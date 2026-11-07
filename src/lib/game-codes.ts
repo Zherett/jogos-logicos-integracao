@@ -31,6 +31,7 @@ const STATIC_PRESETS: Record<string, string> = {
   porcentagem: "Q9PC26",
   completar: "K0CL26",
   rpg: "P8RP26",
+  spacequest: "S4SQ26",
 };
 
 /** Default codes for all games on the platform (dynamically populated). */
@@ -50,6 +51,20 @@ export const DEFAULT_ENABLED_GAMES: Record<GameId, boolean> = ALL_GAME_IDS.reduc
   },
   {} as Record<GameId, boolean>,
 );
+
+/** Default minimum level required for each game (Level 1 = free for everyone). */
+export const DEFAULT_GAME_LEVEL_REQUIREMENTS: Record<GameId, number> = ALL_GAME_IDS.reduce(
+  (acc, id) => {
+    acc[id] = 1;
+    return acc;
+  },
+  {} as Record<GameId, number>,
+);
+
+/** Default admin-only (preview/testing mode) games. Initially Space Quest is ADM-only. */
+export const DEFAULT_ADMIN_ONLY_GAMES: Partial<Record<GameId, boolean>> = {
+  spacequest: true,
+};
 
 /** Default Master code (unlocks all enabled games for teachers). */
 export const DEFAULT_MASTER_CODE = "SEMED26";
@@ -136,6 +151,10 @@ export interface PlatformAdminConfig {
   tournamentGameOverride: GameId | null;
   /** Daily XP limit per student (default: 1000 XP/day). Configurable by ADM. */
   dailyXpCap: number;
+  /** Nível mínimo (1 a 10) exigido para alunos logados acessarem cada jogo (padrão: 1 para todos). */
+  gameLevelRequirements?: Record<GameId, number>;
+  /** Jogos com acesso liberado exclusivamente para o Administrador em modo de teste preliminar. */
+  adminOnlyGames?: Partial<Record<GameId, boolean>>;
   /** Custom medals created or edited by the administrator */
   customMedals?: MedalDefinition[];
   /** In-game "mailbox" notifications of students who earned medals */
@@ -221,6 +240,8 @@ export const DEFAULT_ADMIN_CONFIG: PlatformAdminConfig = {
   tournamentEnabled: true,
   tournamentGameOverride: null,
   dailyXpCap: 1000,
+  gameLevelRequirements: { ...DEFAULT_GAME_LEVEL_REQUIREMENTS },
+  adminOnlyGames: { ...DEFAULT_ADMIN_ONLY_GAMES },
   customMedals: [],
   adminMedalNotifications: [],
   specialEvents: [],
@@ -265,6 +286,14 @@ export function loadAdminConfig(): PlatformAdminConfig {
       ...parsed,
       requireCodeGate: typeof parsed.requireCodeGate === "boolean" ? parsed.requireCodeGate : false,
       enabledGames: { ...DEFAULT_ENABLED_GAMES, ...(parsed.enabledGames ?? {}) },
+      gameLevelRequirements: {
+        ...DEFAULT_GAME_LEVEL_REQUIREMENTS,
+        ...(parsed.gameLevelRequirements ?? {}),
+      },
+      adminOnlyGames: {
+        ...DEFAULT_ADMIN_ONLY_GAMES,
+        ...(parsed.adminOnlyGames ?? {}),
+      },
       gameCodes: { ...DEFAULT_GAME_CODES, ...(parsed.gameCodes ?? {}) },
       masterCode: normalizeCode(parsed.masterCode || DEFAULT_MASTER_CODE) || DEFAULT_MASTER_CODE,
       resetHistory: Array.isArray(parsed.resetHistory) ? parsed.resetHistory : [],

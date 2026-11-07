@@ -27,6 +27,7 @@ import {
   answerX1MinadoQuestion,
   closeX1Room,
   finishX1RoomByTimeout,
+  forfeitX1Match,
   getX1Room,
   openX1MinadoCard,
   submitX1RobotClashAnswer,
@@ -56,10 +57,39 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
   const recentTextsRef = useRef<string[]>([]);
   const recentAnsRef = useRef<boolean[]>([]);
   const [myQuestionIdx, setMyQuestionIdx] = useState(0);
+  const [confirmForfeitOpen, setConfirmForfeitOpen] = useState(false);
 
   const isHost = room.host.playerId === myId;
   const me = isHost ? room.host : (room.guest ?? room.host);
   const opponent = isHost ? room.guest : room.host;
+
+  // Cleanup imediato por desistência ao recarregar ou fechar a aba durante partida ativa
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (room.status === "playing" || room.status === "countdown") {
+        forfeitX1Match(room.code, myId);
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [room.status, room.code, myId]);
+
+  const handleRequestExit = () => {
+    if (room.status === "finished") {
+      closeX1Room(room.code);
+      onExitX1();
+    } else {
+      setConfirmForfeitOpen(true);
+    }
+  };
+
+  const handleConfirmForfeit = () => {
+    forfeitX1Match(room.code, myId);
+    setConfirmForfeitOpen(false);
+    onExitX1();
+  };
 
   // Real-time updates subscription (BroadcastChannel, localStorage, PlayFab SharedGroup)
   useEffect(() => {
@@ -507,7 +537,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
               type="button"
               variant="ghost"
               size="sm"
-              onClick={onExitX1}
+              onClick={handleRequestExit}
               className="h-8 rounded-xl text-xs"
             >
               <LogOut className="mr-1 h-3.5 w-3.5" /> Sair
@@ -686,7 +716,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
               type="button"
               variant="ghost"
               size="sm"
-              onClick={onExitX1}
+              onClick={handleRequestExit}
               className="h-8 rounded-xl text-xs"
             >
               <LogOut className="mr-1 h-3.5 w-3.5" /> Sair
@@ -832,7 +862,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
             type="button"
             variant="ghost"
             size="sm"
-            onClick={onExitX1}
+            onClick={handleRequestExit}
             className="h-8 rounded-xl text-xs"
           >
             <LogOut className="mr-1 h-3.5 w-3.5" /> Sair
@@ -889,6 +919,42 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
           <p className="text-xs text-muted-foreground">
             Aguardando o oponente concluir ou o tempo da sala se encerrar...
           </p>
+        </div>
+      )}
+      {/* Modal de Confirmação de Desistência (Forfeit) */}
+      {confirmForfeitOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm animate-fade-in">
+          <div className="w-full max-w-sm rounded-3xl border border-destructive/40 bg-card p-6 shadow-2xl space-y-4 text-center">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-destructive/15 text-destructive">
+              <LogOut className="h-7 w-7" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="font-display text-lg font-black text-foreground">
+                Desistir do Desafio X1?
+              </h3>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                Se você sair agora, seu oponente vencerá a partida por desistência (W.O.) e a sala será encerrada imediatamente.
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-2 pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setConfirmForfeitOpen(false)}
+                className="h-10 rounded-xl font-bold"
+              >
+                Continuar
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={handleConfirmForfeit}
+                className="h-10 rounded-xl font-bold"
+              >
+                Sim, Desistir
+              </Button>
+            </div>
+          </div>
         </div>
       )}
     </div>

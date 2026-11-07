@@ -19,6 +19,7 @@ import {
   KeyRound,
   Target,
   ChevronDown,
+  Lock,
 } from "lucide-react";
 import type { GameRegistration } from "@/lib/game-registry";
 import type { GameId } from "@/lib/game-storage";
@@ -35,6 +36,9 @@ interface GameDetailDialogProps {
   stageName?: string;
   isUnlocked?: boolean;
   onOpenCodeGate?: () => void;
+  isLevelLocked?: boolean;
+  requiredLevel?: number;
+  isGuest?: boolean;
 }
 
 export function GameDetailDialog({
@@ -47,6 +51,9 @@ export function GameDetailDialog({
   stageName,
   isUnlocked = true,
   onOpenCodeGate,
+  isLevelLocked = false,
+  requiredLevel = 1,
+  isGuest = false,
 }: GameDetailDialogProps) {
   const [expandedDetails, setExpandedDetails] = useState(false);
 
@@ -151,6 +158,11 @@ export function GameDetailDialog({
                 {!isUnlocked && (
                   <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 border border-amber-500/30 px-2.5 py-0.5 text-[10px] font-bold text-amber-600 dark:text-amber-400">
                     <KeyRound className="h-3 w-3" /> Bloqueado por Código
+                  </span>
+                )}
+                {isLevelLocked && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 border border-amber-500/30 px-2.5 py-0.5 text-[10px] font-black uppercase text-amber-600 dark:text-amber-400">
+                    <Lock className="h-3 w-3" /> Requer Nível {requiredLevel}
                   </span>
                 )}
               </div>
@@ -374,6 +386,13 @@ export function GameDetailDialog({
             </div>
           )}
 
+          {/* Mensagem Informativa para Alunos em Modo Visitante */}
+          {isGuest && (
+            <div className="rounded-2xl border border-sky-400/40 bg-sky-500/10 p-3 text-center text-xs text-sky-800 dark:text-sky-300 font-medium">
+              💡 <b>Modo Visitante:</b> Você pode jogar à vontade para praticar! Para salvar pontuações, subir de nível e conquistar medalhas, entre com sua conta de aluno.
+            </div>
+          )}
+
           {/* 5. Ação Principal / Botão Jogar */}
           <div className="pt-3 border-t border-border/60 flex items-center justify-between gap-3">
             <button
@@ -385,7 +404,16 @@ export function GameDetailDialog({
             </button>
 
             <div className="flex-1 flex justify-center">
-              {isUnlocked ? (
+              {isLevelLocked ? (
+                <button
+                  type="button"
+                  disabled
+                  className="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-2xl bg-muted border border-border px-8 py-3.5 sm:py-4 font-display text-sm sm:text-base font-black text-muted-foreground cursor-not-allowed opacity-80"
+                >
+                  <Lock className="h-5 w-5" />
+                  Bloqueado (Alcance o Nível {requiredLevel})
+                </button>
+              ) : isUnlocked ? (
                 <button
                   type="button"
                   onClick={handleStartPlay}

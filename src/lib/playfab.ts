@@ -4678,6 +4678,23 @@ export async function grantSpecialRobotMedal(
 }
 
 /**
+ * Concede medalha de questão especial com aura no Space Quest (Safira, Ametista, Rubi, Âmbar).
+ */
+export async function grantSpaceQuestAuraMedal(
+  medalId: "sq_safira" | "sq_ametista" | "sq_rubi" | "sq_ambar",
+): Promise<{ success: boolean; medal?: MedalDefinition; profile?: PlayerProfile }> {
+  const session = loadStoredSession();
+  if (!session) return { success: false };
+  const cfg = loadAdminConfig();
+  const allMedals = getAllAvailableMedals(cfg.customMedals);
+  const def = allMedals.find((m) => m.id === medalId);
+  if (!def) return { success: false };
+  const res = await grantPlayerMedalManually(session.playerId, def);
+  const active = getActiveAccount();
+  return { success: res.success, medal: def, profile: active?.profile };
+}
+
+/**
  * Deduz a taxa fixa de 5 pontos ranqueados para compra de entrada extra (após esgotar as 10 grátis).
  */
 export async function deductPaidTournamentPoints(

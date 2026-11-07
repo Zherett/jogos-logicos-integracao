@@ -717,6 +717,15 @@ export async function syncX1WithPlayFabCloud(activeRoomCode?: string | null): Pr
         }
       }
       for (const [code, r] of Object.entries(remoteStore.rooms ?? {})) {
+        // Ignora salas de espera expiradas (> 2 min) ou concluídas que já passaram do tempo de auto-close
+        const expiresAt = r.expiresAt ?? (r.createdAt + X1_ROOM_EXPIRATION_MS);
+        if (r.status === "waiting" && now >= expiresAt) {
+          continue;
+        }
+        if (r.status === "finished" && r.autoCloseAt && now >= r.autoCloseAt) {
+          continue;
+        }
+
         if (now - r.createdAt < 15 * 60_000) {
           const local = store.rooms[code];
           const remoteTime = Math.max(r.host.updatedAt, r.guest?.updatedAt ?? 0, r.createdAt);
@@ -961,6 +970,7 @@ export function cancelWaitingX1Room(code: string, hostPlayerId?: string): boolea
   delete store.rooms[clean];
   store.invites = store.invites.filter((inv) => inv.roomCode !== clean);
   saveStore(store);
+  void syncX1WithPlayFabCloud();
   return true;
 }
 
@@ -1370,4 +1380,39 @@ export function closeX1Room(code: string) {
   delete store.rooms[clean];
   store.invites = store.invites.filter((i) => i.roomCode !== clean);
   saveStore(store);
+  void syncX1WithPlayFabCloud();
+}
+
+/**
+ * Desistência / Forfeit voluntário de partida ativa:
+ * Concede vitória imediata por W.O. ao oponente e encerra a sala com log oficial.
+ */
+export function forfeitX1Match(code: string, forfeitingPlayerId: string): X1Room | null {
+  const clean = code.trim().toUpperCase();
+  const store = loadStore();
+  const room = store.rooms[clean];
+  if (!room) return null;
+
+  // Determina o vencedor como o oponente
+  let winnerId: string | null = null;
+  if (room.host.playerId === forfeitingPlayerId) {
+    winnerId = room.guest?.playerId ?? null;
+  } else if (room.guest?.playerId === forfeitingPlayerId) {
+    winnerId = room.host.playerId;
+  }
+
+  if (winnerId) {
+    room.winnerId = winnerId;
+    room.status = "finished";
+    room.finishedAt = Date.now();
+    room.autoCloseAt = Date.now() + X1_POST_MATCH_AUTOCLOSE_MS;
+    recordX1MatchFinished(room);
+    store.rooms[clean] = room;
+    saveStore(store);
+    void pushRoomToPlayFab(room);
+    return room;
+  } else {
+    closeX1Room(clean);
+    return null;
+  }
 }

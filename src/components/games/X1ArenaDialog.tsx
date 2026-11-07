@@ -130,6 +130,22 @@ export function X1ArenaDialog({
     }
   }, [waitingRoomCode, tick, profile, onOpenChange, onStartX1Match]);
 
+  // Cleanup imediato da sala de espera ao fechar aba, recarregar página ou desmontar diálogo
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (waitingRoomCode && profile?.id) {
+        cancelWaitingX1Room(waitingRoomCode, profile.id);
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      if (waitingRoomCode && profile?.id) {
+        cancelWaitingX1Room(waitingRoomCode, profile.id);
+      }
+    };
+  }, [waitingRoomCode, profile?.id]);
+
   if (!profile) {
     return (
       <Dialog open={open} onOpenChange={onOpenChange}>

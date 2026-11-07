@@ -10,6 +10,7 @@ import {
   Grid3x3,
   Puzzle as PuzzleIcon,
   Swords,
+  Rocket,
 } from "lucide-react";
 import { ALL_GAME_IDS, GAME_NAMES, type GameId } from "./game-storage.ts";
 import { LogicGame } from "@/components/games/LogicGame";
@@ -22,6 +23,7 @@ import { MinefieldGame } from "@/components/games/MinefieldGame";
 import { PercentGame } from "@/components/games/PercentGame";
 import { CompleteLogicGame } from "@/components/games/CompleteLogicGame";
 import { RpgGame } from "@/components/games/RpgGame";
+import { SpaceQuestGame } from "@/components/games/SpaceQuestGame";
 
 export interface GameComponentProps {
   onExit: () => void;
@@ -135,6 +137,15 @@ export const GAME_REGISTRY: GameRegistration[] = [
     gradient: "from-accent to-primary",
     defaultCode: "P8RP26",
     component: RpgGame,
+  },
+  {
+    id: "spacequest",
+    title: GAME_NAMES.spacequest,
+    subtitle: "Interceptações espaciais: resolva operações lógicas e matemáticas que caem da galáxia!",
+    icon: <Rocket className="h-10 w-10" />,
+    gradient: "from-indigo-600 via-sky-600 to-purple-600",
+    defaultCode: "S4SQ26",
+    component: SpaceQuestGame,
   },
 ];
 

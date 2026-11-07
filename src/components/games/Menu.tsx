@@ -60,6 +60,9 @@ interface Props {
   enabledDefaultNotices?: Record<string, boolean>;
   hideAllDefaultNotices?: boolean;
   pauseNoticeBoard?: boolean;
+  adminOnlyGames?: Partial<Record<GameId, boolean>>;
+  gameLevelRequirements?: Record<GameId, number>;
+  isAdmin?: boolean;
   onSelect: (id: GameId) => void;
   onAddCode: () => void;
   onOpenX1Arena?: () => void;
@@ -85,6 +88,9 @@ export function Menu({
   enabledDefaultNotices,
   hideAllDefaultNotices = false,
   pauseNoticeBoard = false,
+  adminOnlyGames,
+  gameLevelRequirements,
+  isAdmin = false,
   onSelect,
   onAddCode,
   onOpenX1Arena,
@@ -92,8 +98,16 @@ export function Menu({
   onOpenAuth,
 }: Props) {
   const isGameEnabled = (id: GameId) => Boolean(enabledGames && enabledGames[id] === true);
+  const isGameAllowedForUser = (id: GameId) => {
+    // Se o jogo for restrito a ADM, só exibe para o Administrador logado
+    if (adminOnlyGames?.[id] && !isAdmin) return false;
+    return true;
+  };
   const visible = GAME_REGISTRY.filter(
-    (g) => isGameEnabled(g.id) && (!requireCodeGate || unlocked.includes(g.id)),
+    (g) =>
+      isGameEnabled(g.id) &&
+      isGameAllowedForUser(g.id) &&
+      (!requireCodeGate || unlocked.includes(g.id)),
   );
   const canTournament = Boolean(playerProfile && playerLevel >= TOURNAMENT_MIN_LEVEL);
   const canX1 = Boolean(playerProfile && playerLevel >= X1_MIN_LEVEL && x1OpenNow);
@@ -521,6 +535,10 @@ export function Menu({
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
         {visible.map((g) => {
           const isLocked = requireCodeGate && !unlocked.includes(g.id);
+          const reqLevel = gameLevelRequirements?.[g.id] ?? 1;
+          const isLevelLocked = Boolean(playerProfile && !isAdmin && playerLevel < reqLevel);
+          const isAdminOnly = Boolean(adminOnlyGames?.[g.id]);
+
           return (
             <button
               key={g.id}
@@ -544,11 +562,24 @@ export function Menu({
                 {g.title}
               </span>
 
-              {isLocked && (
-                <span className="mt-1.5 inline-flex items-center gap-1 rounded-full bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 text-[9px] font-black uppercase text-amber-600 dark:text-amber-400">
-                  <Lock className="h-2.5 w-2.5" /> Bloqueado
-                </span>
-              )}
+              {/* Badges de Status (Apenas ADM, Bloqueio por Nível ou Código) */}
+              <div className="flex flex-wrap items-center justify-center gap-1 mt-1.5">
+                {isAdminOnly && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-purple-500/20 border border-purple-500/40 px-2 py-0.5 text-[9px] font-black uppercase text-purple-300">
+                    🧪 Testes ADM
+                  </span>
+                )}
+                {isLevelLocked && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 text-[9px] font-black uppercase text-amber-600 dark:text-amber-400">
+                    <Lock className="h-2.5 w-2.5" /> Nível {reqLevel}+
+                  </span>
+                )}
+                {isLocked && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 text-[9px] font-black uppercase text-amber-600 dark:text-amber-400">
+                    <Lock className="h-2.5 w-2.5" /> Bloqueado
+                  </span>
+                )}
+              </div>
             </button>
           );
         })}
@@ -599,6 +630,19 @@ export function Menu({
             : null
         }
         stageName={playerProfile ? undefined : "1ª Etapa (5º ano)"}
+        isGuest={!playerProfile}
+        isLevelLocked={
+          selectedGameForDetail
+            ? Boolean(
+                playerProfile &&
+                  !isAdmin &&
+                  playerLevel < (gameLevelRequirements?.[selectedGameForDetail.id] ?? 1),
+              )
+            : false
+        }
+        requiredLevel={
+          selectedGameForDetail ? (gameLevelRequirements?.[selectedGameForDetail.id] ?? 1) : 1
+        }
         isUnlocked={
           selectedGameForDetail
             ? !requireCodeGate || unlocked.includes(selectedGameForDetail.id)

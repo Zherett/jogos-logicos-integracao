@@ -12,7 +12,8 @@ export type GameId =
   | "memoria"
   | "minado"
   | "porcentagem"
-  | "completar";
+  | "completar"
+  | "spacequest";
 
 export const ALL_GAME_IDS: GameId[] = [
   "logica",
@@ -25,6 +26,7 @@ export const ALL_GAME_IDS: GameId[] = [
   "minado",
   "completar",
   "rpg",
+  "spacequest",
 ];
 
 export const GAME_NAMES: Record<GameId, string> = {
@@ -38,6 +40,7 @@ export const GAME_NAMES: Record<GameId, string> = {
   minado: "Campo Minado Lógico",
   completar: "Completando a Lógica",
   rpg: "Batalha de Robôs",
+  spacequest: "Space Quest",
 };
 
 export interface GameStats {
@@ -82,6 +85,7 @@ export const DEFAULT_STATS: AllStats = {
   minado: { bestScore: 0, bestLevel: 1 },
   porcentagem: { bestScore: 0, bestLevel: 1 },
   completar: { bestScore: 0, bestLevel: 1 },
+  spacequest: { bestScore: 0, bestLevel: 1 },
 };
 
 export function loadStats(): AllStats {

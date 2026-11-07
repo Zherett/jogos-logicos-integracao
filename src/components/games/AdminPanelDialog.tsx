@@ -53,6 +53,8 @@ import {
   DEFAULT_ENABLED_GAMES,
   DEFAULT_GAME_CODES,
   DEFAULT_MASTER_CODE,
+  DEFAULT_GAME_LEVEL_REQUIREMENTS,
+  DEFAULT_ADMIN_ONLY_GAMES,
   DEFAULT_ENABLED_DEFAULT_NOTICES,
   SYSTEM_DEFAULT_NOTICES,
   normalizeCode,
@@ -270,8 +272,10 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
   const [recNewMedalMinScore, setRecNewMedalMinScore] = useState<number>(30);
   const [recSelectedExistingMedalId, setRecSelectedExistingMedalId] = useState("");
 
-  // Arena X1 Caixa de Entrada / Histórico
+  // Arena X1 Caixa de Entrada / Histórico e Estados de Edição de Horário
   const [x1History, setX1History] = useState<X1MatchLogEntry[]>([]);
+  const [x1OpenInput, setX1OpenInput] = useState<string>(() => String(draft.x1OpenHour ?? 7));
+  const [x1CloseInput, setX1CloseInput] = useState<string>(() => String(draft.x1CloseHour ?? 19));
 
   // Turmas & Escolas states (2 Sub-abas: 1 = Visão por Escolas & Turmas, 2 = Solicitações de Troca)
   const [turmaSubTab, setTurmaSubTab] = useState<"visao" | "solicitacoes">("visao");
@@ -429,6 +433,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
     setScheduleClearXp(auth.adminConfig.scheduledResetClearXp);
     setAutoRenewSeason(auth.adminConfig.autoRenewSeason !== false);
     setSeasonDurationDays(auth.adminConfig.seasonDurationDays || 14);
+    setX1OpenInput(String(auth.adminConfig.x1OpenHour ?? 7));
+    setX1CloseInput(String(auth.adminConfig.x1CloseHour ?? 19));
 
     const sStart = auth.adminConfig.seasonStartAt
       ? new Date(auth.adminConfig.seasonStartAt)
@@ -531,11 +537,120 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
     );
   }
 
+  async function handleToggleAdminOnly(id: GameId, nextVal: boolean) {
+    const updated: PlatformAdminConfig = {
+      ...draft,
+      adminOnlyGames: { ...(draft.adminOnlyGames ?? {}), [id]: nextVal },
+    };
+    setDraft(updated);
+    await auth.updateAdminConfig(updated);
+    onConfigSaved?.();
+    flashCloudResult(
+      nextVal
+        ? `🧪 "${GAME_NAMES[id]}" restrito apenas para o Administrador (Modo de Testes)!`
+        : `🌍 "${GAME_NAMES[id]}" liberado para todos os alunos!`,
+    );
+  }
+
+  async function handleSetGameLevel(id: GameId, nextLevel: number) {
+    const clamped = Math.max(1, Math.min(10, nextLevel));
+    const updated: PlatformAdminConfig = {
+      ...draft,
+      gameLevelRequirements: {
+        ...(draft.gameLevelRequirements ?? {}),
+        [id]: clamped,
+      },
+    };
+    setDraft(updated);
+    await auth.updateAdminConfig(updated);
+    onConfigSaved?.();
+    flashCloudResult(`⭐ Nível exigido para "${GAME_NAMES[id]}": Nível ${clamped}+!`);
+  }
+
+  async function handleToggleX1Game(id: GameId) {
+    const cur = (draft.x1AvailableGames && draft.x1AvailableGames.length > 0)
+      ? draft.x1AvailableGames
+      : ["rpg", "logica", "porcentagem", "minado"];
+    const isSelected = cur.includes(id);
+    let nextGames: GameId[];
+    if (isSelected) {
+      if (cur.length <= 1) {
+        flashSaved("⚠️ Selecione pelo menos 1 jogo para a Arena X1.");
+        return;
+      }
+      nextGames = cur.filter((g) => g !== id);
+    } else {
+      nextGames = [...cur, id];
+    }
+    const updated: PlatformAdminConfig = {
+      ...draft,
+      x1AvailableGames: nextGames,
+    };
+    setDraft(updated);
+    await auth.updateAdminConfig(updated);
+    onConfigSaved?.();
+    flashCloudResult(
+      isSelected
+        ? `🚫 "${GAME_NAMES[id]}" desmarcado da Arena X1!`
+        : `⚔️ "${GAME_NAMES[id]}" ativado na Arena X1!`,
+    );
+  }
+
+  async function handleSaveX1Hour(which: "open" | "close", valStr: string) {
+    let num = parseInt(valStr, 10);
+    if (Number.isNaN(num)) {
+      num = which === "open" ? (draft.x1OpenHour ?? 7) : (draft.x1CloseHour ?? 19);
+    }
+    if (which === "open") {
+      num = Math.max(0, Math.min(23, num));
+      setX1OpenInput(String(num));
+      const updated: PlatformAdminConfig = { ...draft, x1OpenHour: num };
+      setDraft(updated);
+      await auth.updateAdminConfig(updated);
+      onConfigSaved?.();
+      flashCloudResult(`⏰ Horário de abertura da Arena X1 salvo: ${String(num).padStart(2, "0")}:00h!`);
+    } else {
+      num = Math.max(1, Math.min(24, num));
+      setX1CloseInput(String(num));
+      const updated: PlatformAdminConfig = { ...draft, x1CloseHour: num };
+      setDraft(updated);
+      await auth.updateAdminConfig(updated);
+      onConfigSaved?.();
+      flashCloudResult(`⏰ Horário de fechamento da Arena X1 salvo: ${String(num).padStart(2, "0")}:00h!`);
+    }
+  }
+
+  async function handleToggleX1ForceOpen(val: boolean) {
+    const updated: PlatformAdminConfig = { ...draft, x1ForceOpen: val };
+    setDraft(updated);
+    await auth.updateAdminConfig(updated);
+    onConfigSaved?.();
+    flashCloudResult(
+      val
+        ? "🌐 Modo 24 Horas ativado no X1 (sem restrição de horário)!"
+        : "⏰ Horário restrito ativado no X1!",
+    );
+  }
+
+  async function handleToggleX1Enabled(val: boolean) {
+    const updated: PlatformAdminConfig = { ...draft, x1Enabled: val };
+    setDraft(updated);
+    await auth.updateAdminConfig(updated);
+    onConfigSaved?.();
+    flashCloudResult(
+      val
+        ? "⚔️ Arena X1 Online ativada para alunos nível 5+!"
+        : "🔒 Arena X1 Online desativada temporariamente!",
+    );
+  }
+
   async function restoreDefaultCodes() {
     const restored: PlatformAdminConfig = {
       ...draft,
       enabledGames: { ...DEFAULT_ENABLED_GAMES },
       gameCodes: { ...DEFAULT_GAME_CODES },
+      gameLevelRequirements: { ...DEFAULT_GAME_LEVEL_REQUIREMENTS },
+      adminOnlyGames: { ...DEFAULT_ADMIN_ONLY_GAMES },
       masterCode: DEFAULT_MASTER_CODE,
     };
     setDraft(restored);
@@ -1583,7 +1698,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
                   />
                 </div>
 
-                {/* Arena X1 Online Config (Nível 5+ e Horários) */}
+                {/* Arena X1 Online Config (Nível 5+ e Atalho para Aba Arena X1) */}
                 <div className="rounded-2xl border bg-accent/10 p-3.5 space-y-3">
                   <div className="flex items-center justify-between gap-4">
                     <div>
@@ -1592,59 +1707,39 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
                       </div>
                       <div className="text-xs text-muted-foreground">
                         Liberada apenas para alunos a partir do Nível 5 nos horários configurados
-                        abaixo (padrão: 07h às 19h).
+                        (padrão: 07h às 19h).
                       </div>
                     </div>
                     <Switch
                       checked={draft.x1Enabled ?? true}
-                      onCheckedChange={(v) => setDraft({ ...draft, x1Enabled: v })}
+                      onCheckedChange={(v) => void handleToggleX1Enabled(v)}
                     />
                   </div>
 
                   {(draft.x1Enabled ?? true) && (
-                    <div className="grid grid-cols-1 gap-2 rounded-xl border bg-background/80 p-3 sm:grid-cols-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border bg-background/80 p-3 text-xs">
                       <div>
-                        <Label className="text-[11px] font-bold">Hora de Abertura (0–23h)</Label>
-                        <Input
-                          type="number"
-                          min={0}
-                          max={23}
-                          value={draft.x1OpenHour ?? 7}
-                          onChange={(e) =>
-                            setDraft({
-                              ...draft,
-                              x1OpenHour: Math.max(0, Math.min(23, Number(e.target.value) || 0)),
-                            })
-                          }
-                          className="mt-1 h-9 rounded-xl font-display font-bold"
-                        />
+                        <span className="font-bold text-foreground">Status do Horário: </span>
+                        {draft.x1ForceOpen ? (
+                          <span className="font-extrabold text-emerald-600 dark:text-emerald-400">
+                            Liberado 24 Horas (Sem restrição)
+                          </span>
+                        ) : (
+                          <span className="font-bold text-primary">
+                            Aberto das {String(draft.x1OpenHour ?? 7).padStart(2, "0")}:00h às {String(draft.x1CloseHour ?? 19).padStart(2, "0")}:00h
+                          </span>
+                        )}
                       </div>
-                      <div>
-                        <Label className="text-[11px] font-bold">Hora de Fechamento (1–24h)</Label>
-                        <Input
-                          type="number"
-                          min={1}
-                          max={24}
-                          value={draft.x1CloseHour ?? 19}
-                          onChange={(e) =>
-                            setDraft({
-                              ...draft,
-                              x1CloseHour: Math.max(1, Math.min(24, Number(e.target.value) || 19)),
-                            })
-                          }
-                          className="mt-1 h-9 rounded-xl font-display font-bold"
-                        />
-                      </div>
-                      <div className="flex items-center justify-between gap-2 rounded-xl border bg-secondary/30 px-3 py-2 sm:col-span-1">
-                        <div className="text-[11px] leading-tight">
-                          <div className="font-bold">Liberar 24h</div>
-                          <div className="text-muted-foreground">Ignorar horário</div>
-                        </div>
-                        <Switch
-                          checked={draft.x1ForceOpen ?? false}
-                          onCheckedChange={(v) => setDraft({ ...draft, x1ForceOpen: v })}
-                        />
-                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => setTab("arena_x1")}
+                        className="h-8 rounded-lg text-xs font-bold"
+                      >
+                        <Swords className="mr-1.5 h-3.5 w-3.5 text-accent" />
+                        Configurar Jogos e Horários da Arena X1 →
+                      </Button>
                     </div>
                   )}
                 </div>
@@ -1738,15 +1833,17 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
 
                   {ALL_GAME_IDS.map((id) => {
                     const enabled = Boolean(draft.enabledGames[id]);
+                    const isAdminOnly = Boolean(draft.adminOnlyGames?.[id]);
+                    const reqLevel = draft.gameLevelRequirements?.[id] ?? 1;
                     const gStats = gameStatsSummary[id] ?? { totalPlays: 0, admPlays: 0 };
                     return (
                       <div
                         key={id}
-                        className={`flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 rounded-2xl border p-3 transition-colors ${
+                        className={`flex flex-wrap lg:flex-nowrap items-center justify-between gap-3 rounded-2xl border p-3 transition-colors ${
                           enabled ? "bg-card border-primary/20" : "bg-muted/40 opacity-70 border-dashed"
                         }`}
                       >
-                        <div className="flex items-center gap-3 min-w-0">
+                        <div className="flex items-center gap-3 min-w-0 flex-1">
                           <Switch
                             checked={enabled}
                             onCheckedChange={(v) => void handleToggleGame(id, v)}
@@ -1759,10 +1856,22 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
                                   Oculto
                                 </span>
                               )}
+                              {isAdminOnly && (
+                                <span className="rounded bg-purple-500/15 text-purple-600 dark:text-purple-300 border border-purple-500/30 px-1.5 py-0.2 text-[9px] font-black uppercase tracking-normal">
+                                  🧪 Só ADM (Testes)
+                                </span>
+                              )}
+                              {reqLevel > 1 && (
+                                <span className="rounded bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30 px-1.5 py-0.2 text-[9px] font-black uppercase tracking-normal">
+                                  ⭐ Nv {reqLevel}+
+                                </span>
+                              )}
                             </div>
                             <div className="text-[11px] text-muted-foreground">
                               {enabled
-                                ? "Liberado e visível na página inicial"
+                                ? isAdminOnly
+                                  ? "Visível exclusivamente para o ADM (Testes preliminares)"
+                                  : "Liberado e visível na página inicial para todos"
                                 : "Desmarcado (Oculto da página inicial para todos)"}
                             </div>
                             <div className="flex flex-wrap items-center gap-2 mt-1">
@@ -1784,39 +1893,75 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-1.5 ml-auto">
-                          <Input
-                            value={draft.gameCodes[id] ?? ""}
-                            onChange={(e) =>
-                              setDraft({
-                                ...draft,
-                                gameCodes: {
-                                  ...draft.gameCodes,
-                                  [id]: normalizeCode(e.target.value),
-                                },
-                              })
-                            }
-                            maxLength={10}
-                            className="h-9 w-28 rounded-xl text-center font-display text-sm font-extrabold uppercase tracking-wider"
-                          />
-                          <Button
+                        {/* Controles de Nível Mínimo e Modo Apenas ADM */}
+                        <div className="flex flex-wrap items-center gap-2">
+                          {/* Toggle Apenas ADM / Testes */}
+                          <button
                             type="button"
-                            variant="ghost"
-                            size="sm"
-                            title="Sortear novo código"
-                            onClick={() =>
-                              setDraft({
-                                ...draft,
-                                gameCodes: {
-                                  ...draft.gameCodes,
-                                  [id]: randomGameCode(id),
-                                },
-                              })
-                            }
-                            className="h-9 px-2.5 rounded-xl"
+                            onClick={() => void handleToggleAdminOnly(id, !isAdminOnly)}
+                            className={`inline-flex items-center gap-1 rounded-xl px-2.5 py-1 text-xs font-black cursor-pointer transition-all ${
+                              isAdminOnly
+                                ? "bg-purple-500 text-white shadow-xs hover:bg-purple-600"
+                                : "bg-secondary text-muted-foreground hover:bg-secondary/80 border border-border"
+                            }`}
+                            title="Alternar entre modo aberto para alunos ou exclusivo para testes do ADM"
                           >
-                            <Sparkles className="h-4 w-4 text-accent" />
-                          </Button>
+                            🧪 {isAdminOnly ? "Apenas ADM" : "Aberto"}
+                          </button>
+
+                          {/* Seletor de Nível Mínimo Necessário (1 a 10) */}
+                          <div className="flex items-center gap-1 rounded-xl border bg-secondary/40 px-2 py-0.5">
+                            <span className="text-[10px] font-bold text-muted-foreground whitespace-nowrap">
+                              Nível Req:
+                            </span>
+                            <select
+                              value={reqLevel}
+                              onChange={(e) => void handleSetGameLevel(id, Number(e.target.value))}
+                              className="h-7 rounded-lg bg-card px-1.5 text-xs font-black font-display text-foreground border border-border cursor-pointer"
+                            >
+                              {Array.from({ length: 10 }, (_, i) => i + 1).map((lvl) => (
+                                <option key={lvl} value={lvl}>
+                                  Nível {lvl} {lvl === 1 ? "(Padrão)" : ""}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          {/* Código de Acesso */}
+                          <div className="flex items-center gap-1">
+                            <Input
+                              value={draft.gameCodes[id] ?? ""}
+                              onChange={(e) =>
+                                setDraft({
+                                  ...draft,
+                                  gameCodes: {
+                                    ...draft.gameCodes,
+                                    [id]: normalizeCode(e.target.value),
+                                  },
+                                })
+                              }
+                              maxLength={10}
+                              className="h-8 w-24 rounded-xl text-center font-display text-xs font-extrabold uppercase tracking-wider"
+                            />
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              title="Sortear novo código"
+                              onClick={() =>
+                                setDraft({
+                                  ...draft,
+                                  gameCodes: {
+                                    ...draft.gameCodes,
+                                    [id]: randomGameCode(id),
+                                  },
+                                })
+                              }
+                              className="h-8 px-2 rounded-xl"
+                            >
+                              <Sparkles className="h-3.5 w-3.5 text-accent" />
+                            </Button>
+                          </div>
                         </div>
                       </div>
                     );
@@ -1868,7 +2013,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
                     </div>
                     <Switch
                       checked={draft.x1Enabled ?? true}
-                      onCheckedChange={(v) => setDraft({ ...draft, x1Enabled: v })}
+                      onCheckedChange={(v) => void handleToggleX1Enabled(v)}
                     />
                   </div>
 
@@ -1887,7 +2032,13 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
                     </div>
                     <Switch
                       checked={!(draft.x1ArenaClosed ?? false)}
-                      onCheckedChange={(aberta) => setDraft({ ...draft, x1ArenaClosed: !aberta })}
+                      onCheckedChange={async (aberta) => {
+                        const updated = { ...draft, x1ArenaClosed: !aberta };
+                        setDraft(updated);
+                        await auth.updateAdminConfig(updated);
+                        onConfigSaved?.();
+                        flashCloudResult(!aberta ? "⛔ Arena X1 fechada pela coordenação!" : "🟢 Arena X1 reaberta!");
+                      }}
                     />
                   </div>
 
@@ -1898,13 +2049,15 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
                         type="number"
                         min={0}
                         max={23}
-                        value={draft.x1OpenHour ?? 7}
-                        onChange={(e) =>
-                          setDraft({
-                            ...draft,
-                            x1OpenHour: Math.max(0, Math.min(23, Number(e.target.value) || 0)),
-                          })
-                        }
+                        value={x1OpenInput}
+                        onChange={(e) => setX1OpenInput(e.target.value)}
+                        onBlur={() => void handleSaveX1Hour("open", x1OpenInput)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            void handleSaveX1Hour("open", x1OpenInput);
+                          }
+                        }}
                         className="mt-1 h-9 rounded-xl font-bold"
                       />
                     </div>
@@ -1914,13 +2067,15 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
                         type="number"
                         min={1}
                         max={24}
-                        value={draft.x1CloseHour ?? 19}
-                        onChange={(e) =>
-                          setDraft({
-                            ...draft,
-                            x1CloseHour: Math.max(1, Math.min(24, Number(e.target.value) || 19)),
-                          })
-                        }
+                        value={x1CloseInput}
+                        onChange={(e) => setX1CloseInput(e.target.value)}
+                        onBlur={() => void handleSaveX1Hour("close", x1CloseInput)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            void handleSaveX1Hour("close", x1CloseInput);
+                          }
+                        }}
                         className="mt-1 h-9 rounded-xl font-bold"
                       />
                     </div>
@@ -1931,7 +2086,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
                       </div>
                       <Switch
                         checked={draft.x1ForceOpen ?? false}
-                        onCheckedChange={(v) => setDraft({ ...draft, x1ForceOpen: v })}
+                        onCheckedChange={(v) => void handleToggleX1ForceOpen(v)}
                       />
                     </div>
                   </div>
@@ -1951,24 +2106,16 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
                   </div>
 
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-2">
-                    {(["rpg", "logica", "porcentagem", "minado"] as const).map((id) => {
-                      const selected = (draft.x1AvailableGames ?? ["rpg", "logica", "porcentagem", "minado"]).includes(id);
+                    {ALL_GAME_IDS.map((id) => {
+                      const cur = (draft.x1AvailableGames && draft.x1AvailableGames.length > 0)
+                        ? draft.x1AvailableGames
+                        : ["rpg", "logica", "porcentagem", "minado"];
+                      const selected = cur.includes(id);
                       return (
                         <button
                           key={id}
                           type="button"
-                          onClick={() => {
-                            const cur = draft.x1AvailableGames ?? ["rpg", "logica", "porcentagem", "minado"];
-                            if (selected) {
-                              if (cur.length > 1) {
-                                setDraft({ ...draft, x1AvailableGames: cur.filter((g) => g !== id) });
-                              } else {
-                                flashSaved("Selecione pelo menos 1 jogo para a Arena X1.");
-                              }
-                            } else {
-                              setDraft({ ...draft, x1AvailableGames: [...cur, id] });
-                            }
-                          }}
+                          onClick={() => void handleToggleX1Game(id)}
                           className={`rounded-xl border p-3 text-xs font-extrabold text-left transition-all ${
                             selected
                               ? "border-primary bg-primary text-primary-foreground shadow-sm"
@@ -1986,7 +2133,11 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
 
                   <Button
                     type="button"
-                    onClick={saveSystemSettings}
+                    onClick={async () => {
+                      await handleSaveX1Hour("open", x1OpenInput);
+                      await handleSaveX1Hour("close", x1CloseInput);
+                      await saveSystemSettings();
+                    }}
                     className="w-full h-11 rounded-xl font-bold mt-2"
                   >
                     <Save className="mr-2 h-4 w-4" /> Salvar Configurações da Arena X1

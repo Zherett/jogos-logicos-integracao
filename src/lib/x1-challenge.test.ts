@@ -2,9 +2,14 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   applyX1RobotBattleAnswer,
+  cancelWaitingX1Room,
   computeScoreRaceBlueShare,
+  createX1Room,
+  forfeitX1Match,
   generateRoomCode,
   getActiveRotatedX1Game,
+  getX1Room,
+  joinX1Room,
   resolveX1Winner,
   X1_ROBOT_INITIAL_HP,
   type X1Room,
@@ -157,6 +162,35 @@ describe("Arena de Desafio X1 Online (1v1 Versus Mode)", () => {
 
   it("garante 5 vidas iniciais para cada jogador no Robô X1", () => {
     assert.equal(X1_ROBOT_INITIAL_HP, 5);
+  });
+
+  it("permite desistência (forfeit) concedendo vitória por W.O. ao oponente e finalizando a partida", () => {
+    const created = createX1Room({
+      host: { playerId: "host_test_1", nick: "HostTest", school: "Escola A", level: 5 },
+      gameId: "rpg",
+    });
+    joinX1Room({
+      code: created.code,
+      guest: { playerId: "guest_test_2", nick: "GuestTest", school: "Escola B", level: 5 },
+    });
+
+    // Host desiste da partida
+    const updated = forfeitX1Match(created.code, "host_test_1");
+    assert.ok(updated);
+    assert.equal(updated.status, "finished");
+    assert.equal(updated.winnerId, "guest_test_2");
+  });
+
+  it("permite cancelar sala de espera antes de ser iniciada", () => {
+    const created = createX1Room({
+      host: { playerId: "host_cancel_me", nick: "HostCancel", school: "Escola A", level: 5 },
+      gameId: "logica",
+    });
+    assert.ok(getX1Room(created.code));
+
+    const ok = cancelWaitingX1Room(created.code, "host_cancel_me");
+    assert.equal(ok, true);
+    assert.equal(getX1Room(created.code), null);
   });
 
   it("determina vencedor no Campo Minado por pontos e desempata por MENOS erros", () => {

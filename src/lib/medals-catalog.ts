@@ -431,8 +431,7 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
     },
   );
 
-  // 7. Jogos Diferentes Sem Errar (3, 5 e Dinâmico baseado em ALL_GAME_IDS)
-  const flawlessMaxThreshold = Math.max(4, ALL_GAME_IDS.length - 2);
+  // 7. Jogos Diferentes Sem Errar (3, 5 e 8 jogos)
   medals.push(
     {
       id: "flawless_3_games",
@@ -454,12 +453,12 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
     },
     {
       id: "flawless_8_games",
-      title: `Inviolável da Lógica (${flawlessMaxThreshold} Jogos)`,
-      description: `Conquiste vitória com zero erros em pelo menos ${flawlessMaxThreshold} jogos diferentes.`,
+      title: "Inviolável da Lógica (8 Jogos)",
+      description: "Conquiste vitória com zero erros em pelo menos 8 jogos diferentes.",
       rarity: "platina",
       category: "sem_erros",
       iconName: "Gem",
-      condition: { type: "distinct_flawless_games", threshold: flawlessMaxThreshold },
+      condition: { type: "distinct_flawless_games", threshold: 8 },
     },
   );
 
@@ -823,6 +822,43 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
       rarity: "platina",
       category: "evento",
       iconName: "Flame",
+      condition: { type: "manual_event" },
+    },
+    // 16. Medalhas Especiais de Auras Cósmicas — Space Quest
+    {
+      id: "sq_safira",
+      title: "Questão Safira",
+      description: "Acertou uma questão média com aura azul no Space Quest (2x de pontos)!",
+      rarity: "bronze",
+      category: "evento",
+      iconName: "Gem",
+      condition: { type: "manual_event" },
+    },
+    {
+      id: "sq_ametista",
+      title: "Questão Ametista",
+      description: "Acertou uma questão difícil com aura roxa no Space Quest (3x de pontos)!",
+      rarity: "prata",
+      category: "evento",
+      iconName: "Sparkles",
+      condition: { type: "manual_event" },
+    },
+    {
+      id: "sq_rubi",
+      title: "Questão Rubi",
+      description: "Acertou uma questão difícil com aura vermelha no Space Quest (4x de pontos)!",
+      rarity: "ouro",
+      category: "evento",
+      iconName: "Flame",
+      condition: { type: "manual_event" },
+    },
+    {
+      id: "sq_ambar",
+      title: "Questão Âmbar",
+      description: "Acertou a raríssima questão difícil com aura dourada no Space Quest (4x de pontos e sem penalidade)!",
+      rarity: "platina",
+      category: "evento",
+      iconName: "Crown",
       condition: { type: "manual_event" },
     },
   );

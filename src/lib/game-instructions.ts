@@ -122,6 +122,18 @@ export const GAME_INSTRUCTIONS: Record<GameId, GameInstruction> = {
     tips: "Velocidade e precisão são essenciais: não chute respostas para não sofrer contra-ataques.",
     scoring: "XP por vitória e bônus de duelo conforme o nível de maestria alcançado.",
   },
+  spacequest: {
+    objective: "Pilotar a nave estelar, interceptando e resolvendo operações lógicas e matemáticas que descem do espaço sideral.",
+    howToPlay: [
+      "Operações lógicas e matemáticas descem do topo em direção à base.",
+      "Quanto mais difícil for a expressão, mais devagar ela desce; quanto mais fácil, mais rápido.",
+      "Selecione a resposta correta no painel de comando da nave antes que a operação atinja a parte inferior.",
+      "Identifique cápsulas com auras especiais: Azul (Safira 2x), Roxa (Ametista 3x), Vermelha (Rubi 4x) e Dourada (Âmbar 4x sem penalidade) para desbloquear medalhas cósmicas!",
+    ],
+    controls: "Clique ou toque nas alternativas (V/F ou valores matemáticos) no painel da nave ou use o teclado.",
+    tips: "Mantenha combos de 5 acertos seguidos para somar +10 pontos extras e priorize questões com auras raras!",
+    scoring: "Acerto: +10 pts (ou 2x a 4x com auras) • Combo x5: +10 pts extras • Queda no fundo: -5 pts • Erros penalizam de acordo com a aura.",
+  },
 };
 
 export function getGameInstructions(gameId: GameId): GameInstruction {

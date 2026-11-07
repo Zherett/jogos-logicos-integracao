@@ -98,4 +98,32 @@ describe("Liberação Inicial de Jogos e Controle de Bloqueio com SEMED26", () =
     assert.equal(configWithNotices.noticeSlides?.[0].durationSeconds, 5);
     assert.equal(configWithNotices.noticeSlides?.[1].durationSeconds, 15);
   });
+
+  it("inicia por padrão com todos os jogos no nível 1 e spacequest em modo apenas ADM", () => {
+    const cfg = loadAdminConfig();
+    assert.equal(cfg.gameLevelRequirements?.logica, 1);
+    assert.equal(cfg.gameLevelRequirements?.spacequest, 1);
+    assert.equal(cfg.adminOnlyGames?.spacequest, true);
+  });
+
+  it("salva e carrega requisitos de nível e modos apenas ADM por jogo", () => {
+    const updated = saveAdminConfig({
+      ...DEFAULT_ADMIN_CONFIG,
+      gameLevelRequirements: {
+        ...DEFAULT_ADMIN_CONFIG.gameLevelRequirements!,
+        spacequest: 4,
+        rpg: 2,
+      },
+      adminOnlyGames: {
+        ...DEFAULT_ADMIN_CONFIG.adminOnlyGames,
+        spacequest: false, // ADM liberou para todos
+        rpg: true, // ADM colocou em manutenção
+      },
+    });
+
+    assert.equal(updated.gameLevelRequirements?.spacequest, 4);
+    assert.equal(updated.gameLevelRequirements?.rpg, 2);
+    assert.equal(updated.adminOnlyGames?.spacequest, false);
+    assert.equal(updated.adminOnlyGames?.rpg, true);
+  });
 });

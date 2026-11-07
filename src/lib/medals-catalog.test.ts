@@ -33,13 +33,13 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
     assert.equal(lvlMedals[0].id, "lvl_2");
     assert.equal(lvlMedals[8].id, "lvl_10");
 
-    // Valida 50 medalhas de quantidade de partidas (5 por jogo x 10 jogos)
+    // Valida medalhas de quantidade de partidas (5 por jogo x ALL_GAME_IDS.length)
     const matchMedals = catalog.filter((m) => m.category === "jogo_partidas");
-    assert.equal(matchMedals.length, 50);
+    assert.equal(matchMedals.length, ALL_GAME_IDS.length * 5);
 
-    // Valida 10 medalhas de zero erros
+    // Valida medalhas de zero erros (1 por jogo)
     const flawlessMedals = catalog.filter((m) => m.category === "jogo_perfeito");
-    assert.equal(flawlessMedals.length, 10);
+    assert.equal(flawlessMedals.length, ALL_GAME_IDS.length);
 
     // Valida medalhas de X1 (10 vitórias totais + 3 semanais)
     const x1Total = catalog.filter((m) => m.category === "x1_vitorias");
@@ -570,6 +570,7 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
       porcentagem: false,
       completar: false,
       rpg: false,
+      spacequest: false,
     };
 
     const profileInflated: PlayerProfile = {

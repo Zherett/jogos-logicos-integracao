@@ -393,6 +393,9 @@ function Index() {
           enabledDefaultNotices={cfg.enabledDefaultNotices}
           hideAllDefaultNotices={cfg.hideAllDefaultNotices}
           pauseNoticeBoard={cfg.pauseNoticeBoard}
+          adminOnlyGames={cfg.adminOnlyGames}
+          gameLevelRequirements={cfg.gameLevelRequirements}
+          isAdmin={auth.isAdmin}
           onSelect={(id) => {
             setActiveRankedGameId(null);
             setView(id);
