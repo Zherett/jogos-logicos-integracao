@@ -195,6 +195,8 @@ export interface PlatformAdminConfig {
   pauseNoticeBoard?: boolean;
   /** Mensagens transmitidas do Correio / Caixa de Entrada */
   inboxMessages?: any[];
+  /** IDs de mensagens com envio cancelado pelo Administrador */
+  canceledInboxMessageIds?: string[];
   /** Regras de mensagens programadas e recorrentes */
   scheduledInboxRules?: ScheduledInboxRule[];
   /** Optional PlayFab Title ID configured via Admin UI. */
@@ -289,6 +291,7 @@ export const DEFAULT_ADMIN_CONFIG: PlatformAdminConfig = {
   hideAllDefaultNotices: false,
   pauseNoticeBoard: false,
   inboxMessages: [],
+  canceledInboxMessageIds: [],
   playfabTitleId: "186F63",
   updatedAt: "2026-01-01T00:00:00.000Z",
 };
@@ -358,6 +361,9 @@ export function loadAdminConfig(): PlatformAdminConfig {
       pauseNoticeBoard:
         typeof parsed.pauseNoticeBoard === "boolean" ? parsed.pauseNoticeBoard : false,
       inboxMessages: Array.isArray(parsed.inboxMessages) ? parsed.inboxMessages : [],
+      canceledInboxMessageIds: Array.isArray(parsed.canceledInboxMessageIds)
+        ? parsed.canceledInboxMessageIds
+        : [],
       scheduledInboxRules: Array.isArray(parsed.scheduledInboxRules)
         ? parsed.scheduledInboxRules
         : loadScheduledInboxRules(),
@@ -393,6 +399,9 @@ export function saveAdminConfig(config: PlatformAdminConfig): PlatformAdminConfi
     pauseNoticeBoard:
       typeof config.pauseNoticeBoard === "boolean" ? config.pauseNoticeBoard : false,
     inboxMessages: Array.isArray(config.inboxMessages) ? config.inboxMessages : [],
+    canceledInboxMessageIds: Array.isArray(config.canceledInboxMessageIds)
+      ? config.canceledInboxMessageIds
+      : [],
     scheduledInboxRules: Array.isArray(config.scheduledInboxRules)
       ? config.scheduledInboxRules
       : loadScheduledInboxRules(),

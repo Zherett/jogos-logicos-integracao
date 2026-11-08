@@ -21,6 +21,9 @@ import {
   runRetroactiveInboxReadsScan,
   extractInboxTags,
   validateMessageTags,
+  cancelInboxMessage,
+  isMessageCanceled,
+  loadCanceledMessageIds,
 } from "./inbox-messages.ts";
 import type { PlayerProfile } from "./playfab.ts";
 
@@ -701,6 +704,57 @@ describe("Sistema Completo de Caixa de Entrada e Correio (inbox-messages)", () =
       // Outro aluno consta como não lido (1 aluno pendente)
       assert.equal(readers.unreadStudents.length, 1);
       assert.equal(readers.unreadStudents[0].nick, "OutroAluno");
+    });
+  });
+
+  describe("Cancelamento de envio de mensagens no perfil ADM", () => {
+    it("cancela envio de mensagem específica e remove da caixa de correio dos alunos", () => {
+      const student1 = createTestStudent({ id: "aluno_1", nick: "Lucas" });
+      const student2 = createTestStudent({ id: "aluno_2", nick: "Beatriz" });
+
+      const msg = sendAdminBroadcastMessage({
+        mode: "all",
+        title: "Torneio Especial de Fim de Semana",
+        body: "Venham todos participar!",
+        reward: {
+          type: "points",
+          pointsAmount: 50,
+          isSecret: false,
+        },
+      });
+
+      // Antes do cancelamento: ambos os alunos recebem a mensagem
+      const msgs1Before = getInboxMessagesForPlayer(student1);
+      const msgs2Before = getInboxMessagesForPlayer(student2);
+      assert.equal(msgs1Before.some((m) => m.id === msg.id), true);
+      assert.equal(msgs2Before.some((m) => m.id === msg.id), true);
+
+      // Contagem de não lidos e recompensas
+      const countsBefore = getInboxCountsForPlayer(student1);
+      assert.equal(countsBefore.unreadCount >= 1, true);
+      assert.equal(countsBefore.unclaimedRewardsCount >= 1, true);
+
+      // ADM cancela o envio da mensagem
+      const cancelRes = cancelInboxMessage(msg.id);
+      assert.equal(cancelRes.success, true);
+      assert.equal(cancelRes.canceledMessage?.id, msg.id);
+      assert.equal(isMessageCanceled(msg.id), true);
+      assert.equal(loadCanceledMessageIds().has(msg.id), true);
+
+      // Após o cancelamento: a mensagem sumiu da caixa de entrada de ambos os alunos
+      const msgs1After = getInboxMessagesForPlayer(student1);
+      const msgs2After = getInboxMessagesForPlayer(student2);
+      assert.equal(msgs1After.some((m) => m.id === msg.id), false);
+      assert.equal(msgs2After.some((m) => m.id === msg.id), false);
+
+      // Também não aparece no repositório global de mensagens ativas
+      const allActive = loadAllInboxMessages();
+      assert.equal(allActive.some((m) => m.id === msg.id), false);
+
+      // Contagem de alertas do jogador é reduzida
+      const countsAfter = getInboxCountsForPlayer(student1);
+      assert.equal(countsAfter.unreadCount, countsBefore.unreadCount - 1);
+      assert.equal(countsAfter.unclaimedRewardsCount, countsBefore.unclaimedRewardsCount - 1);
     });
   });
 });

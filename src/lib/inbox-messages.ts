@@ -83,6 +83,7 @@ export interface SystemInboxMessage {
 
 // Chave para persistencia local de mensagens
 const INBOX_STORAGE_KEY = "desafios_inbox_messages_v2";
+const CANCELED_MESSAGES_KEY = "desafios_canceled_inbox_messages_v1";
 const STUDENT_CLAIMS_KEY = "desafios_student_claimed_rewards_v1";
 const STUDENT_READS_KEY = "desafios_student_read_messages_v1";
 const STUDENT_DELETES_KEY = "desafios_student_deleted_messages_v1";
@@ -98,7 +99,7 @@ export const INBOX_MESSAGE_AUTO_PURGE_MS = 24 * 60 * 60 * 1000; // 24 horas
 const INBOX_CHANNEL_NAME = "semed_inbox_realtime_sync_v1";
 
 export interface InboxSyncPayload {
-  type: "new_message" | "message_read" | "rewards_claimed";
+  type: "new_message" | "message_read" | "rewards_claimed" | "message_canceled";
   messageId?: string;
   studentId?: string;
   studentNick?: string;
@@ -169,12 +170,14 @@ export function subscribeToInboxSync(
 }
 
 let memoryInboxMessages: SystemInboxMessage[] = [];
+let memoryCanceledMessages = new Set<string>();
 let memoryStudentClaims: Record<string, Record<string, string>> = {}; // playerId -> { messageId: claimedAt }
 let memoryStudentReads: Record<string, Record<string, any>> = {}; // playerId -> { messageId: timestamp | true }
 let memoryStudentDeletes: Record<string, Record<string, boolean>> = {}; // playerId -> { messageId: true }
 
 export function clearMemoryInboxMessages(): void {
   memoryInboxMessages = [];
+  memoryCanceledMessages.clear();
   memoryStudentClaims = {};
   memoryStudentReads = {};
   memoryStudentDeletes = {};
@@ -188,9 +191,133 @@ export function clearMemoryStudentClaims(): void {
 // PERSISTÊNCIA BROWSER / LOCAL & NUVEM
 // ----------------------------------------------------------------------------
 
+export function loadCanceledMessageIds(): Set<string> {
+  const set = new Set(memoryCanceledMessages);
+  if (typeof window !== "undefined") {
+    try {
+      const raw = window.localStorage.getItem(CANCELED_MESSAGES_KEY);
+      if (raw) {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr)) {
+          for (const id of arr) {
+            if (typeof id === "string" && id) set.add(id);
+          }
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+
+    // Mescla com IDs cancelados nos arquivos locais e remotos de configuração ADM
+    for (const key of [ADMIN_CONFIG_LOCAL_KEY, ADMIN_CONFIG_REMOTE_KEY]) {
+      try {
+        const cRaw = window.localStorage.getItem(key);
+        if (cRaw) {
+          const cfg = JSON.parse(cRaw);
+          if (Array.isArray(cfg?.canceledInboxMessageIds)) {
+            for (const id of cfg.canceledInboxMessageIds) {
+              if (typeof id === "string" && id) set.add(id);
+            }
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  memoryCanceledMessages = new Set(set);
+  return set;
+}
+
+export function saveCanceledMessageIds(set: Set<string>): void {
+  memoryCanceledMessages = new Set(set);
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(CANCELED_MESSAGES_KEY, JSON.stringify(Array.from(set)));
+  } catch (err) {
+    console.warn("Falha ao salvar IDs de mensagens canceladas:", err);
+  }
+}
+
+export function isMessageCanceled(messageId: string): boolean {
+  if (!messageId) return false;
+  return loadCanceledMessageIds().has(messageId);
+}
+
+/**
+ * Cancela o envio de uma mensagem específica no perfil ADM.
+ * Remove a mensagem do histórico e da caixa de correio de todos os alunos instantaneamente.
+ */
+export function cancelInboxMessage(messageId: string): {
+  success: boolean;
+  canceledMessage?: SystemInboxMessage;
+} {
+  if (!messageId) return { success: false };
+
+  const all = loadAllInboxMessages();
+  const target = all.find((m) => m.id === messageId);
+
+  // Registra o ID como permanentemente cancelado
+  const canceled = loadCanceledMessageIds();
+  canceled.add(messageId);
+  saveCanceledMessageIds(canceled);
+
+  // Remove a mensagem da lista de ativas e salva
+  const filtered = all.filter((m) => m.id !== messageId);
+  saveAllInboxMessages(filtered);
+
+  // Atualiza também os caches de configuração do ADM
+  if (typeof window !== "undefined") {
+    for (const key of [ADMIN_CONFIG_LOCAL_KEY, ADMIN_CONFIG_REMOTE_KEY]) {
+      try {
+        const cRaw = window.localStorage.getItem(key);
+        if (cRaw) {
+          const cfg = JSON.parse(cRaw);
+          let changed = false;
+          if (Array.isArray(cfg?.inboxMessages)) {
+            cfg.inboxMessages = cfg.inboxMessages.filter((m: any) => m?.id !== messageId);
+            changed = true;
+          }
+          if (!Array.isArray(cfg?.canceledInboxMessageIds)) {
+            cfg.canceledInboxMessageIds = [];
+          }
+          if (!cfg.canceledInboxMessageIds.includes(messageId)) {
+            cfg.canceledInboxMessageIds.push(messageId);
+            changed = true;
+          }
+          if (changed) {
+            window.localStorage.setItem(key, JSON.stringify(cfg));
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    // Dispara eventos em tempo real para atualização imediata na interface de todos os alunos e abas
+    window.dispatchEvent(
+      new CustomEvent("desafios:inbox-message-received", {
+        detail: { type: "message_canceled", messageId },
+      })
+    );
+    window.dispatchEvent(
+      new CustomEvent("desafios:inbox-message-canceled", {
+        detail: { messageId },
+      })
+    );
+    broadcastInboxEvent({
+      type: "message_canceled",
+      messageId,
+    });
+  }
+
+  return { success: true, canceledMessage: target };
+}
+
 export function loadAllInboxMessages(): SystemInboxMessage[] {
   if (typeof window === "undefined") {
-    return [...memoryInboxMessages];
+    const canceled = loadCanceledMessageIds();
+    return memoryInboxMessages.filter((m) => !canceled.has(m.id));
   }
   try {
     const raw = window.localStorage.getItem(INBOX_STORAGE_KEY);
@@ -222,13 +349,15 @@ export function loadAllInboxMessages(): SystemInboxMessage[] {
       }
     }
 
-    const merged = Array.from(map.values()).sort(
-      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    );
+    const canceled = loadCanceledMessageIds();
+    const merged = Array.from(map.values())
+      .filter((m) => !canceled.has(m.id))
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     memoryInboxMessages = [...merged];
     return merged;
   } catch {
-    return [...memoryInboxMessages];
+    const canceled = loadCanceledMessageIds();
+    return memoryInboxMessages.filter((m) => !canceled.has(m.id));
   }
 }
 
@@ -658,6 +787,9 @@ export function getInboxMessagesForPlayer(
   const playerMessages: SystemInboxMessage[] = [];
 
   for (const raw of all) {
+    // Se o envio da mensagem foi cancelado pelo ADM, não exibir para o aluno
+    if (isMessageCanceled(raw.id)) continue;
+
     // Se o aluno já apagou a mensagem, não exibir
     if (deletesMap[raw.id]) continue;
 

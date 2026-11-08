@@ -49,6 +49,8 @@ import {
   subscribeToInboxSync,
   extractInboxTags,
   validateMessageTags,
+  cancelInboxMessage,
+  loadCanceledMessageIds,
   type SystemInboxMessage,
   type AdminBroadcastDraft,
 } from "@/lib/inbox-messages";
@@ -242,6 +244,10 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
   const [readersModalMsg, setReadersModalMsg] = useState<SystemInboxMessage | null>(null);
   const [readersTab, setReadersTab] = useState<"read" | "unread">("read");
 
+  // Estado para confirmação de cancelamento de envio
+  const [cancelingMsg, setCancelingMsg] = useState<SystemInboxMessage | null>(null);
+  const [isCanceling, setIsCanceling] = useState(false);
+
   // Histórico ordenado conforme a preferência selecionada
   const sortedSentHistory = useMemo(() => {
     return [...sentHistory].sort((a, b) => {
@@ -305,7 +311,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
             setReadersRefreshCount((c) => c + 1);
           })
           .catch(console.warn);
-      } else if (payload.type === "new_message") {
+      } else if (payload.type === "new_message" || payload.type === "message_canceled") {
         refreshHistory();
       }
     });
@@ -313,6 +319,42 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
       unsubscribe();
     };
   }, []);
+
+  // Cancela o envio da mensagem selecionada no histórico ADM e remove da caixa de entrada de todos os alunos
+  const handleConfirmCancelMessage = async () => {
+    if (!cancelingMsg) return;
+    setIsCanceling(true);
+    try {
+      const res = cancelInboxMessage(cancelingMsg.id);
+      if (res.success) {
+        // Sincroniza imediatamente com PlayFab Cloud através de PlatformAdminConfig
+        const allMsgs = loadAllInboxMessages();
+        const canceledIds = Array.from(loadCanceledMessageIds());
+        try {
+          await auth.updateAdminConfig({
+            ...auth.adminConfig,
+            inboxMessages: allMsgs.slice(0, 50),
+            canceledInboxMessageIds: canceledIds,
+          });
+        } catch (err) {
+          console.warn("Aviso ao salvar configuração remota após cancelamento:", err);
+        }
+
+        refreshHistory();
+        if (readersModalMsg?.id === cancelingMsg.id) {
+          setReadersModalMsg(null);
+        }
+        onBroadcastSent?.(
+          `🚫 O envio da mensagem "${cancelingMsg.title}" foi cancelado com sucesso. Ela foi removida da caixa de correio de todos os alunos.`
+        );
+      }
+    } catch (err) {
+      console.error("Erro ao cancelar envio da mensagem:", err);
+    } finally {
+      setIsCanceling(false);
+      setCancelingMsg(null);
+    }
+  };
 
   // Sincroniza ativamente da nuvem PlayFab e executa retrobusca sempre que o modal de detalhes de leitura for aberto
   // e mantém polling em tempo real a cada 5 segundos de forma silenciosa e estável (sem nenhum layout shift)
@@ -2008,18 +2050,30 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                           </span>
                         </div>
 
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => {
-                            setReadersModalMsg(msg);
-                            setReadersTab("read");
-                          }}
-                          className="h-7 rounded-xl text-[11px] font-bold gap-1 cursor-pointer"
-                        >
-                          <Users className="h-3 w-3" /> Ver Detalhes de Leitura
-                        </Button>
+                        <div className="flex items-center gap-1.5">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => {
+                              setReadersModalMsg(msg);
+                              setReadersTab("read");
+                            }}
+                            className="h-7 rounded-xl text-[11px] font-bold gap-1 cursor-pointer"
+                          >
+                            <Users className="h-3 w-3" /> Ver Detalhes de Leitura
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setCancelingMsg(msg)}
+                            className="h-7 rounded-xl text-[11px] font-bold gap-1 text-destructive hover:bg-destructive/10 hover:text-destructive cursor-pointer"
+                            title="Cancelar o envio e remover esta mensagem da caixa de correio de todos os alunos"
+                          >
+                            <Trash2 className="h-3 w-3" /> Cancelar Envio
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   );
@@ -3105,14 +3159,103 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                 )}
               </div>
 
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setReadersModalMsg(null)}
-                className="w-full rounded-xl text-xs font-bold"
-              >
-                Fechar
-              </Button>
+              <div className="flex items-center gap-2 pt-1">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setReadersModalMsg(null)}
+                  className="flex-1 rounded-xl text-xs font-bold"
+                >
+                  Fechar
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => {
+                    if (readersModalMsg) {
+                      setCancelingMsg(readersModalMsg);
+                    }
+                  }}
+                  className="rounded-xl text-xs font-bold text-destructive hover:bg-destructive/10 hover:text-destructive gap-1.5"
+                  title="Cancelar o envio deste comunicado e removê-lo de todos os alunos"
+                >
+                  <Trash2 className="h-3.5 w-3.5" /> Cancelar Envio
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* MODAL DE CONFIRMAÇÃO DE CANCELAMENTO DE ENVIO */}
+      <Dialog
+        open={Boolean(cancelingMsg)}
+        onOpenChange={(isOpen) => {
+          if (!isOpen && !isCanceling) setCancelingMsg(null);
+        }}
+      >
+        <DialogContent className="max-w-md rounded-3xl p-6">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base font-bold text-destructive">
+              <AlertCircle className="h-5 w-5" />
+              Cancelar Envio da Mensagem
+            </DialogTitle>
+          </DialogHeader>
+
+          {cancelingMsg && (
+            <div className="space-y-4 py-2 text-xs">
+              <p className="text-muted-foreground leading-relaxed">
+                Tem certeza de que deseja cancelar o envio do comunicado{" "}
+                <strong className="text-foreground font-semibold">"{cancelingMsg.title}"</strong>?
+              </p>
+
+              <div className="rounded-2xl border border-destructive/20 bg-destructive/5 p-3.5 space-y-1.5 text-destructive text-[11px]">
+                <p className="font-bold flex items-center gap-1.5">
+                  ⚠️ Efeitos imediatos do cancelamento:
+                </p>
+                <ul className="list-disc list-inside space-y-1 text-muted-foreground">
+                  <li>
+                    A mensagem será <strong className="text-foreground">removida imediatamente</strong> da caixa de entrada de todos os jogadores.
+                  </li>
+                  <li>
+                    Alunos que ainda não leram não terão mais acesso ao comunicado.
+                  </li>
+                  <li>
+                    Quaisquer recompensas pendentes não resgatadas serão canceladas.
+                  </li>
+                </ul>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCancelingMsg(null)}
+                  disabled={isCanceling}
+                  className="h-9 rounded-xl font-bold text-xs cursor-pointer"
+                >
+                  Voltar
+                </Button>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  size="sm"
+                  onClick={handleConfirmCancelMessage}
+                  disabled={isCanceling}
+                  className="h-9 rounded-xl font-bold text-xs gap-1.5 cursor-pointer shadow-xs"
+                >
+                  {isCanceling ? (
+                    <>
+                      <RefreshCw className="h-3.5 w-3.5 animate-spin" /> Cancelando...
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="h-3.5 w-3.5" /> Confirmar e Cancelar Envio
+                    </>
+                  )}
+                </Button>
+              </div>
             </div>
           )}
         </DialogContent>
