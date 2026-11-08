@@ -34,6 +34,11 @@ import {
   EyeOff,
   Pencil,
   FastForward,
+  Coins,
+  AlertTriangle,
+  Info,
+  Beaker,
+  CheckCircle2,
 } from "lucide-react";
 import {
   computeSeasonDates,
@@ -307,6 +312,29 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
     return getSeasonProgress(seasonStartInput, seasonEndInput);
   }, [seasonStartInput, seasonEndInput]);
 
+  // --- ATIVIDADES (GERAL & BETA) STATES ---
+  const [activityDurationDays, setActivityDurationDays] = useState<number>(60);
+  const [activityStartInput, setActivityStartInput] = useState<string>("");
+  const [activityEndInput, setActivityEndInput] = useState<string>("");
+  const [activitySeasonName, setActivitySeasonName] = useState<string>("");
+  const [confirmBetaResetNow, setConfirmBetaResetNow] = useState<boolean>(false);
+  const [confirmActivityResetNow, setConfirmActivityResetNow] = useState<boolean>(false);
+
+  const activitySeasonProgress = useMemo(() => {
+    return getSeasonProgress(activityStartInput, activityEndInput);
+  }, [activityStartInput, activityEndInput]);
+
+  // --- RANQUEADA (COMPETITIVO) STATES ---
+  const [rankedDurationDays, setRankedDurationDays] = useState<number>(14);
+  const [rankedStartInput, setRankedStartInput] = useState<string>("");
+  const [rankedEndInput, setRankedEndInput] = useState<string>("");
+  const [rankedSeasonName, setRankedSeasonName] = useState<string>("");
+  const [confirmRankedResetNow, setConfirmRankedResetNow] = useState<boolean>(false);
+
+  const rankedSeasonProgress = useMemo(() => {
+    return getSeasonProgress(rankedStartInput, rankedEndInput);
+  }, [rankedStartInput, rankedEndInput]);
+
   // System states
   const [newAdminPin, setNewAdminPin] = useState("");
 
@@ -436,6 +464,37 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
     setX1OpenInput(String(auth.adminConfig.x1OpenHour ?? 7));
     setX1CloseInput(String(auth.adminConfig.x1CloseHour ?? 19));
 
+    // Initialize Activity Season states
+    setActivityDurationDays(auth.adminConfig.activitySeasonDurationDays || 60);
+    setActivitySeasonName(
+      auth.adminConfig.activitySeasonName ||
+        (auth.adminConfig.isBetaActive !== false
+          ? "Temporada 1 Beta • SEMED Coari"
+          : "Temporada 1 de Atividades • SEMED Coari"),
+    );
+    const actStart = auth.adminConfig.activitySeasonStartAt
+      ? new Date(auth.adminConfig.activitySeasonStartAt)
+      : new Date("2026-11-01T00:00:00.000Z");
+    setActivityStartInput(toDatetimeLocalString(actStart));
+    const actEnd = auth.adminConfig.activitySeasonEndAt
+      ? new Date(auth.adminConfig.activitySeasonEndAt)
+      : new Date("2026-11-15T23:59:59.999Z");
+    setActivityEndInput(toDatetimeLocalString(actEnd));
+
+    // Initialize Ranked Season states
+    setRankedDurationDays(auth.adminConfig.rankedSeasonDurationDays || 14);
+    setRankedSeasonName(
+      auth.adminConfig.rankedSeasonName || "Temporada 1 Ranqueada • SEMED Coari",
+    );
+    const rnkStart = auth.adminConfig.rankedSeasonStartAt
+      ? new Date(auth.adminConfig.rankedSeasonStartAt)
+      : new Date("2026-11-01T00:00:00.000Z");
+    setRankedStartInput(toDatetimeLocalString(rnkStart));
+    const rnkEnd = auth.adminConfig.rankedSeasonEndAt
+      ? new Date(auth.adminConfig.rankedSeasonEndAt)
+      : new Date("2026-11-15T23:59:59.999Z");
+    setRankedEndInput(toDatetimeLocalString(rnkEnd));
+
     const sStart = auth.adminConfig.seasonStartAt
       ? new Date(auth.adminConfig.seasonStartAt)
       : new Date(auth.adminConfig.lastResetAt || Date.now());
@@ -457,6 +516,9 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
     }
     setNextSeasonName(`Temporada ${auth.adminConfig.seasonId + 1} • SEMED Coari`);
     setConfirmResetNow(false);
+    setConfirmBetaResetNow(false);
+    setConfirmActivityResetNow(false);
+    setConfirmRankedResetNow(false);
     setSavedMsg(null);
     return () => {
       window.removeEventListener(PRESENCE_UPDATED_EVENT, onPresenceChange);
@@ -753,261 +815,107 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
     flashSaved("Ranking resetado e nova temporada iniciada!");
   }
 
-  const renderSeasonManagementSection = () => (
-    <>
-      {/* 1. STATUS E PROGRESSO DA TEMPORADA VIGENTE */}
-      <div className="rounded-3xl border bg-gradient-to-br from-primary/10 via-card to-accent/5 p-5 space-y-4 shadow-xs">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 pb-3">
-          <div className="flex items-center gap-2.5">
-            <Trophy className="h-5 w-5 text-amber-500" />
-            <span className="font-display text-base font-black text-foreground">
-              Temporada Vigente (#{draft.seasonId})
-            </span>
-          </div>
-          <span className="inline-flex items-center gap-1 rounded-full bg-secondary/80 border px-3 py-1 text-xs font-bold text-muted-foreground">
-            <Calendar className="h-3.5 w-3.5 text-primary" />
-            Último reset: {new Date(draft.lastResetAt).toLocaleDateString("pt-BR")}
-          </span>
-        </div>
+  // --- ATIVIDADES (GERAL & BETA) HANDLERS ---
+  const handleSelectActivityPreset = (days: number) => {
+    setActivityDurationDays(days);
+    const baseStart = parseDatetimeLocal(activityStartInput) || new Date();
+    const { start, end } = computeSeasonDates(baseStart, days);
+    setActivityStartInput(toDatetimeLocalString(start));
+    setActivityEndInput(toDatetimeLocalString(end));
+  };
 
-        {/* Nome da Temporada */}
-        <div className="space-y-1.5">
-          <Label htmlFor="season-name-input" className="text-xs font-bold text-muted-foreground">
-            Nome Oficial da Temporada
-          </Label>
-          <div className="flex gap-2">
-            <Input
-              id="season-name-input"
-              value={draft.seasonName}
-              onChange={(e) => setDraft({ ...draft, seasonName: e.target.value })}
-              placeholder="Nome da temporada (ex: Temporada 1 • SEMED Coari)"
-              className="rounded-xl font-display font-bold text-sm bg-background"
-            />
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => void auth.updateAdminConfig(draft).then(() => flashSaved("Nome da temporada salvo!"))}
-              className="rounded-xl shrink-0 font-bold"
-            >
-              Renomear
-            </Button>
-          </div>
-        </div>
+  const handleExtendActivityDays = (additionalDays: number) => {
+    const currentEnd = parseDatetimeLocal(activityEndInput) || new Date();
+    const newEnd = extendSeasonDate(currentEnd, additionalDays);
+    setActivityEndInput(toDatetimeLocalString(newEnd));
+    const baseStart = parseDatetimeLocal(activityStartInput) || new Date();
+    const totalDays = Math.max(1, Math.round((newEnd.getTime() - baseStart.getTime()) / (24 * 60 * 60 * 1000)));
+    setActivityDurationDays(totalDays);
+    flashSaved(`Temporada de Atividades estendida em +${additionalDays} dias!`);
+  };
 
-        {/* Barra de Progresso Visual e Contagem Regressiva */}
-        <div className="rounded-2xl border bg-background/80 p-3.5 space-y-2.5">
-          <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold">
-            <span className="text-muted-foreground">
-              {seasonProgress.formattedRangeLabel}
-            </span>
-            <span className={`font-mono font-black ${seasonProgress.isExpired ? "text-rose-500" : "text-primary"}`}>
-              {seasonProgress.formattedCountdown}
-            </span>
-          </div>
+  const saveActivitySeasonSettings = async () => {
+    const start = parseDatetimeLocal(activityStartInput) || new Date();
+    const end = parseDatetimeLocal(activityEndInput);
+    const updated: PlatformAdminConfig = {
+      ...draft,
+      activitySeasonName: activitySeasonName.trim() || draft.activitySeasonName,
+      activitySeasonStartAt: start.toISOString(),
+      activitySeasonEndAt: end ? end.toISOString() : null,
+      activitySeasonDurationDays: activityDurationDays,
+    };
+    setDraft(updated);
+    await auth.updateAdminConfig(updated);
+    flashSaved("Configurações da Temporada de Atividades salvas com sucesso!");
+  };
 
-          <div className="h-3 w-full overflow-hidden rounded-full bg-muted border border-border/60">
-            <div
-              className={`h-full rounded-full transition-all duration-500 ${
-                seasonProgress.isExpired
-                  ? "bg-rose-500"
-                  : "bg-gradient-to-r from-primary to-accent"
-              }`}
-              style={{ width: `${Math.min(100, Math.max(3, seasonProgress.progressPercent))}%` }}
-            />
-          </div>
+  const executeBetaResetAction = async () => {
+    await auth.triggerActivitySeasonReset({
+      isBetaEnd: true,
+      newSeasonName: `Temporada ${(draft.activitySeasonId ?? 1) + 1} de Atividades • SEMED Coari`,
+      reason: "Encerramento oficial da fase Beta pelo Administrador",
+    });
+    setConfirmBetaResetNow(false);
+    onConfigSaved?.();
+    flashSaved("Fase Beta finalizada com sucesso! 120 medalhas revogadas, 25 preservadas e pontos convertidos em moedas!");
+  };
 
-          <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-            <span>Dia {seasonProgress.elapsedDays} de {seasonProgress.totalDays}</span>
-            <span>{Math.round(seasonProgress.progressPercent)}% concluído</span>
-          </div>
-        </div>
-      </div>
+  const executeRegularActivityResetAction = async () => {
+    await auth.triggerActivitySeasonReset({
+      isBetaEnd: false,
+      newSeasonName: `Temporada ${(draft.activitySeasonId ?? 1) + 1} de Atividades • SEMED Coari`,
+      reason: "Reset regular da Temporada de Atividades pelo Administrador",
+    });
+    setConfirmActivityResetNow(false);
+    onConfigSaved?.();
+    flashSaved("Nova Temporada de Atividades iniciada! Nível reiniciado e pontos convertidos em moedas.");
+  };
 
-      {/* 2. CONFIGURADOR DE DURAÇÃO E PERÍODO (PRESETS 7, 14, 30 DIAS OU LIVRE) */}
-      <div className="rounded-3xl border bg-card p-5 space-y-4 shadow-xs">
-        <div className="flex items-center gap-2 border-b border-border/50 pb-3">
-          <CalendarClock className="h-5 w-5 text-primary" />
-          <div>
-            <h3 className="font-display text-sm font-bold text-foreground">
-              Duração da Temporada & Ciclo de Renovação
-            </h3>
-            <p className="text-xs text-muted-foreground">
-              Defina quantos dias cada temporada irá durar. Ao vencer, a temporada seguinte é criada automaticamente.
-            </p>
-          </div>
-        </div>
+  // --- RANQUEADA HANDLERS ---
+  const handleSelectRankedPreset = (days: number) => {
+    setRankedDurationDays(days);
+    const baseStart = parseDatetimeLocal(rankedStartInput) || new Date();
+    const { start, end } = computeSeasonDates(baseStart, days);
+    setRankedStartInput(toDatetimeLocalString(start));
+    setRankedEndInput(toDatetimeLocalString(end));
+  };
 
-        {/* Presets Rápidos de Duração */}
-        <div className="space-y-1.5">
-          <Label className="text-xs font-bold text-foreground">
-            Selecione a Duração Padrão da Temporada
-          </Label>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            {SEASON_DURATION_PRESETS.map((days) => {
-              const isSelected = seasonDurationDays === days;
-              return (
-                <button
-                  key={days}
-                  type="button"
-                  onClick={() => handleSelectPreset(days)}
-                  className={`flex flex-col items-center justify-center p-3 rounded-2xl border transition-all cursor-pointer ${
-                    isSelected
-                      ? "border-primary bg-primary/10 text-primary ring-2 ring-primary/30 shadow-xs"
-                      : "border-border/70 bg-secondary/30 text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
-                  }`}
-                >
-                  <span className="font-display text-base font-black">
-                    {days === 7 ? "⚡ 7 Dias" : days === 14 ? "⭐ 14 Dias" : "🗓️ 30 Dias"}
-                  </span>
-                  <span className="text-[10px] font-semibold mt-0.5">
-                    {days === 7 ? "Semanal" : days === 14 ? "Quinzenal (Padrão)" : "Mensal"}
-                  </span>
-                </button>
-              );
-            })}
+  const handleExtendRankedDays = (additionalDays: number) => {
+    const currentEnd = parseDatetimeLocal(rankedEndInput) || new Date();
+    const newEnd = extendSeasonDate(currentEnd, additionalDays);
+    setRankedEndInput(toDatetimeLocalString(newEnd));
+    const baseStart = parseDatetimeLocal(rankedStartInput) || new Date();
+    const totalDays = Math.max(1, Math.round((newEnd.getTime() - baseStart.getTime()) / (24 * 60 * 60 * 1000)));
+    setRankedDurationDays(totalDays);
+    flashSaved(`Temporada de Ranqueada estendida em +${additionalDays} dias!`);
+  };
 
-            <button
-              type="button"
-              onClick={() => setSeasonDurationDays(-1)}
-              className={`flex flex-col items-center justify-center p-3 rounded-2xl border transition-all cursor-pointer ${
-                !SEASON_DURATION_PRESETS.includes(seasonDurationDays as any)
-                  ? "border-primary bg-primary/10 text-primary ring-2 ring-primary/30 shadow-xs"
-                  : "border-border/70 bg-secondary/30 text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
-              }`}
-            >
-              <span className="font-display text-base font-black">✏️ Livre</span>
-              <span className="text-[10px] font-semibold mt-0.5">Personalizado</span>
-            </button>
-          </div>
-        </div>
+  const saveRankedSeasonSettings = async () => {
+    const start = parseDatetimeLocal(rankedStartInput) || new Date();
+    const end = parseDatetimeLocal(rankedEndInput);
+    const updated: PlatformAdminConfig = {
+      ...draft,
+      rankedSeasonName: rankedSeasonName.trim() || draft.rankedSeasonName,
+      rankedSeasonStartAt: start.toISOString(),
+      rankedSeasonEndAt: end ? end.toISOString() : null,
+      rankedSeasonDurationDays: rankedDurationDays,
+    };
+    setDraft(updated);
+    await auth.updateAdminConfig(updated);
+    flashSaved("Configurações da Temporada de Ranqueada salvas com sucesso!");
+  };
 
-        {/* Campos de Início e Término */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-          <div className="space-y-1.5">
-            <Label htmlFor="season-start-datetime" className="text-xs font-bold text-muted-foreground">
-              Data e Hora de Início
-            </Label>
-            <Input
-              id="season-start-datetime"
-              type="datetime-local"
-              value={seasonStartInput}
-              onChange={(e) => setSeasonStartInput(e.target.value)}
-              className="rounded-xl font-mono text-xs bg-background"
-            />
-          </div>
+  const executeRankedResetAction = async () => {
+    await auth.triggerRankedSeasonReset({
+      newSeasonName: `Temporada ${(draft.rankedSeasonId ?? 1) + 1} Ranqueada • SEMED Coari`,
+      reason: "Reset da Temporada de Ranqueada pelo Administrador",
+    });
+    setConfirmRankedResetNow(false);
+    onConfigSaved?.();
+    flashSaved("Temporada de Ranqueada resetada com sucesso! Pontos zerados e medalhas preservadas.");
+  };
 
-          <div className="space-y-1.5">
-            <Label htmlFor="season-end-datetime" className="text-xs font-bold text-muted-foreground">
-              Data e Hora de Encerramento
-            </Label>
-            <Input
-              id="season-end-datetime"
-              type="datetime-local"
-              value={seasonEndInput}
-              onChange={(e) => {
-                setSeasonEndInput(e.target.value);
-                setScheduleInput(e.target.value);
-              }}
-              className="rounded-xl font-mono text-xs bg-background"
-            />
-          </div>
-        </div>
 
-        {/* AÇÕES DE EXTENSÃO RÁPIDA (Estender Temporada) */}
-        <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-3.5 space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold text-foreground flex items-center gap-1.5">
-              <FastForward className="h-4 w-4 text-amber-500" />
-              Estender Temporada Atual (Empurra a Próxima)
-            </span>
-            <span className="text-[11px] text-muted-foreground hidden sm:inline">
-              Adiciona dias mantendo o término às 23:59
-            </span>
-          </div>
-          <p className="text-[11px] text-muted-foreground">
-            Precisa de mais tempo? Clique abaixo para estender a data final. A próxima temporada será automaticamente empurrada para iniciar após o novo prazo.
-          </p>
-          <div className="flex flex-wrap gap-2 pt-1">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => handleExtendSeason(3)}
-              className="rounded-xl text-xs font-bold cursor-pointer border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
-            >
-              +3 Dias
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => handleExtendSeason(7)}
-              className="rounded-xl text-xs font-bold cursor-pointer border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
-            >
-              +7 Dias (1 Semana)
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => handleExtendSeason(14)}
-              className="rounded-xl text-xs font-bold cursor-pointer border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
-            >
-              +14 Dias (2 Semanas)
-            </Button>
-          </div>
-        </div>
-
-        {/* SWITCH DE RENOVAÇÃO AUTOMÁTICA EM CADEIA */}
-        <div className="flex items-center justify-between gap-3 rounded-2xl border bg-secondary/30 p-3.5">
-          <div className="text-xs space-y-0.5">
-            <div className="font-bold text-foreground flex items-center gap-1.5">
-              <RotateCcw className="h-3.5 w-3.5 text-primary" />
-              Renovação Automática da Temporada em Cadeia
-            </div>
-            <div className="text-muted-foreground text-[11px]">
-              Ao alcançar a data final, encerra o ciclo, consolida premiações e inicia automaticamente a Temporada seguinte com a mesma quantidade de dias.
-            </div>
-          </div>
-          <Switch checked={autoRenewSeason} onCheckedChange={setAutoRenewSeason} />
-        </div>
-
-        {/* SWITCH DE RESET DE XP */}
-        <div className="flex items-center justify-between gap-3 rounded-2xl border bg-secondary/30 p-3.5">
-          <div className="text-xs space-y-0.5">
-            <div className="font-bold text-foreground">
-              Zerar também XP Total e Nível dos alunos na virada?
-            </div>
-            <div className="text-muted-foreground text-[11px]">
-              Se desmarcado (recomendado), apenas o XP de temporada e recordes são reiniciados, preservando o nível do aluno.
-            </div>
-          </div>
-          <Switch checked={scheduleClearXp} onCheckedChange={setScheduleClearXp} />
-        </div>
-
-        {/* BOTÃO SALVAR CONFIGURAÇÃO */}
-        <div className="flex flex-wrap gap-2 pt-1">
-          <Button
-            type="button"
-            onClick={handleSaveSeasonConfig}
-            className="flex-1 h-11 rounded-xl font-display font-extrabold text-sm gap-2 shadow-xs cursor-pointer"
-          >
-            <Save className="h-4 w-4" /> Salvar Configuração da Temporada
-          </Button>
-          {draft.scheduledResetAt && (
-            <Button
-              type="button"
-              variant="outline"
-              onClick={cancelScheduledReset}
-              className="h-11 rounded-xl text-destructive hover:bg-destructive/10 border-destructive/30 font-bold"
-            >
-              <Trash2 className="mr-1.5 h-4 w-4" /> Cancelar Agendamento
-            </Button>
-          )}
-        </div>
-      </div>
-    </>
-  );
 
   async function saveSystemSettings() {
     await auth.updateAdminConfig(draft);
@@ -2352,8 +2260,115 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
                     </div>
                   </div>
 
-                  {/* Ciclo, Duração & Datas da Temporada do Torneio */}
-                  {renderSeasonManagementSection()}
+                  {/* Status da Temporada de Ranqueada (Somente Leitura) */}
+                  <div className="rounded-2xl border bg-gradient-to-r from-primary/10 via-card to-accent/10 p-4 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <Trophy className="h-5 w-5 text-accent" />
+                          <span className="font-display text-base font-extrabold text-foreground">
+                            {draft.rankedSeasonName || "Temporada 1 Ranqueada • SEMED Coari"}
+                          </span>
+                          <span className="rounded-full bg-accent/20 border border-accent/40 px-2.5 py-0.5 text-[10px] font-black text-accent uppercase">
+                            Ciclo de 2 Semanas (14 Dias)
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Domingo 08/11/2026 completa metade da Temporada 1. O encerramento oficial e reset ocorrerão no próximo domingo, <b>15/11/2026 às 23:59:59</b>.
+                        </p>
+                      </div>
+
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => setTab("resets")}
+                        className="rounded-xl font-bold text-xs"
+                      >
+                        ⚙️ Configurar Datas e Resets na Aba Resets →
+                      </Button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2 border-t border-border/50 text-xs">
+                      <div className="rounded-xl bg-background/80 p-2.5 border">
+                        <span className="text-[10px] uppercase font-bold text-muted-foreground block">Início da Temporada</span>
+                        <span className="font-bold text-foreground">
+                          {new Date(draft.rankedSeasonStartAt || "2026-11-01T00:00:00.000Z").toLocaleDateString("pt-BR")}
+                        </span>
+                      </div>
+                      <div className="rounded-xl bg-background/80 p-2.5 border">
+                        <span className="text-[10px] uppercase font-bold text-muted-foreground block">Término & Reset</span>
+                        <span className="font-bold text-primary font-mono">
+                          {new Date(draft.rankedSeasonEndAt || "2026-11-15T23:59:59.999Z").toLocaleDateString("pt-BR")} às 23:59
+                        </span>
+                      </div>
+                      <div className="rounded-xl bg-background/80 p-2.5 border">
+                        <span className="text-[10px] uppercase font-bold text-muted-foreground block">Regra de Reset</span>
+                        <span className="font-bold text-foreground">
+                          Zera pontos ranqueados • Mantém todas as medalhas
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Horário de Funcionamento das Partidas Ranqueadas */}
+                  <div className="rounded-2xl border bg-card p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="font-display text-sm font-bold text-foreground">
+                          Horário de Funcionamento das Partidas Ranqueadas
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          Defina a janela de horários em que os alunos podem disputar partidas ranqueadas.
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+                      <div>
+                        <Label className="text-xs font-bold">Abertura (0-23h)</Label>
+                        <Input
+                          type="number"
+                          min={0}
+                          max={23}
+                          value={draft.rankedOpenHour ?? 7}
+                          onChange={(e) =>
+                            setDraft({
+                              ...draft,
+                              rankedOpenHour: Math.max(0, Math.min(23, Number(e.target.value) || 0)),
+                            })
+                          }
+                          className="mt-1 h-9 rounded-xl font-bold"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-xs font-bold">Fechamento (1-24h)</Label>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={24}
+                          value={draft.rankedCloseHour ?? 22}
+                          onChange={(e) =>
+                            setDraft({
+                              ...draft,
+                              rankedCloseHour: Math.max(1, Math.min(24, Number(e.target.value) || 22)),
+                            })
+                          }
+                          className="mt-1 h-9 rounded-xl font-bold"
+                        />
+                      </div>
+                      <div className="flex items-center justify-between gap-2 rounded-xl border bg-secondary/30 p-2.5">
+                        <div className="text-xs">
+                          <div className="font-bold">Modo 24 Horas</div>
+                          <div className="text-[10px] text-muted-foreground">Sem restrição de horário</div>
+                        </div>
+                        <Switch
+                          checked={draft.rankedForceOpen ?? true}
+                          onCheckedChange={(v) => setDraft({ ...draft, rankedForceOpen: v })}
+                        />
+                      </div>
+                    </div>
+                  </div>
 
                   {/* Inspeção do Ranking por Etapa Escolar */}
                   <div className="rounded-2xl border bg-card p-5 space-y-4">
@@ -5005,80 +5020,646 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
           </div>
         )}
 
-            {/* TAB 2: RESETS PERIÓDICOS & GESTÃO DE TEMPORADAS */}
+            {/* TAB 2: RESETS PERIÓDICOS & GESTÃO DE TEMPORADAS (CONTAINERS SEPARADOS) */}
             {tab === "resets" && (
-              <div className="space-y-4">
-                {renderSeasonManagementSection()}
-
-                {/* Reset Imediato */}
-                <div className="rounded-2xl border border-destructive/30 bg-destructive/5 p-4 space-y-3">
-                  <div className="font-display text-base font-extrabold text-destructive flex items-center gap-2">
-                    <RotateCcw className="h-5 w-5" /> Executar Reset Agora (Imediato)
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="next-season-name">Nome da Nova Temporada</Label>
-                    <Input
-                      id="next-season-name"
-                      value={nextSeasonName}
-                      onChange={(e) => setNextSeasonName(e.target.value)}
-                      className="rounded-xl bg-background"
-                    />
-                  </div>
-                  <div className="flex items-center justify-between gap-3 rounded-xl border bg-background p-3">
-                    <div className="text-xs">
-                      <div className="font-bold">Zerar também XP Total e Nível dos alunos?</div>
-                      <div className="text-muted-foreground">
-                        Reinicia todos os alunos no Nível 1 (0 XP).
+              <div className="space-y-6">
+                {/* ========================================================= */}
+                {/* CONTAINER 1: TEMPORADA DE ATIVIDADES (GERAL & FASE BETA)  */}
+                {/* ========================================================= */}
+                <div className="rounded-3xl border-2 border-indigo-500/30 bg-gradient-to-br from-indigo-500/10 via-card to-purple-500/5 p-5 space-y-4 shadow-sm">
+                  {/* Cabeçalho do Bloco 1 */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-indigo-500/20 pb-4">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-indigo-500/20 text-indigo-600 dark:text-indigo-400">
+                        <Sparkles className="h-6 w-6" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h2 className="font-display text-base font-black text-foreground">
+                            1. Temporada de Atividades (Geral & Nível)
+                          </h2>
+                          {draft.isBetaActive !== false ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/20 border border-amber-500/40 px-2.5 py-0.5 text-[11px] font-black text-amber-600 dark:text-amber-400">
+                              <Beaker className="h-3 w-3" /> FASE BETA ATIVA
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/20 border border-emerald-500/40 px-2.5 py-0.5 text-[11px] font-black text-emerald-600 dark:text-emerald-400">
+                              <CheckCircle2 className="h-3 w-3" /> TEMPORADA REGULAR
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {draft.isBetaActive !== false
+                            ? "Fase Beta em andamento • Encerramento previsto para domingo, 15/11/2026 às 23:59:59"
+                            : "Ciclo padrão bimestral (2 meses / 60 dias) de evolução de atividades e níveis"}
+                        </p>
                       </div>
                     </div>
-                    <Switch checked={nowClearXp} onCheckedChange={setNowClearXp} />
+                    <div className="text-xs font-mono font-bold text-muted-foreground bg-secondary/50 rounded-xl px-3 py-1.5 border">
+                      Temporada #{draft.activitySeasonId ?? 1}
+                    </div>
                   </div>
 
-                  {!confirmResetNow ? (
+                  {/* Nome da Temporada de Atividades */}
+                  <div className="space-y-1.5">
+                    <Label htmlFor="activity-season-name-input" className="text-xs font-bold text-muted-foreground">
+                      Nome da Temporada de Atividades
+                    </Label>
+                    <Input
+                      id="activity-season-name-input"
+                      value={activitySeasonName}
+                      onChange={(e) => setActivitySeasonName(e.target.value)}
+                      placeholder="Ex: Temporada 1 Beta • SEMED Coari"
+                      className="rounded-xl font-display font-bold text-sm bg-background"
+                    />
+                  </div>
+
+                  {/* Barra de Progresso Visual */}
+                  <div className="rounded-2xl border bg-background/80 p-3.5 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold">
+                      <span className="text-muted-foreground">
+                        {activitySeasonProgress.formattedRangeLabel}
+                      </span>
+                      <span className={`font-mono font-black ${activitySeasonProgress.isExpired ? "text-rose-500" : "text-indigo-600 dark:text-indigo-400"}`}>
+                        {activitySeasonProgress.formattedCountdown}
+                      </span>
+                    </div>
+
+                    <div className="h-3 w-full overflow-hidden rounded-full bg-muted border border-border/60">
+                      <div
+                        className={`h-full rounded-full transition-all duration-500 ${
+                          activitySeasonProgress.isExpired
+                            ? "bg-rose-500"
+                            : "bg-gradient-to-r from-indigo-500 to-purple-500"
+                        }`}
+                        style={{ width: `${Math.min(100, Math.max(3, activitySeasonProgress.progressPercent))}%` }}
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                      <span>Dia {activitySeasonProgress.elapsedDays} de {activitySeasonProgress.totalDays}</span>
+                      <span>{Math.round(activitySeasonProgress.progressPercent)}% decorrido</span>
+                    </div>
+                  </div>
+
+                  {/* Regras e Diretrizes do Reset de Atividades */}
+                  <div className="rounded-2xl border border-indigo-500/20 bg-indigo-500/5 p-4 space-y-2 text-xs">
+                    <div className="font-bold text-indigo-700 dark:text-indigo-300 flex items-center gap-1.5">
+                      <Info className="h-4 w-4" /> Diretrizes e Regras de Reset da Temporada de Atividades
+                    </div>
+                    {draft.isBetaActive !== false ? (
+                      <ul className="list-disc list-inside space-y-1 text-muted-foreground leading-relaxed">
+                        <li>
+                          <b className="text-foreground">Fase Beta finaliza em 15/11 às 23:59:59:</b> No reset do Beta, todos os níveis e XPs voltam para 1 (0 XP).
+                        </li>
+                        <li>
+                          <b className="text-foreground">Revogação de 120 medalhas de atividades:</b> As medalhas de jogos e níveis são retiradas para permitir novos pioneiros na temporada seguinte.
+                        </li>
+                        <li>
+                          <b className="text-foreground">25 Medalhas Especiais Preservadas:</b> Apenas medalhas Beta Tester, Robôs Raros (Ametista, Rubi, Safira, etc.), Streaks de Login e pioneiros de nível são mantidas permanentemente.
+                        </li>
+                        <li>
+                          <b className="text-foreground">Conversão de Pontos em Moedas:</b> Todo saldo de pontos dos alunos é convertido em Moedas de Cosméticos. A pontuação histórica no ranking (<code className="font-mono text-[11px]">careerPoints</code>) nunca é perdida!
+                        </li>
+                      </ul>
+                    ) : (
+                      <ul className="list-disc list-inside space-y-1 text-muted-foreground leading-relaxed">
+                        <li>
+                          <b className="text-foreground">Temporadas Oficiais Regulares (2 Meses / 60 Dias):</b> As medalhas conquistadas NÃO são mais removidas; passam a ser acumuladas definitivamente no perfil.
+                        </li>
+                        <li>
+                          <b className="text-foreground">Reset de Nível & XP:</b> A cada 2 meses, os níveis reiniciam em 1 para estimular novo avanço educacional.
+                        </li>
+                        <li>
+                          <b className="text-foreground">Conversão em Moedas:</b> O saldo de pontos é convertido em moedas de cosméticos para gastar na loja do jogo.
+                        </li>
+                      </ul>
+                    )}
+                  </div>
+
+                  {/* Configuração de Duração e Datas */}
+                  <div className="space-y-3 pt-1">
+                    <Label className="text-xs font-bold text-foreground">
+                      Duração Padrão da Temporada de Atividades
+                    </Label>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      {[30, 60, 90].map((days) => {
+                        const isSelected = activityDurationDays === days;
+                        return (
+                          <button
+                            key={days}
+                            type="button"
+                            onClick={() => handleSelectActivityPreset(days)}
+                            className={`flex flex-col items-center justify-center p-3 rounded-2xl border transition-all cursor-pointer ${
+                              isSelected
+                                ? "border-indigo-500 bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 ring-2 ring-indigo-500/30 shadow-xs"
+                                : "border-border/70 bg-secondary/30 text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
+                            }`}
+                          >
+                            <span className="font-display text-base font-black">
+                              {days === 30 ? "🗓️ 30 Dias" : days === 60 ? "⭐ 60 Dias" : "📅 90 Dias"}
+                            </span>
+                            <span className="text-[10px] font-semibold mt-0.5">
+                              {days === 30 ? "Mensal" : days === 60 ? "Bimestral (Padrão)" : "Trimestral"}
+                            </span>
+                          </button>
+                        );
+                      })}
+
+                      <button
+                        type="button"
+                        onClick={() => setActivityDurationDays(-1)}
+                        className={`flex flex-col items-center justify-center p-3 rounded-2xl border transition-all cursor-pointer ${
+                          ![30, 60, 90].includes(activityDurationDays)
+                            ? "border-indigo-500 bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 ring-2 ring-indigo-500/30 shadow-xs"
+                            : "border-border/70 bg-secondary/30 text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
+                        }`}
+                      >
+                        <span className="font-display text-base font-black">✏️ Livre</span>
+                        <span className="text-[10px] font-semibold mt-0.5">Personalizado</span>
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="act-season-start" className="text-xs font-bold text-muted-foreground">
+                          Data e Hora de Início
+                        </Label>
+                        <Input
+                          id="act-season-start"
+                          type="datetime-local"
+                          value={activityStartInput}
+                          onChange={(e) => setActivityStartInput(e.target.value)}
+                          className="rounded-xl font-mono text-xs bg-background"
+                        />
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <Label htmlFor="act-season-end" className="text-xs font-bold text-muted-foreground">
+                          Data e Hora de Encerramento
+                        </Label>
+                        <Input
+                          id="act-season-end"
+                          type="datetime-local"
+                          value={activityEndInput}
+                          onChange={(e) => setActivityEndInput(e.target.value)}
+                          className="rounded-xl font-mono text-xs bg-background"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Extensão rápida da Temporada de Atividades */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border bg-secondary/20 p-3">
+                      <span className="text-xs font-bold text-muted-foreground flex items-center gap-1.5">
+                        <FastForward className="h-4 w-4 text-indigo-500" />
+                        Estender término da temporada de atividades:
+                      </span>
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleExtendActivityDays(7)}
+                          className="rounded-xl text-xs font-bold border-indigo-500/30 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-500/10"
+                        >
+                          +7 Dias
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleExtendActivityDays(14)}
+                          className="rounded-xl text-xs font-bold border-indigo-500/30 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-500/10"
+                        >
+                          +14 Dias
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleExtendActivityDays(30)}
+                          className="rounded-xl text-xs font-bold border-indigo-500/30 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-500/10"
+                        >
+                          +30 Dias
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* Taxa de Conversão de Moedas */}
+                    <div className="flex items-center justify-between gap-3 rounded-2xl border bg-secondary/30 p-3.5">
+                      <div className="text-xs space-y-0.5">
+                        <div className="font-bold text-foreground flex items-center gap-1.5">
+                          <Coins className="h-4 w-4 text-amber-500" />
+                          Taxa de Conversão de Pontos em Moedas
+                        </div>
+                        <div className="text-muted-foreground text-[11px]">
+                          Quantidade de moedas geradas para cada ponto convertido no reset ou resgate voluntário.
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-muted-foreground">1 pt =</span>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={100}
+                          value={draft.pointsToCoinsRate ?? 1}
+                          onChange={(e) => setDraft({ ...draft, pointsToCoinsRate: Math.max(1, parseInt(e.target.value) || 1) })}
+                          className="w-18 h-9 text-center font-bold rounded-xl bg-background"
+                        />
+                        <span className="text-xs font-bold text-amber-600 dark:text-amber-400">moeda(s)</span>
+                      </div>
+                    </div>
+
+                    {/* Botão Salvar Configuração de Atividades */}
                     <Button
                       type="button"
-                      variant="destructive"
-                      onClick={() => setConfirmResetNow(true)}
-                      className="w-full rounded-xl font-bold"
+                      onClick={saveActivitySeasonSettings}
+                      className="w-full h-11 rounded-xl font-display font-extrabold text-sm gap-2 bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs cursor-pointer"
                     >
-                      Iniciar Nova Temporada e Resetar Ranking Agora
+                      <Save className="h-4 w-4" /> Salvar Configurações da Temporada de Atividades
                     </Button>
-                  ) : (
-                    <div className="flex gap-2">
+                  </div>
+
+                  {/* Reset da Temporada de Atividades */}
+                  <div className="rounded-2xl border border-destructive/30 bg-destructive/5 p-4 space-y-3 mt-2">
+                    <div className="font-display text-sm font-black text-destructive flex items-center gap-2">
+                      <RotateCcw className="h-4 w-4" />
+                      {draft.isBetaActive !== false
+                        ? "Ação de Encerramento da Fase Beta (Reset Especial)"
+                        : "Iniciar Nova Temporada de Atividades (Reset Regular)"}
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {draft.isBetaActive !== false
+                        ? "Atenção: Ao executar o encerramento do Beta, 120 medalhas de atividades serão revogadas, níveis voltam para 1, pioneiros são reiniciados e todo saldo de pontos é convertido em moedas. As 25 medalhas especiais acordadas são preservadas."
+                        : "Ao iniciar nova temporada bimestral, os níveis voltam para 1 e os pontos são convertidos em moedas. Todas as medalhas conquistadas são mantidas."}
+                    </p>
+
+                    {draft.isBetaActive !== false ? (
+                      !confirmBetaResetNow ? (
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          onClick={() => setConfirmBetaResetNow(true)}
+                          className="w-full rounded-xl font-bold cursor-pointer"
+                        >
+                          🧪 Finalizar Fase Beta e Executar Reset de Atividades Agora
+                        </Button>
+                      ) : (
+                        <div className="rounded-xl border border-destructive/40 bg-background p-3.5 space-y-2.5">
+                          <div className="text-xs font-bold text-destructive flex items-center gap-1.5">
+                            <AlertTriangle className="h-4 w-4" /> Confirmação de Encerramento Definitivo do Beta:
+                          </div>
+                          <p className="text-[11px] text-muted-foreground">
+                            Você tem certeza que deseja finalizar a Fase Beta agora? Essa ação revogará 120 medalhas de atividades, manterá 25 especiais, converterá os pontos em moedas e iniciará a Temporada 2 oficial.
+                          </p>
+                          <div className="flex gap-2">
+                            <Button
+                              type="button"
+                              variant="destructive"
+                              onClick={executeBetaResetAction}
+                              className="flex-1 rounded-xl font-bold cursor-pointer"
+                            >
+                              Sim, Confirmar e Finalizar Fase Beta
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              onClick={() => setConfirmBetaResetNow(false)}
+                              className="rounded-xl cursor-pointer"
+                            >
+                              Cancelar
+                            </Button>
+                          </div>
+                        </div>
+                      )
+                    ) : (
+                      !confirmActivityResetNow ? (
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          onClick={() => setConfirmActivityResetNow(true)}
+                          className="w-full rounded-xl font-bold cursor-pointer"
+                        >
+                          Iniciar Nova Temporada de Atividades (Reset Bimestral)
+                        </Button>
+                      ) : (
+                        <div className="rounded-xl border border-destructive/40 bg-background p-3.5 space-y-2.5">
+                          <div className="text-xs font-bold text-destructive flex items-center gap-1.5">
+                            <AlertTriangle className="h-4 w-4" /> Confirmar Novo Ciclo Bimestral:
+                          </div>
+                          <p className="text-[11px] text-muted-foreground">
+                            Os níveis serão reiniciados para 1 e os pontos convertidos em moedas. As medalhas dos alunos serão preservadas.
+                          </p>
+                          <div className="flex gap-2">
+                            <Button
+                              type="button"
+                              variant="destructive"
+                              onClick={executeRegularActivityResetAction}
+                              className="flex-1 rounded-xl font-bold cursor-pointer"
+                            >
+                              Confirmar Novo Ciclo
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              onClick={() => setConfirmActivityResetNow(false)}
+                              className="rounded-xl cursor-pointer"
+                            >
+                              Cancelar
+                            </Button>
+                          </div>
+                        </div>
+                      )
+                    )}
+                  </div>
+                </div>
+
+                {/* ========================================================= */}
+                {/* CONTAINER 2: TEMPORADA DE RANQUEADA (MODO COMPETITIVO)    */}
+                {/* ========================================================= */}
+                <div className="rounded-3xl border-2 border-amber-500/30 bg-gradient-to-br from-amber-500/10 via-card to-orange-500/5 p-5 space-y-4 shadow-sm">
+                  {/* Cabeçalho do Bloco 2 */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-amber-500/20 pb-4">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-amber-500/20 text-amber-600 dark:text-amber-400">
+                        <Trophy className="h-6 w-6" />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h2 className="font-display text-base font-black text-foreground">
+                            2. Temporada de Ranqueada (Modo Competitivo)
+                          </h2>
+                          <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/20 border border-amber-500/40 px-2.5 py-0.5 text-[11px] font-black text-amber-600 dark:text-amber-400">
+                            ⚡ CICLO DE 2 SEMANAS
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          Ciclo quinzenal fixo (14 dias) • Domingo 08/11 marca metade do período • Encerramento no domingo seguinte, 15/11 às 23:59:59
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-xs font-mono font-bold text-muted-foreground bg-secondary/50 rounded-xl px-3 py-1.5 border">
+                      Temporada #{draft.rankedSeasonId ?? 1}
+                    </div>
+                  </div>
+
+                  {/* Nome da Temporada de Ranqueada */}
+                  <div className="space-y-1.5">
+                    <Label htmlFor="ranked-season-name-input" className="text-xs font-bold text-muted-foreground">
+                      Nome Oficial da Temporada de Ranqueada
+                    </Label>
+                    <Input
+                      id="ranked-season-name-input"
+                      value={rankedSeasonName}
+                      onChange={(e) => setRankedSeasonName(e.target.value)}
+                      placeholder="Ex: Temporada 1 Ranqueada • SEMED Coari"
+                      className="rounded-xl font-display font-bold text-sm bg-background"
+                    />
+                  </div>
+
+                  {/* Barra de Progresso Visual da Ranqueada */}
+                  <div className="rounded-2xl border bg-background/80 p-3.5 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold">
+                      <span className="text-muted-foreground">
+                        {rankedSeasonProgress.formattedRangeLabel}
+                      </span>
+                      <span className={`font-mono font-black ${rankedSeasonProgress.isExpired ? "text-rose-500" : "text-amber-600 dark:text-amber-400"}`}>
+                        {rankedSeasonProgress.formattedCountdown}
+                      </span>
+                    </div>
+
+                    <div className="h-3 w-full overflow-hidden rounded-full bg-muted border border-border/60">
+                      <div
+                        className={`h-full rounded-full transition-all duration-500 ${
+                          rankedSeasonProgress.isExpired
+                            ? "bg-rose-500"
+                            : "bg-gradient-to-r from-amber-500 to-orange-500"
+                        }`}
+                        style={{ width: `${Math.min(100, Math.max(3, rankedSeasonProgress.progressPercent))}%` }}
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                      <span>Dia {rankedSeasonProgress.elapsedDays} de {rankedSeasonProgress.totalDays}</span>
+                      <span>{Math.round(rankedSeasonProgress.progressPercent)}% decorrido</span>
+                    </div>
+                  </div>
+
+                  {/* Regras e Diretrizes da Ranqueada */}
+                  <div className="rounded-2xl border border-amber-500/20 bg-amber-500/5 p-4 space-y-2 text-xs">
+                    <div className="font-bold text-amber-700 dark:text-amber-300 flex items-center gap-1.5">
+                      <Info className="h-4 w-4" /> Diretrizes e Regras de Reset da Ranqueada
+                    </div>
+                    <ul className="list-disc list-inside space-y-1 text-muted-foreground leading-relaxed">
+                      <li>
+                        <b className="text-foreground">Duração Quinzenal (14 Dias):</b> O ciclo reinicia a cada duas semanas, permitindo novas disputas pelos primeiros lugares do pódio escolar.
+                      </li>
+                      <li>
+                        <b className="text-foreground">Zera Apenas Pontos Ranqueados:</b> No reset, somente a pontuação do torneio (<code className="font-mono text-[11px]">tournamentPoints</code>) volta a zero e a divisão retorna para Bronze I.
+                      </li>
+                      <li>
+                        <b className="text-foreground">Nenhum Nível ou XP Perdido:</b> O nível escolar, XP geral e moedas dos alunos NÃO são alterados no reset de ranqueada.
+                      </li>
+                      <li>
+                        <b className="text-foreground">Medalhas de Pódio Empilham (Cumulativas):</b> As medalhas de 1º, 2º e 3º lugar são dinâmicas. Ao conquistar novamente, o aluno acumula um contador (<code className="font-mono text-[11px]">2x, 3x...</code>) e todo o histórico de temporadas conquistadas fica gravado na mesma medalha!
+                      </li>
+                    </ul>
+                  </div>
+
+                  {/* Presets e Datas da Ranqueada */}
+                  <div className="space-y-3 pt-1">
+                    <Label className="text-xs font-bold text-foreground">
+                      Duração Padrão da Temporada de Ranqueada
+                    </Label>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      {[7, 14, 21].map((days) => {
+                        const isSelected = rankedDurationDays === days;
+                        return (
+                          <button
+                            key={days}
+                            type="button"
+                            onClick={() => handleSelectRankedPreset(days)}
+                            className={`flex flex-col items-center justify-center p-3 rounded-2xl border transition-all cursor-pointer ${
+                              isSelected
+                                ? "border-amber-500 bg-amber-500/10 text-amber-600 dark:text-amber-400 ring-2 ring-amber-500/30 shadow-xs"
+                                : "border-border/70 bg-secondary/30 text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
+                            }`}
+                          >
+                            <span className="font-display text-base font-black">
+                              {days === 7 ? "⚡ 7 Dias" : days === 14 ? "⭐ 14 Dias" : "🗓️ 21 Dias"}
+                            </span>
+                            <span className="text-[10px] font-semibold mt-0.5">
+                              {days === 7 ? "Semanal" : days === 14 ? "Quinzenal (Padrão)" : "3 Semanas"}
+                            </span>
+                          </button>
+                        );
+                      })}
+
+                      <button
+                        type="button"
+                        onClick={() => setRankedDurationDays(-1)}
+                        className={`flex flex-col items-center justify-center p-3 rounded-2xl border transition-all cursor-pointer ${
+                          ![7, 14, 21].includes(rankedDurationDays)
+                            ? "border-amber-500 bg-amber-500/10 text-amber-600 dark:text-amber-400 ring-2 ring-amber-500/30 shadow-xs"
+                            : "border-border/70 bg-secondary/30 text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
+                        }`}
+                      >
+                        <span className="font-display text-base font-black">✏️ Livre</span>
+                        <span className="text-[10px] font-semibold mt-0.5">Personalizado</span>
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="ranked-season-start" className="text-xs font-bold text-muted-foreground">
+                          Data e Hora de Início
+                        </Label>
+                        <Input
+                          id="ranked-season-start"
+                          type="datetime-local"
+                          value={rankedStartInput}
+                          onChange={(e) => setRankedStartInput(e.target.value)}
+                          className="rounded-xl font-mono text-xs bg-background"
+                        />
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <Label htmlFor="ranked-season-end" className="text-xs font-bold text-muted-foreground">
+                          Data e Hora de Encerramento
+                        </Label>
+                        <Input
+                          id="ranked-season-end"
+                          type="datetime-local"
+                          value={rankedEndInput}
+                          onChange={(e) => setRankedEndInput(e.target.value)}
+                          className="rounded-xl font-mono text-xs bg-background"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Extensão rápida da Temporada de Ranqueada */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border bg-secondary/20 p-3">
+                      <span className="text-xs font-bold text-muted-foreground flex items-center gap-1.5">
+                        <FastForward className="h-4 w-4 text-amber-500" />
+                        Estender término da ranqueada:
+                      </span>
+                      <div className="flex gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleExtendRankedDays(3)}
+                          className="rounded-xl text-xs font-bold border-amber-500/30 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
+                        >
+                          +3 Dias
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleExtendRankedDays(7)}
+                          className="rounded-xl text-xs font-bold border-amber-500/30 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
+                        >
+                          +7 Dias
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleExtendRankedDays(14)}
+                          className="rounded-xl text-xs font-bold border-amber-500/30 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
+                        >
+                          +14 Dias
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* Botão Salvar Configurações da Ranqueada */}
+                    <Button
+                      type="button"
+                      onClick={saveRankedSeasonSettings}
+                      className="w-full h-11 rounded-xl font-display font-extrabold text-sm gap-2 bg-amber-600 hover:bg-amber-700 text-white shadow-xs cursor-pointer"
+                    >
+                      <Save className="h-4 w-4" /> Salvar Configurações da Temporada de Ranqueada
+                    </Button>
+                  </div>
+
+                  {/* Reset Imediato de Ranqueada */}
+                  <div className="rounded-2xl border border-destructive/30 bg-destructive/5 p-4 space-y-3 mt-2">
+                    <div className="font-display text-sm font-black text-destructive flex items-center gap-2">
+                      <RotateCcw className="h-4 w-4" /> Reiniciar Temporada de Ranqueada Imediatamente
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Zera os pontos do torneio de todos os competidores (retornando todos para Bronze I, 0 pts). Todas as medalhas e níveis escolares são rigorosamente mantidos.
+                    </p>
+
+                    {!confirmRankedResetNow ? (
                       <Button
                         type="button"
                         variant="destructive"
-                        onClick={executeImmediateReset}
-                        className="flex-1 rounded-xl font-bold"
+                        onClick={() => setConfirmRankedResetNow(true)}
+                        className="w-full rounded-xl font-bold cursor-pointer"
                       >
-                        Confirmar Reset Definitivo
+                        Reiniciar Temporada de Ranqueada Agora (Zerar Pontos de Torneio)
                       </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => setConfirmResetNow(false)}
-                        className="rounded-xl"
-                      >
-                        Cancelar
-                      </Button>
-                    </div>
-                  )}
+                    ) : (
+                      <div className="rounded-xl border border-destructive/40 bg-background p-3.5 space-y-2.5">
+                        <div className="text-xs font-bold text-destructive flex items-center gap-1.5">
+                          <AlertTriangle className="h-4 w-4" /> Confirmar Reinício da Ranqueada:
+                        </div>
+                        <p className="text-[11px] text-muted-foreground">
+                          Tem certeza de que deseja zerar a pontuação ranqueada agora e iniciar a Temporada {(draft.rankedSeasonId ?? 1) + 1}? Nenhuma medalha será excluída.
+                        </p>
+                        <div className="flex gap-2">
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            onClick={executeRankedResetAction}
+                            className="flex-1 rounded-xl font-bold cursor-pointer"
+                          >
+                            Sim, Zerar Ranqueada e Iniciar Nova Temporada
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={() => setConfirmRankedResetNow(false)}
+                            className="rounded-xl cursor-pointer"
+                          >
+                            Cancelar
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
-                {/* Histórico de Resets */}
+                {/* ========================================================= */}
+                {/* CONTAINER 3: HISTÓRICO DE RESETS REALIZADOS               */}
+                {/* ========================================================= */}
                 {draft.resetHistory.length > 0 && (
-                  <div className="rounded-2xl border bg-card p-4 space-y-2">
-                    <div className="font-display text-sm font-bold">Histórico de Resets</div>
+                  <div className="rounded-3xl border bg-card p-5 space-y-3 shadow-xs">
+                    <div className="font-display text-sm font-bold flex items-center gap-2">
+                      <Clock className="h-4 w-4 text-muted-foreground" />
+                      Histórico Geral de Resets de Temporada
+                    </div>
                     <ul className="space-y-1.5 text-xs">
                       {draft.resetHistory.map((h) => (
                         <li
                           key={h.id}
-                          className="flex items-center justify-between rounded-xl bg-secondary/40 px-3 py-2"
+                          className="flex items-center justify-between rounded-xl bg-secondary/40 px-3.5 py-2.5"
                         >
-                          <span>
-                            <b>{h.seasonName}</b> ({h.resetXp ? "Reset Total + XP" : "Reset de Temporada"})
-                          </span>
-                          <span className="text-muted-foreground">
+                          <div>
+                            <span className="font-bold text-foreground">{h.seasonName}</span>
+                            <span className="text-muted-foreground ml-2">
+                              ({h.resetXp ? "Reset de Atividades / Nível" : "Reset de Temporada"})
+                            </span>
+                            {h.reason && (
+                              <div className="text-[11px] text-muted-foreground mt-0.5">
+                                Motivo: {h.reason}
+                              </div>
+                            )}
+                          </div>
+                          <span className="text-muted-foreground font-mono text-[11px]">
                             {new Date(h.executedAt).toLocaleString("pt-BR")}
                           </span>
                         </li>

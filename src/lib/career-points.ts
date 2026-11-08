@@ -88,6 +88,66 @@ export function spendCareerPoints(
 }
 
 /**
+ * Converte voluntariamente uma quantidade de pontos em moedas para aquisição futura de itens/cosméticos.
+ * O saldo de pontos (pointsBalance) é debitado e as moedas (coins) são creditadas.
+ * IMPORTANTE: O total histórico acumulado (careerPoints) NUNCA é reduzido,
+ * garantindo que a conversão de moedas não altere o ranking do Hall da Fama!
+ */
+export function convertPointsToCoins(
+  profile: PlayerProfile,
+  pointsToConvert: number,
+  rate = 1,
+): { success: boolean; coinsAwarded: number; remainingBalance: number; error?: string } {
+  if (!profile) return { success: false, coinsAwarded: 0, remainingBalance: 0, error: "Perfil inexistente" };
+  const currentBalance = profile.pointsBalance ?? 0;
+  if (pointsToConvert <= 0) {
+    return { success: false, coinsAwarded: 0, remainingBalance: currentBalance, error: "Quantidade inválida" };
+  }
+  if (currentBalance < pointsToConvert) {
+    return { success: false, coinsAwarded: 0, remainingBalance: currentBalance, error: "Saldo de pontos insuficiente" };
+  }
+
+  const safeRate = Math.max(0.1, rate);
+  const coinsAwarded = Math.floor(pointsToConvert / safeRate);
+  if (coinsAwarded <= 0) {
+    return {
+      success: false,
+      coinsAwarded: 0,
+      remainingBalance: currentBalance,
+      error: "Pontos insuficientes para obter ao menos 1 moeda",
+    };
+  }
+
+  profile.pointsBalance = currentBalance - pointsToConvert;
+  profile.coins = (profile.coins ?? 0) + coinsAwarded;
+
+  return { success: true, coinsAwarded, remainingBalance: profile.pointsBalance };
+}
+
+/**
+ * Conversão automática de todo o saldo residual de pontos em moedas
+ * acionada ao encerramento de um ciclo / temporada de atividades.
+ */
+export function autoConvertAllPointsToCoins(
+  profile: PlayerProfile,
+  rate = 1,
+): { coinsAwarded: number; newCoinsBalance: number } {
+  if (!profile) return { coinsAwarded: 0, newCoinsBalance: 0 };
+  const currentBalance = profile.pointsBalance ?? 0;
+  if (currentBalance <= 0) {
+    return { coinsAwarded: 0, newCoinsBalance: profile.coins ?? 0 };
+  }
+
+  const safeRate = Math.max(0.1, rate);
+  const coinsAwarded = Math.floor(currentBalance / safeRate);
+
+  profile.pointsBalance = 0;
+  profile.coins = (profile.coins ?? 0) + coinsAwarded;
+
+  return { coinsAwarded, newCoinsBalance: profile.coins };
+}
+
+/**
  * Avalia e concede 25 pontos pelo primeiro login do dia (1x a cada 24h).
  */
 export function checkAndApplyDailyLoginPoints(

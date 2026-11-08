@@ -88,6 +88,7 @@ import {
   getTop5TotalWeeks,
   getTop1ConsecutiveWeeks,
   isFlawlessMatch,
+  isMedalPreservedOnBetaEnd,
   MEDAL_XP_REWARDS,
   type PlayerUnlockedMedal,
   type MedalDefinition,
@@ -98,6 +99,7 @@ import {
   seedRecordsFromRegistry,
 } from "./game-records.ts";
 import {
+  autoConvertAllPointsToCoins,
   awardCareerPoints,
   checkAndApplyDailyLoginPoints,
   checkAndApplyFirstGameOfDayPoints,
@@ -228,6 +230,7 @@ export interface PlayerProfile {
   activeDates?: string[];
   pointsBalance?: number;
   careerPoints?: number;
+  coins?: number;
   lastDailyLoginPointsDate?: string;
   lastDailyFirstGamePointsDate?: string;
   achievedTournamentTiers?: string[];
@@ -624,83 +627,154 @@ export function executeRankingReset(options: {
   newSeasonName?: string;
   reason?: string;
 }): PlatformAdminConfig {
+  return executeActivitySeasonReset({
+    isBetaEnd: options.clearXp,
+    newSeasonName: options.newSeasonName,
+    reason: options.reason,
+  });
+}
+
+/**
+ * Executa o Reset da Temporada de Atividades (Geral & Beta):
+ * - Se isBetaEnd === true:
+ *   - Finaliza a fase Beta (isBetaActive = false).
+ *   - Todos os alunos voltam para o Nível 1 (0 XP).
+ *   - Revoga as 120 medalhas de atividades/jogos, preservando estritamente as 25 medalhas especiais acordadas.
+ *   - Reseta os pioneiros de medalhas (invalidatePioneersCache).
+ *   - Converte todo o saldo restante de pontos (pointsBalance) em moedas (coins) para a futura loja.
+ *   - O ranking histórico permanente (careerPoints) NUNCA é reduzido!
+ *   - Inicia a Temporada 1 Oficial de Atividades com duração pós-beta de 60 dias (2 meses).
+ * - Se isBetaEnd === false (resets pós-beta a cada 2 meses):
+ *   - Zera nível/XP para 1.
+ *   - Converte pontos em moedas.
+ *   - AS MEDALHAS NÃO SÃO REMOVIDAS (permanecem intactas).
+ */
+export function executeActivitySeasonReset(options: {
+  isBetaEnd?: boolean;
+  newSeasonName?: string;
+  reason?: string;
+}): PlatformAdminConfig {
   const cfg = loadAdminConfig();
   const nowIso = new Date().toISOString();
-  const nextSeasonId = cfg.seasonId + 1;
+  const isBeta = options.isBetaEnd !== undefined ? options.isBetaEnd : (cfg.isBetaActive ?? true);
+  const currentSeasonId = cfg.activitySeasonId ?? cfg.seasonId;
+  const nextSeasonId = currentSeasonId + 1;
+
+  // Duração pós-beta: 60 dias (2 meses)
+  const durationDays = isBeta ? 60 : (cfg.activitySeasonDurationDays && cfg.activitySeasonDurationDays > 0 ? cfg.activitySeasonDurationDays : 60);
+  const { start: nStart, end: nEnd } = computeSeasonDates(new Date(nowIso), durationDays);
+
   const entry: ResetHistoryEntry = {
-    id: `rst_${Date.now()}`,
-    seasonId: cfg.seasonId,
-    seasonName: cfg.seasonName,
+    id: `rst_act_${Date.now()}`,
+    seasonId: currentSeasonId,
+    seasonName: cfg.activitySeasonName || cfg.seasonName,
     executedAt: nowIso,
-    resetXp: options.clearXp,
-    reason: options.reason || "Reset manual pelo Administrador",
+    resetXp: true,
+    reason: options.reason || (isBeta ? "Encerramento Oficial da Fase Beta" : "Reset Regular da Temporada de Atividades (2 meses)"),
   };
-
-  // Se autoRenewSeason estiver ativo (padrão true), calcula automaticamente o novo ciclo
-  const autoRenew = cfg.autoRenewSeason !== false;
-  const durationDays = cfg.seasonDurationDays && cfg.seasonDurationDays > 0 ? cfg.seasonDurationDays : 14;
-
-  let nextStartIso = nowIso;
-  let nextEndIso: string | null = null;
-
-  if (autoRenew) {
-    const { start: nStart, end: nEnd } = computeSeasonDates(new Date(nowIso), durationDays);
-    nextStartIso = nStart.toISOString();
-    nextEndIso = nEnd.toISOString();
-  }
 
   const nextConfig = saveAdminConfig({
     ...cfg,
     seasonId: nextSeasonId,
-    seasonName: options.newSeasonName?.trim() || `Temporada ${nextSeasonId} • SEMED Coari`,
-    seasonStartAt: nextStartIso,
-    seasonEndAt: nextEndIso,
-    seasonDurationDays: durationDays,
-    autoRenewSeason: autoRenew,
+    activitySeasonId: nextSeasonId,
+    activitySeasonName: options.newSeasonName?.trim() || `Temporada ${nextSeasonId} de Atividades • SEMED Coari`,
+    activitySeasonStartAt: nStart.toISOString(),
+    activitySeasonEndAt: nEnd.toISOString(),
+    activitySeasonDurationDays: durationDays,
+    isBetaActive: false,
     lastResetAt: nowIso,
-    scheduledResetAt: nextEndIso,
+    scheduledResetAt: nEnd.toISOString(),
     resetHistory: [entry, ...cfg.resetHistory].slice(0, 25),
   });
 
-  // Reset local registry statistics for the new season
+  const rate = cfg.pointsToCoinsRate ?? 1;
+
+  // Processa todos os alunos registrados
   const reg = loadRegistry();
   for (const key of Object.keys(reg)) {
     const acc = reg[key];
     acc.stats = [];
     acc.profile.seasonXp = 0;
     acc.profile.seasonId = nextConfig.seasonId;
-    if (options.clearXp) {
-      acc.profile.xp = 0;
-      acc.profile.level = 1;
-      acc.profile.wins = 0;
-      acc.profile.matchesPlayed = 0;
-      acc.profile.distinctGamesPlayed = 0;
-      acc.profile.dailyXp = 0;
-      acc.profile.dailyXpDate = getLocalDateKey();
-      acc.profile.badges = [];
+    acc.profile.xp = 0;
+    acc.profile.level = 1;
+    acc.profile.wins = 0;
+    acc.profile.matchesPlayed = 0;
+    acc.profile.distinctGamesPlayed = 0;
+    acc.profile.dailyXp = 0;
+    acc.profile.dailyXpDate = getLocalDateKey();
+
+    // Converte saldo restante de pontos em moedas
+    autoConvertAllPointsToCoins(acc.profile, rate);
+
+    if (isBeta) {
+      // No fim do Beta: revoga as 120 medalhas de atividades e preserva apenas as 25 especiais
+      acc.profile.unlockedMedals = (acc.profile.unlockedMedals ?? []).filter((m) =>
+        isMedalPreservedOnBetaEnd(m.medalId),
+      );
+      acc.profile.badges = (acc.profile.badges ?? []).filter((b) =>
+        isMedalPreservedOnBetaEnd(b.id),
+      );
     }
+
     acc.updatedAt = nowIso;
   }
   saveRegistry(reg);
   clearLocalStats();
+  invalidatePioneersCache();
 
-  // If logged in to PlayFab and CloudScript is available, notify PlayFab
-  const session = loadStoredSession();
-  if (session?.sessionTicket && isPlayFabConfigured()) {
-    void callPlayFabClient(
-      "ExecuteCloudScript",
-      {
-        FunctionName: "AdminResetSeason",
-        FunctionParameter: {
-          seasonId: nextConfig.seasonId,
-          seasonName: nextConfig.seasonName,
-          clearXp: options.clearXp,
-          lastResetAt: nowIso,
-        },
-      },
-      session.sessionTicket,
-    );
+  return nextConfig;
+}
+
+/**
+ * Executa o Reset da Temporada de Ranqueada (Torneio Competitivo):
+ * - Ciclo rápido de 2 semanas (14 dias).
+ * - Reinicia a pontuação de todos os jogadores para 0 pontos ranqueados (tournamentPoints = 0).
+ * - Retorna o rank inicial para Bronze I.
+ * - TODAS as medalhas ranqueadas e pódios são 100% mantidos (cumulativas com contador 'count').
+ * - Inicia a nova Temporada N+1 de Ranqueada.
+ */
+export function executeRankedSeasonReset(options?: {
+  newSeasonName?: string;
+  reason?: string;
+}): PlatformAdminConfig {
+  const cfg = loadAdminConfig();
+  const nowIso = new Date().toISOString();
+  const currentRankedSeasonId = cfg.rankedSeasonId ?? 1;
+  const nextRankedSeasonId = currentRankedSeasonId + 1;
+
+  const durationDays = cfg.rankedSeasonDurationDays && cfg.rankedSeasonDurationDays > 0 ? cfg.rankedSeasonDurationDays : 14;
+  const { start: nStart, end: nEnd } = computeSeasonDates(new Date(nowIso), durationDays);
+
+  const entry: ResetHistoryEntry = {
+    id: `rst_rnk_${Date.now()}`,
+    seasonId: currentRankedSeasonId,
+    seasonName: cfg.rankedSeasonName || `Temporada ${currentRankedSeasonId} Ranqueada`,
+    executedAt: nowIso,
+    resetXp: false,
+    reason: options?.reason || "Reset da Temporada de Ranqueada (2 semanas)",
+  };
+
+  const nextConfig = saveAdminConfig({
+    ...cfg,
+    rankedSeasonId: nextRankedSeasonId,
+    rankedSeasonName: options?.newSeasonName?.trim() || `Temporada ${nextRankedSeasonId} Ranqueada • SEMED Coari`,
+    rankedSeasonStartAt: nStart.toISOString(),
+    rankedSeasonEndAt: nEnd.toISOString(),
+    rankedSeasonDurationDays: durationDays,
+    resetHistory: [entry, ...cfg.resetHistory].slice(0, 25),
+  });
+
+  // Zera os pontos ranqueados de todos os alunos registrados
+  const reg = loadRegistry();
+  for (const key of Object.keys(reg)) {
+    const acc = reg[key];
+    acc.profile.tournamentPoints = 0;
+    acc.profile.tournamentRankId = "bronze_1";
+    acc.profile.dailyTournamentEntries = 0;
+    acc.updatedAt = nowIso;
   }
+  saveRegistry(reg);
 
   return nextConfig;
 }

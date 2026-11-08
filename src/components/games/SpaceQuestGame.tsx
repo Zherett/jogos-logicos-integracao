@@ -17,7 +17,6 @@ import { useRoundClock } from "@/lib/use-countdown";
 import { GameTopBar } from "./GameTopBar";
 import { ResultPanel } from "./ResultPanel";
 import { Countdown } from "./Countdown";
-import { StartScreen } from "./StartScreen";
 import { updateBest, saveLastMatch, loadLastMatch, type LastMatch } from "@/lib/game-storage";
 import {
   generateSpaceQuestQuestion,
@@ -47,7 +46,7 @@ interface ActiveFallingQuestion {
 const ROUND_DURATION_SECONDS = 90;
 
 export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponentProps) {
-  const [phase, setPhase] = useState<"setup" | "countdown" | "playing" | "gameover">("setup");
+  const [phase, setPhase] = useState<"countdown" | "playing" | "gameover">("countdown");
   const [score, setScore] = useState(0);
   const [combo, setCombo] = useState(0);
   const [maxCombo, setMaxCombo] = useState(0);
@@ -339,68 +338,9 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [phase, activeTargetId, fallingItems, handleAnswer]);
 
-  /* --------------------------------- VIEWS --------------------------------- */
-
-  // 1. SETUP / START SCREEN VIEW
-  if (phase === "setup") {
-    return (
-      <StartScreen
-        title="Space Quest"
-        description="Pilote sua nave e destrua as operações lógicas e matemáticas que caem pelo espaço sideral antes que atinjam a barreira estelar!"
-        onStart={() => setPhase("countdown")}
-        onExit={onExit}
-        lastMatch={lastMatch}
-      >
-        <div className="space-y-4">
-          <div className="rounded-2xl border border-sky-500/30 bg-sky-950/20 p-4 space-y-3">
-            <h4 className="font-display text-sm font-bold text-sky-400 flex items-center gap-2">
-              <Sparkles className="h-4 w-4" /> Auras Especiais e Medalhas Cósmicas
-            </h4>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
-              <div className="rounded-xl border border-blue-500/40 bg-blue-950/30 p-2.5">
-                <div className="font-extrabold text-blue-400">🔵 Questão Safira (20%)</div>
-                <div className="text-[11px] text-muted-foreground mt-0.5">
-                  2x Pontos (+20 / -20 pts) • Concede a Medalha Safira (Bronze)
-                </div>
-              </div>
-              <div className="rounded-xl border border-purple-500/40 bg-purple-950/30 p-2.5">
-                <div className="font-extrabold text-purple-400">🟣 Questão Ametista (10%)</div>
-                <div className="text-[11px] text-muted-foreground mt-0.5">
-                  3x Pontos (+30 / -30 pts) • Concede a Medalha Ametista (Prata)
-                </div>
-              </div>
-              <div className="rounded-xl border border-red-500/40 bg-red-950/30 p-2.5">
-                <div className="font-extrabold text-red-400">🔴 Questão Rubi (5%)</div>
-                <div className="text-[11px] text-muted-foreground mt-0.5">
-                  4x Pontos (+40 / -30 pts) • Concede a Medalha Rubi (Ouro)
-                </div>
-              </div>
-              <div className="rounded-xl border border-amber-500/40 bg-amber-950/30 p-2.5">
-                <div className="font-extrabold text-amber-400">🟡 Questão Âmbar (1%)</div>
-                <div className="text-[11px] text-muted-foreground mt-0.5">
-                  4x Pontos (+40 pts sem penalidade) • Concede a Medalha Âmbar (Platina)
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div className="rounded-2xl border bg-secondary/30 p-4 text-xs space-y-2">
-            <h4 className="font-display font-bold text-foreground">Instruções de Missão:</h4>
-            <ul className="list-disc list-inside space-y-1 text-muted-foreground">
-              <li>Cada acerto vale <b>+10 pontos</b>.</li>
-              <li>A cada combo de <b>5 acertos consecutivos</b> você soma <b>+10 pontos extras</b>!</li>
-              <li>Quanto mais difícil a questão, mais lenta ela cai; quanto mais fácil, mais rápido ela cai.</li>
-              <li>Se uma operação colidir com a parte inferior da tela, você perde <b>-5 pontos</b>.</li>
-            </ul>
-          </div>
-        </div>
-      </StartScreen>
-    );
-  }
-
   const currentTarget = fallingItems.find((it) => it.instanceId === activeTargetId);
 
-  // 2. MAIN ACTIVE PLAYING VIEW (ARCADE COSMOS CONTAINER)
+  // MAIN ACTIVE PLAYING VIEW (ARCADE COSMOS CONTAINER)
   return (
     <div className="space-y-3">
       {/* Top Bar Navigation */}
@@ -425,8 +365,12 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
         }
       />
 
-      {/* Countdown overlay */}
-      {phase === "countdown" && <Countdown onComplete={handleStartPlaying} />}
+      {/* Countdown overlay: 3, 2, 1, VAI! - clica para iniciar imediatamente ou aguarda término */}
+      {phase === "countdown" && (
+        <div onClick={handleStartPlaying} className="cursor-pointer" title="Clique para iniciar imediatamente">
+          <Countdown onDone={handleStartPlaying} />
+        </div>
+      )}
 
       {/* Main Cosmos Arcade Container (Solid Deep Space Background with Stars) */}
       <div

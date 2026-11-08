@@ -262,17 +262,60 @@ export const MEDAL_XP_REWARDS: Record<MedalRarity, number> = {
   heroi: 100,
 };
 
-/** Janela oficial de conquista das medalhas especiais de Beta Tester: 01 a 07 de Novembro de 2026 */
+/** Janela oficial de conquista das medalhas especiais de Beta Tester: 01 a 15 de Novembro de 2026 */
 export const BETA_TESTER_START = "2026-11-01T00:00:00.000Z";
-export const BETA_TESTER_END = "2026-11-07T23:59:59.999Z";
+export const BETA_TESTER_END = "2026-11-15T23:59:59.999Z";
 
 export function isBetaTesterPeriodActive(now = new Date()): boolean {
   const y = now.getFullYear();
   const m = now.getMonth(); // 10 = Novembro (base 0)
   const d = now.getDate();
-  if (y === 2026 && m === 10 && d >= 1 && d <= 7) return true;
+  if (y === 2026 && m === 10 && d >= 1 && d <= 15) return true;
   const t = now.getTime();
   return t >= new Date(BETA_TESTER_START).getTime() && t <= new Date(BETA_TESTER_END).getTime();
+}
+
+/**
+ * Relação oficial das 25 medalhas preservadas no perfil do aluno no encerramento da fase Beta (15/11/2026).
+ * Todas as outras ~120 medalhas de atividades e níveis comuns de jogos são revogadas.
+ */
+export const PRESERVED_BETA_END_MEDAL_IDS: string[] = [
+  // 1. Beta Tester (5)
+  "beta_tester_bronze",
+  "beta_tester_prata",
+  "beta_tester_ouro",
+  "beta_tester_platina",
+  "beta_tester_heroi",
+  // 2. Robôs Raros Especiais (2)
+  "m_rpg_ametista",
+  "m_rpg_carmesim",
+  // 3. Space Quest Auras Especiais (4)
+  "sq_safira",
+  "sq_ametista",
+  "sq_rubi",
+  "sq_ambar",
+  // 4. Ranqueada Pódio e Ligas (9)
+  "tournament_top_1_gold",
+  "tournament_top_2_silver",
+  "tournament_top_3_bronze",
+  "tour_master_bronze",
+  "tour_master_prata",
+  "tour_master_ouro",
+  "tour_master_platina",
+  "tour_master_diamante",
+  "tour_master_mestre",
+  // 5. Histórico e Legado de Torneio (5)
+  "secret_top5_weeks_2",
+  "secret_top5_weeks_4",
+  "secret_top1_consecutive_2",
+  "secret_top1_consecutive_3",
+  "secret_top1_consecutive_4",
+];
+
+export const PRESERVED_BETA_END_MEDALS_SET = new Set(PRESERVED_BETA_END_MEDAL_IDS);
+
+export function isMedalPreservedOnBetaEnd(medalId: string): boolean {
+  return PRESERVED_BETA_END_MEDALS_SET.has(medalId);
 }
 
 /**

@@ -8,6 +8,15 @@ import {
   parseDatetimeLocal,
   SEASON_DURATION_PRESETS,
 } from "./season-cycle.ts";
+import {
+  PRESERVED_BETA_END_MEDAL_IDS,
+  isMedalPreservedOnBetaEnd,
+} from "./medals-catalog.ts";
+import {
+  convertPointsToCoins,
+  autoConvertAllPointsToCoins,
+} from "./career-points.ts";
+import type { PlayerProfile } from "./playfab.ts";
 
 describe("Gestão de Ciclos de Temporada (season-cycle)", () => {
   it("contém os presets padrão de 7, 14 e 30 dias", () => {
@@ -73,5 +82,101 @@ describe("Gestão de Ciclos de Temporada (season-cycle)", () => {
     assert.equal(parsed?.getFullYear(), 2026);
     assert.equal(parsed?.getMonth(), 10);
     assert.equal(parsed?.getDate(), 15);
+  });
+});
+
+describe("Regras do Reset de Temporada e Economia de Moedas", () => {
+  it("preserva estritamente as 25 medalhas especiais acordadas e revoga as medalhas comuns de atividades", () => {
+    assert.equal(PRESERVED_BETA_END_MEDAL_IDS.length, 25);
+
+    // Medalhas preservadas
+    for (const preservedId of PRESERVED_BETA_END_MEDAL_IDS) {
+      assert.equal(isMedalPreservedOnBetaEnd(preservedId), true, `Deveria preservar ${preservedId}`);
+    }
+
+    // Medalhas revogadas (jogos, fases, auras comuns)
+    const revokedSample = [
+      "spacequest_safira",
+      "spacequest_ametista",
+      "spacequest_rubi",
+      "spacequest_ambar",
+      "logica_bronze",
+      "logica_prata",
+      "quiz_ouro",
+      "padroes_bronze",
+      "memoria_ouro",
+      "labirinto_prata",
+    ];
+
+    for (const revokedId of revokedSample) {
+      assert.equal(isMedalPreservedOnBetaEnd(revokedId), false, `Deveria revogar ${revokedId}`);
+    }
+  });
+
+  it("converte saldo de pontos em moedas debitando pointsBalance sem reduzir careerPoints", () => {
+    const initialProfile: PlayerProfile = {
+      id: "p_test_student",
+      nick: "AlunoTeste",
+      nickNormalized: "alunoteste",
+      full_name: "ALUNO TESTE",
+      school: "Nenhuma",
+      grade: null,
+      birthdate: "2013-05-10",
+      xp: 1500,
+      seasonXp: 1500,
+      level: 4,
+      wins: 10,
+      matchesPlayed: 20,
+      distinctGamesPlayed: 5,
+      badges: [],
+      seasonId: 1,
+      unlockedMedals: [],
+      pointsBalance: 500,
+      careerPoints: 1200,
+      coins: 50,
+    };
+
+    // Conversão voluntária de 200 pontos na proporção 1:1
+    const res = convertPointsToCoins(initialProfile, 200, 1);
+
+    assert.equal(res.success, true);
+    assert.equal(res.coinsAwarded, 200);
+    assert.equal(res.remainingBalance, 300);
+    assert.equal(initialProfile.pointsBalance, 300); // 500 - 200
+    assert.equal(initialProfile.coins, 250); // 50 + 200
+    assert.equal(initialProfile.careerPoints, 1200); // rigorosamente intocado!
+  });
+
+  it("auto-converte todo o saldo de pontos em moedas no encerramento de temporada", () => {
+    const profile: PlayerProfile = {
+      id: "p_test_student_2",
+      nick: "AlunoAuto",
+      nickNormalized: "alunoauto",
+      full_name: "ALUNO AUTO",
+      school: "Nenhuma",
+      grade: null,
+      birthdate: "2013-05-10",
+      xp: 1000,
+      seasonXp: 1000,
+      level: 3,
+      wins: 5,
+      matchesPlayed: 10,
+      distinctGamesPlayed: 3,
+      badges: [],
+      seasonId: 1,
+      unlockedMedals: [],
+      pointsBalance: 750,
+      careerPoints: 2500,
+      coins: 100,
+    };
+
+    // Encerramento da temporada converte todo o saldo
+    const res = autoConvertAllPointsToCoins(profile, 1);
+
+    assert.equal(res.coinsAwarded, 750);
+    assert.equal(res.newCoinsBalance, 850); // 100 + 750 moedas disponíveis para cosméticos
+    assert.equal(profile.pointsBalance, 0); // saldo zerado para a nova temporada
+    assert.equal(profile.coins, 850);
+    assert.equal(profile.careerPoints, 2500); // ranking histórico preservado intacto!
   });
 });

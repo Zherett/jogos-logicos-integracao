@@ -131,6 +131,28 @@ export interface PlatformAdminConfig {
   scheduledResetClearXp: boolean;
   /** History of executed ranking resets. */
   resetHistory: ResetHistoryEntry[];
+
+  /** --- GESTÃO SEPARADA: TEMPORADA DE ATIVIDADES (GERAL & BETA) --- */
+  activitySeasonId?: number;
+  activitySeasonName?: string;
+  activitySeasonStartAt?: string;
+  activitySeasonEndAt?: string | null;
+  activitySeasonDurationDays?: number; // Padrão pós-beta: 60 dias (2 meses)
+  isBetaActive?: boolean; // Padrão atual: true (finaliza em 15/11/2026 às 23:59:59)
+
+  /** --- GESTÃO SEPARADA: TEMPORADA DE RANQUEADA (TORNEIO COMPETITIVO) --- */
+  rankedSeasonId?: number;
+  rankedSeasonName?: string;
+  rankedSeasonStartAt?: string;
+  rankedSeasonEndAt?: string | null;
+  rankedSeasonDurationDays?: number; // Padrão: 14 dias (2 semanas)
+  rankedOpenHour?: number;
+  rankedCloseHour?: number;
+  rankedForceOpen?: boolean;
+
+  /** --- SISTEMA INTERNO DE CONVERSÃO DE PONTOS EM MOEDAS --- */
+  pointsToCoinsRate?: number; // Padrão: 1 (1 ponto = 1 moeda)
+  coinsConversionEnabled?: boolean; // Padrão: true
   /** Whether the Arena X1 Online (1v1 Versus mode) is enabled for students (Level 5+). */
   x1Enabled: boolean;
   /** Definido pelo ADM para forçar o fechamento total da Arena X1 com faixa visual explicativa. */
@@ -230,6 +252,22 @@ export const DEFAULT_ADMIN_CONFIG: PlatformAdminConfig = {
   scheduledResetAt: null,
   scheduledResetClearXp: false,
   resetHistory: [],
+  activitySeasonId: 1,
+  activitySeasonName: "Temporada 1 Beta • SEMED Coari",
+  activitySeasonStartAt: "2026-11-01T00:00:00.000Z",
+  activitySeasonEndAt: "2026-11-15T23:59:59.999Z",
+  activitySeasonDurationDays: 60,
+  isBetaActive: true,
+  rankedSeasonId: 1,
+  rankedSeasonName: "Temporada 1 Ranqueada • SEMED Coari",
+  rankedSeasonStartAt: "2026-11-01T00:00:00.000Z",
+  rankedSeasonEndAt: "2026-11-15T23:59:59.999Z",
+  rankedSeasonDurationDays: 14,
+  rankedOpenHour: 7,
+  rankedCloseHour: 22,
+  rankedForceOpen: true,
+  pointsToCoinsRate: 1,
+  coinsConversionEnabled: true,
   x1Enabled: true,
   x1ArenaClosed: false,
   x1OpenHour: 7,

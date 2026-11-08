@@ -206,9 +206,9 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
     assert.ok(ids.includes("explore_all_games")); // Mestre de Todos os Jogos
   });
 
-  it("avalia e concede as medalhas especiais de Beta Tester no período de 01 a 07 de Novembro", () => {
+  it("avalia e concede as medalhas especiais de Beta Tester no período Beta até 15 de Novembro", () => {
     const nov3 = new Date("2026-11-03T14:00:00Z"); // Durante período Beta
-    const nov15 = new Date("2026-11-15T14:00:00Z"); // Fora do período Beta
+    const postBeta = new Date("2026-11-16T14:00:00Z"); // Fora do período Beta (após encerramento em 15/11 às 23:59)
 
     // Perfil de jogador com 1 partida finalizada
     const profileBronze: PlayerProfile = {
@@ -250,13 +250,13 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
     );
     assert.ok(awardedNov3.some((m) => m.id === "beta_tester_bronze"));
 
-    // Fora do período Beta (nov 15): não conquista
-    const awardedNov15 = evaluatePlayerMedals(
+    // Fora do período Beta (após 15/11): não conquista
+    const awardedPostBeta = evaluatePlayerMedals(
       { profile: profileBronze, stats: statsBronze },
       undefined,
-      nov15,
+      postBeta,
     );
-    assert.ok(!awardedNov15.some((m) => m.id === "beta_tester_bronze"));
+    assert.ok(!awardedPostBeta.some((m) => m.id === "beta_tester_bronze"));
 
     // Jogador avançado com 10 partidas finalizadas em todos os 10 jogos e Nível 5
     const statsHeroi: GameStatRow[] = ALL_GAME_IDS.map((gId) => ({

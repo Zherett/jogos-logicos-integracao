@@ -24,6 +24,8 @@ import {
   type PlatformAdminConfig,
 } from "./game-codes";
 import {
+  executeActivitySeasonReset,
+  executeRankedSeasonReset,
   executeRankingReset,
   getActiveAccount,
   getAdminPin,
@@ -98,6 +100,15 @@ interface AuthValue {
   updateAdminConfig: (next: PlatformAdminConfig) => Promise<void>;
   triggerReset: (options: {
     clearXp: boolean;
+    newSeasonName?: string;
+    reason?: string;
+  }) => Promise<void>;
+  triggerActivitySeasonReset: (options: {
+    isBetaEnd?: boolean;
+    newSeasonName?: string;
+    reason?: string;
+  }) => Promise<void>;
+  triggerRankedSeasonReset: (options?: {
     newSeasonName?: string;
     reason?: string;
   }) => Promise<void>;
@@ -342,6 +353,32 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const triggerActivitySeasonReset = useCallback(
+    async (options: { isBetaEnd?: boolean; newSeasonName?: string; reason?: string }) => {
+      const nextCfg = executeActivitySeasonReset(options);
+      setAdminConfig(nextCfg);
+      const active = getActiveAccount();
+      if (active) {
+        setProfile({ ...active.profile });
+        setStats([...active.stats]);
+      }
+    },
+    [],
+  );
+
+  const triggerRankedSeasonReset = useCallback(
+    async (options?: { newSeasonName?: string; reason?: string }) => {
+      const nextCfg = executeRankedSeasonReset(options);
+      setAdminConfig(nextCfg);
+      const active = getActiveAccount();
+      if (active) {
+        setProfile({ ...active.profile });
+        setStats([...active.stats]);
+      }
+    },
+    [],
+  );
+
   const unlockAdminWithPin = useCallback((pin: string) => {
     const clean = pin.trim().toUpperCase();
     const expected = getAdminPin().toUpperCase();
@@ -384,6 +421,8 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
       awardSpaceQuestMedal,
       updateAdminConfig,
       triggerReset,
+      triggerActivitySeasonReset,
+      triggerRankedSeasonReset,
       unlockAdminWithPin,
       lockAdmin,
       refresh: loadState,
@@ -405,6 +444,8 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
       awardSpaceQuestMedal,
       updateAdminConfig,
       triggerReset,
+      triggerActivitySeasonReset,
+      triggerRankedSeasonReset,
       unlockAdminWithPin,
       lockAdmin,
       loadState,
