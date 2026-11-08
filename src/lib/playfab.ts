@@ -1053,12 +1053,30 @@ function getCurrentWeekKey(now = new Date()): string {
 
 export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdminConfig): StoredAccount {
   if (!acc || !acc.profile) return acc;
-  ensurePlayerCareerPointsInitialized(acc.profile);
-  checkAndApplyDailyLoginPoints(acc.profile);
+
+  // Captura as medalhas que o aluno já possuía antes de qualquer filtragem/alinhamento
+  // para impedir concessão duplicada de XP ou Pontos de Carreira na mesma função
+  const preExistingMedalIds = new Set<string>(
+    (acc.profile.unlockedMedals ?? [])
+      .map((m: any) => (typeof m === "string" ? m : (m?.medalId ?? m?.id ?? "")))
+      .filter(Boolean),
+  );
 
   // Sincroniza a senha estritamente com a data de nascimento atual do aluno
   if (acc.profile.birthdate && !acc.profile.isAdmin && !isSpecialAdminAccount(acc.profile)) {
     acc.passwordHash = simpleHash(passwordFromBirthdate(acc.profile.birthdate));
+  }
+
+  // Concede login diário APENAS se este perfil for o jogador realmente autenticado na sessão local ativa
+  const activeSession = loadStoredSession();
+  const isCurrentActivePlayer = Boolean(
+    activeSession?.playerId &&
+      (acc.profile.nickNormalized === activeSession.playerId ||
+        acc.profile.id === activeSession.playerId ||
+        (activeSession.playfabId && acc.profile.playfabId === activeSession.playfabId)),
+  );
+  if (isCurrentActivePlayer && !acc.profile.isAdmin && !isSpecialAdminAccount(acc.profile)) {
+    checkAndApplyDailyLoginPoints(acc.profile);
   }
 
   const todayKey = getLocalDateKey();
@@ -1113,8 +1131,8 @@ export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdmin
   // Como o sistema anterior permitia finalizar partida sem oponente real, remove medalhas de X1
   // obtidas indevidamente antes do lançamento oficial:
   if (Array.isArray(acc.profile.unlockedMedals)) {
-    acc.profile.unlockedMedals = acc.profile.unlockedMedals.filter((m) => {
-      const medalId = typeof m === "string" ? m : (m?.id ?? "");
+    acc.profile.unlockedMedals = acc.profile.unlockedMedals.filter((m: any) => {
+      const medalId = typeof m === "string" ? m : (m?.medalId ?? m?.id ?? "");
       const isX1Medal =
         medalId.startsWith("x1_wins_") ||
         medalId.startsWith("x1_weekly_") ||
@@ -1305,8 +1323,7 @@ export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdmin
           return gamesWith10Plays >= (def?.condition.threshold ?? 10) && acc.profile.level >= 5;
 
         case "all_game_medals":
-          return ALL_GAME_IDS.every((gId) => {
-            if (cfg.enabledGames[gId] === false) return false;
+          return ALL_GAME_IDS.filter((gId) => cfg.enabledGames[gId] !== false).every((gId) => {
             const r = statsMap.get(gId);
             return Boolean(r && r.plays > 0 && r.best_level >= 3);
           });
@@ -1356,10 +1373,13 @@ export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdmin
       for (const m of legitimatelyAwarded) {
         if (!unlocked.some((u) => u.medalId === m.id)) {
           unlocked.push({ medalId: m.id, unlockedAt: nowIso });
-          const extraXp = MEDAL_XP_REWARDS[m.rarity] ?? 10;
-          bonusXp += extraXp;
-          const ptsReward = MEDAL_POINTS_REWARDS[m.rarity] ?? 20;
-          awardCareerPoints(acc.profile, ptsReward, `Medalha: ${m.title}`);
+          // Só concede XP e Pontos de Carreira se a medalha realmente NÃO existia antes do filtro
+          if (!preExistingMedalIds.has(m.id)) {
+            const extraXp = MEDAL_XP_REWARDS[m.rarity] ?? 10;
+            bonusXp += extraXp;
+            const ptsReward = MEDAL_POINTS_REWARDS[m.rarity] ?? 20;
+            awardCareerPoints(acc.profile, ptsReward, `Medalha: ${m.title}`);
+          }
         }
       }
       acc.profile.unlockedMedals = unlocked;
@@ -1382,6 +1402,9 @@ export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdmin
       }
     }
   }
+
+  // Inicializa e sanitiza pontos de carreira após reconciliar stats, nível e medalhas
+  ensurePlayerCareerPointsInitialized(acc.profile);
 
   // Sanitization: Players in Etapa 3 (15+ years old) cannot belong to elementary SEMED schools or classes.
   // If institution is "Nenhuma" or "Outro", grade and turma are always null.
@@ -1598,6 +1621,21 @@ function buildAccountFromPlayFabPayload(
       ? parsedProfile.unlockedMedals
       : [],
     badges: Array.isArray(parsedProfile.badges) ? parsedProfile.badges : [],
+    careerPoints: parsedProfile.careerPoints ?? 0,
+    pointsBalance: parsedProfile.pointsBalance ?? 0,
+    coins: parsedProfile.coins ?? 0,
+    claimedInboxRewardIds: Array.isArray(parsedProfile.claimedInboxRewardIds)
+      ? parsedProfile.claimedInboxRewardIds
+      : [],
+    lastDailyLoginPointsDate: parsedProfile.lastDailyLoginPointsDate,
+    lastDailyFirstGamePointsDate: parsedProfile.lastDailyFirstGamePointsDate,
+    achievedLevelsPoints: Array.isArray(parsedProfile.achievedLevelsPoints)
+      ? parsedProfile.achievedLevelsPoints
+      : [],
+    achievedTournamentTiers: Array.isArray(parsedProfile.achievedTournamentTiers)
+      ? parsedProfile.achievedTournamentTiers
+      : [],
+    eventProgress: parsedProfile.eventProgress,
     isAdmin: parsedProfile.isAdmin || slug === "admin" || slug === "semed_admin",
     seasonId: parsedProfile.seasonId ?? cfg.seasonId,
   };
@@ -1793,6 +1831,8 @@ export async function playfabSignUp(data: SignUpData): Promise<{
     updatedAt: new Date().toISOString(),
   };
 
+  checkAndApplyDailyLoginPoints(account.profile);
+
   reg[slug] = account;
   saveRegistry(reg);
   saveStoredSession({ playerId: slug, sessionTicket, playfabId, activeSessionId: newActiveSessionId });
@@ -1981,6 +2021,7 @@ export async function playfabSignIn(
 
         account.profile.activeSessionId = newActiveSessionId;
         account.profile.activeSessionUpdatedAt = new Date().toISOString();
+        checkAndApplyDailyLoginPoints(account.profile);
 
         reg[account.profile.nickNormalized] = account;
         saveRegistry(reg);
@@ -2045,6 +2086,7 @@ export async function playfabSignIn(
 
       account.profile.activeSessionId = newActiveSessionId;
       account.profile.activeSessionUpdatedAt = new Date().toISOString();
+      checkAndApplyDailyLoginPoints(account.profile);
 
       reg[account.profile.nickNormalized] = account;
       saveRegistry(reg);
@@ -2097,6 +2139,7 @@ export async function playfabSignIn(
 
       account.profile.activeSessionId = newActiveSessionId;
       account.profile.activeSessionUpdatedAt = new Date().toISOString();
+      checkAndApplyDailyLoginPoints(account.profile);
 
       reg[account.profile.nickNormalized] = account;
       saveRegistry(reg);
@@ -2177,6 +2220,9 @@ export async function playfabSignIn(
 
   aligned.profile.activeSessionId = newActiveSessionId;
   aligned.profile.activeSessionUpdatedAt = new Date().toISOString();
+  if (!aligned.profile.isAdmin && !isSpecialAdminAccount(aligned.profile)) {
+    checkAndApplyDailyLoginPoints(aligned.profile);
+  }
 
   reg[aligned.profile.nickNormalized] = aligned;
   saveRegistry(reg);
@@ -2240,6 +2286,7 @@ export async function playfabRecoverByNameAndBirthdate(
       const newActiveSessionId = `sess_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
       account.profile.activeSessionId = newActiveSessionId;
       account.profile.activeSessionUpdatedAt = new Date().toISOString();
+      checkAndApplyDailyLoginPoints(account.profile);
       reg[account.profile.nickNormalized] = account;
       saveRegistry(reg);
       saveStoredSession({
@@ -2285,6 +2332,9 @@ export async function playfabRecoverByNameAndBirthdate(
 
   aligned.profile.activeSessionId = newActiveSessionId;
   aligned.profile.activeSessionUpdatedAt = new Date().toISOString();
+  if (!aligned.profile.isAdmin && !isSpecialAdminAccount(aligned.profile)) {
+    checkAndApplyDailyLoginPoints(aligned.profile);
+  }
 
   reg[aligned.profile.nickNormalized] = aligned;
   saveRegistry(reg);
@@ -2370,6 +2420,11 @@ async function pushProfileToPlayFab(account: StoredAccount, sessionTicket?: stri
           pointsBalance: p.pointsBalance ?? 0,
           coins: p.coins ?? 0,
           claimedInboxRewardIds: p.claimedInboxRewardIds ?? [],
+          lastDailyLoginPointsDate: p.lastDailyLoginPointsDate,
+          lastDailyFirstGamePointsDate: p.lastDailyFirstGamePointsDate,
+          achievedLevelsPoints: p.achievedLevelsPoints ?? [],
+          achievedTournamentTiers: p.achievedTournamentTiers ?? [],
+          eventProgress: p.eventProgress,
           isAdmin: p.isAdmin,
           seasonId: p.seasonId,
         }),
@@ -2425,6 +2480,11 @@ async function pushProfileToPlayFab(account: StoredAccount, sessionTicket?: stri
               pointsBalance: p.pointsBalance ?? 0,
               coins: p.coins ?? 0,
               claimedInboxRewardIds: p.claimedInboxRewardIds ?? [],
+              lastDailyLoginPointsDate: p.lastDailyLoginPointsDate,
+              lastDailyFirstGamePointsDate: p.lastDailyFirstGamePointsDate,
+              achievedLevelsPoints: p.achievedLevelsPoints ?? [],
+              achievedTournamentTiers: p.achievedTournamentTiers ?? [],
+              eventProgress: p.eventProgress,
               stats: account.stats ?? [],
               isAdmin: p.isAdmin,
               seasonId: p.seasonId,
@@ -2840,6 +2900,38 @@ export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Prom
                 ...(Array.isArray((udProf as any)?.claimedInboxRewardIds) ? (udProf as any).claimedInboxRewardIds : []),
               ])
             ),
+            lastDailyLoginPointsDate:
+              [
+                parsed.lastDailyLoginPointsDate,
+                existing?.profile.lastDailyLoginPointsDate,
+                (udProf as any)?.lastDailyLoginPointsDate,
+              ]
+                .filter((d): d is string => Boolean(d))
+                .sort()
+                .pop(),
+            lastDailyFirstGamePointsDate:
+              [
+                parsed.lastDailyFirstGamePointsDate,
+                existing?.profile.lastDailyFirstGamePointsDate,
+                (udProf as any)?.lastDailyFirstGamePointsDate,
+              ]
+                .filter((d): d is string => Boolean(d))
+                .sort()
+                .pop(),
+            achievedLevelsPoints: Array.from(
+              new Set([
+                ...(Array.isArray(parsed.achievedLevelsPoints) ? parsed.achievedLevelsPoints : []),
+                ...(Array.isArray(existing?.profile.achievedLevelsPoints) ? existing.profile.achievedLevelsPoints : []),
+                ...(Array.isArray((udProf as any)?.achievedLevelsPoints) ? (udProf as any).achievedLevelsPoints : []),
+              ])
+            ),
+            achievedTournamentTiers: Array.from(
+              new Set([
+                ...(Array.isArray(parsed.achievedTournamentTiers) ? parsed.achievedTournamentTiers : []),
+                ...(Array.isArray(existing?.profile.achievedTournamentTiers) ? existing.profile.achievedTournamentTiers : []),
+                ...(Array.isArray((udProf as any)?.achievedTournamentTiers) ? (udProf as any).achievedTournamentTiers : []),
+              ])
+            ),
           };
 
           if (mergedProfile.claimedInboxRewardIds && mergedProfile.claimedInboxRewardIds.length > 0) {
@@ -2926,6 +3018,7 @@ export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Prom
           const incomingDistinct = parsed.distinctGamesPlayed ?? 0;
           const incomingLevel = parsed.level ?? 1;
           const incomingMatches = parsed.matchesPlayed ?? 0;
+          const incomingCareerPoints = parsed.careerPoints ?? 0;
 
           const aligned = ensurePlayerSeasonAligned(
             {
@@ -2945,7 +3038,8 @@ export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Prom
             (aligned.profile.distinctGamesPlayed ?? 0) !== incomingDistinct ||
             aligned.profile.level !== incomingLevel ||
             (aligned.profile.matchesPlayed ?? 0) !== incomingMatches ||
-            (aligned.stats?.length ?? 0) !== incomingStats.length
+            (aligned.stats?.length ?? 0) !== incomingStats.length ||
+            (aligned.profile.careerPoints ?? 0) !== incomingCareerPoints
           ) {
             needsCloudSanitize.add(slug);
           }
@@ -2990,6 +3084,10 @@ export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Prom
           x1Wins: acc.profile.x1Wins ?? 0,
           weeklyX1Wins: acc.profile.weeklyX1Wins ?? 0,
           weeklyX1WeekKey: acc.profile.weeklyX1WeekKey,
+          tournamentPoints: acc.profile.tournamentPoints ?? 0,
+          bestTournamentPoints: acc.profile.bestTournamentPoints ?? 0,
+          tournamentRankId: acc.profile.tournamentRankId ?? "bronze_1",
+          tournamentWeekKey: acc.profile.tournamentWeekKey,
           matchesPlayed: acc.profile.matchesPlayed,
           distinctGamesPlayed: acc.profile.distinctGamesPlayed ?? 0,
           streakDays: getPlayerStreakDays(acc.profile),
@@ -2998,6 +3096,15 @@ export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Prom
           tournamentMedals: acc.profile.tournamentMedals ?? [],
           unlockedMedals: acc.profile.unlockedMedals ?? [],
           badges: acc.profile.badges ?? [],
+          careerPoints: acc.profile.careerPoints ?? 0,
+          pointsBalance: acc.profile.pointsBalance ?? 0,
+          coins: acc.profile.coins ?? 0,
+          claimedInboxRewardIds: acc.profile.claimedInboxRewardIds ?? [],
+          lastDailyLoginPointsDate: acc.profile.lastDailyLoginPointsDate,
+          lastDailyFirstGamePointsDate: acc.profile.lastDailyFirstGamePointsDate,
+          achievedLevelsPoints: acc.profile.achievedLevelsPoints ?? [],
+          achievedTournamentTiers: acc.profile.achievedTournamentTiers ?? [],
+          eventProgress: acc.profile.eventProgress,
           stats: acc.stats ?? [],
           deletedAt: acc.profile.deletedAt,
           deleteScheduledPermanentAt: acc.profile.deleteScheduledPermanentAt,
@@ -3807,6 +3914,9 @@ export async function playfabRecordMatch(args: {
   }
   if (mode === "torneio_semanal" && won) {
     awardCareerPoints(acc.profile, RANKED_WIN_POINTS, "Vitória na Ranqueada", pointsMultiplier);
+  }
+  if (args.tournamentRankId) {
+    checkTournamentTierPromotion(args.tournamentRankId, acc.profile, pointsMultiplier);
   }
 
   const nextXp = acc.profile.xp + earnedXp;

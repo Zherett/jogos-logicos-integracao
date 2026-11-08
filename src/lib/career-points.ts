@@ -1,6 +1,7 @@
 import type { PlayerProfile } from "./playfab.ts";
-import type { MedalRarity } from "./medals-catalog.ts";
+import { getAllAvailableMedals, type MedalRarity } from "./medals-catalog.ts";
 import { getLocalDateKey } from "./player-profile.ts";
+import { loadAllInboxMessages } from "./inbox-messages.ts";
 
 /** Pontos concedidos por raridade de medalha */
 export const MEDAL_POINTS_REWARDS: Record<MedalRarity, number> = {
@@ -10,6 +11,7 @@ export const MEDAL_POINTS_REWARDS: Record<MedalRarity, number> = {
   platina: 100,
   diamante: 150,
   heroi: 150,
+  secreta: 150,
 };
 
 /** Pontos concedidos ao subir para cada nível (2 a 10) */
@@ -261,12 +263,16 @@ export function calculateRetroactivePoints(profile: PlayerProfile): number {
   if (!profile) return 0;
   let sum = 0;
 
+  const catalogMap = new Map(getAllAvailableMedals().map((m) => [m.id, m.rarity]));
+
   // 1. Pontos de medalhas já conquistadas
   if (Array.isArray(profile.unlockedMedals)) {
     for (const m of profile.unlockedMedals) {
       if (!m) continue;
-      const rarity = ((m as any).rarity ?? "bronze") as MedalRarity;
-      sum += MEDAL_POINTS_REWARDS[rarity] ?? 20;
+      const mId = (m as any).medalId ?? (m as any).id ?? "";
+      const rarity = ((m as any).rarity ?? catalogMap.get(mId) ?? "bronze") as MedalRarity;
+      const count = Math.max(1, (m as any).count ?? 1);
+      sum += (MEDAL_POINTS_REWARDS[rarity] ?? 20) * count;
     }
   }
 
@@ -285,8 +291,125 @@ export function calculateRetroactivePoints(profile: PlayerProfile): number {
 }
 
 /**
+ * Calcula o teto legítimo razoável de pontos de carreira para um perfil,
+ * e se detectar inflação de pontos gerada pelo loop de sincronização anterior,
+ * corrige `careerPoints`, `pointsBalance` e restaura as travas de nível/data.
+ */
+export function sanitizeInflatedCareerPoints(profile: PlayerProfile): {
+  profile: PlayerProfile;
+  wasSanitized: boolean;
+} {
+  if (!profile || profile.isAdmin) {
+    return { profile, wasSanitized: false };
+  }
+
+  // Garante que todos os níveis já conquistados pelo jogador constem em achievedLevelsPoints
+  const curLevel = Math.min(10, Math.max(1, profile.level ?? 1));
+  const lvlSet = new Set<number>(Array.isArray(profile.achievedLevelsPoints) ? profile.achievedLevelsPoints : []);
+  for (let l = 2; l <= curLevel; l++) {
+    lvlSet.add(l);
+  }
+  profile.achievedLevelsPoints = Array.from(lvlSet);
+
+  // Restaura achievedTournamentTiers de acordo com a patente máxima já alcançada
+  const tierSet = new Set<string>(Array.isArray(profile.achievedTournamentTiers) ? profile.achievedTournamentTiers : []);
+  const maxPts = Math.max(profile.tournamentPoints ?? 0, profile.bestTournamentPoints ?? 0);
+  if (maxPts >= 31) tierSet.add("prata");
+  if (maxPts >= 61) tierSet.add("ouro");
+  if (maxPts >= 91) tierSet.add("platina");
+  if (maxPts >= 121) tierSet.add("diamante");
+  if (maxPts >= 151) tierSet.add("mestre");
+  profile.achievedTournamentTiers = Array.from(tierSet);
+
+  // Calcula os pontos legítimos comprovados pelo histórico real do aluno
+  const baseRetro = calculateRetroactivePoints(profile);
+
+  // Pontos de promoção de liga ranqueada
+  let tierPoints = 0;
+  for (const t of tierSet) {
+    tierPoints += TOURNAMENT_TIER_PROMOTION_POINTS[t] ?? 0;
+  }
+
+  // Pontos de dias ativos (login diário +25 e 1º jogo do dia +10 por data ativa real)
+  const statsList = Array.isArray(profile.stats) ? profile.stats : [];
+  const totalMatches = Math.max(
+    profile.matchesPlayed ?? 0,
+    profile.totalMatches ?? 0,
+    statsList.reduce((acc, s) => acc + (s?.plays ?? 0), 0),
+  );
+  const activeDatesCount = Math.max(
+    Array.isArray(profile.activeDates) ? profile.activeDates.length : 0,
+    profile.lastActiveDate ? 1 : 0,
+    totalMatches > 0 ? 1 : 0,
+  );
+  const verifiedLoginDays = Math.max(1, activeDatesCount);
+  const loginAndFirstGamePoints =
+    verifiedLoginDays * DAILY_LOGIN_POINTS +
+    (totalMatches > 0 ? activeDatesCount * DAILY_FIRST_GAME_POINTS : 0);
+
+  // Pontos de partidas perfeitas (flawless_wins) e recordes pessoais
+  const totalFlawlessWins = statsList.reduce((acc, s) => acc + (s?.flawless_wins ?? 0), 0);
+  const gamesPlayedCount = statsList.filter((s) => (s?.plays ?? 0) > 0).length;
+  const flawlessAndRecordPoints =
+    totalFlawlessWins * FLAWLESS_MATCH_POINTS + gamesPlayedCount * RECORD_PERSONAL_POINTS;
+
+  // Pontos de vitórias ranqueadas
+  const rankedStats = statsList.filter((s) => s?.mode === "torneio_semanal");
+  const rankedWins = Math.max(
+    rankedStats.reduce((acc, s) => acc + (s?.wins ?? 0), 0),
+    Math.floor(maxPts / 8),
+  );
+  const rankedWinPoints = rankedWins * RANKED_WIN_POINTS;
+
+  // Pontos resgatados em mensagens do correio
+  let claimedInboxPoints = 0;
+  if (Array.isArray(profile.claimedInboxRewardIds) && profile.claimedInboxRewardIds.length > 0) {
+    try {
+      const allMsgs = loadAllInboxMessages();
+      const msgMap = new Map(allMsgs.map((m) => [m.id, m]));
+      for (const mId of profile.claimedInboxRewardIds) {
+        const msg = msgMap.get(mId);
+        if (msg?.reward?.type === "points" && (msg.reward.pointsAmount ?? 0) > 0) {
+          claimedInboxPoints += msg.reward.pointsAmount!;
+        }
+      }
+    } catch {
+      // Fallback caso mensagens ainda não estejam carregadas
+      claimedInboxPoints += profile.claimedInboxRewardIds.length * 100;
+    }
+  }
+
+  const legitimatePoints =
+    baseRetro +
+    tierPoints +
+    loginAndFirstGamePoints +
+    flawlessAndRecordPoints +
+    rankedWinPoints +
+    claimedInboxPoints;
+
+  // Margem de segurança para bônus de eventos (2x) ou recordes de etapa (+50)
+  const maxReasonableThreshold = Math.max(
+    legitimatePoints + 150,
+    Math.round(legitimatePoints * 1.5),
+  );
+
+  const currentCareer = profile.careerPoints ?? 0;
+  const currentBalance = profile.pointsBalance ?? 0;
+
+  if (currentCareer > maxReasonableThreshold || currentBalance > maxReasonableThreshold) {
+    const coinsSpent = Math.max(0, profile.coins ?? 0);
+    profile.careerPoints = legitimatePoints;
+    profile.pointsBalance = Math.max(0, legitimatePoints - coinsSpent);
+    return { profile, wasSanitized: true };
+  }
+
+  return { profile, wasSanitized: false };
+}
+
+/**
  * Garante que o perfil possua `careerPoints` e `pointsBalance` inicializados,
- * aplicando reconciliação retroativa justa caso estejam zerados/indefinidos.
+ * aplicando reconciliação retroativa justa caso estejam zerados/indefinidos,
+ * e corrige pontuações infladas por loops de sincronização.
  */
 export function ensurePlayerCareerPointsInitialized(profile: PlayerProfile): PlayerProfile {
   if (!profile) return profile;
@@ -310,6 +433,8 @@ export function ensurePlayerCareerPointsInitialized(profile: PlayerProfile): Pla
     }
     profile.achievedLevelsPoints = Array.from(new Set([...(profile.achievedLevelsPoints ?? []), ...lvlList]));
   }
+
+  sanitizeInflatedCareerPoints(profile);
 
   return profile;
 }

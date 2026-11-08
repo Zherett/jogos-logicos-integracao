@@ -1105,13 +1105,6 @@ export async function recordWeeklyTournamentAttempt(args: {
   const newTournamentPoints = Math.max(0, curPoints + pointsDelta);
   const rankInfo = getTournamentRank(newTournamentPoints);
 
-  // Concede pontos de carreira por vitória na ranqueada e promoção de classe
-  const careerMultiplier = eventBonuses.pointsMultiplier ?? 1;
-  if (won) {
-    awardCareerPoints(args.profile, RANKED_WIN_POINTS, "Vitória na Ranqueada", careerMultiplier);
-  }
-  checkTournamentTierPromotion(rankInfo.currentRank.id, args.profile, careerMultiplier);
-
   store.records[args.profile.id] = {
     playerId: args.profile.id,
     nick: args.profile.nick,

@@ -9,6 +9,7 @@ import {
   checkLevelPromotionPoints,
   calculateRetroactivePoints,
   ensurePlayerCareerPointsInitialized,
+  sanitizeInflatedCareerPoints,
   MEDAL_POINTS_REWARDS,
   LEVEL_POINTS_REWARDS,
   DAILY_LOGIN_POINTS,
@@ -159,5 +160,23 @@ describe("Sistema de Pontuação e Moeda de Carreira (career-points)", () => {
     ensurePlayerCareerPointsInitialized(existingStudent);
     assert.equal(existingStudent.careerPoints, 250);
     assert.equal(existingStudent.pointsBalance, 250);
+  });
+
+  it("corrige automaticamente pontuações infladas pelo bug de loop de sincronização de jogadores offline", () => {
+    const inflatedOfflineStudent = createMockProfile({
+      level: 1,
+      wins: 0,
+      matchesPlayed: 0,
+      unlockedMedals: [],
+      stats: [],
+      activeDates: [],
+      careerPoints: 13250,
+      pointsBalance: 13250,
+    });
+
+    const { wasSanitized } = sanitizeInflatedCareerPoints(inflatedOfflineStudent);
+    assert.equal(wasSanitized, true);
+    assert.equal(inflatedOfflineStudent.careerPoints, 25); // 1 dia de login inicial (25 pts)
+    assert.equal(inflatedOfflineStudent.pointsBalance, 25);
   });
 });
