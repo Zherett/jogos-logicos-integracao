@@ -36,7 +36,17 @@ import {
   type SpaceQuestQuestion,
   type AuraType,
 } from "@/lib/space-quest-content";
-import { playCorrect, playWrong, playTone, playVictory } from "@/lib/sound";
+import {
+  playCorrect,
+  playWrong,
+  playTone,
+  playVictory,
+  playLaserShoot,
+  playSpaceQuestWrong,
+  playBarrierBreach,
+  startHourglassTicking,
+  stopHourglassTicking,
+} from "@/lib/sound";
 import { usePlayerAuth } from "@/lib/player-auth";
 import type { GameComponentProps } from "@/lib/game-registry";
 
@@ -205,6 +215,7 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
         requestRef.current = null;
       }
       clearAllTimeouts();
+      stopHourglassTicking();
       setLaserEffect(null);
       setExplosions([]);
       setNotificationBanner(null);
@@ -490,7 +501,7 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
         }
 
         if (collision.livesLost > 0) {
-          playTone(180, 0.18, "sawtooth", 0.05);
+          playBarrierBreach();
 
           scoreRef.current = collision.nextScore;
           setScore(collision.nextScore);
@@ -557,7 +568,8 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
       const now = Date.now();
 
       if (res.isCorrect) {
-        // Disparo do feixe laser animado até o alvo
+        // Disparo do feixe laser animado até o alvo + som blaster laser
+        playLaserShoot();
         const auraCfg = AURA_CONFIGS[targetItem.data.aura];
         setLaserEffect({
           targetX: targetItem.laneXPercent,
@@ -720,8 +732,9 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
           }, 360);
         }, 120);
       } else {
-        // Resposta Incorreta: Reseta progresso de escudo e ampulheta
-        playWrong();
+        // Resposta Incorreta: Dispara laser vermelho + som blaster + som específico de erro do Space Quest
+        playLaserShoot();
+        playSpaceQuestWrong();
         setLaserEffect({
           targetX: targetItem.laneXPercent,
           targetY: targetItem.yPercent,
@@ -794,6 +807,7 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
     setShieldActivationsCount(0);
     setHourglassProgress(0);
     setHourglassActiveEndsAt(null);
+    stopHourglassTicking();
     setHourglassCooldownEndsAt(null);
     setHourglassActivationsCount(0);
     setLaserEffect(null);
@@ -905,6 +919,21 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
   const shieldCooldownSec = isShieldCooldown
     ? Math.max(0, Math.ceil((shieldCooldownEndsAt! - nowTimestamp) / 1000))
     : 0;
+
+  // Efeito sonoro contínuo de Tic-Tac enquanto a Ampulheta (Dilatação Temporal) estiver ativa
+  useEffect(() => {
+    if (phase === "playing" && isHourglassActive) {
+      const stop = startHourglassTicking(450);
+      return () => {
+        stop();
+      };
+    } else {
+      stopHourglassTicking();
+    }
+    return () => {
+      stopHourglassTicking();
+    };
+  }, [phase, isHourglassActive]);
 
   return (
     <div className="space-y-3">

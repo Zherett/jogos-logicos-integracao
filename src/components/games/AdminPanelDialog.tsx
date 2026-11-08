@@ -4903,6 +4903,9 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
                                         nickNormalized={st.nickNormalized}
                                         size="xs"
                                       />
+                                      <span className="rounded-full bg-primary/15 px-2 py-0.2 text-[10px] font-bold text-primary">
+                                        Nv. {stProg.level}
+                                      </span>
                                       <PlayerActivityBadge
                                         playerId={st.id}
                                         playfabId={st.playfabId}
@@ -4910,9 +4913,6 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
                                         nickNormalized={st.nickNormalized}
                                         size="xs"
                                       />
-                                      <span className="rounded-full bg-primary/15 px-2 py-0.2 text-[10px] font-bold text-primary">
-                                        Nv. {stProg.level}
-                                      </span>
                                       {stProg.isLockedByMissions && (
                                         <span
                                           className="rounded-full bg-amber-500/15 border border-amber-500/30 px-1.5 py-0.2 text-[9px] font-extrabold text-amber-600 dark:text-amber-400"
@@ -6453,6 +6453,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
                                   nickNormalized={p.nickNormalized}
                                   size="xs"
                                 />
+                                <span className="font-normal text-muted-foreground truncate">({p.full_name})</span>
                                 <PlayerActivityBadge
                                   playerId={p.id}
                                   playfabId={p.playfabId}
@@ -6460,7 +6461,6 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
                                   nickNormalized={p.nickNormalized}
                                   size="xs"
                                 />
-                                <span className="font-normal text-muted-foreground truncate">({p.full_name})</span>
                                 {pProg.isLockedByMissions && (
                                   <span
                                     className="rounded-full bg-amber-500/15 border border-amber-500/30 px-1.5 py-0.2 text-[9px] font-bold text-amber-600 dark:text-amber-400"
