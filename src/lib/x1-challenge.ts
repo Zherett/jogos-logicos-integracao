@@ -673,6 +673,8 @@ export function mergeX1RoomStates(local: X1Room | undefined, remote: X1Room, now
       if (!merged.startedAt || Math.abs(now - merged.startedAt) > 15_000) {
         merged.startedAt = now;
       }
+    } else if (merged.status === "finished") {
+      recordX1MatchFinished(merged);
     }
     return merged;
   }
@@ -748,9 +750,9 @@ export function mergeX1RoomStates(local: X1Room | undefined, remote: X1Room, now
       base.host.wrong = Math.max(local.host.wrong, remote.host.wrong);
       base.guest.wrong = Math.max(local.guest.wrong, remote.guest.wrong);
 
-      // Aplica o deslocamento da barra de Cabo de Guerra caso ambos tenham respondido simultaneamente
+      // Aplica o deslocamento da barra de Cabo de Guerra caso ambos tenham respondido simultaneamente (+18 acerto / -10 erro)
       const shareDelta =
-        dHostCorrect * 12 - dHostWrong * 8 - dGuestCorrect * 12 + dGuestWrong * 8;
+        dHostCorrect * 18 - dHostWrong * 10 - dGuestCorrect * 18 + dGuestWrong * 10;
       if (shareDelta !== 0) {
         base.blueShare = Math.max(0, Math.min(100, base.blueShare + shareDelta));
       }
@@ -1206,9 +1208,18 @@ export async function syncX1WithPlayFabCloud(activeRoomCode?: string | null): Pr
 
 async function pushRoomToPlayFab(room: X1Room): Promise<void> {
   if (!isPlayFabConfigured()) return;
-  const roomGroupId = `x1_room_${room.code.toLowerCase()}`;
+  const cleanCode = room.code.trim().toUpperCase();
+  const roomGroupId = `x1_room_${cleanCode.toLowerCase()}`;
   await ensureSharedGroupExists(roomGroupId);
-  const latestRoom = getX1Room(room.code) ?? room;
+  // Verifica se a sala não foi cancelada/deletada localmente durante o await de rede
+  const currentStore = loadStore();
+  if (currentStore.deletedRooms?.[cleanCode]) {
+    return;
+  }
+  const latestRoom = currentStore.rooms[cleanCode];
+  if (!latestRoom || latestRoom.status === "cancelled") {
+    return;
+  }
   await callPlayFabSharedGroup("UpdateSharedGroupData", {
     SharedGroupId: roomGroupId,
     Data: { Room: JSON.stringify(latestRoom) },
@@ -1218,7 +1229,7 @@ async function pushRoomToPlayFab(room: X1Room): Promise<void> {
   if (latestRoom.status !== "playing") {
     lastLobbyCloudSyncAt = 0;
   }
-  await syncX1WithPlayFabCloud(room.code);
+  await syncX1WithPlayFabCloud(cleanCode);
 }
 
 async function pushCancelledRoomToPlayFab(code: string, previousRoom?: X1Room): Promise<void> {
@@ -1245,6 +1256,22 @@ async function pushCancelledRoomToPlayFab(code: string, previousRoom?: X1Room): 
 
 /* --------------------- Public Lobby & Room Operations --------------------- */
 
+function normalizeX1Nick(nick?: string | null): string {
+  return (nick ?? "").trim().toLowerCase();
+}
+
+function isSameX1Identity(
+  aId?: string | null,
+  aNick?: string | null,
+  bId?: string | null,
+  bNick?: string | null,
+): boolean {
+  if (aId && bId && aId === bId) return true;
+  const na = normalizeX1Nick(aNick);
+  const nb = normalizeX1Nick(bNick);
+  return Boolean(na && nb && na === nb);
+}
+
 export function heartbeatOnlinePlayer(player: {
   playerId: string;
   nick: string;
@@ -1258,6 +1285,15 @@ export function heartbeatOnlinePlayer(player: {
 }) {
   const store = loadStore();
   const now = Date.now();
+  const normNick = normalizeX1Nick(player.nick);
+  // Remove entradas antigas duplicadas do mesmo apelido caso tenha mudado de ID de sessão
+  if (normNick) {
+    for (const [id, p] of Object.entries(store.players)) {
+      if (id !== player.playerId && normalizeX1Nick(p.nick) === normNick) {
+        delete store.players[id];
+      }
+    }
+  }
   const existing = store.players[player.playerId];
   const lastActiveAt = player.lastActiveAt ?? existing?.lastActiveAt ?? now;
   store.players[player.playerId] = {
@@ -1273,8 +1309,10 @@ export function heartbeatOnlinePlayer(player: {
   });
 }
 
-export function getX1LobbySnapshot(currentPlayerId?: string) {
+export function getX1LobbySnapshot(currentPlayerId?: string, currentPlayerNick?: string) {
   const store = loadStore();
+  const myNick = currentPlayerNick ?? (currentPlayerId ? store.players[currentPlayerId]?.nick : undefined);
+
   const onlinePlayers = Object.values(store.players)
     .filter((p) => p.level >= 5 && (Date.now() - p.lastSeenAt) <= 60_000)
     .sort((a, b) => b.lastSeenAt - a.lastSeenAt);
@@ -1285,7 +1323,7 @@ export function getX1LobbySnapshot(currentPlayerId?: string) {
       (r) =>
         r.status === "waiting" &&
         !store.deletedRooms?.[r.code] &&
-        (!currentPlayerId || r.host.playerId !== currentPlayerId),
+        !isSameX1Identity(r.host.playerId, r.host.nick, currentPlayerId, myNick),
     )
     .sort((a, b) => b.createdAt - a.createdAt);
 
@@ -1338,7 +1376,15 @@ export function createX1Room(args: {
 
   // Destrói imediatamente qualquer sala anterior em espera que este mesmo anfitrião tenha deixado aberta
   for (const [oldCode, oldRoom] of Object.entries(store.rooms)) {
-    if (oldRoom.host.playerId === args.host.playerId && oldRoom.status === "waiting") {
+    if (
+      isSameX1Identity(
+        oldRoom.host.playerId,
+        oldRoom.host.nick,
+        args.host.playerId,
+        args.host.nick,
+      ) &&
+      oldRoom.status === "waiting"
+    ) {
       store.deletedRooms[oldCode] = now;
       delete store.rooms[oldCode];
       store.invites = store.invites.filter((inv) => inv.roomCode !== oldCode);
@@ -1433,7 +1479,11 @@ export function rejectX1Invite(inviteId: string, rejectedByNick: string): void {
   }
 }
 
-export function cancelWaitingX1Room(code: string, hostPlayerId?: string): boolean {
+export function cancelWaitingX1Room(
+  code: string,
+  hostPlayerId?: string,
+  hostPlayerNick?: string,
+): boolean {
   const clean = code.trim().toUpperCase();
   if (!clean) return false;
   const store = loadStore();
@@ -1444,7 +1494,12 @@ export function cancelWaitingX1Room(code: string, hostPlayerId?: string): boolea
     saveStore(store);
     return false;
   }
-  if (hostPlayerId && room.host.playerId !== hostPlayerId) return false;
+  if (
+    hostPlayerId &&
+    !isSameX1Identity(room.host.playerId, room.host.nick, hostPlayerId, hostPlayerNick)
+  ) {
+    return false;
+  }
   // Não cancela se um desafiante já entrou e iniciou contagem/partida
   if (room.status !== "waiting") return false;
 
@@ -1460,15 +1515,21 @@ export function cancelWaitingX1Room(code: string, hostPlayerId?: string): boolea
  * Cancela imediatamente qualquer sala em espera ("waiting") pertencente ao jogador informado.
  * Usado quando o jogador não está na tela de espera do código, garantindo que nenhuma sala órfã permaneça aberta.
  */
-export function cancelAllWaitingRoomsForHost(hostPlayerId: string): number {
-  if (!hostPlayerId) return 0;
+export function cancelAllWaitingRoomsForHost(
+  hostPlayerId: string,
+  hostPlayerNick?: string,
+): number {
+  if (!hostPlayerId && !hostPlayerNick) return 0;
   const store = loadStore();
   store.deletedRooms = store.deletedRooms ?? {};
   const now = Date.now();
   let count = 0;
 
   for (const [code, room] of Object.entries(store.rooms)) {
-    if (room.host.playerId === hostPlayerId && room.status === "waiting") {
+    if (
+      isSameX1Identity(room.host.playerId, room.host.nick, hostPlayerId, hostPlayerNick) &&
+      room.status === "waiting"
+    ) {
       store.deletedRooms[code] = now;
       delete store.rooms[code];
       store.invites = store.invites.filter((inv) => inv.roomCode !== code);
@@ -1497,7 +1558,10 @@ export function joinX1Room(args: {
   if (!room || room.status === "cancelled") {
     return { room: null, error: "Sala não encontrada, cancelada ou expirada (limite de 2 minutos)." };
   }
-  if (room.host.playerId === args.guest.playerId) {
+  if (
+    !args.guest.isBot &&
+    isSameX1Identity(room.host.playerId, room.host.nick, args.guest.playerId, args.guest.nick)
+  ) {
     return {
       room: null,
       error: "Você não pode entrar na própria sala que criou! Permaneça na tela de espera aguardando um colega.",
@@ -1630,7 +1694,16 @@ export async function joinX1RoomAsync(args: {
 
   // Bloqueio imediato se a sala local for do próprio jogador
   const localCheck = getX1Room(clean);
-  if (localCheck && localCheck.host.playerId === args.guest.playerId) {
+  if (
+    localCheck &&
+    !args.guest.isBot &&
+    isSameX1Identity(
+      localCheck.host.playerId,
+      localCheck.host.nick,
+      args.guest.playerId,
+      args.guest.nick,
+    )
+  ) {
     return {
       room: null,
       error: "Você não pode entrar na própria sala que criou! Permaneça na tela de espera aguardando um colega.",
@@ -1964,9 +2037,19 @@ export function closeX1Room(code: string) {
   const store = loadStore();
   store.deletedRooms = store.deletedRooms ?? {};
   const prev = store.rooms[clean];
+  store.invites = store.invites.filter((i) => i.roomCode !== clean);
+
+  // Se a partida já foi concluída ("finished"), preserva o estado "finished" na nuvem (que expira sozinho em 60s via autoCloseAt)
+  // para que o segundo jogador não perca a tela final de vitória/derrota se estiver 1s atrás na rede
+  if (prev?.status === "finished") {
+    prev.autoCloseAt = prev.autoCloseAt ?? Date.now() + X1_POST_MATCH_AUTOCLOSE_MS;
+    store.rooms[clean] = prev;
+    saveStore(store);
+    return;
+  }
+
   store.deletedRooms[clean] = Date.now();
   delete store.rooms[clean];
-  store.invites = store.invites.filter((i) => i.roomCode !== clean);
   saveStore(store);
   void pushCancelledRoomToPlayFab(clean, prev);
 }

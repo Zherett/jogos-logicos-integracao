@@ -87,10 +87,10 @@ export function X1ArenaDialog({
     if (!profile?.id) return;
     if (!open || !waitingRoomCode) {
       if (!matchStartedRef.current) {
-        cancelAllWaitingRoomsForHost(profile.id);
+        cancelAllWaitingRoomsForHost(profile.id, profile.nick);
       }
     }
-  }, [open, waitingRoomCode, profile?.id]);
+  }, [open, waitingRoomCode, profile?.id, profile?.nick]);
 
   // Se o jogador convidado recusar o desafio direto, encerra a sala de espera do anfitrião e avisa
   useEffect(() => {
@@ -100,7 +100,7 @@ export function X1ArenaDialog({
         | { roomCode?: string; rejectedByNick?: string }
         | undefined;
       if (!detail?.roomCode || detail.roomCode === waitingRoomCode) {
-        cancelWaitingX1Room(waitingRoomCode, profile.id);
+        cancelWaitingX1Room(waitingRoomCode, profile.id, profile.nick);
         waitingRoomCodeRef.current = null;
         setWaitingRoomCode(null);
         setError(`${detail?.rejectedByNick || "O colega"} recusou o seu desafio X1.`);
@@ -108,7 +108,7 @@ export function X1ArenaDialog({
     };
     window.addEventListener("desafios:x1-invite-rejected", handleRejected);
     return () => window.removeEventListener("desafios:x1-invite-rejected", handleRejected);
-  }, [open, waitingRoomCode, profile?.id]);
+  }, [open, waitingRoomCode, profile?.id, profile?.nick]);
 
   // Keep player presence heartbeat active and listen for room updates (fast 1.2s polling when waiting for challenger)
   useEffect(() => {
@@ -298,8 +298,11 @@ export function X1ArenaDialog({
   }
 
   const myStage = stageFromBirthdate(profile.birthdate, new Date(), profile.school);
-  const snapshot = getX1LobbySnapshot(profile.id);
-  const allOtherOnline = snapshot.onlinePlayers.filter((p) => p.playerId !== profile.id);
+  const myNickLower = profile.nick.trim().toLowerCase();
+  const snapshot = getX1LobbySnapshot(profile.id, profile.nick);
+  const allOtherOnline = snapshot.onlinePlayers.filter(
+    (p) => p.playerId !== profile.id && p.nick.trim().toLowerCase() !== myNickLower,
+  );
   const otherOnlinePlayers = onlyMyStage
     ? allOtherOnline.filter((p) => (p.stage ?? "etapa_1") === myStage.id)
     : allOtherOnline;
@@ -373,10 +376,10 @@ export function X1ArenaDialog({
         if (!v) {
           const codeToCancel = waitingRoomCodeRef.current ?? waitingRoomCode;
           if (codeToCancel && !matchStartedRef.current) {
-            cancelWaitingX1Room(codeToCancel, profile?.id);
+            cancelWaitingX1Room(codeToCancel, profile?.id, profile?.nick);
           }
           if (profile?.id && !matchStartedRef.current) {
-            cancelAllWaitingRoomsForHost(profile.id);
+            cancelAllWaitingRoomsForHost(profile.id, profile?.nick);
           }
           waitingRoomCodeRef.current = null;
           setWaitingRoomCode(null);
@@ -477,8 +480,8 @@ export function X1ArenaDialog({
               type="button"
               variant="outline"
               onClick={() => {
-                cancelWaitingX1Room(waitingRoom.code, profile?.id);
-                if (profile?.id) cancelAllWaitingRoomsForHost(profile.id);
+                cancelWaitingX1Room(waitingRoom.code, profile?.id, profile?.nick);
+                if (profile?.id) cancelAllWaitingRoomsForHost(profile.id, profile?.nick);
                 waitingRoomCodeRef.current = null;
                 setWaitingRoomCode(null);
               }}

@@ -253,7 +253,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
   // Score-race deterministic question answer handler (Logica / Porcentagem)
   const handleRaceAnswer = useCallback(
     (chosenAnswer: string) => {
-      if (room.status !== "playing" || !room.questionList) return;
+      if (room.status !== "playing" || !room.questionList || stunned) return;
       const curQ = room.questionList[myQuestionIdx];
       if (!curQ) return;
 
@@ -262,13 +262,15 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
         playCorrect();
       } else {
         playWrong();
+        setStunned(true);
+        window.setTimeout(() => setStunned(false), 600);
       }
 
       const nextIdx = myQuestionIdx + 1;
       setMyQuestionIdx(nextIdx);
 
       const qPoints = Number.isFinite(curQ.points) ? curQ.points : 15;
-      const newScore = me.score + (isCorrect ? qPoints : 0);
+      const newScore = isCorrect ? me.score + qPoints : Math.max(0, me.score - 5);
       const newCorrect = me.correct + (isCorrect ? 1 : 0);
       const newWrong = me.wrong + (isCorrect ? 0 : 1);
       const finished = nextIdx >= (room.questionList.length ?? 25);
@@ -287,7 +289,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
         setRoom({ ...updated });
       }
     },
-    [room.status, room.questionList, room.code, myQuestionIdx, myId, me.score, me.correct, me.wrong],
+    [room.status, room.questionList, room.code, myQuestionIdx, myId, me.score, me.correct, me.wrong, stunned],
   );
 
   // Campo Minado card click handler
@@ -974,6 +976,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
                 key={opt}
                 type="button"
                 size="lg"
+                disabled={stunned}
                 onClick={() => handleRaceAnswer(opt)}
                 className="h-14 sm:h-16 rounded-2xl font-display text-lg font-extrabold hover:scale-[1.02] transition-transform"
               >

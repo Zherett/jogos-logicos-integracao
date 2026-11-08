@@ -337,22 +337,24 @@ describe("Arena de Desafio X1 Online (1v1 Versus Mode)", () => {
       gameId: "rpg",
       status: "playing",
       revision: 20,
-      blueShare: 62, // Host acertou 1 (+12 sobre 50)
+      blueShare: 68, // Host acertou 1 (+18 sobre 50)
       host: { ...makeSampleRoom().host, score: 15, correct: 1, wrong: 0, hp: 5 },
-      guest: { ...makeSampleRoom().guest!, score: 0, correct: 0, wrong: 0, hp: 5 },
+      guest: { ...makeSampleRoom().guest!, score: 0, correct: 0, wrong: 0, hp: 4 },
     };
     const remoteRpg: X1Room = {
       ...makeSampleRoom(),
       gameId: "rpg",
       status: "playing",
       revision: 21,
-      blueShare: 38, // Guest acertou 1 (-12 sobre 50)
-      host: { ...makeSampleRoom().host, score: 0, correct: 0, wrong: 0, hp: 5 },
+      blueShare: 32, // Guest acertou 1 (-18 sobre 50)
+      host: { ...makeSampleRoom().host, score: 0, correct: 0, wrong: 0, hp: 4 },
       guest: { ...makeSampleRoom().guest!, score: 15, correct: 1, wrong: 0, hp: 5 },
     };
     const mergedRpg = mergeX1RoomStates(localRpg, remoteRpg, now);
     assert.equal(mergedRpg.host.correct, 1);
     assert.equal(mergedRpg.guest?.correct, 1);
-    assert.equal(mergedRpg.blueShare, 50); // +12 do host e -12 do guest voltam ao equilíbrio 50%
+    assert.equal(mergedRpg.host.hp, 4);
+    assert.equal(mergedRpg.guest?.hp, 4);
+    assert.equal(mergedRpg.blueShare, 50); // +18 do host e -18 do guest voltam ao equilíbrio 50%
   });
 });
