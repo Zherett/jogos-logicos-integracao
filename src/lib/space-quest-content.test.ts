@@ -208,3 +208,28 @@ test("Space Quest Engine — Auras Especiais e Concessão de Medalhas", () => {
   assert.equal(missAmbar.scoreDelta, 0); // sem penalidade de pontos negativos!
   assert.equal(missAmbar.unlockedMedalId, undefined);
 });
+
+test("Space Quest Engine — Assinatura Flexível e Segura de generateSpaceQuestQuestion", () => {
+  // 1. Chamada apenas com nível
+  const q1 = generateSpaceQuestQuestion(1);
+  assert.ok(q1.prompt.length > 0);
+  assert.ok(q1.options.length >= 2);
+
+  // 2. Chamada com opções como 2º argumento (evita crash de TypeError)
+  const q2 = generateSpaceQuestQuestion(1, {
+    allowSpecial: false,
+    excludedAuras: new Set<AuraType>(["rubi", "ambar"]),
+  });
+  assert.equal(q2.aura, "normal");
+  assert.ok(q2.options.includes(q2.correctAnswer));
+
+  // 3. Chamada com aura forçada no 2º argumento
+  const q3 = generateSpaceQuestQuestion(2, "safira");
+  assert.equal(q3.aura, "safira");
+  assert.equal(q3.pointsOnCorrect, 20);
+
+  // 4. Chamada com aura forçada e opções no 3º argumento
+  const q4 = generateSpaceQuestQuestion(3, "ametista", { allowSpecial: true });
+  assert.equal(q4.aura, "ametista");
+  assert.equal(q4.pointsOnCorrect, 30);
+});

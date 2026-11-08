@@ -403,17 +403,33 @@ export function generateMathQuestion(
   };
 }
 
+export interface SpaceQuestGenerationOptions {
+  allowSpecial?: boolean;
+  excludedAuras?: Set<AuraType>;
+}
+
 /**
  * Creates a next question for the player taking into account current stage and aura roll.
+ * Suporta tanto (level, forcedAura, options) quanto (level, options) de forma segura.
  */
 export function generateSpaceQuestQuestion(
   level: number,
-  forcedAura?: AuraType,
-  options?: {
-    allowSpecial?: boolean;
-    excludedAuras?: Set<AuraType>;
-  },
+  forcedAuraOrOptions?: AuraType | SpaceQuestGenerationOptions,
+  maybeOptions?: SpaceQuestGenerationOptions,
 ): SpaceQuestQuestion {
+  let forcedAura: AuraType | undefined;
+  let options: SpaceQuestGenerationOptions | undefined;
+
+  if (typeof forcedAuraOrOptions === "string") {
+    forcedAura = forcedAuraOrOptions;
+    options = maybeOptions;
+  } else if (forcedAuraOrOptions && typeof forcedAuraOrOptions === "object") {
+    options = forcedAuraOrOptions;
+    forcedAura = undefined;
+  } else {
+    options = maybeOptions;
+  }
+
   const aura = forcedAura ?? rollAura(undefined, options);
   const auraCfg = AURA_CONFIGS[aura];
 

@@ -651,19 +651,9 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
         title="Space Quest"
         onExit={onExit}
         rightElement={
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={toggleMuted}
-              className="p-1.5 rounded-lg border border-sky-400/30 bg-slate-900/60 text-sky-300 hover:text-sky-100 cursor-pointer transition-all"
-              title={muted ? "Ativar som" : "Desativar som"}
-            >
-              {muted ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
-            </button>
-            <div className="rounded-xl border border-sky-500/30 bg-slate-900/80 px-3 py-1 flex items-center gap-2 shadow-xs">
-              <Rocket className="h-4 w-4 text-sky-400 animate-pulse" />
-              <span className="text-xs font-black text-sky-200">Fase {level}</span>
-            </div>
+          <div className="rounded-xl border border-sky-500/30 bg-slate-900/80 px-3 py-1 flex items-center gap-2 shadow-xs">
+            <Rocket className="h-4 w-4 text-sky-400 animate-pulse" />
+            <span className="text-xs font-black text-sky-200">Fase {level}</span>
           </div>
         }
       />
@@ -1113,7 +1103,9 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
           score={Math.max(0, score)}
           correct={correctCount}
           wrong={wrongCount}
-          onRestart={() => {
+          level={level}
+          gameId="spacequest"
+          onReplay={() => {
             questionsSinceSpecialAuraRef.current = 10;
             spawnedAurasThisMatchRef.current = new Set();
             setScore(0);
@@ -1136,7 +1128,7 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
             setActiveTargetId(null);
             setPhase("countdown");
           }}
-          onExit={onExit}
+          onMenu={onExit}
         />
       )}
 

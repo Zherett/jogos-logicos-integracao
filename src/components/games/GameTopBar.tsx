@@ -8,9 +8,10 @@ interface Props {
   /** Shown when a team session is running. */
   sessionActive?: boolean;
   onFinishSession?: () => void;
+  rightElement?: React.ReactNode;
 }
 
-export function GameTopBar({ title, onExit, sessionActive, onFinishSession }: Props) {
+export function GameTopBar({ title, onExit, sessionActive, onFinishSession, rightElement }: Props) {
   const sound = useSoundMuted();
 
   return (
@@ -31,7 +32,8 @@ export function GameTopBar({ title, onExit, sessionActive, onFinishSession }: Pr
         )}
       </div>
       <div className="font-display text-lg sm:text-xl font-bold truncate">{title}</div>
-      <div className="flex w-20 shrink-0 justify-end">
+      <div className="flex shrink-0 items-center justify-end gap-2">
+        {rightElement}
         <Button
           type="button"
           variant="ghost"
