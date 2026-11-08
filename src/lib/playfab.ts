@@ -1299,10 +1299,10 @@ export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdmin
           return gamesWith2Plays >= 6;
 
         case "beta_tester_platina":
-          return gamesWith2Plays >= ALL_GAME_IDS.length;
+          return gamesWith2Plays >= (def?.condition.threshold ?? 10);
 
         case "beta_tester_heroi":
-          return gamesWith10Plays >= ALL_GAME_IDS.length && acc.profile.level >= 5;
+          return gamesWith10Plays >= (def?.condition.threshold ?? 10) && acc.profile.level >= 5;
 
         case "all_game_medals":
           return ALL_GAME_IDS.every((gId) => {

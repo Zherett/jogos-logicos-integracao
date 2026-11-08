@@ -442,8 +442,8 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
     },
   );
 
-  // 6. Exploração: Jogos Diferentes (3, 5 e Dinâmico baseado em ALL_GAME_IDS)
-  const allGamesThreshold = Math.max(3, ALL_GAME_IDS.length - 1);
+  // 6. Exploração: Jogos Diferentes (3, 5 e 10 jogos)
+  const allGamesThreshold = 10;
   medals.push(
     {
       id: "explore_3_games",
@@ -466,11 +466,11 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
     {
       id: "explore_all_games",
       title: "Mestre de Todos os Jogos",
-      description: `Explore e complete partidas em pelo menos ${allGamesThreshold} jogos diferentes da plataforma.`,
+      description: "Explore e complete partidas em pelo menos 10 jogos diferentes da plataforma.",
       rarity: "ouro",
       category: "exploracao",
       iconName: "Trophy",
-      condition: { type: "distinct_games", threshold: allGamesThreshold },
+      condition: { type: "distinct_games", threshold: 10 },
     },
   );
 
@@ -696,16 +696,16 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
     {
       id: "beta_tester_platina",
       title: "Beta Tester Platina",
-      description: "Jogue e finalize pelo menos 2 partidas de todos os jogos da plataforma durante o período Beta (01 a 07 de Novembro).",
+      description: "Jogue e finalize pelo menos 2 partidas de 10 jogos da plataforma durante o período Beta (01 a 15 de Novembro).",
       rarity: "platina",
       category: "evento",
       iconName: "Crown",
-      condition: { type: "beta_tester_platina", threshold: ALL_GAME_IDS.length },
+      condition: { type: "beta_tester_platina", threshold: 10 },
     },
     {
       id: "beta_tester_heroi",
       title: "Beta Tester Herói",
-      description: "Jogue e finalize pelo menos 10 partidas de todos os jogos e alcance o Nível 5 durante o período Beta (01 a 07 de Novembro).",
+      description: "Jogue e finalize pelo menos 10 partidas de 10 jogos e alcance o Nível 5 durante o período Beta (01 a 15 de Novembro).",
       rarity: "heroi",
       category: "evento",
       iconName: "Flame",
@@ -1788,13 +1788,13 @@ export function evaluatePlayerMedals(
         break;
 
       case "beta_tester_platina":
-        if (isBetaActive && gamesWith2Plays >= ALL_GAME_IDS.length) {
+        if (isBetaActive && gamesWith2Plays >= (cond.threshold ?? 10)) {
           earned = true;
         }
         break;
 
       case "beta_tester_heroi":
-        if (isBetaActive && gamesWith10Plays >= ALL_GAME_IDS.length && p.level >= 5) {
+        if (isBetaActive && gamesWith10Plays >= (cond.threshold ?? 10) && p.level >= 5) {
           earned = true;
         }
         break;
@@ -2189,7 +2189,7 @@ export function calculateMedalProgress(
     }
     case "beta_tester_platina": {
       const games = aggregatedRows.filter((s) => s.plays >= 2).length;
-      const target = ALL_GAME_IDS.length;
+      const target = cond.threshold ?? 10;
       const pct = Math.min(100, Math.round((games / target) * 100));
       return {
         percent: pct,
@@ -2198,7 +2198,7 @@ export function calculateMedalProgress(
     }
     case "beta_tester_heroi": {
       const games = aggregatedRows.filter((s) => s.plays >= 10).length;
-      const targetGames = ALL_GAME_IDS.length;
+      const targetGames = cond.threshold ?? 10;
       const lvlTarget = 5;
       const lvlPct = Math.min(1, profile.level / lvlTarget);
       const gamesPct = Math.min(1, games / targetGames);

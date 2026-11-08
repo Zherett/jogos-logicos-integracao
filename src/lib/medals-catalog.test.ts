@@ -333,6 +333,34 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
     assert.ok(!alunaMedalIds.includes("beta_tester_ouro"), "NÃO deve ter Ouro (apenas 1 jogo tem 2+ partidas)");
     assert.ok(!alunaMedalIds.includes("beta_tester_platina"), "NÃO deve ter Platina (nem todos os jogos têm 2+ partidas)");
     assert.ok(!alunaMedalIds.includes("beta_tester_heroi"), "NÃO deve ter Herói");
+
+    // Aluna com 10 jogos concluídos com 10 partidas e Nível 5 (mesmo sem jogar o 11º jogo recente spacequest)
+    const statsExatos10Jogos: GameStatRow[] = ALL_GAME_IDS.filter((id) => id !== "spacequest").map((gId) => ({
+      player_id: "p_aluna_10_jogos",
+      game_id: gId,
+      plays: 10,
+      wins: 8,
+      best_score: 90,
+      best_level: 3,
+      updated_at: "2026-11-03T12:00:00Z",
+    }));
+
+    const profileAluna10: PlayerProfile = {
+      ...profileBronze,
+      level: 5,
+      xp: 2500,
+      matchesPlayed: 100,
+      distinctGamesPlayed: 10,
+    };
+
+    const awarded10 = evaluatePlayerMedals(
+      { profile: profileAluna10, stats: statsExatos10Jogos },
+      undefined,
+      nov3,
+    );
+    const ids10 = awarded10.map((m) => m.id);
+    assert.ok(ids10.includes("beta_tester_platina"), "Deve receber Platina com 10 jogos mesmo havendo 11 na plataforma");
+    assert.ok(ids10.includes("beta_tester_heroi"), "Deve receber Herói com 10 jogos de 10 partidas e nível 5");
   });
 
   it("NÃO concede medalha de zero erros (individual ou 3 jogos) se a aluna teve 1 ou mais erros no final do jogo", () => {
