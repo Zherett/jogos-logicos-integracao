@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Trophy,
   Medal,
@@ -48,12 +48,16 @@ export function LeaderboardDialog({ open, onOpenChange }: Props) {
   const cfg = auth.adminConfig;
   const schoolStandings = open ? getSchoolStandings() : [];
 
-  // Default to the logged-in student's competing series/grade AND the "Medalhas" tab whenever opening the Ranking dialog
+  const prevOpenRef = useRef(false);
+
+  // Default to the logged-in student's competing series/grade AND the "Medalhas" tab ONLY upon opening the Ranking dialog
+  // (Prevents background polling/heartbeat updates to auth.profile from resetting the stage or tab while the user is actively viewing)
   useEffect(() => {
-    if (open) {
+    if (open && !prevOpenRef.current) {
       setSelectedStage(resolveDefaultRankingCategory(auth.profile));
       setTab("medalhas");
     }
+    prevOpenRef.current = open;
   }, [open, auth.profile]);
 
   useEffect(() => {

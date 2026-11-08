@@ -39,6 +39,7 @@ import {
   Info,
   Beaker,
   CheckCircle2,
+  Search,
 } from "lucide-react";
 import {
   computeSeasonDates,
@@ -126,7 +127,9 @@ import {
   getDistinctGamesPlayed,
   getEffectivePlayerProgression,
   RARITY_INFO,
+  CATEGORY_LABELS,
   formatEventRequirementLabel,
+  type MedalCategory,
   type MedalDefinition,
   type MedalRarity,
   type EventRequirementType,
@@ -387,6 +390,11 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
   const [newMedalScope, setNewMedalScope] = useState<"todos" | GameId>("todos");
   const [newMedalThreshold, setNewMedalThreshold] = useState<number>(5);
   const [newMedalIsStackable, setNewMedalIsStackable] = useState<boolean>(true);
+
+  // Filtros do Catálogo Geral de Medalhas do ADM
+  const [adminMedalSearch, setAdminMedalSearch] = useState("");
+  const [adminMedalCategory, setAdminMedalCategory] = useState<string>("ALL");
+  const [adminMedalRarity, setAdminMedalRarity] = useState<string>("ALL");
 
   // Manual Grant Modal state
   const [grantMedalTarget, setGrantMedalTarget] = useState<MedalDefinition | null>(null);
@@ -6158,90 +6166,186 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
                   )}
                 </div>
 
-                {/* 3. Catálogo Geral e Botão de Concessão Manual */}
-                <div className="rounded-2xl border bg-card p-4 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="font-display text-sm font-extrabold text-foreground">
-                      Todas as Medalhas do Sistema ({getAllAvailableMedals(draft.customMedals).length})
-                    </div>
-                    <span className="text-[11px] text-muted-foreground">
-                      Clique em "Conceder a Aluno" para premiar manualmente
-                    </span>
-                  </div>
+                {/* 3. Catálogo Geral e Botão de Concessão Manual com Filtros */}
+                {(() => {
+                  const allAdminMedals = getAllAvailableMedals(draft.customMedals);
+                  const filteredAdminMedals = allAdminMedals.filter((m) => {
+                    if (adminMedalCategory !== "ALL" && m.category !== adminMedalCategory) return false;
+                    if (adminMedalRarity !== "ALL" && m.rarity !== adminMedalRarity) return false;
+                    if (adminMedalSearch.trim()) {
+                      const q = adminMedalSearch.toLowerCase();
+                      const matchTitle = m.title.toLowerCase().includes(q);
+                      const matchDesc = m.description.toLowerCase().includes(q);
+                      const matchRarity = RARITY_INFO[m.rarity]?.label.toLowerCase().includes(q);
+                      const matchCategory = (CATEGORY_LABELS[m.category] ?? "").toLowerCase().includes(q);
+                      if (!matchTitle && !matchDesc && !matchRarity && !matchCategory) return false;
+                    }
+                    return true;
+                  });
 
-                  <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
-                    {getAllAvailableMedals(draft.customMedals).map((m) => {
-                      const rarity = RARITY_INFO[m.rarity];
-                      return (
-                        <div
-                          key={m.id}
-                          className="flex items-center justify-between gap-3 rounded-xl border bg-background p-2.5 text-xs"
-                        >
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            <div
-                              className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg border ${rarity.badgeBgClass}`}
-                            >
-                              <div className={rarity.textColor}>
-                                <MedalIcon name={m.iconName} className="h-4 w-4" />
-                              </div>
-                            </div>
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-1.5">
-                                <span className="font-bold truncate text-foreground">{m.title}</span>
-                                <span className={`text-[10px] font-black uppercase ${rarity.textColor}`}>
-                                  ({rarity.label})
-                                </span>
-                                {m.isCustom && (
-                                  <span className="rounded bg-primary/20 px-1 text-[9px] font-black uppercase text-primary">
-                                    ADM
-                                  </span>
-                                )}
-                                {m.isStackable && (
-                                  <span className="rounded bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/40 px-1 text-[9px] font-black uppercase">
-                                    Empilhável
-                                  </span>
-                                )}
-                              </div>
-                              <p className="text-[11px] text-muted-foreground truncate">{m.description}</p>
-                            </div>
+                  return (
+                    <div className="rounded-2xl border bg-card p-4 space-y-3">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <div className="font-display text-sm font-extrabold text-foreground">
+                            Todas as Medalhas do Sistema ({filteredAdminMedals.length} de {allAdminMedals.length})
                           </div>
-
-                          <div className="flex items-center gap-1.5 shrink-0">
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              onClick={() => {
-                                setGrantMedalTarget(m);
-                                setSelectedStudentForGrant(players[0]?.id ?? "");
-                              }}
-                              className="h-7 rounded-lg text-[11px] font-bold"
-                            >
-                              Conceder a Aluno
-                            </Button>
-                            {m.isCustom && (
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="ghost"
-                                onClick={async () => {
-                                  const filtered = (draft.customMedals ?? []).filter((cm) => cm.id !== m.id);
-                                  const updated = { ...draft, customMedals: filtered };
-                                  setDraft(updated);
-                                  await auth.updateAdminConfig(updated);
-                                  flashSaved(`Medalha "${m.title}" excluída.`);
-                                }}
-                                className="h-7 w-7 p-0 text-destructive"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </Button>
-                            )}
-                          </div>
+                          <p className="text-[11px] text-muted-foreground">
+                            Filtre por tipo ou raridade e clique em "Conceder a Aluno" para premiar manualmente
+                          </p>
                         </div>
-                      );
-                    })}
-                  </div>
-                </div>
+                      </div>
+
+                      {/* Barra de Busca e Filtros Semelhante ao Perfil */}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="relative flex-1 min-w-[160px]">
+                          <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                          <Input
+                            value={adminMedalSearch}
+                            onChange={(e) => setAdminMedalSearch(e.target.value)}
+                            placeholder="Buscar por nome, objetivo ou categoria..."
+                            className="pl-9 h-9 rounded-xl text-xs"
+                          />
+                        </div>
+
+                        <select
+                          value={adminMedalCategory}
+                          onChange={(e) => setAdminMedalCategory(e.target.value)}
+                          className="h-9 rounded-xl border bg-background px-2.5 text-xs font-bold text-foreground"
+                        >
+                          <option value="ALL">Todas as Categorias</option>
+                          {Object.entries(CATEGORY_LABELS).map(([cat, label]) => (
+                            <option key={cat} value={cat}>
+                              {label}
+                            </option>
+                          ))}
+                        </select>
+
+                        <select
+                          value={adminMedalRarity}
+                          onChange={(e) => setAdminMedalRarity(e.target.value)}
+                          className="h-9 rounded-xl border bg-background px-2.5 text-xs font-bold text-foreground"
+                        >
+                          <option value="ALL">Todas as Raridades</option>
+                          {(["bronze", "prata", "ouro", "platina", "diamante", "heroi"] as MedalRarity[]).map((r) => (
+                            <option key={r} value={r}>
+                              {RARITY_INFO[r].label}
+                            </option>
+                          ))}
+                        </select>
+
+                        {(adminMedalSearch || adminMedalCategory !== "ALL" || adminMedalRarity !== "ALL") && (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => {
+                              setAdminMedalSearch("");
+                              setAdminMedalCategory("ALL");
+                              setAdminMedalRarity("ALL");
+                            }}
+                            className="h-9 px-2 text-xs font-bold text-muted-foreground hover:text-foreground"
+                          >
+                            Limpar
+                          </Button>
+                        )}
+                      </div>
+
+                      <div className="max-h-72 overflow-y-auto space-y-2 pr-1">
+                        {filteredAdminMedals.length === 0 ? (
+                          <p className="py-6 text-center text-xs text-muted-foreground">
+                            Nenhuma medalha encontrada com os filtros selecionados.
+                          </p>
+                        ) : (
+                          filteredAdminMedals.map((m) => {
+                            const rarity = RARITY_INFO[m.rarity];
+                            const isSecret = Boolean(m.isSecret);
+                            return (
+                              <div
+                                key={m.id}
+                                className={`flex items-center justify-between gap-3 rounded-xl border bg-background p-2.5 text-xs transition-all ${
+                                  isSecret
+                                    ? "border-emerald-500/50 shadow-[0_0_12px_rgba(16,185,129,0.2)]"
+                                    : "hover:border-border"
+                                }`}
+                              >
+                                <div className="flex items-center gap-2.5 min-w-0">
+                                  <div
+                                    className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg border ${
+                                      isSecret
+                                        ? "border-emerald-400 bg-emerald-950/40 text-emerald-400 animate-pulse"
+                                        : rarity.badgeBgClass
+                                    }`}
+                                  >
+                                    <div className={isSecret ? "text-emerald-400" : rarity.textColor}>
+                                      <MedalIcon name={m.iconName} className="h-4 w-4" />
+                                    </div>
+                                  </div>
+                                  <div className="min-w-0">
+                                    <div className="flex items-center gap-1.5 flex-wrap">
+                                      <span className="font-bold truncate text-foreground">{m.title}</span>
+                                      <span className={`text-[10px] font-black uppercase ${rarity.textColor}`}>
+                                        ({rarity.label})
+                                      </span>
+                                      {isSecret && (
+                                        <span className="rounded bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/40 px-1 text-[9px] font-black uppercase flex items-center gap-0.5">
+                                          <span>✨</span> Secreta
+                                        </span>
+                                      )}
+                                      {m.isCustom && (
+                                        <span className="rounded bg-primary/20 px-1 text-[9px] font-black uppercase text-primary">
+                                          ADM
+                                        </span>
+                                      )}
+                                      {m.isStackable && (
+                                        <span className="rounded bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/40 px-1 text-[9px] font-black uppercase">
+                                          Empilhável
+                                        </span>
+                                      )}
+                                    </div>
+                                    <p className="text-[11px] text-muted-foreground truncate">{m.description}</p>
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => {
+                                      setGrantMedalTarget(m);
+                                      setSelectedStudentForGrant(players[0]?.id ?? "");
+                                    }}
+                                    className="h-7 rounded-lg text-[11px] font-bold"
+                                  >
+                                    Conceder a Aluno
+                                  </Button>
+                                  {m.isCustom && (
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={async () => {
+                                        const filtered = (draft.customMedals ?? []).filter((cm) => cm.id !== m.id);
+                                        const updated = { ...draft, customMedals: filtered };
+                                        setDraft(updated);
+                                        await auth.updateAdminConfig(updated);
+                                        flashSaved(`Medalha "${m.title}" excluída.`);
+                                      }}
+                                      className="h-7 w-7 p-0 text-destructive"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </Button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Modal Sub-diálogo para Conceder Medalha a Aluno */}
                 {grantMedalTarget && (

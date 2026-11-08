@@ -1619,4 +1619,72 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
       "Pontos de carreira devem ter sido concedidos pela medalha retroativa",
     );
   });
+
+  it("avalia e concede as novas medalhas secretas (Especialista em 10 Jogos, Zero Erros em 10 Jogos e 50 Partidas em 10 Jogos)", () => {
+    const all = getAllAvailableMedals();
+
+    const mSpec10 = all.find((m) => m.id === "secret_specialist_10_games");
+    const mFlaw10 = all.find((m) => m.id === "secret_flawless_10_games");
+    const mPlays10 = all.find((m) => m.id === "secret_50_matches_10_games");
+
+    assert.ok(mSpec10 && mSpec10.isSecret && mSpec10.rarity === "diamante" && mSpec10.category === "secreta");
+    assert.ok(mFlaw10 && mFlaw10.isSecret && mFlaw10.rarity === "platina" && mFlaw10.category === "secreta");
+    assert.ok(mPlays10 && mPlays10.isSecret && mPlays10.rarity === "diamante" && mPlays10.category === "secreta");
+
+    const gameIds: GameId[] = [
+      "logica", "cartesiano", "formas", "memoria", "variaveis",
+      "robogrid", "porcentagem", "minado", "completar", "rpg"
+    ];
+
+    const stats10Spec = gameIds.map((id) => ({
+      game_id: id,
+      mode: "padrao",
+      plays: 5,
+      wins: 5,
+      best_score: 50,
+      best_level: 3,
+      flawless_wins: 0,
+      last_wrong: 1,
+    }));
+
+    const awardedSpec = evaluatePlayerMedals({
+      profile: { id: "p_spec", unlockedMedals: [] } as any,
+      stats: stats10Spec as any,
+    });
+    assert.ok(awardedSpec.some((m) => m.id === "secret_specialist_10_games"), "Deve conceder Especialista Absoluto com 10 jogos nível 3+");
+
+    const stats10Flawless = gameIds.map((id) => ({
+      game_id: id,
+      mode: "padrao",
+      plays: 5,
+      wins: 5,
+      best_score: 50,
+      best_level: 2,
+      flawless_wins: 1,
+      last_wrong: 0,
+    }));
+
+    const awardedFlawless = evaluatePlayerMedals({
+      profile: { id: "p_flaw", unlockedMedals: [] } as any,
+      stats: stats10Flawless as any,
+    });
+    assert.ok(awardedFlawless.some((m) => m.id === "secret_flawless_10_games"), "Deve conceder Perfeição Impecável com 10 jogos sem erros");
+
+    const stats10Plays50 = gameIds.map((id) => ({
+      game_id: id,
+      mode: "padrao",
+      plays: 50,
+      wins: 30,
+      best_score: 80,
+      best_level: 2,
+      flawless_wins: 0,
+      last_wrong: 2,
+    }));
+
+    const awardedPlays = evaluatePlayerMedals({
+      profile: { id: "p_plays", unlockedMedals: [] } as any,
+      stats: stats10Plays50 as any,
+    });
+    assert.ok(awardedPlays.some((m) => m.id === "secret_50_matches_10_games"), "Deve conceder Veterano Universal com 50 partidas em 10 jogos");
+  });
 });

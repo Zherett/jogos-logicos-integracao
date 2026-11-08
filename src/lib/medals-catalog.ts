@@ -27,6 +27,22 @@ export type MedalCategory =
   | "evento"
   | "secreta";
 
+export const CATEGORY_LABELS: Record<MedalCategory, string> = {
+  nivel: "Níveis (1..10)",
+  jogo_nivel: "Desafio nos Jogos",
+  jogo_perfeito: "Zero Erros",
+  jogo_partidas: "Partidas Jogadas",
+  x1_vitorias: "Arena X1",
+  x1_semanal: "X1 Semanal",
+  exploracao: "Exploração",
+  sem_erros: "Mente Precisa",
+  atividade: "Dias & XP",
+  ranking: "Torneio",
+  meta: "Meta-Medalhas",
+  evento: "Eventos Especiais",
+  secreta: "Secretas",
+};
+
 export type EventRequirementType =
   | "event_matches"
   | "event_xp"
@@ -56,6 +72,8 @@ export interface MedalCondition {
     | "x1_wins_weekly"
     | "distinct_games"
     | "distinct_flawless_games"
+    | "distinct_specialist_games"
+    | "distinct_games_with_50_matches"
     | "max_daily_xp"
     | "streak_days"
     | "tournament_rank"
@@ -847,6 +865,38 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
       category: "secreta",
       iconName: "Crown",
       condition: { type: "top1_consecutive_weeks", threshold: 4 },
+      isSecret: true,
+    },
+
+    // 16. Novas Medalhas Secretas de Maestria Multijogos
+    {
+      id: "secret_specialist_10_games",
+      title: "Especialista Absoluto",
+      description: "Segredo supremo revelado: conquistou o título de Especialista (Nível 3+) em pelo menos 10 jogos diferentes!",
+      rarity: "diamante",
+      category: "secreta",
+      iconName: "Target",
+      condition: { type: "distinct_specialist_games", threshold: 10 },
+      isSecret: true,
+    },
+    {
+      id: "secret_flawless_10_games",
+      title: "Perfeição Impecável",
+      description: "Segredo revelado: conquistou vitória com ZERO erros em pelo menos 10 jogos diferentes!",
+      rarity: "platina",
+      category: "secreta",
+      iconName: "Crosshair",
+      condition: { type: "distinct_flawless_games", threshold: 10 },
+      isSecret: true,
+    },
+    {
+      id: "secret_50_matches_10_games",
+      title: "Veterano Universal",
+      description: "Segredo supremo revelado: disputou pelo menos 50 partidas em 10 jogos diferentes!",
+      rarity: "diamante",
+      category: "secreta",
+      iconName: "Award",
+      condition: { type: "distinct_games_with_50_matches", threshold: 10 },
       isSecret: true,
     },
     {
@@ -1644,6 +1694,22 @@ export function evaluatePlayerMedals(
   // Contagem estrita de jogos distintos onde o aluno realmente finalizou 2+ partidas
   const gamesWith2Plays = aggregatedRows.filter((s) => s.plays >= 2).length;
   const gamesWith10Plays = aggregatedRows.filter((s) => s.plays >= 10).length;
+
+  // Contagem estrita de jogos distintos onde o aluno atingiu o nível Especialista (nível 3+)
+  const specialistGamesCount = Array.from(enabledSet).filter((gId) => {
+    const s = statsMap.get(gId);
+    const hasBestLvl3 = s && s.plays > 0 && s.best_level >= 3;
+    const isLastMatchLvl3 = ctx.lastMatch && ctx.lastMatch.gameId === gId && ctx.lastMatch.level >= 3;
+    const hasSpecialistMedal = existingSet.has(`game_${gId}_lvl_master`);
+    return Boolean(hasBestLvl3 || isLastMatchLvl3 || hasSpecialistMedal);
+  }).length;
+
+  // Contagem estrita de jogos distintos onde o aluno disputou 50+ partidas
+  const gamesWith50Plays = Array.from(enabledSet).filter((gId) => {
+    const s = statsMap.get(gId);
+    const has50Medal = existingSet.has(`game_${gId}_matches_50`);
+    return Boolean((s && s.plays >= 50) || has50Medal);
+  }).length;
   const isBetaActive = isBetaTesterPeriodActive(now);
   const effectiveStreakDays = getPlayerStreakDays({
     ...p,
@@ -1717,6 +1783,14 @@ export function evaluatePlayerMedals(
         } else if (flawlessGamesCount >= (cond.threshold ?? 3)) {
           earned = true;
         }
+        break;
+
+      case "distinct_specialist_games":
+        if (specialistGamesCount >= (cond.threshold ?? 10)) earned = true;
+        break;
+
+      case "distinct_games_with_50_matches":
+        if (gamesWith50Plays >= (cond.threshold ?? 10)) earned = true;
         break;
 
       case "max_daily_xp":
@@ -2095,6 +2169,34 @@ export function calculateMedalProgress(
       return {
         percent: pct,
         progressText: `${count} de ${target} jogos finalizados com zero erros`,
+      };
+    }
+    case "distinct_specialist_games": {
+      const enabledSet = getEnabledGameIdsSet(enabledGamesOverride);
+      const unlockedSet = new Set((profile?.unlockedMedals ?? []).map((m) => m.medalId));
+      const count = Array.from(enabledSet).filter((gId) => {
+        const s = effectiveStatsMap.get(gId);
+        return Boolean((s && s.plays > 0 && s.best_level >= 3) || unlockedSet.has(`game_${gId}_lvl_master`));
+      }).length;
+      const target = cond.threshold ?? 10;
+      const pct = Math.min(100, Math.round((count / target) * 100));
+      return {
+        percent: pct,
+        progressText: `${count} de ${target} jogos com nível Especialista (Nv. 3+)`,
+      };
+    }
+    case "distinct_games_with_50_matches": {
+      const enabledSet = getEnabledGameIdsSet(enabledGamesOverride);
+      const unlockedSet = new Set((profile?.unlockedMedals ?? []).map((m) => m.medalId));
+      const count = Array.from(enabledSet).filter((gId) => {
+        const s = effectiveStatsMap.get(gId);
+        return Boolean((s && s.plays >= 50) || unlockedSet.has(`game_${gId}_matches_50`));
+      }).length;
+      const target = cond.threshold ?? 10;
+      const pct = Math.min(100, Math.round((count / target) * 100));
+      return {
+        percent: pct,
+        progressText: `${count} de ${target} jogos com 50 partidas disputadas`,
       };
     }
     case "max_daily_xp": {

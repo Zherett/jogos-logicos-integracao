@@ -15,6 +15,7 @@ import {
   getTopShowcaseMedals,
   calculateMedalProgress,
   RARITY_INFO,
+  CATEGORY_LABELS,
   type MedalCategory,
   type MedalDefinition,
   type MedalRarity,
@@ -34,22 +35,6 @@ interface Props {
   stats?: GameStatRow[];
   isOwner?: boolean;
 }
-
-const CATEGORY_LABELS: Record<MedalCategory, string> = {
-  nivel: "Níveis (1..10)",
-  jogo_nivel: "Desafio nos Jogos",
-  jogo_perfeito: "Zero Erros",
-  jogo_partidas: "Partidas Jogadas",
-  x1_vitorias: "Arena X1",
-  x1_semanal: "X1 Semanal",
-  exploracao: "Exploração",
-  sem_erros: "Mente Precisa",
-  atividade: "Dias & XP",
-  ranking: "Torneio",
-  meta: "Meta-Medalhas",
-  evento: "Eventos Especiais",
-  secreta: "Secretas",
-};
 
 export function PlayerMedalsInventory({
   unlockedMedals = [],
@@ -212,20 +197,34 @@ export function PlayerMedalsInventory({
                 {showcase.map((m, idx) => {
                   const rarity = RARITY_INFO[m.rarity];
                   const unlocked = unlockedMap.get(m.id);
+                  const isSecretRevealed = Boolean(m.isSecret && unlocked);
                   const stackCount = unlocked?.count ?? 1;
                   const showStackBadge = Boolean(unlocked) && (m.isStackable || stackCount > 1);
                   return (
                     <div
                       key={m.id}
                       onClick={() => setSelectedMedal(m)}
-                      className={`relative flex flex-col items-center justify-center rounded-2xl border-2 p-3.5 text-center bg-card/90 cursor-pointer transition-all hover:scale-[1.03] active:scale-95 ${rarity.neonBorderClass}`}
-                      style={{ boxShadow: `0 0 15px ${rarity.glowHex}` }}
+                      className={`relative flex flex-col items-center justify-center rounded-2xl border-2 p-3.5 text-center bg-card/90 cursor-pointer transition-all hover:scale-[1.03] active:scale-95 ${
+                        isSecretRevealed
+                          ? "border-emerald-400 ring-2 ring-emerald-400/80 shadow-[0_0_24px_rgba(34,197,94,0.85)] animate-pulse"
+                          : rarity.neonBorderClass
+                      }`}
+                      style={{
+                        boxShadow: isSecretRevealed
+                          ? "0 0 24px rgba(34, 197, 94, 0.85), inset 0 0 14px rgba(34, 197, 94, 0.35)"
+                          : `0 0 15px ${rarity.glowHex}`,
+                      }}
                       role="button"
                       tabIndex={0}
                     >
                       <span className="absolute -top-2 left-3 rounded-full bg-primary px-2 py-0.5 text-[9px] font-black uppercase text-primary-foreground">
                         #{idx + 1} Vitrine
                       </span>
+                      {isSecretRevealed && (
+                        <span className="absolute -top-2 right-3 rounded-full bg-emerald-950/90 border border-emerald-400 px-2 py-0.5 text-[8px] font-black uppercase tracking-wider text-emerald-300 shadow-sm flex items-center gap-1 animate-pulse">
+                          <span>✨</span> Secreta
+                        </span>
+                      )}
                       {showStackBadge && (
                         <span
                           className="absolute -top-2.5 -right-2.5 flex h-6 min-w-6 px-1.5 items-center justify-center rounded-full bg-gradient-to-br from-amber-400 to-amber-600 text-zinc-950 font-mono text-[11px] font-black border-2 border-background shadow-lg z-10"
@@ -234,11 +233,15 @@ export function PlayerMedalsInventory({
                           {stackCount}
                         </span>
                       )}
-                      <div className={`mb-2 mt-1 ${rarity.textColor}`}>
+                      <div className={`mb-2 mt-1 ${isSecretRevealed ? "text-emerald-400" : rarity.textColor}`}>
                         <MedalIcon name={m.iconName} className="h-8 w-8" />
                       </div>
                       <span
-                        className={`rounded-full border px-2 py-0.5 text-[9px] font-black uppercase ${rarity.badgeBgClass}`}
+                        className={`rounded-full border px-2 py-0.5 text-[9px] font-black uppercase ${
+                          isSecretRevealed
+                            ? "border-emerald-400/80 bg-emerald-950/60 text-emerald-300"
+                            : rarity.badgeBgClass
+                        }`}
                       >
                         {rarity.label}
                       </span>
@@ -369,6 +372,7 @@ export function PlayerMedalsInventory({
             {filtered.map(({ medal: m, unlocked, progress }) => {
               const isUnlocked = Boolean(unlocked);
               const isSecretLocked = Boolean(m.isSecret && !isUnlocked);
+              const isSecretRevealed = Boolean(m.isSecret && isUnlocked);
               const rarity = RARITY_INFO[m.rarity];
               const stackCount = unlocked?.count ?? 1;
               const showStackBadge = isUnlocked && (m.isStackable || stackCount > 1);
@@ -378,12 +382,19 @@ export function PlayerMedalsInventory({
                   key={m.id}
                   onClick={() => setSelectedMedal(m)}
                   className={`group relative flex flex-col justify-between rounded-2xl border-2 p-3 transition-all cursor-pointer hover:scale-[1.01] active:scale-95 ${
-                    isUnlocked
-                      ? `bg-card ${rarity.neonBorderClass}`
-                      : isSecretLocked
-                        ? "border-dashed border-amber-500/30 bg-secondary/15 hover:border-amber-500/60"
-                        : "border-border/50 bg-secondary/20 hover:border-border hover:bg-secondary/40"
+                    isSecretRevealed
+                      ? "bg-card border-emerald-400 ring-2 ring-emerald-400/80 shadow-[0_0_20px_rgba(34,197,94,0.8)] animate-pulse"
+                      : isUnlocked
+                        ? `bg-card ${rarity.neonBorderClass}`
+                        : isSecretLocked
+                          ? "border-dashed border-amber-500/30 bg-secondary/15 hover:border-amber-500/60"
+                          : "border-border/50 bg-secondary/20 hover:border-border hover:bg-secondary/40"
                   }`}
+                  style={
+                    isSecretRevealed
+                      ? { boxShadow: "0 0 20px rgba(34, 197, 94, 0.8), inset 0 0 10px rgba(34, 197, 94, 0.25)" }
+                      : undefined
+                  }
                   role="button"
                   tabIndex={0}
                 >
@@ -400,15 +411,17 @@ export function PlayerMedalsInventory({
                   <div className="flex items-start gap-2.5">
                     <div
                       className={`grid h-11 w-11 shrink-0 place-items-center rounded-xl border ${
-                        isUnlocked
-                          ? rarity.badgeBgClass
-                          : isSecretLocked
-                            ? "border-amber-500/30 bg-amber-500/10 text-amber-500"
-                            : "bg-muted text-muted-foreground border-border"
+                        isSecretRevealed
+                          ? "border-emerald-400 bg-emerald-950/40 text-emerald-400 shadow-[0_0_12px_rgba(34,197,94,0.6)] animate-pulse"
+                          : isUnlocked
+                            ? rarity.badgeBgClass
+                            : isSecretLocked
+                              ? "border-amber-500/30 bg-amber-500/10 text-amber-500"
+                              : "bg-muted text-muted-foreground border-border"
                       }`}
                     >
                       {isUnlocked ? (
-                        <div className={rarity.textColor}>
+                        <div className={isSecretRevealed ? "text-emerald-400" : rarity.textColor}>
                           <MedalIcon name={m.iconName} className="h-5 w-5" />
                         </div>
                       ) : isSecretLocked ? (

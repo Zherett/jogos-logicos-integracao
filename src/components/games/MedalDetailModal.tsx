@@ -36,6 +36,7 @@ export function MedalDetailModal({
 
   const isUnlocked = Boolean(unlockedInfo);
   const isSecretLocked = Boolean(medal.isSecret && !isUnlocked);
+  const isSecretRevealed = Boolean(medal.isSecret && isUnlocked);
   const rarity = RARITY_INFO[medal.rarity];
   const stackCount = unlockedInfo?.count ?? 1;
   const showStackBadge = isUnlocked && (medal.isStackable || stackCount > 1);
@@ -71,12 +72,18 @@ export function MedalDetailModal({
           {/* Medal Icon with Neon Glow */}
           <div
             className={`relative mb-4 grid h-24 w-24 place-items-center rounded-3xl border-2 transition-transform duration-300 ${
-              isUnlocked
-                ? rarity.neonBorderClass + " scale-105"
-                : "border-muted-foreground/30 bg-muted/40 opacity-75"
+              isSecretRevealed
+                ? "border-emerald-400 ring-4 ring-emerald-400/80 shadow-[0_0_30px_rgba(34,197,94,0.85)] animate-pulse scale-105"
+                : isUnlocked
+                  ? rarity.neonBorderClass + " scale-105"
+                  : "border-muted-foreground/30 bg-muted/40 opacity-75"
             }`}
             style={{
-              boxShadow: isUnlocked ? `0 0 25px ${rarity.glowHex}` : undefined,
+              boxShadow: isSecretRevealed
+                ? "0 0 32px rgba(34, 197, 94, 0.85), inset 0 0 16px rgba(34, 197, 94, 0.35)"
+                : isUnlocked
+                  ? `0 0 25px ${rarity.glowHex}`
+                  : undefined,
             }}
           >
             {isSecretLocked ? (
@@ -84,7 +91,13 @@ export function MedalDetailModal({
             ) : (
               <MedalIcon
                 name={medal.iconName}
-                className={`h-12 w-12 ${isUnlocked ? rarity.textColor : "text-muted-foreground"}`}
+                className={`h-12 w-12 ${
+                  isSecretRevealed
+                    ? "text-emerald-400"
+                    : isUnlocked
+                      ? rarity.textColor
+                      : "text-muted-foreground"
+                }`}
               />
             )}
             {isUnlocked && (
@@ -105,8 +118,17 @@ export function MedalDetailModal({
 
           {/* Rarity, Reward & Category Tag */}
           <div className="mb-2 flex flex-wrap items-center justify-center gap-1.5">
+            {isSecretRevealed && (
+              <span className="rounded-full bg-emerald-950/80 border border-emerald-400 px-2.5 py-0.5 text-[11px] font-black text-emerald-300 shadow-sm flex items-center gap-1 animate-pulse">
+                <span>✨</span> Aura Secreta Revelada
+              </span>
+            )}
             <span
-              className={`rounded-full border px-3 py-0.5 text-xs font-black uppercase tracking-wider ${rarity.badgeBgClass}`}
+              className={`rounded-full border px-3 py-0.5 text-xs font-black uppercase tracking-wider ${
+                isSecretRevealed
+                  ? "border-emerald-400 bg-emerald-950/60 text-emerald-300"
+                  : rarity.badgeBgClass
+              }`}
             >
               {rarity.label}
             </span>
