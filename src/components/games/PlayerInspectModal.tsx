@@ -58,6 +58,7 @@ import {
 import { ALL_GAME_IDS, GAME_NAMES } from "@/lib/game-storage";
 import { PlayerMedalsInventory } from "./PlayerMedalsInventory";
 import { PresenceDot } from "./PresenceDot";
+import { PlayerActivityBadge } from "./PlayerActivityBadge";
 import { TournamentRankBadge } from "./TournamentRankBadge";
 
 interface Props {
@@ -266,6 +267,17 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                   )}
                 </div>
                 <p className="truncate text-xs font-semibold text-muted-foreground uppercase">{profile.full_name}</p>
+                
+                {/* Status Extra de Atividade em Tempo Real (Separado do Online/Offline) */}
+                <PlayerActivityBadge
+                  playerId={profile.id}
+                  playfabId={profile.playfabId}
+                  nick={profile.nick}
+                  nickNormalized={profile.nickNormalized}
+                  mode="banner"
+                  className="mt-1.5 mb-0.5"
+                />
+
                 <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs">
                   {/* Rank Ranqueado do Torneio */}
                   <TournamentRankBadge

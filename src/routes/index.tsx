@@ -41,7 +41,11 @@ import {
   type X1DirectInvite,
 } from "@/lib/x1-challenge";
 import { playTone } from "@/lib/sound";
-import { getLocalUserLastActiveAt, usePresenceTracker } from "@/lib/presence";
+import {
+  getLocalUserLastActiveAt,
+  setPlayerCurrentActivity,
+  usePresenceTracker,
+} from "@/lib/presence";
 import {
   getWeekInfo,
   recordWeeklyTournamentAttempt,
@@ -205,6 +209,31 @@ function Index() {
         }
       : null,
   );
+
+  // Rastreia e atualiza a atividade atual do aluno para exibição em tempo real ao ADM
+  useEffect(() => {
+    if (view !== "menu") {
+      const mode = activeRankedGameId
+        ? "torneio_semanal"
+        : activeX1Room
+          ? "duelo_x1"
+          : "normal";
+      const currentLevel = stats[view]?.bestLevel || 1;
+      setPlayerCurrentActivity({
+        type: "game",
+        gameId: view,
+        gameName: GAME_NAMES[view] || view,
+        mode,
+        level: currentLevel,
+      });
+    } else if (tournamentOpen) {
+      setPlayerCurrentActivity({ type: "tournament" });
+    } else if (x1Open) {
+      setPlayerCurrentActivity({ type: "x1_arena" });
+    } else {
+      setPlayerCurrentActivity({ type: "menu" });
+    }
+  }, [view, activeRankedGameId, activeX1Room, tournamentOpen, x1Open, stats]);
 
   // Keep logged-in student visible in the online players list across the platform
   useEffect(() => {

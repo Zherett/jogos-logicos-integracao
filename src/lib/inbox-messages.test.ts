@@ -593,6 +593,41 @@ describe("Sistema Completo de Caixa de Entrada e Correio (inbox-messages)", () =
 
       assert.equal(formatted, "Jogue Batalha de Robôs e depois Memória das Cores no Torneio Relâmpago!");
     });
+
+    it("formata com includeEmoji, aliases [aluno]/[nick] e fallback seguro quando [game1] usa mentionedGameId", () => {
+      const body = "[aluno], venha testar nosso novo jogo: [game1] no evento [event1]!";
+      const formatted = formatInboxMessageText(body, {
+        playerNick: "JOSINEY",
+        mentionedGameId: "space_quest",
+        mentionedEventTitle: "Festival Cósmico",
+        includeEmoji: true,
+      });
+
+      assert.equal(formatted, "JOSINEY, venha testar nosso novo jogo: 🎮 Space Quest no evento ✨ Festival Cósmico!");
+    });
+
+    it("extrai e valida tags de mídia unificadas sem número [gif] e [img]", () => {
+      const body = "Venha jogar [game1]! [gif] e [img]";
+      const tags = extractInboxTags(body);
+      assert.deepEqual(tags.gifs, ["gif"]);
+      assert.deepEqual(tags.imgs, ["img"]);
+      assert.deepEqual(tags.games, ["game1"]);
+
+      const validRes = validateMessageTags(body, {
+        mentionedGames: { game1: "space_quest" },
+        gifLinks: { gif: "https://example.com/dance.gif" },
+        imageLinks: { img: "https://example.com/banner.png" },
+      });
+      assert.equal(validRes.valid, true);
+
+      const invalidRes = validateMessageTags(body, {
+        mentionedGames: { game1: "space_quest" },
+        gifLinks: {},
+        imageLinks: { img: "https://example.com/banner.png" },
+      });
+      assert.equal(invalidRes.valid, false);
+      assert.match(invalidRes.errorMessage || "", /\[gif\]/);
+    });
   });
 
   describe("Prevenção de Resgate Duplo Cross-Device e Deduplicação de Leitores", () => {

@@ -177,11 +177,18 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
     }
   };
 
-  const formatText = (text: string, msg?: SystemInboxMessage | null) => {
+  const formatText = (
+    text: string,
+    msg?: SystemInboxMessage | null,
+    includeEmoji = true
+  ) => {
     return formatInboxMessageText(text, {
       playerNick: profile?.nick || profile?.id || "Jogador",
       mentionedGameId: msg?.mentionedGameId,
+      mentionedGames: msg?.mentionedGames,
       mentionedEventTitle: msg?.mentionedEventTitle,
+      mentionedEvents: msg?.mentionedEvents,
+      includeEmoji,
     });
   };
 
@@ -199,19 +206,19 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
     });
   };
 
-  // Renderiza tags inline substituindo [nick], [game]/[gameX] (negrito) e [event]/[eventX] (clicável ou negrito)
+  // Renderiza tags inline substituindo [nick]/[aluno], [game]/[gameX] (negrito) e [event]/[eventX] (clicável ou negrito)
   const renderInlineTags = (
     text: string,
     msg?: SystemInboxMessage | null
   ) => {
     const userNick = profile?.nick || profile?.id || "Jogador";
 
-    // Divide pelas tags [nick], [gameX], [eventX]
-    const subParts = text.split(/(\[(?:nick|game\d*|event\d*)\])/gi);
+    // Divide pelas tags [nick], [aluno], [gameX], [eventX]
+    const subParts = text.split(/(\[(?:nick|aluno|game\d*|event\d*)\])/gi);
 
     return subParts.map((sub, sIdx) => {
       const lower = sub.toLowerCase();
-      if (lower === "[nick]") {
+      if (lower === "[nick]" || lower === "[aluno]") {
         return (
           <strong
             key={sIdx}
@@ -226,8 +233,11 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
         const tagKey = gameMatch[1];
         const gId =
           msg?.mentionedGames?.[tagKey] ||
-          (tagKey === "game" ? msg?.mentionedGameId : undefined);
-        const gameName = gId ? GAME_NAMES[gId as GameId] || gId : "Jogo de Lógica";
+          (tagKey === "game"
+            ? msg?.mentionedGameId || Object.values(msg?.mentionedGames || {})[0]
+            : msg?.mentionedGameId || Object.values(msg?.mentionedGames || {})[0]);
+        const normalizedGId = gId ? (gId.toLowerCase().replace(/[_-]/g, "") as GameId) : undefined;
+        const gameName = gId ? GAME_NAMES[gId as GameId] || (normalizedGId ? GAME_NAMES[normalizedGId] : undefined) || gId : "Jogo de Lógica";
         return (
           <strong
             key={sIdx}
@@ -243,12 +253,20 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
         const evData =
           msg?.mentionedEvents?.[tagKey] ||
           (tagKey === "event"
-            ? {
-                eventId: msg?.mentionedEventId || "",
-                eventTitle: msg?.mentionedEventTitle,
-                linkEventDetails: msg?.linkEventDetails,
-              }
-            : undefined);
+            ? (msg?.mentionedEventTitle
+                ? {
+                    eventId: msg?.mentionedEventId || "",
+                    eventTitle: msg?.mentionedEventTitle,
+                    linkEventDetails: msg?.linkEventDetails,
+                  }
+                : Object.values(msg?.mentionedEvents || {})[0])
+            : (msg?.mentionedEventTitle
+                ? {
+                    eventId: msg?.mentionedEventId || "",
+                    eventTitle: msg?.mentionedEventTitle,
+                    linkEventDetails: msg?.linkEventDetails,
+                  }
+                : Object.values(msg?.mentionedEvents || {})[0]));
         const eventTitle = evData?.eventTitle || "Evento Especial";
         const canLink = evData?.linkEventDetails !== false && Boolean(evData?.eventId || evData?.eventTitle);
 
@@ -283,17 +301,23 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
     imageLinks?: Record<string, string>,
     msg?: SystemInboxMessage | null
   ) => {
-    // Divide texto pelas tags [gif1], [gif2], [img1], [img2], etc.
-    const parts = body.split(/(\[(?:gif|img)\d+\])/gi);
+    // Divide texto pelas tags [gif], [gif1], [gif2], [img], [img1], [img2], etc.
+    const parts = body.split(/(\[(?:gif|img)\d*\])/gi);
 
     return (
       <div className="whitespace-pre-wrap text-sm text-foreground leading-relaxed space-y-3">
         {parts.map((part, index) => {
-          const match = /^\[(gif|img)(\d+)\]$/i.exec(part.trim());
+          const match = /^\[(gif|img)(\d*)\]$/i.exec(part.trim());
           if (match) {
             const prefix = match[1].toLowerCase();
-            const tagKey = `${prefix}${match[2]}`.toLowerCase();
-            const url = prefix === "gif" ? gifLinks?.[tagKey] : imageLinks?.[tagKey];
+            const tagNum = match[2];
+            const tagKey = tagNum ? `${prefix}${tagNum}`.toLowerCase() : prefix;
+            const url =
+              prefix === "gif"
+                ? gifLinks?.[tagKey] ||
+                  (tagKey === "gif" ? gifLinks?.["gif1"] || Object.values(gifLinks || {})[0] : undefined)
+                : imageLinks?.[tagKey] ||
+                  (tagKey === "img" ? imageLinks?.["img1"] || Object.values(imageLinks || {})[0] : undefined);
             const isGif = prefix === "gif";
 
             if (url) {
@@ -311,6 +335,8 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                 </div>
               );
             }
+            // Se a tag não tem link válido associado, oculta em vez de vazar a tag bruta no corpo
+            return null;
           }
           return <span key={index}>{renderInlineTags(part, msg)}</span>;
         })}
@@ -469,9 +495,11 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                                   : "text-slate-500 dark:text-zinc-400"
                               }`}
                             >
-                              {formatText(msg.body, msg)
-                                .replace(/\[gif\d+\]/gi, " [GIF] ")
-                                .replace(/\[img\d+\]/gi, " [IMAGEM] ")}
+                              {formatText(msg.body, msg, true)
+                                .replace(/\[gif\d*\]/gi, " [GIF] ")
+                                .replace(/\[img\d*\]/gi, " [IMAGEM] ")
+                                .replace(/\s{2,}/g, " ")
+                                .trim()}
                             </p>
                           </div>
 

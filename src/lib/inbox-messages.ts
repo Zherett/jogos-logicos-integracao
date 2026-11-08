@@ -496,9 +496,9 @@ export function extractInboxTags(text: string): ExtractedInboxTags {
       gamesSet.add(inner);
     } else if (/^event\d*$/.test(inner)) {
       eventsSet.add(inner);
-    } else if (/^gif\d+$/.test(inner)) {
+    } else if (/^gif\d*$/.test(inner)) {
       gifsSet.add(inner);
-    } else if (/^img\d+$/.test(inner)) {
+    } else if (/^img\d*$/.test(inner)) {
       imgsSet.add(inner);
     }
   }
@@ -552,7 +552,9 @@ export function validateMessageTags(
   }
 
   for (const gifTag of gifs) {
-    const url = config.gifLinks?.[gifTag];
+    const url =
+      config.gifLinks?.[gifTag] ||
+      (gifTag === "gif" ? config.gifLinks?.["gif1"] || Object.values(config.gifLinks || {})[0] : undefined);
     if (!url || !url.trim()) {
       return {
         valid: false,
@@ -562,7 +564,9 @@ export function validateMessageTags(
   }
 
   for (const imgTag of imgs) {
-    const url = config.imageLinks?.[imgTag];
+    const url =
+      config.imageLinks?.[imgTag] ||
+      (imgTag === "img" ? config.imageLinks?.["img1"] || Object.values(config.imageLinks || {})[0] : undefined);
     if (!url || !url.trim()) {
       return {
         valid: false,
@@ -575,7 +579,7 @@ export function validateMessageTags(
 }
 
 /**
- * Resolve tags dinâmicas de texto como [nick], [game]/[game1] e [event]/[event1]
+ * Resolve tags dinâmicas de texto como [nick]/[aluno], [game]/[game1] e [event]/[event1]
  */
 export function formatInboxMessageText(
   text: string,
@@ -586,30 +590,44 @@ export function formatInboxMessageText(
     mentionedGames?: Record<string, string>;
     mentionedEventTitle?: string;
     mentionedEvents?: Record<string, { eventTitle?: string }>;
+    includeEmoji?: boolean;
   }
 ): string {
   if (!text) return "";
   let res = text;
   if (options?.playerNick !== undefined) {
-    res = res.replace(/\[nick\]/gi, options.playerNick || "Aluno");
+    res = res.replace(/\[(?:nick|aluno)\]/gi, options.playerNick || "Aluno");
   }
 
   // Substitui tags de jogos: [game], [game1], [game2], etc.
   res = res.replace(/\[(game\d*)\]/gi, (match, tagKey) => {
     const key = tagKey.toLowerCase();
-    const gId = options?.mentionedGames?.[key] || (key === "game" ? options?.mentionedGameId : "");
+    const gId =
+      options?.mentionedGames?.[key] ||
+      (key === "game"
+        ? options?.mentionedGameId || Object.values(options?.mentionedGames || {})[0]
+        : options?.mentionedGameId || Object.values(options?.mentionedGames || {})[0] || "");
+    const normalizedGId = gId ? (gId.toLowerCase().replace(/[_-]/g, "") as GameId) : undefined;
     const gName = gId
-      ? GAME_NAMES[gId as GameId] || gId
+      ? GAME_NAMES[gId as GameId] || (normalizedGId ? GAME_NAMES[normalizedGId] : undefined) || gId
       : (key === "game" ? options?.mentionedGameName : undefined);
-    return gName || match;
+    if (!gName) return match;
+    const prefix = options?.includeEmoji ? "🎮 " : "";
+    return `${prefix}${gName}`;
   });
 
   // Substitui tags de eventos: [event], [event1], [event2], etc.
   res = res.replace(/\[(event\d*)\]/gi, (match, tagKey) => {
     const key = tagKey.toLowerCase();
-    const ev = options?.mentionedEvents?.[key];
+    const ev =
+      options?.mentionedEvents?.[key] ||
+      (key === "event"
+        ? (options?.mentionedEventTitle ? { eventTitle: options.mentionedEventTitle } : Object.values(options?.mentionedEvents || {})[0])
+        : (options?.mentionedEventTitle ? { eventTitle: options.mentionedEventTitle } : Object.values(options?.mentionedEvents || {})[0]));
     const evTitle = ev?.eventTitle || (key === "event" ? options?.mentionedEventTitle : undefined);
-    return evTitle || match;
+    if (!evTitle) return match;
+    const prefix = options?.includeEmoji ? "✨ " : "";
+    return `${prefix}${evTitle}`;
   });
 
   return res;

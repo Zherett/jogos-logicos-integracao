@@ -43,6 +43,7 @@ import {
   isMessageEligibleForPlayer,
   subscribeToInboxSync,
 } from "@/lib/inbox-messages";
+import { setPlayerCurrentActivity } from "@/lib/presence";
 import { PresenceDot } from "./PresenceDot";
 import { usePlayerAuth } from "@/lib/player-auth";
 import {
@@ -205,7 +206,20 @@ export function PlayerMenu({ onConfigChanged }: Props) {
       .catch(() => setPlayerRank(null));
   }, [profileOpen, profile]);
 
-  // Atualiza contador de mensagens da caixa de entrada em tempo real, toca som e abre modal automaticamente
+  // Atualiza em tempo real a atividade do aluno quando ele visualiza ranking, perfil, medalhas ou caixa de entrada
+  useEffect(() => {
+    if (inboxOpen) {
+      setPlayerCurrentActivity({ type: "inbox" });
+    } else if (rankingOpen) {
+      setPlayerCurrentActivity({ type: "ranking" });
+    } else if (profileOpen) {
+      if (cardFlipped) {
+        setPlayerCurrentActivity({ type: "medals" });
+      } else {
+        setPlayerCurrentActivity({ type: "profile" });
+      }
+    }
+  }, [inboxOpen, rankingOpen, profileOpen, cardFlipped]);
   useEffect(() => {
     if (!profile) {
       setInboxCounts({ unreadCount: 0, unclaimedRewardsCount: 0, totalAlerts: 0 });

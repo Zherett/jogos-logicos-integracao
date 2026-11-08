@@ -142,6 +142,7 @@ import {
 import { MedalIcon } from "./MedalIcon";
 import { PlayerInspectModal } from "./PlayerInspectModal";
 import { PresenceDot } from "./PresenceDot";
+import { PlayerActivityBadge } from "./PlayerActivityBadge";
 import {
   computePresenceSummary,
   PRESENCE_UPDATED_EVENT,
@@ -4902,6 +4903,13 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
                                         nickNormalized={st.nickNormalized}
                                         size="xs"
                                       />
+                                      <PlayerActivityBadge
+                                        playerId={st.id}
+                                        playfabId={st.playfabId}
+                                        nick={st.nick}
+                                        nickNormalized={st.nickNormalized}
+                                        size="xs"
+                                      />
                                       <span className="rounded-full bg-primary/15 px-2 py-0.2 text-[10px] font-bold text-primary">
                                         Nv. {stProg.level}
                                       </span>
@@ -6439,6 +6447,13 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
                               <div className="flex items-center gap-1.5 font-bold truncate flex-wrap">
                                 <span className="truncate">{p.nick}</span>
                                 <PresenceDot
+                                  playerId={p.id}
+                                  playfabId={p.playfabId}
+                                  nick={p.nick}
+                                  nickNormalized={p.nickNormalized}
+                                  size="xs"
+                                />
+                                <PlayerActivityBadge
                                   playerId={p.id}
                                   playfabId={p.playfabId}
                                   nick={p.nick}

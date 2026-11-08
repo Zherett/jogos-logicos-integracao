@@ -3,6 +3,7 @@
 
 import { useEffect, useState } from "react";
 import { nickSlug } from "./player-profile.ts";
+import { GAME_NAMES, type GameId } from "./game-storage.ts";
 import {
   clearCachedAdminPlayFabTicket,
   getAdminPlayFabTicket,
@@ -14,6 +15,25 @@ import {
 
 export type PresenceStatus = "online" | "idle" | "offline";
 
+export type PlayerActivityType =
+  | "menu"
+  | "game"
+  | "ranking"
+  | "profile"
+  | "medals"
+  | "inbox"
+  | "x1_arena"
+  | "tournament";
+
+export interface PlayerActivityInfo {
+  type: PlayerActivityType;
+  gameId?: string;
+  gameName?: string;
+  mode?: "normal" | "torneio_semanal" | "duelo_x1";
+  level?: number;
+  updatedAt?: number;
+}
+
 export interface PlayerPresenceRecord {
   playerId: string;
   playfabId?: string;
@@ -23,6 +43,7 @@ export interface PlayerPresenceRecord {
   lastActiveAt: number; // Timestamp em ms da última interação do aluno (clique, toque, tecla)
   idleMs?: number;      // Tempo inativo medido no relógio do dispositivo do próprio aluno
   disconnected?: boolean;
+  activity?: PlayerActivityInfo;
 }
 
 export interface PresenceStore {
@@ -176,6 +197,198 @@ export function formatPresenceTooltip(
 }
 
 /**
+ * Chave de armazenamento e evento de transição de atividade do jogador local
+ */
+export const ACTIVITY_STORAGE_KEY = "desafios-current-activity-v1";
+export const ACTIVITY_CHANGED_EVENT = "desafios:activity-changed";
+
+let currentLocalActivity: PlayerActivityInfo = {
+  type: "menu",
+  updatedAt: Date.now(),
+};
+
+/**
+ * Atualiza a atividade atual do jogador no cliente (ex: jogando determinado jogo, no ranking, etc.)
+ */
+export function setPlayerCurrentActivity(
+  activity: Partial<PlayerActivityInfo> & { type: PlayerActivityType }
+): void {
+  const gId = activity.gameId as GameId | undefined;
+  const normalizedGId = gId ? (gId.toLowerCase().replace(/[_-]/g, "") as GameId) : undefined;
+  const gameName =
+    activity.gameName ||
+    (gId && GAME_NAMES[gId]) ||
+    (normalizedGId && GAME_NAMES[normalizedGId]) ||
+    undefined;
+
+  currentLocalActivity = {
+    ...activity,
+    gameName,
+    updatedAt: Date.now(),
+  };
+
+  if (typeof window !== "undefined") {
+    try {
+      localStorage.setItem(ACTIVITY_STORAGE_KEY, JSON.stringify(currentLocalActivity));
+      window.dispatchEvent(
+        new CustomEvent(ACTIVITY_CHANGED_EVENT, { detail: currentLocalActivity })
+      );
+    } catch {
+      // ignore
+    }
+  }
+}
+
+/**
+ * Recupera a atividade atual do jogador local
+ */
+export function getPlayerCurrentActivity(): PlayerActivityInfo {
+  if (typeof window !== "undefined") {
+    try {
+      const raw = localStorage.getItem(ACTIVITY_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as PlayerActivityInfo;
+        if (parsed?.type) {
+          currentLocalActivity = parsed;
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return currentLocalActivity;
+}
+
+/**
+ * Formata em texto claro a atividade que o aluno está realizando no momento.
+ * Regra do usuário: O offline continua do jeito que está; se offline, retorna null (sem atividade ativa).
+ */
+export function formatPlayerActivity(
+  activity?: PlayerActivityInfo | null,
+  status?: PresenceStatus
+): string | null {
+  if (status === "offline" || !activity) return null;
+
+  switch (activity.type) {
+    case "game": {
+      const gId = activity.gameId as GameId | undefined;
+      const normalizedGId = gId ? (gId.toLowerCase().replace(/[_-]/g, "") as GameId) : undefined;
+      const gName =
+        activity.gameName ||
+        (gId && GAME_NAMES[gId]) ||
+        (normalizedGId && GAME_NAMES[normalizedGId]) ||
+        activity.gameId ||
+        "Jogo";
+      const lvlStr = activity.level ? ` (Nível ${activity.level})` : "";
+      const modeStr =
+        activity.mode === "torneio_semanal"
+          ? " • Ranqueada"
+          : activity.mode === "duelo_x1"
+            ? " • Duelo X1"
+            : "";
+      return `Jogando ${gName}${lvlStr}${modeStr}`;
+    }
+    case "ranking":
+      return "Visualizando o Ranking";
+    case "profile":
+      return "Olhando o Perfil";
+    case "medals":
+      return "Olhando Medalhas";
+    case "inbox":
+      return "Na Caixa de Entrada";
+    case "x1_arena":
+      return "Na Arena X1";
+    case "tournament":
+      return "No Torneio Ranqueado";
+    case "menu":
+      return "No Menu Principal";
+    default:
+      return null;
+  }
+}
+
+/**
+ * Retorna os detalhes estilizados e ícone da atividade do jogador para exibição na UI do ADM
+ */
+export function getPlayerActivityDetails(
+  record?: {
+    activity?: PlayerActivityInfo;
+    lastSeenAt?: number;
+    lastActiveAt?: number;
+    disconnected?: boolean;
+    idleMs?: number;
+  } | null,
+  now = Date.now()
+): {
+  type: PlayerActivityType;
+  label: string;
+  icon: string;
+  isIdle: boolean;
+  colorClass: string;
+} | null {
+  if (!record) return null;
+  const status = computePresenceStatus(record, now);
+  if (status === "offline") return null;
+
+  const activity = record.activity;
+  const effectiveActivity: PlayerActivityInfo = activity || {
+    type: "menu",
+    updatedAt: record.lastActiveAt || now,
+  };
+
+  const label = formatPlayerActivity(effectiveActivity, status);
+  if (!label) return null;
+
+  const isIdle = status === "idle";
+  let icon = "🎮";
+  let colorClass = "bg-emerald-500/15 border-emerald-500/30 text-emerald-600 dark:text-emerald-400";
+
+  switch (effectiveActivity.type) {
+    case "game":
+      icon = "🎮";
+      colorClass = "bg-emerald-500/15 border-emerald-500/30 text-emerald-600 dark:text-emerald-400";
+      break;
+    case "ranking":
+      icon = "🏆";
+      colorClass = "bg-amber-500/15 border-amber-500/30 text-amber-600 dark:text-amber-400";
+      break;
+    case "profile":
+      icon = "👤";
+      colorClass = "bg-blue-500/15 border-blue-500/30 text-blue-600 dark:text-blue-400";
+      break;
+    case "medals":
+      icon = "🎖️";
+      colorClass = "bg-purple-500/15 border-purple-500/30 text-purple-600 dark:text-purple-400";
+      break;
+    case "inbox":
+      icon = "📬";
+      colorClass = "bg-sky-500/15 border-sky-500/30 text-sky-600 dark:text-sky-400";
+      break;
+    case "x1_arena":
+      icon = "⚔️";
+      colorClass = "bg-rose-500/15 border-rose-500/30 text-rose-600 dark:text-rose-400";
+      break;
+    case "tournament":
+      icon = "🏆";
+      colorClass = "bg-amber-500/15 border-amber-500/30 text-amber-600 dark:text-amber-400";
+      break;
+    case "menu":
+    default:
+      icon = "🏠";
+      colorClass = "bg-slate-500/10 border-slate-500/20 text-slate-600 dark:text-zinc-400";
+      break;
+  }
+
+  return {
+    type: effectiveActivity.type,
+    label: isIdle ? `${label} (inativo)` : label,
+    icon,
+    isIdle,
+    colorClass,
+  };
+}
+
+/**
  * Carrega a base local de presenca
  */
 export function loadPresenceStore(): PresenceStore {
@@ -251,6 +464,7 @@ export function recordPlayerHeartbeat(
     lastSeenAt?: number;
     idleMs?: number;
     disconnected?: boolean;
+    activity?: PlayerActivityInfo;
   }
 ): PlayerPresenceRecord | null {
   if (!playerId) return null;
@@ -271,6 +485,10 @@ export function recordPlayerHeartbeat(
         ? Math.max(0, lastSeenAt - lastActiveAt)
         : 0;
 
+  const activity =
+    data?.activity ??
+    (data?.disconnected ? undefined : (existing?.activity ?? getPlayerCurrentActivity()));
+
   const record: PlayerPresenceRecord = {
     playerId,
     playfabId: data?.playfabId ?? existing?.playfabId,
@@ -280,6 +498,7 @@ export function recordPlayerHeartbeat(
     lastActiveAt,
     idleMs,
     disconnected: Boolean(data?.disconnected),
+    activity,
   };
 
   store.players[playerId] = record;
@@ -405,6 +624,7 @@ export async function pushPresenceToPlayFab(record: PlayerPresenceRecord): Promi
               ? record.idleMs
               : Math.max(0, record.lastSeenAt - record.lastActiveAt),
           disconnected: Boolean(record.disconnected),
+          activity: record.activity,
         }),
       },
       Permission: "Public",
@@ -534,6 +754,7 @@ export async function syncPresenceFromPlayFab(force = false): Promise<void> {
             lastActiveAt: normalizedActiveAt,
             idleMs: remoteIdleMs,
             disconnected: false,
+            activity: remote.activity,
           };
 
           store.players[pId] = normalizedRec;
@@ -707,6 +928,13 @@ export function usePlayerPresence(
   tooltip: string;
   timeAgo: string;
   data: PlayerPresenceRecord | null;
+  activityDetails: {
+    type: PlayerActivityType;
+    label: string;
+    icon: string;
+    isIdle: boolean;
+    colorClass: string;
+  } | null;
 } {
   const [data, setData] = useState<PlayerPresenceRecord | null>(() =>
     playerId ? getPlayerPresenceData(playerId, hints) : null
@@ -727,6 +955,7 @@ export function usePlayerPresence(
 
     // Reagir a eventos de presenca e lobby X1
     window.addEventListener(PRESENCE_UPDATED_EVENT, refresh);
+    window.addEventListener(ACTIVITY_CHANGED_EVENT, refresh);
     window.addEventListener("desafios:x1-lobby-updated", refresh);
     window.addEventListener("storage", refresh);
 
@@ -739,6 +968,7 @@ export function usePlayerPresence(
 
     return () => {
       window.removeEventListener(PRESENCE_UPDATED_EVENT, refresh);
+      window.removeEventListener(ACTIVITY_CHANGED_EVENT, refresh);
       window.removeEventListener("desafios:x1-lobby-updated", refresh);
       window.removeEventListener("storage", refresh);
       clearInterval(timer);
@@ -748,8 +978,9 @@ export function usePlayerPresence(
   const status = computePresenceStatus(data);
   const tooltip = formatPresenceTooltip(status, data);
   const timeAgo = formatPresenceTimeAgo(data);
+  const activityDetails = getPlayerActivityDetails(data);
 
-  return { status, tooltip, timeAgo, data };
+  return { status, tooltip, timeAgo, data, activityDetails };
 }
 
 /**
@@ -811,6 +1042,7 @@ export function usePresenceTracker(player?: {
         lastSeenAt: disconnected ? 0 : now,
         idleMs,
         disconnected,
+        activity: disconnected ? undefined : getPlayerCurrentActivity(),
       });
       if (rec) {
         void pushPresenceToPlayFab(rec);
@@ -838,6 +1070,7 @@ export function usePresenceTracker(player?: {
             lastActiveAt: now,
             lastSeenAt: now,
             idleMs: 0,
+            activity: getPlayerCurrentActivity(),
           });
         }
       }
@@ -856,6 +1089,10 @@ export function usePresenceTracker(player?: {
       pulse(true);
     };
 
+    const onActivityChange = () => {
+      pulse(false);
+    };
+
     window.addEventListener("pointerdown", onUserInteraction, { passive: true });
     window.addEventListener("keydown", onUserInteraction, { passive: true });
     window.addEventListener("touchstart", onUserInteraction, { passive: true });
@@ -864,6 +1101,7 @@ export function usePresenceTracker(player?: {
     document.addEventListener("visibilitychange", onVisibilityOrFocus);
     window.addEventListener("pagehide", onPageHide);
     window.addEventListener("beforeunload", onPageHide);
+    window.addEventListener(ACTIVITY_CHANGED_EVENT, onActivityChange);
 
     pulse(false);
     const intervalId = setInterval(() => pulse(false), 12000);
@@ -877,6 +1115,7 @@ export function usePresenceTracker(player?: {
       document.removeEventListener("visibilitychange", onVisibilityOrFocus);
       window.removeEventListener("pagehide", onPageHide);
       window.removeEventListener("beforeunload", onPageHide);
+      window.removeEventListener(ACTIVITY_CHANGED_EVENT, onActivityChange);
       clearInterval(intervalId);
       clearInterval(cloudPollId);
     };

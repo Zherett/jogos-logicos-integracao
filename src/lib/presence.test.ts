@@ -5,6 +5,11 @@ import {
   formatPresenceTooltip,
   formatPresenceTimeAgo,
   computePresenceSummary,
+  formatPlayerActivity,
+  getPlayerActivityDetails,
+  setPlayerCurrentActivity,
+  getPlayerCurrentActivity,
+  recordPlayerHeartbeat,
   PRESENCE_ONLINE_MAX_AGE_MS,
   PRESENCE_IDLE_MAX_AGE_MS,
   PRESENCE_DISCONNECT_MAX_AGE_MS,
@@ -148,5 +153,97 @@ describe("Player Presence System (computePresenceStatus)", () => {
       ),
       "idle",
     );
+  });
+
+  describe("Player Activity Tracking (Rich Presence - O que o aluno está fazendo)", () => {
+    it("mantém o offline intacto retornando null para formatPlayerActivity e getPlayerActivityDetails quando offline", () => {
+      // Aluno offline
+      const offlineRecord = {
+        lastSeenAt: 0,
+        disconnected: true,
+        activity: { type: "game" as const, gameId: "memoria", gameName: "Memória das Cores" },
+      };
+      assert.equal(computePresenceStatus(offlineRecord, BASE_NOW), "offline");
+      assert.equal(formatPlayerActivity(offlineRecord.activity, "offline"), null);
+      assert.equal(getPlayerActivityDetails(offlineRecord, BASE_NOW), null);
+    });
+
+    it("formata corretamente atividade de jogos educativos (ex: Memória das Cores, Plano Cartesiano)", () => {
+      const actMemoria = { type: "game" as const, gameId: "memoria" };
+      assert.equal(formatPlayerActivity(actMemoria, "online"), "Jogando Memória das Cores");
+
+      const actCartesiano = { type: "game" as const, gameId: "cartesiano", level: 3 };
+      assert.equal(formatPlayerActivity(actCartesiano, "online"), "Jogando Plano Cartesiano (Nível 3)");
+
+      const actSpaceQuestRanked = {
+        type: "game" as const,
+        gameId: "spacequest",
+        mode: "torneio_semanal" as const,
+        level: 5,
+      };
+      assert.equal(
+        formatPlayerActivity(actSpaceQuestRanked, "online"),
+        "Jogando Space Quest (Nível 5) • Ranqueada"
+      );
+    });
+
+    it("formata corretamente atividades de navegação (ranking, perfil, medalhas, caixa de entrada, x1 e menu)", () => {
+      assert.equal(formatPlayerActivity({ type: "ranking" }, "online"), "Visualizando o Ranking");
+      assert.equal(formatPlayerActivity({ type: "profile" }, "online"), "Olhando o Perfil");
+      assert.equal(formatPlayerActivity({ type: "medals" }, "online"), "Olhando Medalhas");
+      assert.equal(formatPlayerActivity({ type: "inbox" }, "online"), "Na Caixa de Entrada");
+      assert.equal(formatPlayerActivity({ type: "x1_arena" }, "online"), "Na Arena X1");
+      assert.equal(formatPlayerActivity({ type: "tournament" }, "online"), "No Torneio Ranqueado");
+      assert.equal(formatPlayerActivity({ type: "menu" }, "online"), "No Menu Principal");
+    });
+
+    it("getPlayerActivityDetails gera badge com ícone, cor e sufixo de inatividade se estiver idle", () => {
+      const activeRecord = {
+        lastSeenAt: BASE_NOW - 5000,
+        lastActiveAt: BASE_NOW - 10000,
+        activity: { type: "game" as const, gameId: "memoria" },
+      };
+      const activeDetails = getPlayerActivityDetails(activeRecord, BASE_NOW);
+      assert.ok(activeDetails);
+      assert.equal(activeDetails?.label, "Jogando Memória das Cores");
+      assert.equal(activeDetails?.icon, "🎮");
+      assert.equal(activeDetails?.isIdle, false);
+
+      const idleRecord = {
+        lastSeenAt: BASE_NOW - 5000,
+        lastActiveAt: BASE_NOW - 5 * 60 * 1000,
+        activity: { type: "ranking" as const },
+      };
+      const idleDetails = getPlayerActivityDetails(idleRecord, BASE_NOW);
+      assert.ok(idleDetails);
+      assert.equal(idleDetails?.label, "Visualizando o Ranking (inativo)");
+      assert.equal(idleDetails?.icon, "🏆");
+      assert.equal(idleDetails?.isIdle, true);
+    });
+
+    it("setPlayerCurrentActivity e getPlayerCurrentActivity armazenam e recuperam o estado", () => {
+      setPlayerCurrentActivity({
+        type: "game",
+        gameId: "cartesiano",
+        level: 2,
+      });
+
+      const current = getPlayerCurrentActivity();
+      assert.equal(current.type, "game");
+      assert.equal(current.gameId, "cartesiano");
+      assert.equal(current.gameName, "Plano Cartesiano");
+      assert.equal(current.level, 2);
+    });
+
+    it("recordPlayerHeartbeat armazena a atividade no registro do jogador", () => {
+      const rec = recordPlayerHeartbeat("aluno_teste_act_1", {
+        nick: "TesteAluno",
+        activity: { type: "game", gameId: "rpg", level: 1 },
+      });
+
+      assert.ok(rec);
+      assert.equal(rec?.activity?.gameId, "rpg");
+      assert.equal(rec?.activity?.level, 1);
+    });
   });
 });
