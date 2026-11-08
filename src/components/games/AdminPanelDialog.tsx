@@ -91,6 +91,8 @@ import {
   syncAdminMedalNotificationsFromPlayFab,
   playfabApproveTurmaRequest,
   playfabRejectTurmaRequest,
+  runRetroactiveMedalsAudit,
+  type MedalsAuditResult,
   type PlayerProfile,
 } from "@/lib/playfab";
 import { getCachedMedalPioneers, formatPioneerLabel } from "@/lib/medal-pioneers";
@@ -201,6 +203,32 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
   const [, setPresenceTick] = useState(0);
   const [tournamentStageFilter, setTournamentStageFilter] = useState<AgeStageId | "TODAS">("TODAS");
   const [syncingTournament, setSyncingTournament] = useState(false);
+
+  // Varredura e retroatribuição de medalhas
+  const [isAuditingMedals, setIsAuditingMedals] = useState(false);
+  const [auditProgress, setAuditProgress] = useState<string | null>(null);
+  const [auditResult, setAuditResult] = useState<MedalsAuditResult | null>(null);
+
+  const handleRunMedalsAudit = async () => {
+    setIsAuditingMedals(true);
+    setAuditProgress("Iniciando varredura no banco de dados...");
+    try {
+      const res = await runRetroactiveMedalsAudit((info) => {
+        setAuditProgress(info.message);
+      });
+      setAuditResult(res);
+      await auth.refresh();
+      flashSaved(
+        `Varredura concluída: ${res.medalsAwardedCount} medalha(s) retroatribuída(s) para ${res.updatedStudentsCount} aluno(s).`,
+      );
+    } catch (err: any) {
+      console.error("Erro na varredura de medalhas:", err);
+      flashSaved("Erro ao processar varredura de medalhas.");
+    } finally {
+      setIsAuditingMedals(false);
+      setAuditProgress(null);
+    }
+  };
 
   // Special Events states (with 3 simultaneous lines of bonus)
   const [specialEvents, setSpecialEvents] = useState<SpecialEvent[]>([]);
@@ -5673,6 +5701,89 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
             {/* TAB MEDALHAS: GERENCIAMENTO, CRIAÇÃO, CONCESSÃO MANUAL E CAIXA DE ENTRADA */}
             {tab === "medalhas" && (
               <div className="space-y-4">
+                {/* 0. Varredura e Retroatribuição de Medalhas no Banco de Dados */}
+                <div className="rounded-2xl border-2 border-primary/30 bg-primary/5 p-4 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2 font-display text-base font-extrabold text-foreground">
+                        <Sparkles className="h-5 w-5 text-primary" /> Varredura e Retroatribuição de Medalhas
+                      </div>
+                      <p className="text-xs text-muted-foreground max-w-2xl">
+                        Escaneia todos os perfis de alunos no banco de dados local e na nuvem PlayFab, reavaliando todas as partidas
+                        concluídas em qualquer modo (inclusive partidas do Modo Ranqueado / Torneio), níveis e critérios especiais. Atribui retroativamente
+                        todas as medalhas legítimas devidas (ex: 10 partidas de cada jogo, maestria, zero erros) com os respectivos Pontos de Carreira e bônus de XP.
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      onClick={handleRunMedalsAudit}
+                      disabled={isAuditingMedals}
+                      className="rounded-xl font-bold h-10 px-4 bg-primary text-primary-foreground hover:bg-primary/90 flex items-center gap-2 shadow-sm"
+                    >
+                      <RefreshCw className={`h-4 w-4 ${isAuditingMedals ? "animate-spin" : ""}`} />
+                      {isAuditingMedals ? "Escaneando Banco de Dados..." : "Iniciar Varredura e Retroatribuir"}
+                    </Button>
+                  </div>
+
+                  {auditProgress && (
+                    <div className="text-xs font-semibold text-primary animate-pulse bg-primary/10 border border-primary/20 px-3 py-2 rounded-xl flex items-center gap-2">
+                      <RefreshCw className="h-4 w-4 animate-spin" /> {auditProgress}
+                    </div>
+                  )}
+
+                  {auditResult && (
+                    <div className="rounded-xl border border-primary/30 bg-card p-3.5 space-y-2.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-2">
+                        <div className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                          <CheckCircle2 className="h-4 w-4 text-emerald-500" /> Relatório da Última Varredura
+                        </div>
+                        <div className="flex gap-2 text-[11px]">
+                          <span className="bg-secondary px-2 py-0.5 rounded-md text-foreground font-semibold">
+                            {auditResult.auditedStudentsCount} alunos auditados
+                          </span>
+                          <span className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 px-2 py-0.5 rounded-md font-semibold">
+                            {auditResult.updatedStudentsCount} com medalhas atribuídas
+                          </span>
+                          <span className="bg-primary/10 text-primary px-2 py-0.5 rounded-md font-bold">
+                            +{auditResult.medalsAwardedCount} medalhas retroatribuídas
+                          </span>
+                        </div>
+                      </div>
+
+                      {auditResult.details.length === 0 ? (
+                        <p className="text-xs text-muted-foreground italic py-1">
+                          Todos os alunos já estavam com 100% de suas medalhas e pontos em dia! Nenhuma pendência encontrada.
+                        </p>
+                      ) : (
+                        <div className="max-h-48 overflow-y-auto space-y-2 pr-1">
+                          {auditResult.details.map((st) => (
+                            <div key={st.studentId} className="rounded-lg border bg-background/80 p-2 text-xs space-y-1">
+                              <div className="flex items-center justify-between">
+                                <span className="font-bold text-foreground">
+                                  {st.nick} <span className="font-normal text-muted-foreground">({st.fullName} • {st.school})</span>
+                                </span>
+                                <span className="text-[10px] font-bold text-primary">
+                                  +{st.medalsAwarded.length} medalha(s)
+                                </span>
+                              </div>
+                              <div className="flex flex-wrap gap-1.5 pt-0.5">
+                                {st.medalsAwarded.map((m) => (
+                                  <span
+                                    key={m.id}
+                                    className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-md bg-secondary text-foreground border"
+                                  >
+                                    🏅 {m.title}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
                 {/* 1. Caixa de Entrada de Notificações de Medalhas Conquistadas */}
                 <div className="rounded-2xl border bg-card p-4 space-y-3">
                   <div className="flex items-center justify-between">

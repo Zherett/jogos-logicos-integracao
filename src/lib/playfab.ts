@@ -493,8 +493,10 @@ export function purgeExpiredTrash(reg: Record<string, StoredAccount>): boolean {
   return changed;
 }
 
+let inMemoryRegistry: Record<string, StoredAccount> = {};
+
 export function loadRegistry(): Record<string, StoredAccount> {
-  if (typeof window === "undefined") return {};
+  if (typeof window === "undefined") return inMemoryRegistry;
   try {
     const raw = window.localStorage.getItem(REGISTRY_KEY);
     if (!raw) return {};
@@ -523,8 +525,11 @@ export function loadRegistry(): Record<string, StoredAccount> {
   }
 }
 
-function saveRegistry(reg: Record<string, StoredAccount>) {
-  if (typeof window === "undefined") return;
+export function saveRegistry(reg: Record<string, StoredAccount>) {
+  if (typeof window === "undefined") {
+    inMemoryRegistry = { ...reg };
+    return;
+  }
   try {
     window.localStorage.setItem(REGISTRY_KEY, JSON.stringify(reg));
   } catch {
@@ -1338,18 +1343,30 @@ export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdmin
         profile: acc.profile,
         stats: acc.stats,
         enabledGames: cfg.enabledGames,
+        todayXpEarned: acc.profile.dailyXp,
+        streakDays: acc.profile.streakDays,
+        weeklyX1Wins: acc.profile.weeklyX1Wins,
       },
       allAvailable,
     );
     if (legitimatelyAwarded.length > 0) {
       const unlocked = acc.profile.unlockedMedals ?? [];
       const nowIso = new Date().toISOString();
+      let bonusXp = 0;
       for (const m of legitimatelyAwarded) {
         if (!unlocked.some((u) => u.medalId === m.id)) {
           unlocked.push({ medalId: m.id, unlockedAt: nowIso });
+          const extraXp = MEDAL_XP_REWARDS[m.rarity] ?? 10;
+          bonusXp += extraXp;
+          const ptsReward = MEDAL_POINTS_REWARDS[m.rarity] ?? 20;
+          awardCareerPoints(acc.profile, ptsReward, `Medalha: ${m.title}`);
         }
       }
       acc.profile.unlockedMedals = unlocked;
+      if (bonusXp > 0) {
+        acc.profile.xp += bonusXp;
+        acc.profile.seasonXp = (acc.profile.seasonXp ?? 0) + bonusXp;
+      }
     }
 
     // Concessão para o jogador ZHERET que comprovadamente derrotou o Robô Ametista na Batalha de Robôs
@@ -5204,6 +5221,218 @@ export function getPlayerPublicProfile(identifier: string): PlayerProfile | null
     }
   }
   return null;
+}
+
+export interface MedalsAuditResult {
+  auditedStudentsCount: number;
+  updatedStudentsCount: number;
+  medalsAwardedCount: number;
+  details: Array<{
+    studentId: string;
+    nick: string;
+    fullName: string;
+    school: string;
+    medalsAwarded: Array<{ id: string; title: string; rarity: string }>;
+  }>;
+}
+
+/**
+ * Realiza uma varredura completa no banco de dados local e na nuvem PlayFab,
+ * reavaliando todos os critérios de medalhas (partidas concluídas por jogo, modo ranqueado,
+ * exploração, níveis e eventos) e retroatribuindo com integridade quaisquer medalhas pendentes
+ * acompanhadas de seus respectivos Pontos de Carreira e XP.
+ */
+export async function runRetroactiveMedalsAudit(
+  optionsOrProgress?:
+    | ((info: { current: number; total: number; message: string }) => void)
+    | {
+        skipCloudSync?: boolean;
+        onProgress?: (info: { current: number; total: number; message: string }) => void;
+      },
+): Promise<MedalsAuditResult> {
+  const onProgress =
+    typeof optionsOrProgress === "function"
+      ? optionsOrProgress
+      : optionsOrProgress?.onProgress;
+  const skipCloudSync =
+    typeof optionsOrProgress === "object" ? Boolean(optionsOrProgress?.skipCloudSync) : false;
+
+  // 0. Captura o estado inicial de medalhas de cada aluno antes de qualquer alinhamento ou sincronização
+  const initialUnlockedByPlayer = new Map<string, Set<string>>();
+  for (const [k, acc] of Object.entries(loadRegistry())) {
+    if (acc?.profile) {
+      const pKey = (acc.profile.nickNormalized || acc.profile.id || k).toLowerCase().trim();
+      initialUnlockedByPlayer.set(
+        pKey,
+        new Set((acc.profile.unlockedMedals ?? []).map((m) => m.medalId)),
+      );
+    }
+  }
+
+  // 1. Sincroniza o elenco escolar com o PlayFab para obter o banco de dados mais atualizado
+  if (!skipCloudSync && isPlayFabConfigured()) {
+    try {
+      onProgress?.({ current: 0, total: 1, message: "Sincronizando elenco escolar com a nuvem PlayFab..." });
+      await syncStudentRosterFromPlayFab();
+    } catch (err) {
+      console.warn("[MedalsAudit] Falha na pré-sincronização do roster:", err);
+    }
+  }
+
+  const cfg = checkAndApplyScheduledReset();
+  const allMedals = getAllAvailableMedals(cfg.customMedals);
+  const reg = loadRegistry();
+  const keys = Object.keys(reg);
+  const total = keys.length;
+
+  let updatedStudentsCount = 0;
+  let medalsAwardedCount = 0;
+  const details: MedalsAuditResult["details"] = [];
+  const cloudRosterUpdates: Record<string, string> = {};
+
+  for (let i = 0; i < total; i++) {
+    const key = keys[i];
+    const acc = reg[key];
+    if (!acc || !acc.profile) continue;
+
+    onProgress?.({
+      current: i + 1,
+      total,
+      message: `Auditando ${acc.profile.nick || acc.profile.full_name} (${i + 1}/${total})...`,
+    });
+
+    const pKey = (acc.profile.nickNormalized || acc.profile.id || key).toLowerCase().trim();
+    const initialUnlockedSet = initialUnlockedByPlayer.get(pKey) ?? new Set((acc.profile.unlockedMedals ?? []).map((m) => m.medalId));
+
+    const aligned = ensurePlayerSeasonAligned(acc, cfg);
+    const isAdminAcc = aligned.profile.isAdmin || isSpecialAdminAccount(aligned.profile);
+    if (isAdminAcc) {
+      reg[key] = aligned;
+      continue;
+    }
+
+    const earned = evaluatePlayerMedals(
+      {
+        profile: aligned.profile,
+        stats: aligned.stats,
+        todayXpEarned: aligned.profile.dailyXp,
+        streakDays: aligned.profile.streakDays,
+        weeklyX1Wins: aligned.profile.weeklyX1Wins,
+        enabledGames: cfg.enabledGames,
+      },
+      allMedals,
+    );
+
+    const unlocked = aligned.profile.unlockedMedals ?? [];
+    const missingMedals = earned.filter((m) => !unlocked.some((u) => u.medalId === m.id));
+
+    if (missingMedals.length > 0) {
+      const nowIso = new Date().toISOString();
+      let bonusXp = 0;
+      for (const m of missingMedals) {
+        unlocked.push({ medalId: m.id, unlockedAt: nowIso });
+        const extraXp = MEDAL_XP_REWARDS[m.rarity] ?? 10;
+        bonusXp += extraXp;
+        const ptsReward = MEDAL_POINTS_REWARDS[m.rarity] ?? 20;
+        awardCareerPoints(aligned.profile, ptsReward, `Medalha Retroativa: ${m.title}`);
+      }
+
+      aligned.profile.unlockedMedals = unlocked;
+      if (bonusXp > 0) {
+        aligned.profile.xp += bonusXp;
+        aligned.profile.seasonXp = (aligned.profile.seasonXp ?? 0) + bonusXp;
+      }
+    }
+
+    // Identifica todas as medalhas que foram concedidas retroativamente nesta execução
+    const currentUnlocked = aligned.profile.unlockedMedals ?? [];
+    const freshlyGrantedMedals = currentUnlocked.filter((m) => !initialUnlockedSet.has(m.medalId));
+
+    if (freshlyGrantedMedals.length > 0) {
+      const nowIso = new Date().toISOString();
+      const awardedForStudent: Array<{ id: string; title: string; rarity: string }> = [];
+
+      for (const m of freshlyGrantedMedals) {
+        const def = allMedals.find((d) => d.id === m.medalId);
+        awardedForStudent.push({
+          id: m.medalId,
+          title: def?.title ?? m.medalId,
+          rarity: def?.rarity ?? "bronze",
+        });
+      }
+
+      const syncedProg = syncLevelStageProgress({
+        xp: aligned.profile.xp,
+        lifetimeMatches: aligned.profile.matchesPlayed,
+        lifetimeWins: aligned.profile.wins,
+        lifetimeDistinctGames: aligned.profile.distinctGamesPlayed ?? 1,
+        currentLevel: aligned.profile.level,
+        existingStage: aligned.profile.levelStageProgress,
+        maxAvailableGames: ALL_GAME_IDS.length,
+      });
+      aligned.profile.level = syncedProg.level;
+      aligned.profile.levelStageProgress = syncedProg.stageProgress;
+      aligned.updatedAt = nowIso;
+
+      reg[key] = aligned;
+      updatedStudentsCount++;
+      medalsAwardedCount += freshlyGrantedMedals.length;
+      details.push({
+        studentId: aligned.profile.id,
+        nick: aligned.profile.nick,
+        fullName: aligned.profile.full_name || aligned.profile.nick,
+        school: aligned.profile.school,
+        medalsAwarded: awardedForStudent,
+      });
+
+      cloudRosterUpdates[`stu_${aligned.profile.nickNormalized}`] = JSON.stringify({
+        ...aligned.profile,
+        stats: aligned.stats ?? [],
+        updatedAt: nowIso,
+      });
+
+      try {
+        await pushProfileToPlayFab(aligned);
+      } catch (err) {
+        console.warn(`[MedalsAudit] Erro ao sincronizar ${aligned.profile.nick}:`, err);
+      }
+    } else {
+      reg[key] = aligned;
+    }
+  }
+
+  saveRegistry(reg);
+
+  // Envia as atualizações em massa para a nuvem PlayFab se houver alterações
+  if (isPlayFabConfigured() && Object.keys(cloudRosterUpdates).length > 0) {
+    try {
+      const ticket = (await getAdminPlayFabTicket()) ?? loadStoredSession()?.sessionTicket;
+      if (ticket) {
+        const entries = Object.entries(cloudRosterUpdates);
+        for (let i = 0; i < entries.length; i += 10) {
+          const chunk = Object.fromEntries(entries.slice(i, i + 10));
+          await callPlayFabClient(
+            "UpdateSharedGroupData",
+            {
+              SharedGroupId: ROSTER_SHARED_GROUP_ID,
+              Data: chunk,
+              Permission: "Public",
+            },
+            ticket,
+          );
+        }
+      }
+    } catch (err) {
+      console.warn("[MedalsAudit] Falha ao enviar atualizações em lote para o SharedGroup:", err);
+    }
+  }
+
+  return {
+    auditedStudentsCount: total,
+    updatedStudentsCount,
+    medalsAwardedCount,
+    details,
+  };
 }
 
 export { ALL_GAME_IDS };

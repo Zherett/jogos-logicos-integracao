@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  aggregateStatsByGame,
   buildBaseMedalsCatalog,
   calculateMaxConsecutiveDays,
   calculateMaxConsecutiveWeeks,
@@ -18,7 +19,15 @@ import {
   type MedalDefinition,
 } from "./medals-catalog.ts";
 import { ALL_GAME_IDS } from "./game-storage.ts";
-import { ensurePlayerSeasonAligned, type PlayerProfile, type GameStatRow, grantPlayerMedalManually } from "./playfab.ts";
+import {
+  ensurePlayerSeasonAligned,
+  type PlayerProfile,
+  type GameStatRow,
+  grantPlayerMedalManually,
+  runRetroactiveMedalsAudit,
+  loadRegistry,
+  saveRegistry,
+} from "./playfab.ts";
 import { loadAdminConfig } from "./game-codes.ts";
 import { getLocalDateKey } from "./player-profile.ts";
 
@@ -1478,5 +1487,108 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
     assert.ok(carmesim, "Medalha m_rpg_carmesim deve existir no catálogo base");
     assert.equal(carmesim.rarity, "platina");
     assert.equal(carmesim.title, "Destruidor do Robô Carmesim");
+  });
+
+  it("computa corretamente partidas disputadas no modo ranqueado/torneio_semanal e concede a medalha de 10 partidas", () => {
+    const statsRanked: GameStatRow[] = [
+      {
+        game_id: "logica",
+        mode: "torneio_semanal",
+        plays: 10,
+        wins: 8,
+        best_score: 95,
+        best_level: 2,
+        last_wrong: 0,
+      },
+    ];
+
+    const agg = aggregateStatsByGame(statsRanked);
+    const logicaAgg = agg.get("logica");
+    assert.ok(logicaAgg, "Deve agregar estatísticas da Lógica");
+    assert.equal(logicaAgg.plays, 10, "Partidas de torneio_semanal devem somar 10 partidas");
+
+    const profileAluna: PlayerProfile = {
+      id: "aluna_10_logica",
+      nick: "AlunaLogica",
+      nickNormalized: "alunalogica",
+      full_name: "ALUNA DA SILVA",
+      school: "Raimundo Bezerra",
+      grade: "6º ano",
+      birthdate: "2014-05-10",
+      xp: 500,
+      seasonXp: 500,
+      level: 2,
+      wins: 8,
+      matchesPlayed: 10,
+      distinctGamesPlayed: 1,
+      badges: [],
+      seasonId: 1,
+      unlockedMedals: [],
+    };
+
+    const awarded = evaluatePlayerMedals({
+      profile: profileAluna,
+      stats: statsRanked,
+    });
+
+    const has10Logica = awarded.some((m) => m.id === "game_logica_matches_10");
+    assert.ok(has10Logica, "Aluna com 10 partidas no torneio deve receber a medalha game_logica_matches_10");
+  });
+
+  it("varredura retroativa (runRetroactiveMedalsAudit) identifica aluna com 10 partidas sem a medalha e atribui retroativamente", async () => {
+    // Simula conta no banco local que jogou 10 partidas mas não tinha a medalha atribuída
+    const alunaAcc = {
+      profile: {
+        id: "aluna_audit_test",
+        nick: "AlunaAudit",
+        nickNormalized: "alunaaudit",
+        full_name: "ALUNA AUDIT TESTE",
+        school: "Raimundo Bezerra",
+        grade: "6º ano",
+        birthdate: "2014-06-15",
+        xp: 400,
+        seasonXp: 400,
+        level: 2,
+        wins: 6,
+        matchesPlayed: 10,
+        distinctGamesPlayed: 1,
+        badges: [],
+        seasonId: 1,
+        unlockedMedals: [],
+      },
+      passwordHash: "hash",
+      unlocked: ["cartesiano"],
+      stats: [
+        {
+          game_id: "cartesiano",
+          mode: "padrao",
+          plays: 10,
+          wins: 6,
+          best_score: 80,
+          best_level: 2,
+          last_wrong: 0,
+        },
+      ],
+      updatedAt: "2026-11-01T00:00:00.000Z",
+    };
+
+    saveRegistry({ [alunaAcc.profile.nickNormalized]: alunaAcc as any });
+
+    const auditRes = await runRetroactiveMedalsAudit({ skipCloudSync: true });
+    assert.ok(auditRes.auditedStudentsCount >= 1, "Deve ter auditado pelo menos 1 aluno");
+    assert.ok(auditRes.medalsAwardedCount >= 1, "Deve ter retroatribuído ao menos 1 medalha");
+
+    // Verifica que a aluna recebeu a medalha retroativamente
+    const regAfter = loadRegistry();
+    const saved = regAfter[alunaAcc.profile.nickNormalized];
+    assert.ok(saved, "Conta deve existir no registro após varredura");
+    assert.ok(
+      saved.profile.unlockedMedals?.some((m: any) => m.medalId === "game_cartesiano_matches_10"),
+      "A medalha de 10 partidas de Cartesiano deve ter sido retroatribuída",
+    );
+    assert.ok(
+      (saved.profile.careerPoints ?? 0) > 0,
+      "Pontos de carreira devem ter sido concedidos pela medalha retroativa",
+    );
   });
 });

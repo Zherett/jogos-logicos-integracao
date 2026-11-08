@@ -1209,8 +1209,6 @@ export function isFlawlessMatch(
   minScore = 30,
 ): boolean {
   if (!match) return false;
-  // Ignora chamadas sintéticas de registro de entrada do torneio (a partida real já é salva pelo jogo)
-  if (match.mode === "torneio_semanal") return false;
   return (
     typeof match.wrong === "number" &&
     match.wrong === 0 &&
@@ -1221,7 +1219,7 @@ export function isFlawlessMatch(
 
 /**
  * Consolida as estatísticas por `game_id` único habilitado (somando partidas jogadas/vitórias entre modos
- * como padrão/equipes/frações e mantendo o maior nível e maior pontuação de cada jogo).
+ * como padrão/equipes/frações/torneio_semanal e mantendo o maior nível e maior pontuação de cada jogo).
  */
 export function aggregateStatsByGame(
   stats: GameStatRow[],
@@ -1232,8 +1230,6 @@ export function aggregateStatsByGame(
   for (const row of stats) {
     if (!row || !row.game_id) continue;
     if (!enabledSet.has(row.game_id)) continue;
-    // Não duplica contagem de partidas se for linha sintética de entrada de torneio
-    const isSyntheticTournament = row.mode === "torneio_semanal";
     const hasActivity =
       (row.plays ?? 0) > 0 ||
       (row.best_score ?? 0) > 0 ||
@@ -1242,17 +1238,15 @@ export function aggregateStatsByGame(
       (row.flawless_wins ?? 0) > 0 ||
       row.last_wrong !== undefined;
     const rawPlays = Math.max(0, row.plays ?? 0);
-    const playsToAdd = isSyntheticTournament ? 0 : Math.max(rawPlays, hasActivity ? 1 : 0);
+    const playsToAdd = Math.max(rawPlays, hasActivity ? 1 : 0);
     const hasWinProgress =
       (row.wins ?? 0) > 0 ||
       (row.flawless_wins ?? 0) >= 1 ||
       (row.best_score ?? 0) >= 20 ||
       (row.best_level ?? 1) >= 2 ||
       playsToAdd >= 2;
-    const winsToAdd = isSyntheticTournament
-      ? 0
-      : Math.max(0, row.wins ?? 0, hasWinProgress ? 1 : 0);
-    const flawlessToAdd = isSyntheticTournament ? 0 : Math.max(0, row.flawless_wins ?? 0);
+    const winsToAdd = Math.max(0, row.wins ?? 0, hasWinProgress ? 1 : 0);
+    const flawlessToAdd = Math.max(0, row.flawless_wins ?? 0);
 
     const existing = map.get(row.game_id);
     if (!existing) {
@@ -1379,7 +1373,6 @@ export function getDistinctGamesPlayed(
   // 3. Última partida
   if (
     lastMatch &&
-    lastMatch.mode !== "torneio_semanal" &&
     lastMatch.gameId &&
     enabledSet.has(lastMatch.gameId)
   ) {
