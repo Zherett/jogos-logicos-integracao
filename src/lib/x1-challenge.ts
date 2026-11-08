@@ -69,14 +69,18 @@ export interface X1PlayerSideState {
 export interface X1ChallengeInvite {
   id: string;
   roomCode: string;
+  fromPlayerId?: string;
   fromNick: string;
   fromSchool: string;
   toPlayerId: string;
+  toNick?: string;
   gameId: GameId;
   createdAt: number;
   status?: "pending" | "accepted" | "rejected";
   rejectedByNick?: string;
 }
+
+export type X1DirectInvite = X1ChallengeInvite;
 
 export interface X1MatchLogEntry {
   id: string;
@@ -158,9 +162,10 @@ interface X1LobbyStore {
 }
 
 const X1_MATCH_HISTORY_KEY = "desafios-x1-match-history-v1";
+let memoryMatchHistoryFallback: X1MatchLogEntry[] = [];
 
 export function loadX1MatchHistory(): X1MatchLogEntry[] {
-  if (typeof window === "undefined") return [];
+  if (typeof window === "undefined") return [...memoryMatchHistoryFallback];
   try {
     const raw = localStorage.getItem(X1_MATCH_HISTORY_KEY);
     return raw ? (JSON.parse(raw) as X1MatchLogEntry[]) : [];
@@ -170,6 +175,7 @@ export function loadX1MatchHistory(): X1MatchLogEntry[] {
 }
 
 export function saveX1MatchHistory(entries: X1MatchLogEntry[]): void {
+  memoryMatchHistoryFallback = [...entries];
   if (typeof window === "undefined") return;
   try {
     localStorage.setItem(X1_MATCH_HISTORY_KEY, JSON.stringify(entries));
@@ -182,7 +188,17 @@ export function saveX1MatchHistory(entries: X1MatchLogEntry[]): void {
 export function recordX1MatchFinished(room: X1Room): void {
   if (!room.guest || !room.winnerId) return;
   const history = loadX1MatchHistory();
-  if (history.some((h) => h.roomCode === room.code)) return;
+  const deterministicId = `x1_match_${room.code}_${room.createdAt}`;
+  if (
+    history.some(
+      (h) =>
+        h.id === deterministicId ||
+        (h.roomCode === room.code &&
+          Math.abs(new Date(h.finishedAt).getTime() - (room.finishedAt ?? Date.now())) < 600_000),
+    )
+  ) {
+    return;
+  }
 
   let winnerNick = "Empate";
   if (room.winnerId === room.host.playerId) {
@@ -194,7 +210,7 @@ export function recordX1MatchFinished(room: X1Room): void {
   room.autoCloseAt = (room.finishedAt ?? Date.now()) + X1_POST_MATCH_AUTOCLOSE_MS;
 
   const entry: X1MatchLogEntry = {
-    id: `x1_match_${room.code}_${Date.now()}`,
+    id: deterministicId,
     roomCode: room.code,
     gameId: room.gameId,
     gameName: GAME_NAMES[room.gameId] ?? room.gameId,
@@ -348,6 +364,65 @@ export function generateDeterministicQuestionList(seed: number, gameId: GameId):
         expr: `${pct}% de ${baseVal}`,
         options: shuffle([...opts]).map(String),
         answer: String(correctAns),
+        points: 15,
+      });
+    } else if (gameId === "operacoes") {
+      const a = 2 + ri(18);
+      const b = 2 + ri(12);
+      const op = rand(["+", "−", "×"] as const);
+      const exprA = op === "−" ? Math.max(a, b) : a;
+      const exprB = op === "−" ? Math.min(a, b) : b;
+      const correctAns = op === "+" ? exprA + exprB : op === "−" ? exprA - exprB : exprA * exprB;
+      const opts = new Set<number>([correctAns]);
+      while (opts.size < 4) {
+        const cand = correctAns + rand([-6, -4, -2, -1, 1, 2, 4, 6]);
+        if (cand >= 0) opts.add(cand);
+      }
+      const expr = `${exprA} ${op} ${exprB} = ?`;
+      list.push({
+        id: `q_op_${seed}_${i}`,
+        prompt: "Qual é o resultado da operação?",
+        question: expr,
+        expr,
+        options: shuffle([...opts]).map(String),
+        answer: String(correctAns),
+        points: 15,
+      });
+    } else if (gameId === "sequencias") {
+      const start = 1 + ri(10);
+      const step = 2 + ri(6);
+      const seq = [start, start + step, start + step * 2, start + step * 3];
+      const correctAns = start + step * 4;
+      const opts = new Set<number>([correctAns]);
+      while (opts.size < 4) {
+        const cand = correctAns + rand([-step, -2, -1, 1, 2, step]);
+        if (cand > 0) opts.add(cand);
+      }
+      const expr = `${seq.join(", ")}, ?`;
+      list.push({
+        id: `q_seq_${seed}_${i}`,
+        prompt: "Qual número completa a sequência lógica?",
+        question: expr,
+        expr,
+        options: shuffle([...opts]).map(String),
+        answer: String(correctAns),
+        points: 15,
+      });
+    } else if (gameId === "binario") {
+      const dec = 1 + ri(15);
+      const bin = dec.toString(2).padStart(4, "0");
+      const opts = new Set<number>([dec]);
+      while (opts.size < 4) {
+        const cand = 1 + ri(15);
+        opts.add(cand);
+      }
+      list.push({
+        id: `q_bin_${seed}_${i}`,
+        prompt: "Qual é o valor decimal deste número binário?",
+        question: bin,
+        expr: bin,
+        options: shuffle([...opts]).map(String),
+        answer: String(dec),
         points: 15,
       });
     } else {
@@ -670,7 +745,7 @@ export function mergeX1RoomStates(local: X1Room | undefined, remote: X1Room, now
         merged.countdownEndsAt = now + X1_COUNTDOWN_DURATION_SEC * 1000;
       }
     } else if (local.status !== "playing" && merged.status === "playing") {
-      if (!merged.startedAt || Math.abs(now - merged.startedAt) > 15_000) {
+      if (!merged.startedAt || Math.abs(now - merged.startedAt) > 3_000) {
         merged.startedAt = now;
       }
     } else if (merged.status === "finished") {
@@ -708,7 +783,7 @@ export function mergeX1RoomStates(local: X1Room | undefined, remote: X1Room, now
   }
 
   if (base.status === "playing" && local.guest && remote.guest) {
-    if (base.gameId === "logica" || base.gameId === "porcentagem") {
+    if (base.gameId !== "rpg" && base.gameId !== "minado") {
       // Na corrida de questões, cada jogador é autoritativo sobre seu próprio lado
       const localHostProgress = (local.host.correct + local.host.wrong) * 1000 + (local.host.currentQuestionIdx ?? 0);
       const remoteHostProgress = (remote.host.correct + remote.host.wrong) * 1000 + (remote.host.currentQuestionIdx ?? 0);
@@ -1165,6 +1240,8 @@ async function runSyncX1WithPlayFabCloud(activeRoomCode?: string | null): Promis
                   detail: {
                     inviteId: rInv.id,
                     roomCode: rInv.roomCode,
+                    fromPlayerId: rInv.fromPlayerId ?? existing.fromPlayerId,
+                    fromNick: rInv.fromNick ?? existing.fromNick,
                     rejectedByNick: rInv.rejectedByNick || "O jogador convidado",
                   },
                 }),
@@ -1179,6 +1256,33 @@ async function runSyncX1WithPlayFabCloud(activeRoomCode?: string | null): Promis
             (store.rooms[inv.roomCode]?.status === "waiting" || inv.status === "rejected"),
         );
       }
+
+      // Mescla histórico de partidas X1 concluídas para a Caixa de Entrada do ADM em qualquer dispositivo
+      const remoteHistory = (remoteStore as { matchHistory?: X1MatchLogEntry[] }).matchHistory;
+      if (Array.isArray(remoteHistory) && remoteHistory.length > 0) {
+        const localHistory = loadX1MatchHistory();
+        const byId = new Map(localHistory.map((h) => [h.id, h]));
+        let historyAdded = false;
+        for (const rEntry of remoteHistory) {
+          if (!rEntry || !rEntry.id || !rEntry.roomCode) continue;
+          const alreadyHasRoom = localHistory.some(
+            (h) =>
+              h.id === rEntry.id ||
+              (h.roomCode === rEntry.roomCode &&
+                Math.abs(new Date(h.finishedAt).getTime() - new Date(rEntry.finishedAt).getTime()) < 600_000),
+          );
+          if (!alreadyHasRoom && !byId.has(rEntry.id)) {
+            byId.set(rEntry.id, { ...rEntry, read: false });
+            historyAdded = true;
+          }
+        }
+        if (historyAdded) {
+          const mergedHistory = Array.from(byId.values())
+            .sort((a, b) => new Date(b.finishedAt).getTime() - new Date(a.finishedAt).getTime())
+            .slice(0, 100);
+          saveX1MatchHistory(mergedHistory);
+        }
+      }
     } catch {
       /* ignore */
     }
@@ -1190,6 +1294,7 @@ async function runSyncX1WithPlayFabCloud(activeRoomCode?: string | null): Promis
 
   // Push merged snapshot (usando o store mais recente para nunca sobrescrever ações concorrentes)
   const latestStore = loadStore();
+  const latestHistory = loadX1MatchHistory().slice(0, 40);
   await callPlayFabSharedGroup("UpdateSharedGroupData", {
     SharedGroupId: LOBBY_SHARED_GROUP_ID,
     Data: {
@@ -1198,6 +1303,7 @@ async function runSyncX1WithPlayFabCloud(activeRoomCode?: string | null): Promis
         rooms: latestStore.rooms,
         deletedRooms: latestStore.deletedRooms,
         invites: latestStore.invites,
+        matchHistory: latestHistory,
       }),
     },
     Permission: "Public",
@@ -1355,15 +1461,16 @@ export function getX1LobbySnapshot(currentPlayerId?: string, currentPlayerNick?:
     .filter((r) => r.status === "playing" || r.status === "countdown")
     .sort((a, b) => b.createdAt - a.createdAt);
 
-  const myInvites = currentPlayerId
-    ? store.invites.filter(
-        (inv) =>
-          inv.toPlayerId === currentPlayerId &&
-          (!inv.status || inv.status === "pending") &&
-          !store.deletedRooms?.[inv.roomCode] &&
-          store.rooms[inv.roomCode]?.status === "waiting",
-      )
-    : [];
+  const myInvites =
+    currentPlayerId || myNick
+      ? store.invites.filter(
+          (inv) =>
+            isSameX1Identity(inv.toPlayerId, inv.toNick, currentPlayerId, myNick) &&
+            (!inv.status || inv.status === "pending") &&
+            !store.deletedRooms?.[inv.roomCode] &&
+            store.rooms[inv.roomCode]?.status === "waiting",
+        )
+      : [];
 
   return {
     onlinePlayers,
@@ -1393,6 +1500,7 @@ export function createX1Room(args: {
   };
   gameId: GameId;
   inviteTargetPlayerId?: string;
+  inviteTargetNick?: string;
 }): X1Room {
   const store = loadStore();
   store.deletedRooms = store.deletedRooms ?? {};
@@ -1461,12 +1569,16 @@ export function createX1Room(args: {
   store.rooms[code] = room;
 
   if (args.inviteTargetPlayerId) {
+    const targetNick =
+      args.inviteTargetNick ?? store.players[args.inviteTargetPlayerId]?.nick;
     store.invites.push({
       id: `inv_${now}_${code}`,
       roomCode: code,
+      fromPlayerId: args.host.playerId,
       fromNick: args.host.nick,
       fromSchool: args.host.school,
       toPlayerId: args.inviteTargetPlayerId,
+      toNick: targetNick,
       gameId: args.gameId,
       createdAt: now,
       status: "pending",
@@ -1496,7 +1608,13 @@ export function rejectX1Invite(inviteId: string, rejectedByNick: string): void {
     if (typeof window !== "undefined") {
       window.dispatchEvent(
         new CustomEvent("desafios:x1-invite-rejected", {
-          detail: { inviteId, roomCode: inv.roomCode, rejectedByNick },
+          detail: {
+            inviteId,
+            roomCode: inv.roomCode,
+            fromPlayerId: inv.fromPlayerId,
+            fromNick: inv.fromNick,
+            rejectedByNick,
+          },
         }),
       );
     }
@@ -1630,7 +1748,7 @@ export function joinX1Room(args: {
       activeQuestion: null,
       turnStartedAt: now + X1_COUNTDOWN_DURATION_SEC * 1000,
     };
-  } else if (room.gameId === "logica" || room.gameId === "porcentagem") {
+  } else if (room.gameId !== "rpg") {
     room.questionList = generateDeterministicQuestionList(room.seed, room.gameId);
   }
 

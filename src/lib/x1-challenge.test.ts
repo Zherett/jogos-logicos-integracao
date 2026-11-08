@@ -356,5 +356,50 @@ describe("Arena de Desafio X1 Online (1v1 Versus Mode)", () => {
     assert.equal(mergedRpg.host.hp, 4);
     assert.equal(mergedRpg.guest?.hp, 4);
     assert.equal(mergedRpg.blueShare, 50); // +18 do host e -18 do guest voltam ao equilíbrio 50%
+
+    // Na transição countdown -> playing, normaliza startedAt se o relógio do outro aparelho estiver mais de 3s adiantado/atrasado
+    const localCountdown: X1Room = {
+      ...makeSampleRoom(),
+      status: "countdown",
+      revision: 11,
+      countdownEndsAt: now + 1000,
+    };
+    const remoteStartedSkewed: X1Room = {
+      ...localCountdown,
+      status: "playing",
+      revision: 12,
+      startedAt: now - 8_000, // 8s atrasado no outro relógio
+    };
+    const mergedStarted = mergeX1RoomStates(localCountdown, remoteStartedSkewed, now);
+    assert.equal(mergedStarted.status, "playing");
+    assert.equal(mergedStarted.startedAt, now);
+  });
+
+  it("gera questionList determinística para qualquer jogo de corrida habilitado pelo ADM (ex: operacoes, sequencias, binario)", () => {
+    for (const gid of ["operacoes", "sequencias", "binario"] as const) {
+      const r = createX1Room({
+        host: { playerId: "h_extra", nick: "HostExtra", school: "SEMED", level: 7 },
+        gameId: gid,
+      });
+      const joined = joinX1Room({
+        code: r.code,
+        guest: { playerId: "g_extra", nick: "GuestExtra", school: "SEMED", level: 7 },
+      });
+      assert.equal(joined.error, null);
+      assert.ok(joined.room?.questionList);
+      assert.equal(joined.room?.questionList?.length, 25);
+      assert.ok(joined.room?.questionList?.[0]?.options.length >= 2);
+    }
+  });
+
+  it("localiza convites diretos mesmo se o ID de sessão do convidado mudar mantendo o mesmo nick", () => {
+    const r = createX1Room({
+      host: { playerId: "h_inv", nick: "Desafiante1", school: "SEMED", level: 8 },
+      gameId: "rpg",
+      inviteTargetPlayerId: "old_target_session",
+      inviteTargetNick: "AlvoX1",
+    });
+    const snap = getX1LobbySnapshot("new_target_session", "alvox1");
+    assert.ok(snap.myInvites.some((i) => i.roomCode === r.code));
   });
 });

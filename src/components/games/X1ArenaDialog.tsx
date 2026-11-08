@@ -81,17 +81,29 @@ export function X1ArenaDialog({
   const [tick, setTick] = useState(0);
 
   const enabledGameIds = ALL_GAME_IDS.filter((id) => auth.adminConfig.enabledGames[id]);
+  const isArenaDisabledByAdmin =
+    auth.adminConfig.x1Enabled === false || Boolean(auth.adminConfig.x1ArenaClosed);
 
-  // Se o jogador estiver fora da tela de espera da sala, destrói imediatamente qualquer sala em espera órfã criada por ele
+  useEffect(() => {
+    if (allowedX1Games.length > 0 && !allowedX1Games.includes(selectedGame)) {
+      setSelectedGame(allowedX1Games[0]);
+    }
+  }, [allowedX1Games, selectedGame]);
+
+  // Se o jogador estiver fora da tela de espera da sala (ou se a arena for fechada pela coordenação), destrói imediatamente qualquer sala em espera órfã criada por ele
   useEffect(() => {
     waitingRoomCodeRef.current = waitingRoomCode;
     if (!profile?.id) return;
-    if (!open || !waitingRoomCode) {
+    if (!open || !waitingRoomCode || isArenaDisabledByAdmin) {
       if (!matchStartedRef.current) {
         cancelAllWaitingRoomsForHost(profile.id, profile.nick);
       }
+      if (isArenaDisabledByAdmin && waitingRoomCode) {
+        waitingRoomCodeRef.current = null;
+        setWaitingRoomCode(null);
+      }
     }
-  }, [open, waitingRoomCode, profile?.id, profile?.nick]);
+  }, [open, waitingRoomCode, isArenaDisabledByAdmin, profile?.id, profile?.nick]);
 
   // Se o jogador convidado recusar o desafio direto, encerra a sala de espera do anfitrião e avisa
   useEffect(() => {
@@ -230,6 +242,37 @@ export function X1ArenaDialog({
   const dailyX1Xp =
     profile.dailyXpDate === todayKey ? Math.max(0, profile.dailyX1Xp ?? 0) : 0;
 
+  if (isArenaDisabledByAdmin) {
+    return (
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="rounded-3xl sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 font-display text-2xl font-extrabold">
+              <Lock className="h-6 w-6 text-destructive" /> Arena X1 Fechada pela Coordenação
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2 text-center">
+            <div className="rounded-2xl border border-destructive/30 bg-destructive/10 p-5 space-y-2">
+              <p className="font-display text-lg font-extrabold text-foreground">
+                ⛔ Arena X1 Temporariamente Fechada
+              </p>
+              <p className="text-xs text-muted-foreground">
+                A coordenação fechou a Arena de Desafio X1 neste momento. Aguarde a reabertura para criar salas e desafiar seus colegas!
+              </p>
+            </div>
+            <Button
+              size="lg"
+              onClick={() => onOpenChange(false)}
+              className="h-12 w-full rounded-2xl font-bold"
+            >
+              Entendi
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    );
+  }
+
   if (!meetsLevel) {
     return (
       <Dialog open={open} onOpenChange={onOpenChange}>
@@ -312,7 +355,7 @@ export function X1ArenaDialog({
     : snapshot.openRooms;
   const waitingRoom = waitingRoomCode ? getX1Room(waitingRoomCode) : null;
 
-  function handleCreateRoom(inviteTargetPlayerId?: string) {
+  function handleCreateRoom(inviteTargetPlayerId?: string, inviteTargetNick?: string) {
     if (!profile) return;
     setError(null);
     matchStartedRef.current = false;
@@ -327,6 +370,7 @@ export function X1ArenaDialog({
       },
       gameId: selectedGame,
       inviteTargetPlayerId,
+      inviteTargetNick,
     });
     waitingRoomCodeRef.current = room.code;
     setWaitingRoomCode(room.code);
@@ -742,7 +786,7 @@ export function X1ArenaDialog({
                             type="button"
                             size="sm"
                             variant="secondary"
-                            onClick={() => handleCreateRoom(p.playerId)}
+                            onClick={() => handleCreateRoom(p.playerId, p.nick)}
                             className="rounded-xl font-bold shrink-0"
                           >
                             <Swords className="mr-1.5 h-3.5 w-3.5 text-accent" /> Desafiar

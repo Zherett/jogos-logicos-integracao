@@ -140,6 +140,7 @@ import {
   loadX1MatchHistory,
   markAllX1MatchesRead,
   clearX1MatchHistory,
+  syncX1WithPlayFabCloud,
   type X1MatchLogEntry,
 } from "@/lib/x1-challenge";
 import { MedalIcon } from "./MedalIcon";
@@ -486,12 +487,21 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
       setDraft((prev) => ({ ...prev, adminMedalNotifications: notifs }));
     });
 
+    void syncX1WithPlayFabCloud().then(() => {
+      setX1History(loadX1MatchHistory());
+    });
+
     const onPresenceChange = () => {
       setPresenceTick((t) => t + 1);
     };
+    const onX1HistoryUpdated = () => {
+      setX1History(loadX1MatchHistory());
+    };
     window.addEventListener(PRESENCE_UPDATED_EVENT, onPresenceChange);
+    window.addEventListener("desafios:x1-history-updated", onX1HistoryUpdated);
     const presencePoll = window.setInterval(() => {
       void syncPresenceFromPlayFab();
+      void syncX1WithPlayFabCloud();
       setPresenceTick((t) => t + 1);
     }, 8000);
 
@@ -559,6 +569,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
     setSavedMsg(null);
     return () => {
       window.removeEventListener(PRESENCE_UPDATED_EVENT, onPresenceChange);
+      window.removeEventListener("desafios:x1-history-updated", onX1HistoryUpdated);
       window.clearInterval(presencePoll);
     };
   }, [open, auth.adminConfig]);

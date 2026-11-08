@@ -19,6 +19,7 @@ import {
   Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ShapeSvg } from "./ShapeSvg";
 import { GAME_NAMES, saveLastMatch, updateBest } from "@/lib/game-storage";
 import { usePlayerAuth } from "@/lib/player-auth";
 import { generateClashQuestion, type ClashQuestion } from "@/lib/rpg-content";
@@ -668,7 +669,12 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
                   </div>
                 </div>
 
-                <div className="py-2 text-center space-y-1">
+                <div className="py-2 text-center space-y-2">
+                  {activeQ.shape && (
+                    <div className="my-2 grid place-items-center">
+                      <ShapeSvg shape={activeQ.shape} color="azul" size={2} />
+                    </div>
+                  )}
                   <p className="font-display text-lg sm:text-xl font-extrabold text-foreground">
                     {activeQ.prompt || activeQ.question}
                   </p>

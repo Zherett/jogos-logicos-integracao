@@ -262,9 +262,16 @@ function Index() {
   useEffect(() => {
     if (!auth.profile) return;
     const myId = auth.profile.id;
+    const myNick = auth.profile.nick;
+    const isArenaClosed =
+      auth.adminConfig.x1Enabled === false || Boolean(auth.adminConfig.x1ArenaClosed);
 
     const checkInvites = () => {
-      const snap = getX1LobbySnapshot(myId);
+      if (isArenaClosed) {
+        if (incomingInvite) setIncomingInvite(null);
+        return;
+      }
+      const snap = getX1LobbySnapshot(myId, myNick);
       const pending = snap.myInvites.find((i) => !i.status || i.status === "pending");
       if (pending && (!incomingInvite || incomingInvite.id !== pending.id)) {
         playTone(880, 0.25, "sine");
@@ -279,8 +286,19 @@ function Index() {
     const pollId = window.setInterval(checkInvites, 3000);
 
     const handleReject = (e: Event) => {
-      const detail = (e as CustomEvent).detail;
-      if (detail?.rejectedByNick) {
+      const detail = (e as CustomEvent).detail as
+        | {
+            fromPlayerId?: string;
+            fromNick?: string;
+            rejectedByNick?: string;
+          }
+        | undefined;
+      if (!detail?.rejectedByNick) return;
+      const isFromMe =
+        (!detail.fromPlayerId && !detail.fromNick) ||
+        detail.fromPlayerId === myId ||
+        Boolean(detail.fromNick && detail.fromNick.trim().toLowerCase() === myNick.trim().toLowerCase());
+      if (isFromMe) {
         setRejectNotice(`${detail.rejectedByNick} recusou o desafio X1.`);
         window.setTimeout(() => setRejectNotice(null), 4000);
       }
@@ -292,7 +310,7 @@ function Index() {
       window.clearInterval(pollId);
       window.removeEventListener("desafios:x1-invite-rejected", handleReject);
     };
-  }, [auth.profile, incomingInvite]);
+  }, [auth.profile, auth.adminConfig.x1Enabled, auth.adminConfig.x1ArenaClosed, incomingInvite]);
 
   useEffect(() => {
     if (auth.unlocked.length === 0) return;
