@@ -46,9 +46,17 @@ interface Props {
 
 export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
   const auth = usePlayerAuth();
-  const myId = auth.profile?.id ?? initialRoom.host.playerId;
+  const rawMyId = auth.profile?.id ?? initialRoom.host.playerId;
+  const rawMyNick = (auth.profile?.nick ?? "").trim().toLowerCase();
 
   const [room, setRoom] = useState<X1Room>(initialRoom);
+  const isHost =
+    room.host.playerId === rawMyId ||
+    Boolean(rawMyNick && room.host.nick.trim().toLowerCase() === rawMyNick);
+  const myId = isHost ? room.host.playerId : (room.guest?.playerId ?? rawMyId);
+  const me = isHost ? room.host : (room.guest ?? room.host);
+  const opponent = isHost ? room.guest : room.host;
+
   const [secondsLeft, setSecondsLeft] = useState(initialRoom.durationSec);
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [question, setQuestion] = useState<ClashQuestion>(() => generateClashQuestion(2));
@@ -58,12 +66,8 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
   const rewardSavedRef = useRef(false);
   const recentTextsRef = useRef<string[]>([]);
   const recentAnsRef = useRef<boolean[]>([]);
-  const [myQuestionIdx, setMyQuestionIdx] = useState(0);
+  const [myQuestionIdx, setMyQuestionIdx] = useState(() => me.currentQuestionIdx ?? 0);
   const [confirmForfeitOpen, setConfirmForfeitOpen] = useState(false);
-
-  const isHost = room.host.playerId === myId;
-  const me = isHost ? room.host : (room.guest ?? room.host);
-  const opponent = isHost ? room.guest : room.host;
 
   // Cleanup imediato por desistência ao recarregar ou fechar a aba durante partida ativa
   useEffect(() => {
@@ -155,8 +159,14 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
     const activeQ = room.minadoState?.activeQuestion;
     if (!activeQ || activeQ.answered) return;
 
+    // O jogador que abriu a carta dispara o timeout em expiresAt; o oponente aguarda +5s de margem caso haja desconexão
+    const isMyActiveQuestion = activeQ.openedBy === myId;
+    const effectiveDeadline = isMyActiveQuestion ? activeQ.expiresAt : activeQ.expiresAt + 5_000;
+
     const timer = window.setInterval(() => {
-      if (Date.now() >= activeQ.expiresAt) {
+      const now = Date.now();
+      setNowTick(now);
+      if (now >= effectiveDeadline) {
         playWrong();
         const updated = timeoutX1MinadoQuestion(room.code);
         if (updated.room) setRoom({ ...updated.room });
@@ -164,7 +174,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
     }, 400);
 
     return () => window.clearInterval(timer);
-  }, [room.gameId, room.status, room.minadoState?.activeQuestion, room.code]);
+  }, [room.gameId, room.status, room.minadoState?.activeQuestion, room.code, myId]);
 
   // Auto-close countdown (1 minute) on finished screen
   useEffect(() => {
@@ -432,7 +442,20 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
               A partida começará simultaneamente para os dois jogadores!
             </p>
           </div>
+
+          <div className="pt-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={handleRequestExit}
+              className="h-9 rounded-xl text-xs text-muted-foreground hover:text-destructive"
+            >
+              <LogOut className="mr-1.5 h-3.5 w-3.5" /> Sair / Desistir do Duelo
+            </Button>
+          </div>
         </div>
+        {forfeitModal}
       </div>
     );
   }

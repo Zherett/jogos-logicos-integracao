@@ -777,6 +777,30 @@ export function mergeX1RoomStates(local: X1Room | undefined, remote: X1Room, now
         base.host = structuredClone(local.host);
         base.guest = structuredClone(local.guest);
       }
+
+      // Protege o cronômetro de 20s da questão ativa contra diferenças de relógio entre aparelhos
+      const activeQ = base.minadoState.activeQuestion;
+      if (activeQ && !activeQ.answered) {
+        const localQ = local.minadoState.activeQuestion;
+        if (localQ && localQ.cardId === activeQ.cardId && localQ.expiresAt) {
+          activeQ.expiresAt = localQ.expiresAt;
+        } else {
+          const rem = activeQ.expiresAt - now;
+          if (rem <= 0 || rem > 22_000) {
+            activeQ.expiresAt = now + 20_000;
+          }
+        }
+      }
+
+      if (
+        Object.keys(base.minadoState.revealed).length >= base.minadoState.board.length &&
+        base.status !== "finished"
+      ) {
+        base.status = "finished";
+        base.finishedAt = base.finishedAt ?? now;
+        base.winnerId = resolveX1Winner(base);
+        recordX1MatchFinished(base);
+      }
     }
   }
 

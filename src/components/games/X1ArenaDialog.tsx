@@ -41,6 +41,7 @@ import {
   heartbeatOnlinePlayer,
   joinX1Room,
   joinX1RoomAsync,
+  rejectX1Invite,
   subscribeX1Updates,
   syncX1WithPlayFabCloud,
   type X1Room,
@@ -524,7 +525,7 @@ export function X1ArenaDialog({
                         size="sm"
                         variant="ghost"
                         onClick={() => {
-                          dismissX1Invite(inv.id);
+                          rejectX1Invite(inv.id, profile.nick);
                           setTick((t) => t + 1);
                         }}
                         className="rounded-xl"
