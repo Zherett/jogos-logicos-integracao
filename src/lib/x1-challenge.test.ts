@@ -2,14 +2,17 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   applyX1RobotBattleAnswer,
+  cancelAllWaitingRoomsForHost,
   cancelWaitingX1Room,
   computeScoreRaceBlueShare,
   createX1Room,
   forfeitX1Match,
   generateRoomCode,
   getActiveRotatedX1Game,
+  getX1LobbySnapshot,
   getX1Room,
   joinX1Room,
+  mergeX1RoomStates,
   resolveX1Winner,
   X1_ROBOT_INITIAL_HP,
   type X1Room,
@@ -219,5 +222,113 @@ describe("Arena de Desafio X1 Online (1v1 Versus Mode)", () => {
     // Empate em tudo -> empate
     room.guest!.correct = 4;
     assert.equal(resolveX1Winner(room), "draw");
+  });
+
+  it("impede o criador de entrar na própria sala e oculta sua sala da lista de salas abertas dele", () => {
+    const created = createX1Room({
+      host: { playerId: "host_self_check", nick: "Criador", school: "Escola A", level: 6 },
+      gameId: "rpg",
+    });
+
+    // Na visão do próprio criador, a sala não aparece como disponível para entrar
+    const mySnap = getX1LobbySnapshot("host_self_check");
+    assert.equal(
+      mySnap.openRooms.some((r) => r.code === created.code),
+      false,
+    );
+
+    // Na visão de outro colega, a sala aparece aberta normalmente
+    const otherSnap = getX1LobbySnapshot("other_challenger");
+    assert.equal(
+      otherSnap.openRooms.some((r) => r.code === created.code),
+      true,
+    );
+
+    // Se o próprio criador tentar entrar por código, recebe erro explícito e room null
+    const selfJoin = joinX1Room({
+      code: created.code,
+      guest: { playerId: "host_self_check", nick: "Criador", school: "Escola A", level: 6 },
+    });
+    assert.equal(selfJoin.room, null);
+    assert.ok(selfJoin.error?.includes("não pode entrar na própria sala"));
+
+    cancelWaitingX1Room(created.code, "host_self_check");
+  });
+
+  it("destrói automaticamente sala anterior se o anfitrião criar outra ou sair da tela de espera", () => {
+    const first = createX1Room({
+      host: { playerId: "host_multi", nick: "Anfitriao", school: "Escola A", level: 6 },
+      gameId: "rpg",
+    });
+    assert.ok(getX1Room(first.code));
+
+    const second = createX1Room({
+      host: { playerId: "host_multi", nick: "Anfitriao", school: "Escola A", level: 6 },
+      gameId: "logica",
+    });
+    // A primeira sala deve ter sido imediatamente destruída
+    assert.equal(getX1Room(first.code), null);
+    assert.ok(getX1Room(second.code));
+
+    // Ao sair da tela de espera, cancelAllWaitingRoomsForHost destrói a sala ativa
+    const removedCount = cancelAllWaitingRoomsForHost("host_multi");
+    assert.equal(removedCount, 1);
+    assert.equal(getX1Room(second.code), null);
+  });
+
+  it("sincroniza entrada do desafiante e jogadas via mergeX1RoomStates mesmo com relógios dessincronizados", () => {
+    const now = 1_700_000_000_000;
+    const hostWaiting: X1Room = {
+      ...makeSampleRoom(),
+      status: "waiting",
+      revision: 1,
+      guest: null,
+      host: {
+        ...makeSampleRoom().host,
+        // Relógio do anfitrião estava 30 segundos adiantado!
+        updatedAt: now + 30_000,
+      },
+    };
+
+    const guestJoinedRemote: X1Room = {
+      ...hostWaiting,
+      status: "countdown",
+      revision: 11,
+      countdownEndsAt: now - 15_000, // Relógio do desafiante atrasado
+      guest: {
+        ...makeSampleRoom().guest!,
+        updatedAt: now - 25_000,
+      },
+    };
+
+    // O anfitrião deve aceitar imediatamente a entrada do desafiante e normalizar os 10s localmente
+    const mergedCountdown = mergeX1RoomStates(hostWaiting, guestJoinedRemote, now);
+    assert.equal(mergedCountdown.status, "countdown");
+    assert.ok(mergedCountdown.guest);
+    assert.equal(mergedCountdown.countdownEndsAt, now + 10_000);
+
+    // Durante o jogo (Score-Race), mescla o progresso de cada lado sem perder pontos de nenhum jogador
+    const localPlaying: X1Room = {
+      ...makeSampleRoom(),
+      gameId: "logica",
+      status: "playing",
+      revision: 15,
+      host: { ...makeSampleRoom().host, score: 45, correct: 3, wrong: 0, currentQuestionIdx: 3 },
+      guest: { ...makeSampleRoom().guest!, score: 15, correct: 1, wrong: 0, currentQuestionIdx: 1 },
+    };
+    const remotePlaying: X1Room = {
+      ...makeSampleRoom(),
+      gameId: "logica",
+      status: "playing",
+      revision: 15,
+      host: { ...makeSampleRoom().host, score: 30, correct: 2, wrong: 0, currentQuestionIdx: 2 },
+      guest: { ...makeSampleRoom().guest!, score: 60, correct: 4, wrong: 0, currentQuestionIdx: 4 },
+    };
+
+    const mergedPlaying = mergeX1RoomStates(localPlaying, remotePlaying, now);
+    assert.equal(mergedPlaying.host.score, 45);
+    assert.equal(mergedPlaying.host.currentQuestionIdx, 3);
+    assert.equal(mergedPlaying.guest?.score, 60);
+    assert.equal(mergedPlaying.guest?.currentQuestionIdx, 4);
   });
 });

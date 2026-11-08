@@ -30,6 +30,7 @@ import {
   forfeitX1Match,
   getX1Room,
   openX1MinadoCard,
+  startX1MatchAfterCountdown,
   submitX1RobotClashAnswer,
   subscribeX1Updates,
   syncX1WithPlayFabCloud,
@@ -49,6 +50,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
 
   const [room, setRoom] = useState<X1Room>(initialRoom);
   const [secondsLeft, setSecondsLeft] = useState(initialRoom.durationSec);
+  const [nowTick, setNowTick] = useState(() => Date.now());
   const [question, setQuestion] = useState<ClashQuestion>(() => generateClashQuestion(2));
   const [stunned, setStunned] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
@@ -71,8 +73,10 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
       }
     };
     window.addEventListener("beforeunload", handleBeforeUnload);
+    window.addEventListener("pagehide", handleBeforeUnload);
     return () => {
       window.removeEventListener("beforeunload", handleBeforeUnload);
+      window.removeEventListener("pagehide", handleBeforeUnload);
     };
   }, [room.status, room.code, myId]);
 
@@ -98,9 +102,10 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
       if (latest) setRoom({ ...latest });
     };
     const unsub = subscribeX1Updates(refresh);
+    void syncX1WithPlayFabCloud(initialRoom.code).then(refresh);
     const cloudInterval = window.setInterval(() => {
       void syncX1WithPlayFabCloud(initialRoom.code).then(refresh);
-    }, 2000);
+    }, 1200);
 
     return () => {
       unsub();
@@ -112,12 +117,14 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
   useEffect(() => {
     if (room.status !== "countdown") return;
     const interval = window.setInterval(() => {
-      const endsAt = room.countdownEndsAt ?? (Date.now() + 10_000);
-      if (Date.now() >= endsAt) {
-        const latest = getX1Room(room.code);
-        if (latest) setRoom({ ...latest });
+      const now = Date.now();
+      setNowTick(now);
+      const endsAt = room.countdownEndsAt ?? (now + 10_000);
+      if (now >= endsAt) {
+        const started = startX1MatchAfterCountdown(room.code);
+        if (started) setRoom({ ...started });
       }
-    }, 500);
+    }, 250);
     return () => window.clearInterval(interval);
   }, [room.status, room.code, room.countdownEndsAt]);
 
@@ -126,8 +133,10 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
     if (room.status !== "playing") return;
 
     const timer = window.setInterval(() => {
+      const now = Date.now();
+      setNowTick(now);
       const start = room.startedAt ?? room.createdAt;
-      const elapsed = Math.floor((Date.now() - start) / 1000);
+      const elapsed = Math.floor((now - start) / 1000);
       const rem = Math.max(0, room.durationSec - elapsed);
       setSecondsLeft(rem);
 
@@ -135,7 +144,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
         const finishedRoom = finishX1RoomByTimeout(room.code);
         if (finishedRoom) setRoom({ ...finishedRoom });
       }
-    }, 1000);
+    }, 500);
 
     return () => window.clearInterval(timer);
   }, [room.status, room.code, room.durationSec, room.startedAt, room.createdAt]);
@@ -150,9 +159,9 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
       if (Date.now() >= activeQ.expiresAt) {
         playWrong();
         const updated = timeoutX1MinadoQuestion(room.code);
-        if (updated) setRoom({ ...updated });
+        if (updated.room) setRoom({ ...updated.room });
       }
-    }, 500);
+    }, 400);
 
     return () => window.clearInterval(timer);
   }, [room.gameId, room.status, room.minadoState?.activeQuestion, room.code]);
@@ -258,10 +267,11 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
       const nextIdx = myQuestionIdx + 1;
       setMyQuestionIdx(nextIdx);
 
-      const newScore = me.score + (isCorrect ? curQ.points : 0);
+      const qPoints = Number.isFinite(curQ.points) ? curQ.points : 15;
+      const newScore = me.score + (isCorrect ? qPoints : 0);
       const newCorrect = me.correct + (isCorrect ? 1 : 0);
       const newWrong = me.wrong + (isCorrect ? 0 : 1);
-      const finished = nextIdx >= (room.questionList.length ?? 15);
+      const finished = nextIdx >= (room.questionList.length ?? 25);
 
       const updated = updateX1PlayerProgress({
         code: room.code,
@@ -269,15 +279,15 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
         score: newScore,
         correct: newCorrect,
         wrong: newWrong,
+        currentQuestionIdx: nextIdx,
         finished,
       });
 
       if (updated) {
-        updated[isHost ? "host" : "guest"]!.currentQuestionIdx = nextIdx;
         setRoom({ ...updated });
       }
     },
-    [room.status, room.questionList, room.code, myQuestionIdx, myId, me.score, me.correct, me.wrong, isHost],
+    [room.status, room.questionList, room.code, myQuestionIdx, myId, me.score, me.correct, me.wrong],
   );
 
   // Campo Minado card click handler
@@ -287,21 +297,24 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
     if (room.minadoState.activeQuestion && !room.minadoState.activeQuestion.answered) return;
 
     const card = room.minadoState.board[cardIdx];
-    if (!card || card.revealed) return;
+    if (!card || room.minadoState.revealed[card.id]) return;
 
-    const res = openX1MinadoCard(room.code, myId, cardIdx);
-    if (!res) return;
-    setRoom({ ...res });
+    const res = openX1MinadoCard({
+      code: room.code,
+      playerId: myId,
+      cardId: card.id,
+    });
+    if (!res.room) return;
+    setRoom({ ...res.room });
 
-    const openedCard = res.minadoState?.board[cardIdx];
-    if (openedCard) {
-      if (openedCard.type === "bonus") {
+    if (card.kind === "bonus") {
+      if (card.points > 0) {
         playCorrect();
-        setMinadoFeedback(`🎁 Bônus Encontrado! +${openedCard.points} pontos.`);
+        setMinadoFeedback(`🎁 Bônus Encontrado! +${card.points} pontos.`);
         window.setTimeout(() => setMinadoFeedback(null), 2000);
-      } else if (openedCard.type === "mine") {
+      } else {
         playWrong();
-        setMinadoFeedback(`💥 MINA ATIVADA! ${openedCard.points} pontos.`);
+        setMinadoFeedback(`💥 MINA ATIVADA! ${card.points} pontos.`);
         window.setTimeout(() => setMinadoFeedback(null), 2000);
       }
     }
@@ -313,27 +326,68 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
     const isCorrect = chosenOpt === room.minadoState.activeQuestion.answer;
     if (isCorrect) {
       playCorrect();
-      setMinadoFeedback("✅ Resposta Correta! Pontos somados.");
+      setMinadoFeedback("✅ Resposta Correta! +5 pontos somados.");
     } else {
       playWrong();
-      setMinadoFeedback("❌ Resposta Incorreta! Erro contabilizado.");
+      setMinadoFeedback("❌ Resposta Incorreta! −3 pontos e erro contabilizado.");
     }
     window.setTimeout(() => setMinadoFeedback(null), 2000);
 
-    const res = answerX1MinadoQuestion(room.code, myId, chosenOpt);
-    if (res) setRoom({ ...res });
+    const res = answerX1MinadoQuestion({
+      code: room.code,
+      playerId: myId,
+      option: chosenOpt,
+    });
+    if (res.room) setRoom({ ...res.room });
   };
 
   const redShare = Math.max(0, 100 - room.blueShare);
   const mins = Math.floor(secondsLeft / 60);
   const secs = String(secondsLeft % 60).padStart(2, "0");
 
+  // Modal de confirmação de desistência reutilizável em todas as modalidades
+  const forfeitModal = confirmForfeitOpen ? (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm animate-fade-in">
+      <div className="w-full max-w-sm rounded-3xl border border-destructive/40 bg-card p-6 shadow-2xl space-y-4 text-center">
+        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-destructive/15 text-destructive">
+          <LogOut className="h-7 w-7" />
+        </div>
+        <div className="space-y-1">
+          <h3 className="font-display text-lg font-black text-foreground">
+            Desistir do Desafio X1?
+          </h3>
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            Se você sair agora, seu oponente vencerá a partida por desistência (W.O.) e a sala será encerrada imediatamente.
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-2 pt-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => setConfirmForfeitOpen(false)}
+            className="h-10 rounded-xl font-bold"
+          >
+            Continuar
+          </Button>
+          <Button
+            type="button"
+            variant="destructive"
+            onClick={handleConfirmForfeit}
+            className="h-10 rounded-xl font-bold"
+          >
+            Sim, Desistir
+          </Button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+
   // ==========================================
   // 1. TELA DE CONTAGEM REGRESSIVA SINCRONIZADA (10s)
   // ==========================================
   if (room.status === "countdown") {
-    const endsAt = room.countdownEndsAt ?? (Date.now() + 10_000);
-    const countdownRem = Math.max(0, Math.ceil((endsAt - Date.now()) / 1000));
+    const endsAt = room.countdownEndsAt ?? (nowTick + 10_000);
+    const countdownRem = Math.max(0, Math.ceil((endsAt - nowTick) / 1000));
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-neutral-950/90 backdrop-blur-md p-4 animate-in fade-in duration-200">
@@ -582,17 +636,22 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
                     <span className="rounded-full bg-primary/20 px-2.5 py-0.5 text-xs font-black text-primary">
                       DESAFIO DE 20 SEGUNDOS
                     </span>
-                    <span className="text-xs text-muted-foreground">Vale +{mState.board[activeQ.cardIndex]?.points ?? 20} pts</span>
+                    <span className="text-xs text-muted-foreground">Vale +5 pts (erro: −3 pts)</span>
                   </div>
                   <div className="flex items-center gap-1 font-mono text-sm font-black text-amber-500">
                     <Clock className="h-4 w-4" /> {qSecsLeft}s
                   </div>
                 </div>
 
-                <div className="py-2 text-center">
-                  <p className="font-display text-xl sm:text-2xl font-extrabold text-foreground">
-                    {activeQ.question}
+                <div className="py-2 text-center space-y-1">
+                  <p className="font-display text-lg sm:text-xl font-extrabold text-foreground">
+                    {activeQ.prompt || activeQ.question}
                   </p>
+                  {activeQ.expr && (
+                    <p className="font-mono text-2xl sm:text-3xl font-black text-primary">
+                      {activeQ.expr}
+                    </p>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-3 pt-2">
@@ -627,15 +686,17 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
         {!isQActive && (
           <div className="grid grid-cols-4 gap-2.5 sm:gap-3.5 py-2">
             {mState.board.map((card, idx) => {
-              const isRevealed = card.revealed;
-              const isMine = card.type === "mine";
-              const isBonus = card.type === "bonus";
-              const isHostRevealed = card.revealedBy === "host";
+              const rev = mState.revealed[card.id];
+              const isRevealed = Boolean(rev);
+              const isMine = card.kind === "bonus" && card.points < 0;
+              const isBonus = card.kind === "bonus" && card.points > 0;
+              const isHostRevealed =
+                rev?.openedByRole === "host" || rev?.openedBy === room.host.nick;
 
-              if (isRevealed) {
+              if (isRevealed && rev) {
                 return (
                   <div
-                    key={idx}
+                    key={card.id}
                     className={`h-20 sm:h-24 rounded-2xl border-2 flex flex-col items-center justify-center p-2 text-center transition-all ${
                       isMine
                         ? "border-destructive bg-destructive/15 text-destructive"
@@ -656,11 +717,13 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
                       </>
                     ) : (
                       <>
-                        <Check className="h-6 w-6 sm:h-7 sm:w-7" />
-                        <span className="font-mono text-xs font-extrabold mt-1">+{card.points} pts</span>
+                        <Check className="h-5 w-5 sm:h-6 sm:w-6" />
+                        <span className="font-mono text-[11px] font-extrabold mt-1 truncate max-w-full">
+                          {rev.resultText}
+                        </span>
                       </>
                     )}
-                    <span className="text-[9px] font-bold opacity-70">
+                    <span className="text-[9px] font-bold opacity-75">
                       {isHostRevealed ? "🔵 Azul" : "🔴 Vermelho"}
                     </span>
                   </div>
@@ -669,7 +732,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
 
               return (
                 <button
-                  key={idx}
+                  key={card.id}
                   type="button"
                   disabled={!isMyTurn}
                   onClick={() => handleMinadoCardClick(idx)}
@@ -680,12 +743,15 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
                   }`}
                 >
                   <HelpCircle className="h-6 w-6 sm:h-7 sm:w-7 text-primary/70" />
-                  <span className="text-[10px] font-bold text-muted-foreground mt-1">Carta #{idx + 1}</span>
+                  <span className="text-[10px] font-bold text-muted-foreground mt-1">
+                    Carta #{idx + 1}
+                  </span>
                 </button>
               );
             })}
           </div>
         )}
+        {forfeitModal}
       </div>
     );
   }
@@ -826,6 +892,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
             <X className="mr-2 h-7 w-7 stroke-[3]" /> FALSO
           </Button>
         </div>
+        {forfeitModal}
       </div>
     );
   }
@@ -835,7 +902,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
   // ==========================================
   const qList = room.questionList ?? [];
   const currentQ = qList[myQuestionIdx];
-  const totalQ = qList.length || 15;
+  const totalQ = qList.length || 25;
   const oppQIdx = isHost
     ? (room.guest?.currentQuestionIdx ?? 0)
     : (room.host.currentQuestionIdx ?? 0);
@@ -846,11 +913,11 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border bg-secondary/40 px-4 py-2.5">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="rounded-xl bg-sky-500/15 px-3 py-1 font-display text-xs font-extrabold text-sky-500">
-            🔵 {room.host.nick}: {room.host.score} pts (Q{(room.host.currentQuestionIdx ?? 0) + 1}/{totalQ})
+            🔵 {room.host.nick}: {room.host.score} pts (Q{Math.min(totalQ, (room.host.currentQuestionIdx ?? 0) + 1)}/{totalQ})
           </span>
           <span className="font-display text-xs font-extrabold text-muted-foreground">VS</span>
           <span className="rounded-xl bg-red-500/15 px-3 py-1 font-display text-xs font-extrabold text-red-500">
-            🔴 {room.guest?.nick ?? "Oponente"}: {room.guest?.score ?? 0} pts (Q{oppQIdx + 1}/{totalQ})
+            🔴 {room.guest?.nick ?? "Oponente"}: {room.guest?.score ?? 0} pts (Q{Math.min(totalQ, oppQIdx + 1)}/{totalQ})
           </span>
         </div>
 
@@ -874,10 +941,10 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
       <div className="rounded-2xl border bg-secondary/20 p-3 space-y-2">
         <div className="flex items-center justify-between text-xs font-bold">
           <span className="text-primary font-display">
-            Você: Questão {myQuestionIdx + 1} de {totalQ}
+            Você: Questão {Math.min(totalQ, myQuestionIdx + 1)} de {totalQ}
           </span>
           <span className="text-muted-foreground">
-            Oponente: Questão {oppQIdx + 1} de {totalQ}
+            Oponente: Questão {Math.min(totalQ, oppQIdx + 1)} de {totalQ}
           </span>
         </div>
         <div className="h-2.5 w-full rounded-full bg-muted overflow-hidden flex">
@@ -894,8 +961,11 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
           <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/15 px-3 py-1 text-xs font-black uppercase text-primary">
             Questão {myQuestionIdx + 1} • {GAME_NAMES[room.gameId]}
           </span>
+          {currentQ.prompt && currentQ.prompt !== currentQ.question && (
+            <p className="text-sm font-bold text-muted-foreground">{currentQ.prompt}</p>
+          )}
           <p className="font-display text-2xl sm:text-3xl font-extrabold text-foreground">
-            {currentQ.question}
+            {currentQ.question || currentQ.expr || currentQ.prompt}
           </p>
 
           <div className="grid grid-cols-2 gap-3 pt-3">
@@ -921,42 +991,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
           </p>
         </div>
       )}
-      {/* Modal de Confirmação de Desistência (Forfeit) */}
-      {confirmForfeitOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm animate-fade-in">
-          <div className="w-full max-w-sm rounded-3xl border border-destructive/40 bg-card p-6 shadow-2xl space-y-4 text-center">
-            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-destructive/15 text-destructive">
-              <LogOut className="h-7 w-7" />
-            </div>
-            <div className="space-y-1">
-              <h3 className="font-display text-lg font-black text-foreground">
-                Desistir do Desafio X1?
-              </h3>
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                Se você sair agora, seu oponente vencerá a partida por desistência (W.O.) e a sala será encerrada imediatamente.
-              </p>
-            </div>
-            <div className="grid grid-cols-2 gap-2 pt-2">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setConfirmForfeitOpen(false)}
-                className="h-10 rounded-xl font-bold"
-              >
-                Continuar
-              </Button>
-              <Button
-                type="button"
-                variant="destructive"
-                onClick={handleConfirmForfeit}
-                className="h-10 rounded-xl font-bold"
-              >
-                Sim, Desistir
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+      {forfeitModal}
     </div>
   );
 }

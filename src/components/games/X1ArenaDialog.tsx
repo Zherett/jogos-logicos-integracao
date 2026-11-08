@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Swords,
   Users,
@@ -32,6 +32,7 @@ import {
 } from "@/lib/player-profile";
 import {
   closeX1Room,
+  cancelAllWaitingRoomsForHost,
   cancelWaitingX1Room,
   createX1Room,
   dismissX1Invite,
@@ -69,6 +70,8 @@ export function X1ArenaDialog({
   );
   const [selectedGame, setSelectedGame] = useState<GameId>(allowedX1Games[0] ?? "rpg");
   const [waitingRoomCode, setWaitingRoomCode] = useState<string | null>(null);
+  const waitingRoomCodeRef = useRef<string | null>(null);
+  const matchStartedRef = useRef(false);
   const [joinCodeInput, setJoinCodeInput] = useState("");
   const [isJoining, setIsJoining] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -78,7 +81,17 @@ export function X1ArenaDialog({
 
   const enabledGameIds = ALL_GAME_IDS.filter((id) => auth.adminConfig.enabledGames[id]);
 
-  // Keep player presence heartbeat active and listen for room updates
+  // Se o jogador estiver fora da tela de espera da sala, destrói imediatamente qualquer sala em espera órfã criada por ele
+  useEffect(() => {
+    if (!profile?.id) return;
+    if (!open || !waitingRoomCode) {
+      if (!matchStartedRef.current) {
+        cancelAllWaitingRoomsForHost(profile.id);
+      }
+    }
+  }, [open, waitingRoomCode, profile?.id]);
+
+  // Keep player presence heartbeat active and listen for room updates (fast 1.2s polling when waiting for challenger)
   useEffect(() => {
     if (!open || !profile) return;
 
@@ -94,13 +107,16 @@ export function X1ArenaDialog({
         stage: pStage.id,
         inRoomCode: waitingRoomCode,
       });
-      void syncX1WithPlayFabCloud(waitingRoomCode);
+      void syncX1WithPlayFabCloud(waitingRoomCode).then(() => {
+        setTick((t) => t + 1);
+      });
       setTick((t) => t + 1);
     };
 
     sendHeartbeat();
     const unsub = subscribeX1Updates(() => setTick((t) => t + 1));
-    const timer = window.setInterval(sendHeartbeat, 3000);
+    const pollMs = waitingRoomCode ? 1200 : 2500;
+    const timer = window.setInterval(sendHeartbeat, pollMs);
 
     return () => {
       unsub();
@@ -113,17 +129,21 @@ export function X1ArenaDialog({
     if (!waitingRoomCode) return;
     const room = getX1Room(waitingRoomCode);
     if (!room) {
+      waitingRoomCodeRef.current = null;
       setWaitingRoomCode(null);
       return;
     }
     const expiresAt = room.expiresAt ?? (room.createdAt + 120_000);
     if (Date.now() >= expiresAt && room.status === "waiting") {
       if (profile) cancelWaitingX1Room(waitingRoomCode, profile.id);
+      waitingRoomCodeRef.current = null;
       setWaitingRoomCode(null);
       setError("Tempo limite de espera de 2 minutos esgotado. A sala foi removida automaticamente.");
       return;
     }
     if ((room.status === "countdown" || room.status === "playing") && room.guest) {
+      matchStartedRef.current = true;
+      waitingRoomCodeRef.current = null;
       setWaitingRoomCode(null);
       onOpenChange(false);
       onStartX1Match(room);
@@ -132,19 +152,24 @@ export function X1ArenaDialog({
 
   // Cleanup imediato da sala de espera ao fechar aba, recarregar página ou desmontar diálogo
   useEffect(() => {
-    const handleBeforeUnload = () => {
-      if (waitingRoomCode && profile?.id) {
-        cancelWaitingX1Room(waitingRoomCode, profile.id);
+    const handleUnload = () => {
+      const code = waitingRoomCodeRef.current;
+      if (code && !matchStartedRef.current && profile?.id) {
+        cancelWaitingX1Room(code, profile.id);
       }
     };
-    window.addEventListener("beforeunload", handleBeforeUnload);
+    window.addEventListener("beforeunload", handleUnload);
+    window.addEventListener("pagehide", handleUnload);
     return () => {
-      window.removeEventListener("beforeunload", handleBeforeUnload);
-      if (waitingRoomCode && profile?.id) {
-        cancelWaitingX1Room(waitingRoomCode, profile.id);
+      window.removeEventListener("beforeunload", handleUnload);
+      window.removeEventListener("pagehide", handleUnload);
+      const code = waitingRoomCodeRef.current;
+      if (code && !matchStartedRef.current && profile?.id) {
+        cancelWaitingX1Room(code, profile.id);
+        waitingRoomCodeRef.current = null;
       }
     };
-  }, [waitingRoomCode, profile?.id]);
+  }, [profile?.id]);
 
   if (!profile) {
     return (
@@ -267,6 +292,7 @@ export function X1ArenaDialog({
   function handleCreateRoom(inviteTargetPlayerId?: string) {
     if (!profile) return;
     setError(null);
+    matchStartedRef.current = false;
     const room = createX1Room({
       host: {
         playerId: profile.id,
@@ -279,6 +305,7 @@ export function X1ArenaDialog({
       gameId: selectedGame,
       inviteTargetPlayerId,
     });
+    waitingRoomCodeRef.current = room.code;
     setWaitingRoomCode(room.code);
   }
 
@@ -300,6 +327,8 @@ export function X1ArenaDialog({
         setError(res.error ?? "Não foi possível entrar na sala.");
         return;
       }
+      matchStartedRef.current = true;
+      waitingRoomCodeRef.current = null;
       setWaitingRoomCode(null);
       onOpenChange(false);
       onStartX1Match(res.room);
@@ -322,9 +351,18 @@ export function X1ArenaDialog({
     <Dialog
       open={open}
       onOpenChange={(v) => {
-        if (!v && waitingRoomCode) {
-          cancelWaitingX1Room(waitingRoomCode, profile?.id);
+        if (!v) {
+          const codeToCancel = waitingRoomCodeRef.current ?? waitingRoomCode;
+          if (codeToCancel && !matchStartedRef.current) {
+            cancelWaitingX1Room(codeToCancel, profile?.id);
+          }
+          if (profile?.id && !matchStartedRef.current) {
+            cancelAllWaitingRoomsForHost(profile.id);
+          }
+          waitingRoomCodeRef.current = null;
           setWaitingRoomCode(null);
+        } else {
+          matchStartedRef.current = false;
         }
         onOpenChange(v);
       }}
@@ -421,6 +459,8 @@ export function X1ArenaDialog({
               variant="outline"
               onClick={() => {
                 cancelWaitingX1Room(waitingRoom.code, profile?.id);
+                if (profile?.id) cancelAllWaitingRoomsForHost(profile.id);
+                waitingRoomCodeRef.current = null;
                 setWaitingRoomCode(null);
               }}
               className="w-full rounded-2xl text-destructive"

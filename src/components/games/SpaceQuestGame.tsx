@@ -847,6 +847,46 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [phase, handleAnswer]);
 
+  // Cálculo dos tempos da ampulheta
+  const isHourglassActive = hourglassActiveEndsAt !== null && nowTimestamp < hourglassActiveEndsAt;
+  const isHourglassCooldown =
+    !isHourglassActive &&
+    hourglassCooldownEndsAt !== null &&
+    nowTimestamp < hourglassCooldownEndsAt;
+
+  const hourglassRemainingSec = isHourglassActive
+    ? Math.max(0, Math.ceil((hourglassActiveEndsAt! - nowTimestamp) / 1000))
+    : isHourglassCooldown
+      ? Math.max(0, Math.ceil((hourglassCooldownEndsAt! - nowTimestamp) / 1000))
+      : 0;
+
+  const hourglassProgressPercent = isHourglassActive
+    ? ((hourglassActiveEndsAt! - nowTimestamp) / SLOW_MOTION_DURATION_MS) * 100
+    : isHourglassCooldown
+      ? ((hourglassCooldownEndsAt! - nowTimestamp) / SLOW_MOTION_COOLDOWN_MS) * 100
+      : 0;
+
+  // Cálculo dos tempos do escudo
+  const isShieldCooldown = shieldCooldownEndsAt !== null && nowTimestamp < shieldCooldownEndsAt;
+  const shieldCooldownSec = isShieldCooldown
+    ? Math.max(0, Math.ceil((shieldCooldownEndsAt! - nowTimestamp) / 1000))
+    : 0;
+
+  // Efeito sonoro contínuo de Tic-Tac enquanto a Ampulheta (Dilatação Temporal) estiver ativa
+  useEffect(() => {
+    if (phase === "playing" && isHourglassActive) {
+      const stop = startHourglassTicking(450);
+      return () => {
+        stop();
+      };
+    } else {
+      stopHourglassTicking();
+    }
+    return () => {
+      stopHourglassTicking();
+    };
+  }, [phase, isHourglassActive]);
+
   // Se o jogo terminou, substitui a tela do jogo pelo Painel de Resultados (evita tela congelada)
   if (phase === "gameover") {
     return (
@@ -894,46 +934,6 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
   const currentTarget = fallingItems.find(
     (it) => it.instanceId === activeTargetId && !it.isDestroying,
   );
-
-  // Cálculo dos tempos da ampulheta
-  const isHourglassActive = hourglassActiveEndsAt !== null && nowTimestamp < hourglassActiveEndsAt;
-  const isHourglassCooldown =
-    !isHourglassActive &&
-    hourglassCooldownEndsAt !== null &&
-    nowTimestamp < hourglassCooldownEndsAt;
-
-  const hourglassRemainingSec = isHourglassActive
-    ? Math.max(0, Math.ceil((hourglassActiveEndsAt! - nowTimestamp) / 1000))
-    : isHourglassCooldown
-      ? Math.max(0, Math.ceil((hourglassCooldownEndsAt! - nowTimestamp) / 1000))
-      : 0;
-
-  const hourglassProgressPercent = isHourglassActive
-    ? ((hourglassActiveEndsAt! - nowTimestamp) / SLOW_MOTION_DURATION_MS) * 100
-    : isHourglassCooldown
-      ? ((hourglassCooldownEndsAt! - nowTimestamp) / SLOW_MOTION_COOLDOWN_MS) * 100
-      : 0;
-
-  // Cálculo dos tempos do escudo
-  const isShieldCooldown = shieldCooldownEndsAt !== null && nowTimestamp < shieldCooldownEndsAt;
-  const shieldCooldownSec = isShieldCooldown
-    ? Math.max(0, Math.ceil((shieldCooldownEndsAt! - nowTimestamp) / 1000))
-    : 0;
-
-  // Efeito sonoro contínuo de Tic-Tac enquanto a Ampulheta (Dilatação Temporal) estiver ativa
-  useEffect(() => {
-    if (phase === "playing" && isHourglassActive) {
-      const stop = startHourglassTicking(450);
-      return () => {
-        stop();
-      };
-    } else {
-      stopHourglassTicking();
-    }
-    return () => {
-      stopHourglassTicking();
-    };
-  }, [phase, isHourglassActive]);
 
   return (
     <div className="space-y-3">
