@@ -29,7 +29,12 @@ import {
 } from "@/lib/inbox-messages";
 import { getAllAvailableMedals, RARITY_INFO } from "@/lib/medals-catalog";
 import { usePlayerAuth } from "@/lib/player-auth";
-import { pushInboxReadToPlayFab } from "@/lib/playfab";
+import {
+  pushInboxReadToPlayFab,
+  pushInboxClaimToPlayFab,
+  savePlayerProfile,
+  syncInboxReadsFromPlayFab,
+} from "@/lib/playfab";
 import { GAME_NAMES, type GameId } from "@/lib/game-storage";
 import { findEventById, type SpecialEvent, type RecurringEvent } from "@/lib/custom-events";
 import { MedalIcon } from "./MedalIcon";
@@ -81,6 +86,7 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
   useEffect(() => {
     if (open && profile) {
       refreshMessages();
+      void syncInboxReadsFromPlayFab().then(() => refreshMessages());
       // Escuta novos eventos de correio em tempo real
       const handleNew = () => refreshMessages();
       window.addEventListener("desafios:inbox-message-received", handleNew);
@@ -162,6 +168,8 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
       setRevealedRewardModal(null);
       markInboxMessageAsRead(msgId, profile);
       pushInboxReadToPlayFab(msgId, profile).catch(console.warn);
+      pushInboxClaimToPlayFab(msgId, profile).catch(console.warn);
+      await savePlayerProfile(res.profile);
       await auth.refresh();
       refreshMessages();
     } else {

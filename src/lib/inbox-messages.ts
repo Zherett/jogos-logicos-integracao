@@ -180,6 +180,10 @@ export function clearMemoryInboxMessages(): void {
   memoryStudentDeletes = {};
 }
 
+export function clearMemoryStudentClaims(): void {
+  memoryStudentClaims = {};
+}
+
 // ----------------------------------------------------------------------------
 // PERSISTÊNCIA BROWSER / LOCAL & NUVEM
 // ----------------------------------------------------------------------------
@@ -639,7 +643,17 @@ export function getInboxMessagesForPlayer(
     ...(pNick ? allReads[pNick] || {} : {}),
     ...(pId.startsWith("pf_local_") ? allReads[pId.replace(/^pf_local_/, "")] || {} : {}),
   };
-  const claimsMap = loadStudentMap(STUDENT_CLAIMS_KEY, memoryStudentClaims)[pId] || {};
+
+  const allClaims = loadStudentMap(STUDENT_CLAIMS_KEY, memoryStudentClaims);
+  const pNickNorm = ((player as any).nickNormalized || "").toLowerCase().trim();
+  const pPlayfabId = ((player as any).playfabId || "").toLowerCase().trim();
+  const claimsMap: Record<string, string> = {
+    ...(allClaims[pId] || {}),
+    ...(pNick ? allClaims[pNick] || {} : {}),
+    ...(pNickNorm ? allClaims[pNickNorm] || {} : {}),
+    ...(pPlayfabId ? allClaims[pPlayfabId] || {} : {}),
+    ...(pId.startsWith("pf_local_") ? allClaims[pId.replace(/^pf_local_/, "")] || {} : {}),
+  };
 
   const playerMessages: SystemInboxMessage[] = [];
 
@@ -653,7 +667,13 @@ export function getInboxMessagesForPlayer(
       const isRead = raw.recipientId === "ALL"
         ? Boolean(readVal)
         : Boolean(readVal ?? raw.read);
-      const claimedAt = claimsMap[raw.id];
+
+      const isClaimedInProfile =
+        Array.isArray((player as any).claimedInboxRewardIds) &&
+        (player as any).claimedInboxRewardIds.includes(raw.id);
+
+      const claimedAt = claimsMap[raw.id] || (isClaimedInProfile ? (raw.reward?.claimedAt || new Date().toISOString()) : undefined);
+      const isClaimed = Boolean(claimedAt || isClaimedInProfile || raw.reward?.claimed);
 
       // Clone com estados locais do aluno
       const cloned: SystemInboxMessage = {
@@ -663,8 +683,8 @@ export function getInboxMessagesForPlayer(
         reward: raw.reward
           ? {
               ...raw.reward,
-              claimed: Boolean(claimedAt || raw.reward.claimed),
-              claimedAt: claimedAt || raw.reward.claimedAt,
+              claimed: isClaimed,
+              claimedAt: claimedAt || (isClaimed ? raw.reward.claimedAt || new Date().toISOString() : undefined),
             }
           : undefined,
       };
@@ -795,7 +815,41 @@ export function mergeStudentReads(
 }
 
 /**
- * Calcula quem eram os destinatários de um comunicado e quem já abriu a mensagem
+ * Mescla resgates de presentes/recompensas vindos da nuvem PlayFab com a base local
+ */
+export function mergeStudentClaims(
+  remoteClaims: Array<{ studentKey: string; messageId: string; claimedAt?: string }>
+): void {
+  const claims = loadStudentMap(STUDENT_CLAIMS_KEY, memoryStudentClaims);
+  let changed = false;
+  for (const item of remoteClaims) {
+    if (!item.studentKey || !item.messageId) continue;
+    const clean = item.studentKey.toLowerCase().trim();
+    if (!clean) continue;
+    if (!claims[clean]) claims[clean] = {};
+    if (!claims[clean][item.messageId]) {
+      claims[clean][item.messageId] = item.claimedAt || new Date().toISOString();
+      changed = true;
+    }
+  }
+  if (changed) {
+    saveStudentMap(STUDENT_CLAIMS_KEY, claims, (d) => (memoryStudentClaims = d));
+  }
+}
+
+/**
+ * Informações detalhadas de leitura e resgate de um aluno em relação a uma mensagem
+ */
+export interface MessageReaderInfo {
+  student: PlayerProfile;
+  readAt?: string;
+  claimedAt?: string;
+  hasClaimedReward?: boolean;
+}
+
+/**
+ * Calcula quem eram os destinatários de um comunicado e quem já abriu a mensagem.
+ * Garante rigorosamente que nenhum aluno apareça duplicado.
  */
 export function getMessageReaders(
   msg: SystemInboxMessage,
@@ -803,21 +857,39 @@ export function getMessageReaders(
 ): {
   readCount: number;
   totalTargeted: number;
-  readStudents: { student: PlayerProfile; readAt?: string }[];
+  readStudents: MessageReaderInfo[];
   unreadStudents: PlayerProfile[];
 } {
   const reads = loadStudentMap(STUDENT_READS_KEY, memoryStudentReads);
-  const readStudents: { student: PlayerProfile; readAt?: string }[] = [];
-  const unreadStudents: PlayerProfile[] = [];
+  const claims = loadStudentMap(STUDENT_CLAIMS_KEY, memoryStudentClaims);
 
-  // Filtra apenas os alunos que eram de fato elegíveis para receber este comunicado
-  const targeted = allStudents.filter((st) => isMessageEligibleForPlayer(msg, st));
+  // 1. Deduplica rigorosamente a lista de entrada de alunos para que a mesma conta não seja processada 2 vezes
+  const uniqueStudentsMap = new Map<string, PlayerProfile>();
+  for (const st of allStudents) {
+    if (!st) continue;
+    const key = (st.nickNormalized || st.nick || st.id || "").toLowerCase().trim();
+    if (key && !uniqueStudentsMap.has(key)) {
+      uniqueStudentsMap.set(key, st);
+    }
+  }
+  const uniqueStudents = Array.from(uniqueStudentsMap.values());
+
+  // 2. Filtra apenas os alunos que eram de fato elegíveis para receber este comunicado
+  const targeted = uniqueStudents.filter((st) => isMessageEligibleForPlayer(msg, st));
+
+  const readStudents: MessageReaderInfo[] = [];
+  const unreadStudents: PlayerProfile[] = [];
+  const processedKeys = new Set<string>();
 
   for (const st of targeted) {
     const pId = (st.id || "").toLowerCase().trim();
     const pNick = (st.nick || "").toLowerCase().trim();
     const pNickNorm = (st.nickNormalized || "").toLowerCase().trim();
     const pPlayfabId = (st.playfabId || "").toLowerCase().trim();
+
+    const identKey = pNickNorm || pNick || pId;
+    if (processedKeys.has(identKey)) continue;
+    processedKeys.add(identKey);
 
     let readVal =
       (reads[pId] && reads[pId][msg.id]) ||
@@ -836,27 +908,40 @@ export function getMessageReaders(
       }
     }
 
-    // Se o aluno resgatou a recompensa da mensagem, ele comprovadamente abriu e leu a mensagem
-    if (!readVal) {
-      const claims = loadStudentMap(STUDENT_CLAIMS_KEY, memoryStudentClaims);
-      readVal =
-        (claims[pId] && claims[pId][msg.id]) ||
-        (pNick && claims[pNick] && claims[pNick][msg.id]) ||
-        (pNickNorm && claims[pNickNorm] && claims[pNickNorm][msg.id]) ||
-        (pPlayfabId && claims[pPlayfabId] && claims[pPlayfabId][msg.id]);
-      if (!readVal) {
-        for (const [key, msgMap] of Object.entries(claims)) {
-          if (msgMap && msgMap[msg.id] && matchPlayerIdentifier(key, st)) {
-            readVal = msgMap[msg.id];
-            break;
-          }
+    // Verifica resgate de recompensa
+    let claimVal =
+      (claims[pId] && claims[pId][msg.id]) ||
+      (pNick && claims[pNick] && claims[pNick][msg.id]) ||
+      (pNickNorm && claims[pNickNorm] && claims[pNickNorm][msg.id]) ||
+      (pPlayfabId && claims[pPlayfabId] && claims[pPlayfabId][msg.id]);
+
+    if (!claimVal && Array.isArray((st as any).claimedInboxRewardIds) && (st as any).claimedInboxRewardIds.includes(msg.id)) {
+      claimVal = readVal || new Date().toISOString();
+    }
+
+    if (!claimVal) {
+      for (const [key, msgMap] of Object.entries(claims)) {
+        if (msgMap && msgMap[msg.id] && matchPlayerIdentifier(key, st)) {
+          claimVal = msgMap[msg.id];
+          break;
         }
       }
     }
 
+    // Se o aluno resgatou a recompensa da mensagem, ele comprovadamente abriu e leu a mensagem
+    if (!readVal && claimVal) {
+      readVal = claimVal;
+    }
+
     if (readVal) {
       const readAt = typeof readVal === "string" ? readVal : undefined;
-      readStudents.push({ student: st, readAt });
+      const claimedAt = typeof claimVal === "string" ? claimVal : undefined;
+      readStudents.push({
+        student: st,
+        readAt,
+        claimedAt,
+        hasClaimedReward: Boolean(claimVal),
+      });
     } else {
       unreadStudents.push(st);
     }
@@ -949,6 +1034,7 @@ export function getInboxMessagesForRecipient(recipientId: string): SystemInboxMe
 /**
  * Resgata uma recompensa presente na mensagem.
  * Atualiza pontos ou medalha do aluno e trava contra resgates duplicados.
+ * Sincroniza em nuvem e impede que outro dispositivo resgate o mesmo presente novamente.
  */
 export function claimInboxReward(
   messageId: string,
@@ -959,10 +1045,22 @@ export function claimInboxReward(
   }
 
   const pId = profile.id.toLowerCase().trim();
-  const claims = loadStudentMap(STUDENT_CLAIMS_KEY, memoryStudentClaims);
-  if (!claims[pId]) claims[pId] = {};
+  const pNick = (profile.nick || "").toLowerCase().trim();
+  const pNickNorm = (profile.nickNormalized || "").toLowerCase().trim();
+  const pPlayfabId = (profile.playfabId || "").toLowerCase().trim();
 
-  if (claims[pId][messageId]) {
+  const claims = loadStudentMap(STUDENT_CLAIMS_KEY, memoryStudentClaims);
+
+  const alreadyClaimedLocal =
+    (claims[pId] && claims[pId][messageId]) ||
+    (pNick && claims[pNick] && claims[pNick][messageId]) ||
+    (pNickNorm && claims[pNickNorm] && claims[pNickNorm][messageId]) ||
+    (pPlayfabId && claims[pPlayfabId] && claims[pPlayfabId][messageId]);
+
+  const alreadyClaimedProfile =
+    Array.isArray(profile.claimedInboxRewardIds) && profile.claimedInboxRewardIds.includes(messageId);
+
+  if (alreadyClaimedLocal || alreadyClaimedProfile) {
     return { success: false, error: "Esta recompensa já foi resgatada anteriormente.", profile };
   }
 
@@ -970,6 +1068,10 @@ export function claimInboxReward(
   const msg = all.find((m) => m.id === messageId);
   if (!msg || !msg.reward) {
     return { success: false, error: "Nenhuma recompensa encontrada nesta mensagem.", profile };
+  }
+
+  if (msg.recipientId !== "ALL" && msg.reward.claimed) {
+    return { success: false, error: "Esta recompensa já foi resgatada anteriormente.", profile };
   }
 
   const reward = msg.reward;
@@ -1003,8 +1105,21 @@ export function claimInboxReward(
     }
   }
 
-  // Salva registro de resgate individual para o aluno
-  claims[pId][messageId] = nowIso;
+  // 3. Atualizar profile.claimedInboxRewardIds permanente (trava cross-device)
+  if (!Array.isArray(profile.claimedInboxRewardIds)) {
+    profile.claimedInboxRewardIds = [];
+  }
+  if (!profile.claimedInboxRewardIds.includes(messageId)) {
+    profile.claimedInboxRewardIds.push(messageId);
+  }
+
+  // 4. Salva registro de resgate individual em todas as chaves de identidade do aluno
+  for (const k of [pId, pNick, pNickNorm, pPlayfabId]) {
+    if (k) {
+      if (!claims[k]) claims[k] = {};
+      claims[k][messageId] = nowIso;
+    }
+  }
   saveStudentMap(STUDENT_CLAIMS_KEY, claims, (d) => (memoryStudentClaims = d));
 
   // Resgatar a recompensa garante que a mensagem também seja marcada como lida

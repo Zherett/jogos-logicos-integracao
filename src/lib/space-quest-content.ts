@@ -53,7 +53,7 @@ export const AURA_CONFIGS: Record<AuraType, AuraDefinition> = {
     borderClass: "border-sky-400/40 shadow-[0_0_12px_rgba(56,189,248,0.25)]",
     bgGlowClass: "from-sky-950/40 to-slate-900/90",
     textColor: "text-sky-300",
-    chance: 0.835, // 83.5%
+    chance: 0.924, // 92.4%
     scoreMultiplier: 1,
     wrongPenalty: 0,
   },
@@ -65,7 +65,7 @@ export const AURA_CONFIGS: Record<AuraType, AuraDefinition> = {
     borderClass: "border-blue-500 shadow-[0_0_20px_rgba(37,99,235,0.7)] animate-pulse",
     bgGlowClass: "from-blue-950/70 via-indigo-950/50 to-slate-900/90",
     textColor: "text-blue-300 font-extrabold",
-    chance: 0.10, // 10%
+    chance: 0.05, // 5%
     fixedDifficulty: "medium",
     scoreMultiplier: 2, // 2x = 20 pts
     wrongPenalty: 20, // -20 pts
@@ -80,7 +80,7 @@ export const AURA_CONFIGS: Record<AuraType, AuraDefinition> = {
     borderClass: "border-purple-500 shadow-[0_0_22px_rgba(147,51,234,0.75)] animate-pulse",
     bgGlowClass: "from-purple-950/70 via-fuchsia-950/50 to-slate-900/90",
     textColor: "text-purple-300 font-extrabold",
-    chance: 0.05, // 5%
+    chance: 0.02, // 2%
     fixedDifficulty: "hard",
     scoreMultiplier: 3, // 3x = 30 pts
     wrongPenalty: 30, // -30 pts
@@ -95,7 +95,7 @@ export const AURA_CONFIGS: Record<AuraType, AuraDefinition> = {
     borderClass: "border-red-500 shadow-[0_0_25px_rgba(239,68,68,0.85)] animate-pulse",
     bgGlowClass: "from-red-950/70 via-rose-950/50 to-slate-900/90",
     textColor: "text-red-300 font-black",
-    chance: 0.01, // 1%
+    chance: 0.005, // 0.5%
     fixedDifficulty: "hard",
     scoreMultiplier: 4, // 4x = 40 pts
     wrongPenalty: 30, // 3x = -30 pts
@@ -110,7 +110,7 @@ export const AURA_CONFIGS: Record<AuraType, AuraDefinition> = {
     borderClass: "border-amber-400 shadow-[0_0_28px_rgba(245,158,11,0.9)] animate-pulse",
     bgGlowClass: "from-amber-950/70 via-yellow-950/50 to-slate-900/90",
     textColor: "text-amber-300 font-black",
-    chance: 0.005, // 0.5%
+    chance: 0.001, // 0.1%
     fixedDifficulty: "hard",
     scoreMultiplier: 4, // 4x = 40 pts
     wrongPenalty: 0, // sem penalidade de pontos negativos
@@ -134,18 +134,37 @@ export const SLOW_MOTION_SPEED_MULT = 0.5; // -50% velocidade
 export const AMPULHETA_COMBO_REQ = 5; // 5 acertos seguidos
 export const SHIELD_COMBO_REQ = 10; // 10 acertos seguidos
 export const SHIELD_COOLDOWN_MS = 10000; // 10s de cooldown após ativação do escudo
+export const SPECIAL_AURA_COOLDOWN_QUESTIONS = 5; // Mínimo de 5 questões normais entre especiais
 
 /**
  * Randomly rolls an aura based on the exact probabilities:
- * 0.5% ambar (dourada), 1% rubi (vermelha), 5% ametista (roxa), 10% safira (azul), 83.5% normal
+ * 0.1% ambar (dourada), 0.5% rubi (vermelha), 2% ametista (roxa), 5% safira (azul), 92.4% normal.
+ * Suporta restrições anti-consecutivas e caps de partida.
  */
-export function rollAura(forcedRandom?: number): AuraType {
+export function rollAura(
+  forcedRandom?: number,
+  options?: {
+    allowSpecial?: boolean;
+    excludedAuras?: Set<AuraType>;
+  },
+): AuraType {
+  if (options?.allowSpecial === false) {
+    return "normal";
+  }
+
   const roll = typeof forcedRandom === "number" ? forcedRandom : Math.random();
-  if (roll < 0.005) return "ambar"; // 0.5%
-  if (roll < 0.015) return "rubi"; // 1.0%
-  if (roll < 0.065) return "ametista"; // 5.0%
-  if (roll < 0.165) return "safira"; // 10.0%
-  return "normal"; // 83.5%
+  let candidate: AuraType = "normal";
+
+  if (roll < 0.001) candidate = "ambar"; // 0.1%
+  else if (roll < 0.006) candidate = "rubi"; // 0.5%
+  else if (roll < 0.026) candidate = "ametista"; // 2.0%
+  else if (roll < 0.076) candidate = "safira"; // 5.0%
+
+  if (options?.excludedAuras && options.excludedAuras.has(candidate)) {
+    return "normal";
+  }
+
+  return candidate;
 }
 
 /**
@@ -390,8 +409,12 @@ export function generateMathQuestion(
 export function generateSpaceQuestQuestion(
   level: number,
   forcedAura?: AuraType,
+  options?: {
+    allowSpecial?: boolean;
+    excludedAuras?: Set<AuraType>;
+  },
 ): SpaceQuestQuestion {
-  const aura = forcedAura ?? rollAura();
+  const aura = forcedAura ?? rollAura(undefined, options);
   const auraCfg = AURA_CONFIGS[aura];
 
   let diff: QuestionDifficulty = "easy";
@@ -419,15 +442,24 @@ export function generateSpaceQuestQuestion(
 /**
  * Generates two questions guaranteed to have DIFFERENT difficulties for the double wave (5% chance).
  * e.g., one easy and one medium or hard.
+ * Regra Anti-Consecutiva: Se a questão 1 vier com aura especial, a questão 2 é OBRIGATORIAMENTE normal!
  */
 export function generateDoubleWaveQuestions(
   level: number,
+  options?: {
+    allowSpecial?: boolean;
+    excludedAuras?: Set<AuraType>;
+  },
 ): [SpaceQuestQuestion, SpaceQuestQuestion] {
-  const q1 = generateSpaceQuestQuestion(level);
+  const q1 = generateSpaceQuestQuestion(level, undefined, options);
   const allDiffs: QuestionDifficulty[] = ["easy", "medium", "hard"];
   const otherDiffs = allDiffs.filter((d) => d !== q1.difficulty);
   const diff2 = otherDiffs[Math.floor(Math.random() * otherDiffs.length)];
-  const aura2 = rollAura();
+
+  // Se q1 foi especial, q2 é obrigatoriamente normal!
+  const allowSpecialForQ2 = q1.aura === "normal" && options?.allowSpecial !== false;
+  const aura2 = allowSpecialForQ2 ? rollAura(undefined, options) : "normal";
+
   const kind2: QuestionKind = Math.random() < 0.5 ? "logic" : "math";
   const q2 =
     kind2 === "logic"

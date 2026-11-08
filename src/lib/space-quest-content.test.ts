@@ -25,13 +25,20 @@ import {
 } from "./space-quest-content.ts";
 import { getAllAvailableMedals } from "./medals-catalog.ts";
 
-test("Space Quest Engine — Sorteio de Auras por Probabilidade Atualizada", () => {
-  // 0.5% Âmbar, 1% Rubi, 5% Ametista, 10% Safira, 83.5% Normal
-  assert.equal(rollAura(0.002), "ambar"); // < 0.005
-  assert.equal(rollAura(0.010), "rubi"); // 0.005 a 0.015
-  assert.equal(rollAura(0.040), "ametista"); // 0.015 a 0.065
-  assert.equal(rollAura(0.100), "safira"); // 0.065 a 0.165
-  assert.equal(rollAura(0.500), "normal"); // >= 0.165
+test("Space Quest Engine — Sorteio de Auras por Probabilidade Atualizada e Anti-Aglomeração", () => {
+  // 0.1% Âmbar, 0.5% Rubi, 2% Ametista, 5% Safira, 92.4% Normal
+  assert.equal(rollAura(0.0005), "ambar"); // < 0.001
+  assert.equal(rollAura(0.003), "rubi"); // 0.001 a 0.006
+  assert.equal(rollAura(0.015), "ametista"); // 0.006 a 0.026
+  assert.equal(rollAura(0.050), "safira"); // 0.026 a 0.076
+  assert.equal(rollAura(0.200), "normal"); // >= 0.076
+
+  // Cooldown de auras especiais
+  assert.equal(rollAura(0.0005, { allowSpecial: false }), "normal");
+  assert.equal(rollAura(0.050, { allowSpecial: false }), "normal");
+
+  // Exclusão por limite de partida (máx 1 por tipo)
+  assert.equal(rollAura(0.0005, { excludedAuras: new Set(["ambar"]) }), "normal");
 
   // Verificação exata da soma das probabilidades
   const total =

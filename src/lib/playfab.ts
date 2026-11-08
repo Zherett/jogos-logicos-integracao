@@ -120,6 +120,7 @@ import {
   recordDeviceSecurityAlert,
   ADMIN_NOTIFICATIONS_SHARED_GROUP_ID,
   mergeStudentReads,
+  mergeStudentClaims,
 } from "./inbox-messages.ts";
 import { invalidatePioneersCache } from "./medal-pioneers.ts";
 
@@ -231,6 +232,7 @@ export interface PlayerProfile {
   pointsBalance?: number;
   careerPoints?: number;
   coins?: number;
+  claimedInboxRewardIds?: string[];
   lastDailyLoginPointsDate?: string;
   lastDailyFirstGamePointsDate?: string;
   achievedTournamentTiers?: string[];
@@ -2347,6 +2349,10 @@ async function pushProfileToPlayFab(account: StoredAccount, sessionTicket?: stri
           tournamentMedals: p.tournamentMedals ?? [],
           unlockedMedals: p.unlockedMedals ?? [],
           badges: p.badges,
+          careerPoints: p.careerPoints ?? 0,
+          pointsBalance: p.pointsBalance ?? 0,
+          coins: p.coins ?? 0,
+          claimedInboxRewardIds: p.claimedInboxRewardIds ?? [],
           isAdmin: p.isAdmin,
           seasonId: p.seasonId,
         }),
@@ -2398,6 +2404,10 @@ async function pushProfileToPlayFab(account: StoredAccount, sessionTicket?: stri
               tournamentMedals: p.tournamentMedals ?? [],
               unlockedMedals: p.unlockedMedals ?? [],
               badges: p.badges ?? [],
+              careerPoints: p.careerPoints ?? 0,
+              pointsBalance: p.pointsBalance ?? 0,
+              coins: p.coins ?? 0,
+              claimedInboxRewardIds: p.claimedInboxRewardIds ?? [],
               stats: account.stats ?? [],
               isAdmin: p.isAdmin,
               seasonId: p.seasonId,
@@ -2791,7 +2801,44 @@ export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Prom
               udProf?.deleteScheduledPermanentAt,
             isAdmin: parsed.isAdmin ?? existing?.profile.isAdmin,
             seasonId: parsed.seasonId ?? existing?.profile.seasonId ?? 1,
+            careerPoints: Math.max(
+              parsed.careerPoints ?? 0,
+              existing?.profile.careerPoints ?? 0,
+              (udProf as any)?.careerPoints ?? 0,
+            ),
+            pointsBalance: Math.max(
+              parsed.pointsBalance ?? 0,
+              existing?.profile.pointsBalance ?? 0,
+              (udProf as any)?.pointsBalance ?? 0,
+            ),
+            coins: Math.max(
+              parsed.coins ?? 0,
+              existing?.profile.coins ?? 0,
+              (udProf as any)?.coins ?? 0,
+            ),
+            claimedInboxRewardIds: Array.from(
+              new Set([
+                ...(Array.isArray(parsed.claimedInboxRewardIds) ? parsed.claimedInboxRewardIds : []),
+                ...(Array.isArray(existing?.profile.claimedInboxRewardIds) ? existing.profile.claimedInboxRewardIds : []),
+                ...(Array.isArray((udProf as any)?.claimedInboxRewardIds) ? (udProf as any).claimedInboxRewardIds : []),
+              ])
+            ),
           };
+
+          if (mergedProfile.claimedInboxRewardIds && mergedProfile.claimedInboxRewardIds.length > 0) {
+            mergeStudentClaims(
+              mergedProfile.claimedInboxRewardIds.map((mId) => ({
+                studentKey: mergedProfile.id,
+                messageId: mId,
+              }))
+            );
+            mergeStudentClaims(
+              mergedProfile.claimedInboxRewardIds.map((mId) => ({
+                studentKey: mergedProfile.nickNormalized,
+                messageId: mId,
+              }))
+            );
+          }
 
           // Merge stats per game_id keeping highest best_score, best_level, plays, wins, and flawless_wins
           const incomingStats: GameStatRow[] = Array.isArray((parsed as any).stats)
@@ -3190,9 +3237,115 @@ export async function pushInboxReadToPlayFab(
   }
 }
 
+export interface InboxClaimReceipt {
+  messageId: string;
+  studentId: string;
+  studentNick?: string;
+  studentSchool?: string;
+  claimedAt: string;
+}
+
 /**
- * Consulta a nuvem PlayFab para sincronizar todos os recibos de abertura de comunicados
- * feitos pelos alunos, integrando-os ao cache local de leituras.
+ * Publica um recibo de resgate de recompensa/presente na nuvem PlayFab (SharedGroup público)
+ * para travar imediatamente resgates duplicados entre múltiplos dispositivos.
+ */
+export async function pushInboxClaimToPlayFab(
+  messageId: string,
+  player: { id: string; nick?: string; nickNormalized?: string; school?: string },
+  sessionTicket?: string
+): Promise<void> {
+  if (!isPlayFabConfigured() || !messageId || !player) return;
+  try {
+    const adminTicket = (await getAdminPlayFabTicket()) ?? sessionTicket ?? loadStoredSession()?.sessionTicket;
+    if (!adminTicket) return;
+
+    const receipt: InboxClaimReceipt = {
+      messageId,
+      studentId: player.id,
+      studentNick: player.nick,
+      studentSchool: player.school,
+      claimedAt: new Date().toISOString(),
+    };
+
+    const cleanNick = (player.nick || player.id).toLowerCase().replace(/[^a-z0-9_]/g, "_");
+    const cleanMsg = messageId.replace(/[^a-z0-9_]/gi, "_");
+    const key = `inbox_claim_${cleanNick}_${cleanMsg}`.substring(0, 100);
+
+    try {
+      await callPlayFabClient(
+        "CreateSharedGroup",
+        { SharedGroupId: ADMIN_NOTIFICATIONS_SHARED_GROUP_ID },
+        adminTicket
+      );
+    } catch {
+      /* SharedGroup já existe */
+    }
+
+    try {
+      await callPlayFabClient(
+        "UpdateSharedGroupData",
+        {
+          SharedGroupId: ADMIN_NOTIFICATIONS_SHARED_GROUP_ID,
+          Data: {
+            [key]: JSON.stringify(receipt),
+          },
+          Permission: "Public",
+        },
+        adminTicket
+      );
+    } catch (updateErr) {
+      console.warn("Aviso ao salvar resgate no SharedGroup:", updateErr);
+    }
+
+    const studentTicket = sessionTicket ?? loadStoredSession()?.sessionTicket;
+    if (studentTicket) {
+      void callPlayFabClient(
+        "UpdateUserData",
+        {
+          Data: {
+            [`claim_${cleanMsg}`]: receipt.claimedAt,
+          },
+          Permission: "Public",
+        },
+        studentTicket
+      );
+    }
+  } catch (err) {
+    console.warn("Falha ao registrar resgate no PlayFab:", err);
+  }
+}
+
+/**
+ * Salva o perfil do aluno no registro local e sincroniza imediatamente com a nuvem PlayFab.
+ */
+export async function savePlayerProfile(profile: PlayerProfile): Promise<PlayerProfile> {
+  const reg = loadRegistry();
+  const slug = nickSlug(profile.nickNormalized || profile.nick || profile.id);
+  const pId = profile.id;
+  const acc =
+    reg[slug] ||
+    (pId ? reg[pId] : undefined) ||
+    Object.values(reg).find((a) => a.profile.id === pId || a.profile.nickNormalized === slug);
+
+  if (acc) {
+    acc.profile = { ...acc.profile, ...profile };
+    acc.updatedAt = new Date().toISOString();
+    reg[slug] = acc;
+    if (pId) reg[pId] = acc;
+    saveRegistry(reg);
+    syncLocalBrowserFromAccount(acc);
+    const session = loadStoredSession();
+    if (session?.sessionTicket && isPlayFabConfigured()) {
+      await pushProfileToPlayFab(acc, session.sessionTicket);
+    }
+    return acc.profile;
+  }
+  return profile;
+}
+
+/**
+ * Consulta a nuvem PlayFab para sincronizar todos os recibos de abertura e resgates de comunicados
+ * feitos pelos alunos, integrando-os ao cache local de leituras e resgates.
  */
 export async function syncInboxReadsFromPlayFab(
   sessionTicket?: string
@@ -3211,41 +3364,69 @@ export async function syncInboxReadsFromPlayFab(
     if (res.data?.Data) {
       const receipts: InboxReadReceipt[] = [];
       const remoteReadsToMerge: Array<{ studentKey: string; messageId: string; readAt?: string }> = [];
+      const remoteClaimsToMerge: Array<{ studentKey: string; messageId: string; claimedAt?: string }> = [];
 
       for (const [k, v] of Object.entries(res.data.Data)) {
-        if (!k.startsWith("inbox_read_") || !v?.Value) continue;
-        try {
-          const parsed = JSON.parse(v.Value) as InboxReadReceipt;
-          if (parsed && parsed.messageId && (parsed.studentId || parsed.studentNick)) {
-            receipts.push(parsed);
-            if (parsed.studentId) {
-              remoteReadsToMerge.push({
-                studentKey: parsed.studentId,
-                messageId: parsed.messageId,
-                readAt: parsed.readAt,
-              });
+        if (!v?.Value) continue;
+        if (k.startsWith("inbox_read_")) {
+          try {
+            const parsed = JSON.parse(v.Value) as InboxReadReceipt;
+            if (parsed && parsed.messageId && (parsed.studentId || parsed.studentNick)) {
+              receipts.push(parsed);
+              if (parsed.studentId) {
+                remoteReadsToMerge.push({
+                  studentKey: parsed.studentId,
+                  messageId: parsed.messageId,
+                  readAt: parsed.readAt,
+                });
+              }
+              if (parsed.studentNick) {
+                remoteReadsToMerge.push({
+                  studentKey: parsed.studentNick,
+                  messageId: parsed.messageId,
+                  readAt: parsed.readAt,
+                });
+              }
             }
-            if (parsed.studentNick) {
-              remoteReadsToMerge.push({
-                studentKey: parsed.studentNick,
-                messageId: parsed.messageId,
-                readAt: parsed.readAt,
-              });
-            }
+          } catch {
+            /* ignore */
           }
-        } catch {
-          /* ignore */
+        } else if (k.startsWith("inbox_claim_")) {
+          try {
+            const parsed = JSON.parse(v.Value) as InboxClaimReceipt;
+            if (parsed && parsed.messageId && (parsed.studentId || parsed.studentNick)) {
+              if (parsed.studentId) {
+                remoteClaimsToMerge.push({
+                  studentKey: parsed.studentId,
+                  messageId: parsed.messageId,
+                  claimedAt: parsed.claimedAt,
+                });
+              }
+              if (parsed.studentNick) {
+                remoteClaimsToMerge.push({
+                  studentKey: parsed.studentNick,
+                  messageId: parsed.messageId,
+                  claimedAt: parsed.claimedAt,
+                });
+              }
+            }
+          } catch {
+            /* ignore */
+          }
         }
       }
 
       if (remoteReadsToMerge.length > 0) {
         mergeStudentReads(remoteReadsToMerge);
       }
+      if (remoteClaimsToMerge.length > 0) {
+        mergeStudentClaims(remoteClaimsToMerge);
+      }
 
       return receipts;
     }
   } catch (err) {
-    console.warn("Falha ao sincronizar leituras do PlayFab:", err);
+    console.warn("Falha ao sincronizar leituras/resgates do PlayFab:", err);
   }
   return [];
 }
@@ -4222,10 +4403,22 @@ export function getSchoolStandings(): {
 export function getAllRegisteredPlayers(includeDeleted = false): PlayerProfile[] {
   const cfg = checkAndApplyScheduledReset();
   const reg = loadRegistry();
-  const list = Object.values(reg)
-    .map((a) => ensurePlayerSeasonAligned(a, cfg).profile)
-    .filter((p) => includeDeleted || !p.deletedAt)
-    .sort((a, b) => b.xp - a.xp);
+  const seen = new Set<string>();
+  const list: PlayerProfile[] = [];
+
+  for (const rawAcc of Object.values(reg)) {
+    const p = ensurePlayerSeasonAligned(rawAcc, cfg).profile;
+    if (!includeDeleted && p.deletedAt) continue;
+    if (includeDeleted && !p.deletedAt) {
+      /* include */
+    }
+    const ident = (p.nickNormalized || p.nick || p.id).toLowerCase().trim();
+    if (seen.has(ident)) continue;
+    seen.add(ident);
+    list.push(p);
+  }
+
+  list.sort((a, b) => b.xp - a.xp);
   saveRegistry(reg);
   return list;
 }
@@ -4234,14 +4427,23 @@ export function getAllRegisteredPlayers(includeDeleted = false): PlayerProfile[]
 export function getTrashPlayers(): PlayerProfile[] {
   const cfg = checkAndApplyScheduledReset();
   const reg = loadRegistry();
-  const list = Object.values(reg)
-    .map((a) => ensurePlayerSeasonAligned(a, cfg).profile)
-    .filter((p) => Boolean(p.deletedAt))
-    .sort((a, b) => {
-      const timeA = a.deletedAt ? new Date(a.deletedAt).getTime() : 0;
-      const timeB = b.deletedAt ? new Date(b.deletedAt).getTime() : 0;
-      return timeB - timeA;
-    });
+  const seen = new Set<string>();
+  const list: PlayerProfile[] = [];
+
+  for (const rawAcc of Object.values(reg)) {
+    const p = ensurePlayerSeasonAligned(rawAcc, cfg).profile;
+    if (!p.deletedAt) continue;
+    const ident = (p.nickNormalized || p.nick || p.id).toLowerCase().trim();
+    if (seen.has(ident)) continue;
+    seen.add(ident);
+    list.push(p);
+  }
+
+  list.sort((a, b) => {
+    const timeA = a.deletedAt ? new Date(a.deletedAt).getTime() : 0;
+    const timeB = b.deletedAt ? new Date(b.deletedAt).getTime() : 0;
+    return timeB - timeA;
+  });
   return list;
 }
 

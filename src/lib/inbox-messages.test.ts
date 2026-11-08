@@ -9,12 +9,14 @@ import {
   markAllInboxMessagesAsReadForRecipient,
   recordDeviceSecurityAlert,
   clearMemoryInboxMessages,
+  clearMemoryStudentClaims,
   sendAdminBroadcastMessage,
   claimInboxReward,
   deleteInboxMessageForPlayer,
   getInboxCountsForPlayer,
   getMessageReaders,
   mergeStudentReads,
+  mergeStudentClaims,
   formatInboxMessageText,
   runRetroactiveInboxReadsScan,
   extractInboxTags,
@@ -587,6 +589,118 @@ describe("Sistema Completo de Caixa de Entrada e Correio (inbox-messages)", () =
       });
 
       assert.equal(formatted, "Jogue Batalha de Robôs e depois Memória das Cores no Torneio Relâmpago!");
+    });
+  });
+
+  describe("Prevenção de Resgate Duplo Cross-Device e Deduplicação de Leitores", () => {
+    it("impede que o mesmo presente seja resgatado duas vezes entre múltiplos dispositivos (cross-device)", () => {
+      clearMemoryInboxMessages();
+      const student = createTestStudent({
+        id: "aluno_cross_1",
+        nick: "Piloto1",
+        nickNormalized: "piloto1",
+        pointsBalance: 10,
+        careerPoints: 10,
+        claimedInboxRewardIds: [],
+      });
+
+      const msg = sendAdminBroadcastMessage({
+        mode: "all",
+        title: "Presente de Boas-Vindas",
+        body: "Receba 50 pontos!",
+        reward: {
+          type: "points",
+          pointsAmount: 50,
+          isSecret: false,
+        },
+      });
+
+      // 1. Resgate no Dispositivo A: deve ter sucesso
+      const resA = claimInboxReward(msg.id, student);
+      assert.equal(resA.success, true);
+      assert.equal(student.pointsBalance, 60);
+      assert.equal(student.careerPoints, 60);
+      assert.ok(student.claimedInboxRewardIds?.includes(msg.id));
+
+      // 2. Simula Dispositivo B: memória local de claims zerada (sem claims locais no aparelho),
+      // mas perfil sincronizado vindo da nuvem com claimedInboxRewardIds
+      clearMemoryStudentClaims();
+      const deviceBStudent: PlayerProfile = {
+        ...student,
+        id: "pf_cloud_piloto1", // ID da nuvem no segundo dispositivo
+        nick: "Piloto1",
+        nickNormalized: "piloto1",
+      };
+
+      // As mensagens na tela do dispositivo B já devem aparecer como "claimed: true"
+      const msgsDeviceB = getInboxMessagesForPlayer(deviceBStudent);
+      const msgOnDeviceB = msgsDeviceB.find((m) => m.id === msg.id);
+      assert.ok(msgOnDeviceB?.reward);
+      assert.equal(msgOnDeviceB?.reward?.claimed, true);
+
+      // Tentativa de resgate no Dispositivo B deve ser rigorosamente bloqueada!
+      const resB = claimInboxReward(msg.id, deviceBStudent);
+      assert.equal(resB.success, false);
+      assert.match(resB.error || "", /já foi resgatada/);
+      assert.equal(deviceBStudent.pointsBalance, 60); // Saldo inalterado!
+
+      // 3. Simula mesclagem de claims remotos da nuvem
+      mergeStudentClaims([
+        { studentKey: "piloto1", messageId: msg.id, claimedAt: new Date().toISOString() },
+      ]);
+      const resBAfterSync = claimInboxReward(msg.id, deviceBStudent);
+      assert.equal(resBAfterSync.success, false);
+    });
+
+    it("getMessageReaders nunca duplica um aluno mesmo que ele conste múltiplas vezes na lista", () => {
+      clearMemoryInboxMessages();
+      const studentA1 = createTestStudent({
+        id: "pf_local_douglas",
+        nick: "Douglas",
+        nickNormalized: "douglas",
+        school: "Escola Municipal Ayrton Senna",
+      });
+      const studentA2 = createTestStudent({
+        id: "E7A819C20DB",
+        nick: "Douglas",
+        nickNormalized: "douglas",
+        school: "Escola Municipal Ayrton Senna",
+      });
+      const studentB = createTestStudent({
+        id: "aluno_outro",
+        nick: "OutroAluno",
+        nickNormalized: "outroaluno",
+        school: "Escola Municipal Ayrton Senna",
+      });
+
+      const msg = sendAdminBroadcastMessage({
+        mode: "all",
+        title: "Aviso de Teste",
+        body: "Mensagem para todos",
+        reward: {
+          type: "points",
+          pointsAmount: 20,
+          isSecret: false,
+        },
+      });
+
+      // Douglas lê e resgata a recompensa
+      claimInboxReward(msg.id, studentA1);
+
+      // Passa uma lista com Douglas DUPLICADO (como ocorria quando existia entrada local e cloud)
+      const readers = getMessageReaders(msg, [studentA1, studentA2, studentB]);
+
+      // Total de elegíveis deve ser 2 (Douglas e OutroAluno), nunca 3!
+      assert.equal(readers.totalTargeted, 2);
+      // Apenas Douglas abriu
+      assert.equal(readers.readCount, 1);
+      assert.equal(readers.readStudents.length, 1);
+      assert.equal(readers.readStudents[0].student.nick, "Douglas");
+      assert.equal(readers.readStudents[0].hasClaimedReward, true);
+
+      // Outro aluno consta como não lido (1 aluno pendente)
+      assert.equal(readers.unreadStudents.length, 1);
+      assert.equal(readers.unreadStudents[0].nick, "OutroAluno");
     });
   });
 });

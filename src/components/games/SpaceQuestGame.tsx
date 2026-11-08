@@ -35,6 +35,7 @@ import {
   AMPULHETA_COMBO_REQ,
   SHIELD_COMBO_REQ,
   SHIELD_COOLDOWN_MS,
+  SPECIAL_AURA_COOLDOWN_QUESTIONS,
   type SpaceQuestQuestion,
   type AuraType,
 } from "@/lib/space-quest-content";
@@ -113,6 +114,10 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
   const lastSpawnTimeRef = useRef<number>(Date.now());
   const requestRef = useRef<number | null>(null);
   const lastFrameTimeRef = useRef<number>(Date.now());
+
+  // Rastreamento estrito de auras especiais: cooldown de 5 questões e limite de 1 por tipo na partida
+  const questionsSinceSpecialAuraRef = useRef<number>(10);
+  const spawnedAurasThisMatchRef = useRef<Set<AuraType>>(new Set());
 
   // Rastreamento de tempo atual para animação suave dos anéis
   const [nowTimestamp, setNowTimestamp] = useState(Date.now());
@@ -198,7 +203,21 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
 
   // Start Playing transition from Countdown: Immediately spawn first question
   const handleStartPlaying = useCallback(() => {
-    const qData = generateSpaceQuestQuestion(1);
+    questionsSinceSpecialAuraRef.current = 10;
+    spawnedAurasThisMatchRef.current = new Set();
+
+    const allowSpecial = questionsSinceSpecialAuraRef.current >= SPECIAL_AURA_COOLDOWN_QUESTIONS;
+    const qData = generateSpaceQuestQuestion(1, {
+      allowSpecial,
+      excludedAuras: spawnedAurasThisMatchRef.current,
+    });
+    if (qData.aura !== "normal") {
+      questionsSinceSpecialAuraRef.current = 0;
+      spawnedAurasThisMatchRef.current.add(qData.aura);
+    } else {
+      questionsSinceSpecialAuraRef.current += 1;
+    }
+
     const duration = getStageFallDurationSeconds(1, qData.difficulty);
     const firstItem: ActiveFallingQuestion = {
       instanceId: `item_${Date.now()}_first`,
@@ -245,9 +264,24 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
         ) {
           lastSpawnTimeRef.current = now;
 
+          const allowSpecial =
+            questionsSinceSpecialAuraRef.current >= SPECIAL_AURA_COOLDOWN_QUESTIONS;
+
           if (updated.length === 0 && Math.random() < DOUBLE_WAVE_CHANCE) {
-            // Onda Dupla: 2 questões de dificuldades distintas em pistas opostas (22% e 78%)
-            const [q1, q2] = generateDoubleWaveQuestions(level);
+            // Onda Dupla: 2 questões de dificuldades distintas em pistas opostas (24% e 76%)
+            const [q1, q2] = generateDoubleWaveQuestions(level, {
+              allowSpecial,
+              excludedAuras: spawnedAurasThisMatchRef.current,
+            });
+            const specialInWave =
+              q1.aura !== "normal" ? q1.aura : q2.aura !== "normal" ? q2.aura : null;
+            if (specialInWave) {
+              questionsSinceSpecialAuraRef.current = 0;
+              spawnedAurasThisMatchRef.current.add(specialInWave);
+            } else {
+              questionsSinceSpecialAuraRef.current += 2;
+            }
+
             const dur1 = getStageFallDurationSeconds(level, q1.difficulty);
             const dur2 = getStageFallDurationSeconds(level, q2.difficulty);
 
@@ -271,7 +305,17 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
             );
           } else if (updated.length < maxConcurrent) {
             // Questão Única: posiciona na pista oposta à questão existente para não sobrepor
-            const qData = generateSpaceQuestQuestion(level);
+            const qData = generateSpaceQuestQuestion(level, {
+              allowSpecial,
+              excludedAuras: spawnedAurasThisMatchRef.current,
+            });
+            if (qData.aura !== "normal") {
+              questionsSinceSpecialAuraRef.current = 0;
+              spawnedAurasThisMatchRef.current.add(qData.aura);
+            } else {
+              questionsSinceSpecialAuraRef.current += 1;
+            }
+
             const duration = getStageFallDurationSeconds(level, qData.difficulty);
             const speedY = 100 / duration;
 
@@ -295,7 +339,7 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
           }
         }
 
-        // 2. Mover questões para baixo & Detecção da Linha Vermelha (yPercent >= 86)
+        // 2. Mover questões para baixo & Detecção da Linha Vermelha (yPercent >= 88)
         let floorHits = 0;
         const nextList: ActiveFallingQuestion[] = [];
 
@@ -307,7 +351,7 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
 
           const nextY = item.yPercent + item.speedYPerSec * dt;
 
-          if (nextY >= 86) {
+          if (nextY >= 88) {
             // Encostou na barreira vermelha! Invalidada imediatamente
             floorHits++;
             playTone(180, 0.18, "sawtooth", 0.05);
@@ -360,7 +404,7 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
 
   // Sincronização do alvo ativo: mira sempre na questão válida mais próxima da base
   useEffect(() => {
-    const validItems = fallingItems.filter((it) => !it.isDestroying && it.yPercent < 86);
+    const validItems = fallingItems.filter((it) => !it.isDestroying && it.yPercent < 88);
     if (validItems.length === 0) {
       setActiveTargetId(null);
       return;
@@ -379,7 +423,7 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
 
       const targetItem = fallingItems.find((it) => it.instanceId === activeTargetId);
       // Blindagem atômica: se encostou na barreira ou está explodindo, não responde
-      if (!targetItem || targetItem.yPercent >= 86 || targetItem.hasFallen || targetItem.isDestroying) {
+      if (!targetItem || targetItem.yPercent >= 88 || targetItem.hasFallen || targetItem.isDestroying) {
         return;
       }
 
@@ -897,7 +941,7 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
                   id="plasmaLaserGrad"
                   gradientUnits="userSpaceOnUse"
                   x1="50%"
-                  y1="90%"
+                  y1="82%"
                   x2={`${laserEffect.targetX}%`}
                   y2={`${laserEffect.targetY + 4}%`}
                 >
@@ -908,7 +952,7 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
               </defs>
               <line
                 x1="50%"
-                y1="90%"
+                y1="82%"
                 x2={`${laserEffect.targetX}%`}
                 y2={`${laserEffect.targetY + 4}%`}
                 stroke="url(#plasmaLaserGrad)"
@@ -949,59 +993,11 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
             </div>
           ))}
 
-          {/* Barreira Estelar Inferior (Linha Vermelha de Impacto) */}
-          <div className="absolute bottom-0 inset-x-0 h-1.5 bg-gradient-to-r from-red-600/30 via-red-500/80 to-red-600/30 border-t border-red-500/50 shadow-[0_0_15px_rgba(239,68,68,0.5)] flex items-center justify-center">
-            <span className="text-[8px] uppercase tracking-widest text-red-300/80 font-black">
-              Barreira Estelar (-1 Vida • -5 pts em colisão)
-            </span>
-          </div>
-        </div>
-
-        {/* Cockpit da Nave e Painel de Resposta */}
-        <div className="relative z-20 flex flex-col items-center gap-3 pb-2">
-          {/* Alvo na Mira e Botões Táteis */}
-          {currentTarget ? (
-            <div className="w-full flex flex-col items-center animate-in fade-in duration-150">
-              <div className="text-xs font-bold text-sky-300 flex items-center gap-1.5 mb-2 bg-slate-950/85 px-4 py-1.5 rounded-full border border-sky-400/40 shadow-md">
-                <Target className="h-4 w-4 text-sky-400 animate-spin" />
-                <span>Alvo na Mira:</span>
-                <b className="text-white font-mono text-sm sm:text-base">{currentTarget.data.prompt}</b>
-              </div>
-
-              {/* Botões de Ação: V/F ou Alternativas Numéricas */}
-              <div className="flex flex-wrap items-center justify-center gap-2.5 sm:gap-3 w-full max-w-md px-2">
-                {currentTarget.data.options.map((opt, idx) => (
-                  <button
-                    key={opt}
-                    type="button"
-                    onClick={() => handleAnswer(opt)}
-                    className={`flex-1 min-w-[75px] py-3 px-3 rounded-2xl font-mono text-lg sm:text-xl font-black transition-all cursor-pointer shadow-xl active:scale-95 border-2 ${
-                      currentTarget.data.kind === "logic"
-                        ? opt === "V"
-                          ? "bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/40 border-emerald-400"
-                          : "bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/40 border-rose-400"
-                        : "bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white shadow-sky-600/40 border-sky-400"
-                    }`}
-                  >
-                    <div>{opt}</div>
-                    <span className="block text-[10px] font-sans font-normal opacity-80 mt-0.5">
-                      [{currentTarget.data.kind === "logic" ? (opt === "V" ? "V / 1" : "F / 2") : idx + 1}]
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div className="text-xs text-sky-400/80 italic py-2 bg-slate-950/70 px-4 py-1 rounded-full border border-sky-500/20">
-              ⚡ Rastreando operações estelares no radar...
-            </div>
-          )}
-
-          {/* Nave Estelar Pairando com Escudo Visual se Ativo */}
-          <div className="relative flex flex-col items-center">
+          {/* Nave Estelar Pairando com Escudo Visual (Acima da Barreira Estelar) */}
+          <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center pointer-events-none">
             {/* Cúpula de Plasma Protetora do Escudo */}
             {hasShield && (
-              <div className="absolute -inset-4 rounded-full border-2 border-sky-300 bg-sky-500/10 shadow-[0_0_25px_rgba(56,189,248,0.8)] animate-pulse pointer-events-none" />
+              <div className="absolute -inset-4 rounded-full border-2 border-sky-300 bg-sky-500/15 shadow-[0_0_25px_rgba(56,189,248,0.85)] animate-pulse" />
             )}
 
             <div className="relative flex flex-col items-center animate-[sway_3s_ease-in-out_infinite]">
@@ -1057,6 +1053,57 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
               <div className="w-4 h-6 -mt-1 bg-gradient-to-b from-sky-400 via-cyan-400 to-transparent rounded-b-full blur-[1px] animate-pulse shadow-[0_4px_14px_#38bdf8]" />
             </div>
           </div>
+
+          {/* Barreira Estelar Inferior (Linha Vermelha de Impacto na Base da Arena) */}
+          <div className="absolute bottom-0 inset-x-0 h-1.5 bg-gradient-to-r from-red-600/30 via-red-500/80 to-red-600/30 border-t border-red-500/50 shadow-[0_0_15px_rgba(239,68,68,0.5)] flex items-center justify-center z-10">
+            <span className="text-[8px] uppercase tracking-widest text-red-300/80 font-black">
+              Barreira Estelar (-1 Vida • -5 pts em colisão)
+            </span>
+          </div>
+        </div>
+
+        {/* Cockpit / Dock de Controle com Altura Estritamente Fixa (Elimina Recuo Visual) */}
+        <div className="relative z-20 w-full h-[105px] min-h-[105px] max-h-[105px] flex flex-col justify-center items-center rounded-2xl bg-slate-950/90 border border-sky-500/20 px-3 py-1 shadow-2xl">
+          {currentTarget ? (
+            <div className="w-full flex flex-col items-center justify-center h-full animate-in fade-in duration-100">
+              <div className="text-[11px] font-bold text-sky-300 flex items-center gap-1.5 mb-1.5 bg-slate-900/80 px-3 py-0.5 rounded-full border border-sky-400/30 shadow-xs">
+                <Target className="h-3.5 w-3.5 text-sky-400 animate-spin" />
+                <span>Alvo na Mira:</span>
+                <b className="text-white font-mono text-sm">{currentTarget.data.prompt}</b>
+              </div>
+
+              {/* Botões de Ação: V/F ou Alternativas Numéricas */}
+              <div className="flex items-center justify-center gap-2 sm:gap-3 w-full max-w-md">
+                {currentTarget.data.options.map((opt, idx) => (
+                  <button
+                    key={opt}
+                    type="button"
+                    onClick={() => handleAnswer(opt)}
+                    className={`flex-1 min-w-[70px] h-12 rounded-xl font-mono text-lg sm:text-xl font-black transition-all cursor-pointer shadow-lg active:scale-95 border-2 flex flex-col items-center justify-center leading-none ${
+                      currentTarget.data.kind === "logic"
+                        ? opt === "V"
+                          ? "bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/30 border-emerald-400"
+                          : "bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/30 border-rose-400"
+                        : "bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white shadow-sky-600/30 border-sky-400"
+                    }`}
+                  >
+                    <span>{opt}</span>
+                    <span className="text-[9px] font-sans font-normal opacity-80 mt-0.5">
+                      [{currentTarget.data.kind === "logic" ? (opt === "V" ? "V/1" : "F/2") : idx + 1}]
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center h-full gap-1.5 text-sky-400/80 animate-in fade-in duration-100">
+              <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-slate-900/70 border border-sky-500/30">
+                <Target className="h-3.5 w-3.5 animate-spin text-sky-400" />
+                <span className="text-xs font-semibold">Rastreando operações estelares no radar...</span>
+              </div>
+              <span className="text-[10px] text-slate-500">Mire e dispare no teclado (1-4 ou V/F)</span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1067,6 +1114,8 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
           correct={correctCount}
           wrong={wrongCount}
           onRestart={() => {
+            questionsSinceSpecialAuraRef.current = 10;
+            spawnedAurasThisMatchRef.current = new Set();
             setScore(0);
             setCombo(0);
             setMaxCombo(0);

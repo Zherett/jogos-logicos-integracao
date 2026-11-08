@@ -3037,9 +3037,9 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                       Nenhum aluno abriu esta mensagem ainda.
                     </div>
                   ) : (
-                    activeReadersData.readStudents.map(({ student, readAt }) => (
+                    activeReadersData.readStudents.map(({ student, readAt, hasClaimedReward }) => (
                       <div
-                        key={student.id}
+                        key={student.nickNormalized || student.nick || student.id}
                         className="flex items-center justify-between gap-2 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-2.5"
                       >
                         <div>
@@ -3051,16 +3051,29 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-1 text-[10px] text-emerald-600 dark:text-emerald-400 font-mono font-bold">
-                          <CheckCircle2 className="h-3 w-3" />
-                          <span>
-                            {readAt
-                              ? new Date(readAt).toLocaleTimeString("pt-BR", {
-                                  hour: "2-digit",
-                                  minute: "2-digit",
-                                })
-                              : "Lida"}
-                          </span>
+                        <div className="flex flex-col items-end gap-1">
+                          <div className="flex items-center gap-1 text-[10px] text-emerald-600 dark:text-emerald-400 font-mono font-bold">
+                            <CheckCircle2 className="h-3 w-3" />
+                            <span>
+                              {readAt
+                                ? new Date(readAt).toLocaleTimeString("pt-BR", {
+                                    hour: "2-digit",
+                                    minute: "2-digit",
+                                  })
+                                : "Lida"}
+                            </span>
+                          </div>
+                          {readersModalMsg?.reward && (
+                            <span
+                              className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                                hasClaimedReward
+                                  ? "bg-amber-500/20 text-amber-500 border border-amber-500/30"
+                                  : "bg-sky-500/10 text-sky-400 border border-sky-500/20"
+                              }`}
+                            >
+                              {hasClaimedReward ? "🎁 Presente Resgatado" : "Pendente de Resgate"}
+                            </span>
+                          )}
                         </div>
                       </div>
                     ))
@@ -3072,7 +3085,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                 ) : (
                   activeReadersData.unreadStudents.map((student) => (
                     <div
-                      key={student.id}
+                      key={student.nickNormalized || student.nick || student.id}
                       className="flex items-center justify-between gap-2 rounded-xl border bg-card/60 p-2.5"
                     >
                       <div>
