@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Trophy,
   Flame,
@@ -59,14 +59,16 @@ export function WeeklyTournamentDialog({
     ? stageFromBirthdate(profile.birthdate, new Date(), profile.school).id
     : "etapa_1";
   const [selectedStage, setSelectedStage] = useState<AgeStageId | "TODAS">(myStageId);
+  const prevOpenRef = useRef(false);
 
   useEffect(() => {
-    if (open && profile) {
+    if (open && !prevOpenRef.current && profile) {
       const sId = stageFromBirthdate(profile.birthdate, new Date(), profile.school).id;
       // Normal students are locked to their own stage; ADM can switch
       setSelectedStage(sId);
       setActiveTab("desafio");
     }
+    prevOpenRef.current = open;
   }, [open, profile]);
 
   useEffect(() => {

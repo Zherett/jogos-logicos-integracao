@@ -4,6 +4,7 @@
 
 import { GAME_NAMES, type GameId } from "./game-storage.ts";
 import {
+  clearCachedAdminPlayFabTicket,
   getAdminPlayFabTicket,
   getPlayFabTitleId,
   isPlayFabConfigured,
@@ -724,6 +725,12 @@ export function mergeX1RoomStates(local: X1Room | undefined, remote: X1Room, now
       }
     } else if (base.gameId === "rpg") {
       // Na Batalha de Robôs, acertos/erros/pontos só crescem e HP só diminui (CRDT)
+      const other = remoteIsNewer ? local : remote;
+      const dHostCorrect = Math.max(0, other.host.correct - base.host.correct);
+      const dHostWrong = Math.max(0, other.host.wrong - base.host.wrong);
+      const dGuestCorrect = Math.max(0, (other.guest?.correct ?? 0) - (base.guest?.correct ?? 0));
+      const dGuestWrong = Math.max(0, (other.guest?.wrong ?? 0) - (base.guest?.wrong ?? 0));
+
       const hostAnsweredMoreLocally =
         local.host.correct + local.host.wrong > remote.host.correct + remote.host.wrong;
       const guestAnsweredMoreLocally =
@@ -740,6 +747,13 @@ export function mergeX1RoomStates(local: X1Room | undefined, remote: X1Room, now
       base.guest.correct = Math.max(local.guest.correct, remote.guest.correct);
       base.host.wrong = Math.max(local.host.wrong, remote.host.wrong);
       base.guest.wrong = Math.max(local.guest.wrong, remote.guest.wrong);
+
+      // Aplica o deslocamento da barra de Cabo de Guerra caso ambos tenham respondido simultaneamente
+      const shareDelta =
+        dHostCorrect * 12 - dHostWrong * 8 - dGuestCorrect * 12 + dGuestWrong * 8;
+      if (shareDelta !== 0) {
+        base.blueShare = Math.max(0, Math.min(100, base.blueShare + shareDelta));
+      }
 
       if (base.host.hp <= 0 || base.guest.hp <= 0) {
         base.status = "finished";
@@ -854,7 +868,7 @@ function loadStore(): X1LobbyStore {
       (inv) =>
         now - inv.createdAt < 120_000 &&
         !deletedRooms[inv.roomCode] &&
-        rooms[inv.roomCode]?.status === "waiting",
+        (rooms[inv.roomCode]?.status === "waiting" || inv.status === "rejected"),
     );
 
     return { players, rooms, deletedRooms, invites, updatedAt: parsed.updatedAt ?? now };
@@ -878,9 +892,15 @@ function saveStore(store: X1LobbyStore) {
 
 /* --------------------- PlayFab SharedGroupData Cloud Sync --------------------- */
 
+const createdSharedGroups = new Set<string>();
+let inFlightCloudSyncPromise: Promise<void> | null = null;
+let queuedSyncRoomCode: string | null | undefined = undefined;
+let lastLobbyCloudSyncAt = 0;
+
 async function callPlayFabSharedGroup(
   endpoint: string,
   body: Record<string, unknown>,
+  allowRetry = true,
 ): Promise<Record<string, unknown> | null> {
   if (!isPlayFabConfigured()) return null;
   const session = loadStoredSession();
@@ -897,18 +917,55 @@ async function callPlayFabSharedGroup(
       },
       body: JSON.stringify({ TitleId: titleId, ...body }),
     });
-    const json = (await res.json()) as { data?: Record<string, unknown>; error?: string };
+    const json = (await res.json()) as {
+      data?: Record<string, unknown>;
+      error?: string;
+      errorCode?: number;
+    };
+
+    if ((!res.ok || json.error) && allowRetry) {
+      const errName = String(json.error ?? "");
+      // Renova ticket ADM se expirou ou ficou inválido
+      if (
+        res.status === 401 ||
+        errName.includes("NotAuthenticated") ||
+        errName.includes("InvalidSessionTicket") ||
+        errName.includes("NotAuthorized")
+      ) {
+        clearCachedAdminPlayFabTicket();
+        const freshTicket = await getAdminPlayFabTicket();
+        if (freshTicket) {
+          return callPlayFabSharedGroup(endpoint, body, false);
+        }
+      }
+      // Se tentou atualizar um SharedGroup ainda não criado, cria e tenta de novo
+      if (
+        endpoint === "UpdateSharedGroupData" &&
+        typeof body.SharedGroupId === "string" &&
+        (errName.includes("SharedGroup") || errName.includes("InvalidParams") || res.status === 400)
+      ) {
+        createdSharedGroups.delete(body.SharedGroupId);
+        await ensureSharedGroupExists(body.SharedGroupId);
+        return callPlayFabSharedGroup(endpoint, body, false);
+      }
+    }
+
     return json.data ?? null;
   } catch {
     return null;
   }
 }
 
-export async function syncX1WithPlayFabCloud(activeRoomCode?: string | null): Promise<void> {
+async function ensureSharedGroupExists(groupId: string): Promise<void> {
+  if (createdSharedGroups.has(groupId)) return;
+  await callPlayFabSharedGroup("CreateSharedGroup", { SharedGroupId: groupId }, false);
+  createdSharedGroups.add(groupId);
+}
+
+async function runSyncX1WithPlayFabCloud(activeRoomCode?: string | null): Promise<void> {
   if (!isPlayFabConfigured()) return;
-  const store = loadStore();
-  store.deletedRooms = store.deletedRooms ?? {};
-  let changed = false;
+
+  let activeRoomStatus: X1RoomStatus | null = null;
 
   // 1. Prioridade máxima: se há uma sala ativa (espera, contagem ou partida), sincroniza seu SharedGroup primeiro
   if (activeRoomCode) {
@@ -918,35 +975,83 @@ export async function syncX1WithPlayFabCloud(activeRoomCode?: string | null): Pr
       SharedGroupId: roomGroupId,
     })) as { Data?: Record<string, { Value: string }> } | null;
 
+    // Recarrega o store APÓS o await para nunca sobrescrever ações locais feitas durante a requisição
+    const storeAfterRoom = loadStore();
+    storeAfterRoom.deletedRooms = storeAfterRoom.deletedRooms ?? {};
+    let roomChanged = false;
+    let shouldPushMergedBack = false;
+    let roomToPush: X1Room | null = null;
+
     if (remoteRoomData?.Data?.Room?.Value) {
       try {
         const remoteRoom = JSON.parse(remoteRoomData.Data.Room.Value) as X1Room;
-        if (remoteRoom.status === "cancelled" || store.deletedRooms[cleanCode]) {
-          if (store.rooms[cleanCode]) {
-            delete store.rooms[cleanCode];
-            changed = true;
+        if (remoteRoom.status === "cancelled" || storeAfterRoom.deletedRooms[cleanCode]) {
+          if (storeAfterRoom.rooms[cleanCode]) {
+            delete storeAfterRoom.rooms[cleanCode];
+            roomChanged = true;
           }
-          store.deletedRooms[cleanCode] = store.deletedRooms[cleanCode] ?? Date.now();
+          storeAfterRoom.deletedRooms[cleanCode] =
+            storeAfterRoom.deletedRooms[cleanCode] ?? Date.now();
+          activeRoomStatus = "cancelled";
         } else {
-          const localRoom = store.rooms[cleanCode];
+          const localRoom = storeAfterRoom.rooms[cleanCode];
           const merged = mergeX1RoomStates(localRoom, remoteRoom);
-          store.rooms[cleanCode] = merged;
-          changed = true;
+          activeRoomStatus = merged.status;
+          if (!localRoom || JSON.stringify(localRoom) !== JSON.stringify(merged)) {
+            storeAfterRoom.rooms[cleanCode] = merged;
+            roomChanged = true;
+          }
+          if (
+            localRoom &&
+            ((localRoom.revision ?? 1) > (remoteRoom.revision ?? 1) ||
+              JSON.stringify(merged) !== JSON.stringify(remoteRoom))
+          ) {
+            shouldPushMergedBack = true;
+            roomToPush = merged;
+          }
         }
       } catch {
         /* ignore */
       }
+    } else if (storeAfterRoom.rooms[cleanCode] && !storeAfterRoom.deletedRooms[cleanCode]) {
+      // Sala existe localmente mas ainda não foi gravada no SharedGroup da nuvem: envia agora
+      shouldPushMergedBack = true;
+      roomToPush = storeAfterRoom.rooms[cleanCode];
+      activeRoomStatus = roomToPush.status;
+    }
+
+    if (roomChanged) {
+      saveStore(storeAfterRoom);
+    }
+
+    if (shouldPushMergedBack && roomToPush) {
+      await ensureSharedGroupExists(roomGroupId);
+      await callPlayFabSharedGroup("UpdateSharedGroupData", {
+        SharedGroupId: roomGroupId,
+        Data: { Room: JSON.stringify(roomToPush) },
+        Permission: "Public",
+      });
     }
   }
 
+  // Durante partida ativa ("playing"), evita trafegar o LobbySnapshot global a cada 1.2s (sincroniza o lobby a cada 8s)
+  const nowCheck = Date.now();
+  if (activeRoomCode && activeRoomStatus === "playing" && nowCheck - lastLobbyCloudSyncAt < 8_000) {
+    return;
+  }
+  lastLobbyCloudSyncAt = nowCheck;
+
   // 2. Sincroniza o Lobby SharedGroup geral
-  await callPlayFabSharedGroup("CreateSharedGroup", {
-    SharedGroupId: LOBBY_SHARED_GROUP_ID,
-  });
+  await ensureSharedGroupExists(LOBBY_SHARED_GROUP_ID);
 
   const remoteLobby = (await callPlayFabSharedGroup("GetSharedGroupData", {
     SharedGroupId: LOBBY_SHARED_GROUP_ID,
   })) as { Data?: Record<string, { Value: string; LastUpdated?: string }> } | null;
+
+  // Recarrega o store imediatamente após o await para preservar qualquer mudança local recente
+  const store = loadStore();
+  store.deletedRooms = store.deletedRooms ?? {};
+  let changed = false;
 
   if (remoteLobby?.Data?.LobbySnapshot?.Value) {
     try {
@@ -958,6 +1063,7 @@ export async function syncX1WithPlayFabCloud(activeRoomCode?: string | null): Pr
         if (now - delAt < 15 * 60_000) {
           if (!store.deletedRooms[delCode] || delAt > store.deletedRooms[delCode]) {
             store.deletedRooms[delCode] = delAt;
+            changed = true;
           }
           if (store.rooms[delCode]) {
             delete store.rooms[delCode];
@@ -1010,6 +1116,43 @@ export async function syncX1WithPlayFabCloud(activeRoomCode?: string | null): Pr
           }
         }
       }
+
+      // Mescla convites diretos entre dispositivos (incluindo notificações de recusa)
+      if (Array.isArray(remoteStore.invites)) {
+        const localById = new Map(store.invites.map((i) => [i.id, i]));
+        for (const rInv of remoteStore.invites) {
+          if (!rInv || !rInv.id || now - rInv.createdAt >= 120_000) continue;
+          if (store.deletedRooms[rInv.roomCode]) continue;
+          const existing = localById.get(rInv.id);
+          if (!existing) {
+            if (store.rooms[rInv.roomCode]?.status === "waiting" || rInv.status === "rejected") {
+              localById.set(rInv.id, rInv);
+              changed = true;
+            }
+          } else if (rInv.status === "rejected" && existing.status !== "rejected") {
+            existing.status = "rejected";
+            existing.rejectedByNick = rInv.rejectedByNick;
+            changed = true;
+            if (typeof window !== "undefined") {
+              window.dispatchEvent(
+                new CustomEvent("desafios:x1-invite-rejected", {
+                  detail: {
+                    inviteId: rInv.id,
+                    roomCode: rInv.roomCode,
+                    rejectedByNick: rInv.rejectedByNick || "O jogador convidado",
+                  },
+                }),
+              );
+            }
+          }
+        }
+        store.invites = Array.from(localById.values()).filter(
+          (inv) =>
+            now - inv.createdAt < 120_000 &&
+            !store.deletedRooms?.[inv.roomCode] &&
+            (store.rooms[inv.roomCode]?.status === "waiting" || inv.status === "rejected"),
+        );
+      }
     } catch {
       /* ignore */
     }
@@ -1019,30 +1162,62 @@ export async function syncX1WithPlayFabCloud(activeRoomCode?: string | null): Pr
     saveStore(store);
   }
 
-  // Push merged snapshot (incluindo deletedRooms para que outros clientes apaguem salas canceladas)
+  // Push merged snapshot (usando o store mais recente para nunca sobrescrever ações concorrentes)
+  const latestStore = loadStore();
   await callPlayFabSharedGroup("UpdateSharedGroupData", {
     SharedGroupId: LOBBY_SHARED_GROUP_ID,
     Data: {
       LobbySnapshot: JSON.stringify({
-        players: store.players,
-        rooms: store.rooms,
-        deletedRooms: store.deletedRooms,
-        invites: store.invites,
+        players: latestStore.players,
+        rooms: latestStore.rooms,
+        deletedRooms: latestStore.deletedRooms,
+        invites: latestStore.invites,
       }),
     },
     Permission: "Public",
   });
 }
 
+export async function syncX1WithPlayFabCloud(activeRoomCode?: string | null): Promise<void> {
+  if (!isPlayFabConfigured()) return;
+  if (inFlightCloudSyncPromise) {
+    // Enfileira o código prioritário se chegar enquanto uma sincronização já está em voo
+    if (activeRoomCode || queuedSyncRoomCode === undefined) {
+      queuedSyncRoomCode = activeRoomCode ?? null;
+    }
+    return inFlightCloudSyncPromise;
+  }
+
+  inFlightCloudSyncPromise = (async () => {
+    try {
+      await runSyncX1WithPlayFabCloud(activeRoomCode);
+      while (queuedSyncRoomCode !== undefined) {
+        const nextCode = queuedSyncRoomCode;
+        queuedSyncRoomCode = undefined;
+        await runSyncX1WithPlayFabCloud(nextCode);
+      }
+    } finally {
+      inFlightCloudSyncPromise = null;
+    }
+  })();
+
+  return inFlightCloudSyncPromise;
+}
+
 async function pushRoomToPlayFab(room: X1Room): Promise<void> {
   if (!isPlayFabConfigured()) return;
   const roomGroupId = `x1_room_${room.code.toLowerCase()}`;
-  await callPlayFabSharedGroup("CreateSharedGroup", { SharedGroupId: roomGroupId });
+  await ensureSharedGroupExists(roomGroupId);
+  const latestRoom = getX1Room(room.code) ?? room;
   await callPlayFabSharedGroup("UpdateSharedGroupData", {
     SharedGroupId: roomGroupId,
-    Data: { Room: JSON.stringify(room) },
+    Data: { Room: JSON.stringify(latestRoom) },
     Permission: "Public",
   });
+  // Sincroniza o lobby imediatamente quando a sala é criada, inicia contagem ou encerra
+  if (latestRoom.status !== "playing") {
+    lastLobbyCloudSyncAt = 0;
+  }
   await syncX1WithPlayFabCloud(room.code);
 }
 
@@ -1057,13 +1232,14 @@ async function pushCancelledRoomToPlayFab(code: string, previousRoom?: X1Room): 
       revision: (previousRoom.revision ?? 1) + 100,
       finishedAt: Date.now(),
     };
-    await callPlayFabSharedGroup("CreateSharedGroup", { SharedGroupId: roomGroupId });
+    await ensureSharedGroupExists(roomGroupId);
     await callPlayFabSharedGroup("UpdateSharedGroupData", {
       SharedGroupId: roomGroupId,
       Data: { Room: JSON.stringify(tombstone) },
       Permission: "Public",
     });
   }
+  lastLobbyCloudSyncAt = 0;
   await syncX1WithPlayFabCloud();
 }
 
@@ -1245,6 +1421,8 @@ export function rejectX1Invite(inviteId: string, rejectedByNick: string): void {
     inv.status = "rejected";
     inv.rejectedByNick = rejectedByNick;
     saveStore(store);
+    lastLobbyCloudSyncAt = 0;
+    void syncX1WithPlayFabCloud(inv.roomCode);
     if (typeof window !== "undefined") {
       window.dispatchEvent(
         new CustomEvent("desafios:x1-invite-rejected", {
@@ -1404,8 +1582,6 @@ export async function fetchX1RoomFromCloud(code: string): Promise<X1Room | null>
   const clean = code.trim().toUpperCase();
   if (!clean || !isPlayFabConfigured()) return null;
 
-  const store = loadStore();
-  store.deletedRooms = store.deletedRooms ?? {};
   const roomGroupId = `x1_room_${clean.toLowerCase()}`;
 
   // 1. Consulta o SharedGroup direto da sala
@@ -1416,6 +1592,8 @@ export async function fetchX1RoomFromCloud(code: string): Promise<X1Room | null>
 
     if (remoteRoomData?.Data?.Room?.Value) {
       const remoteRoom = JSON.parse(remoteRoomData.Data.Room.Value) as X1Room;
+      const store = loadStore();
+      store.deletedRooms = store.deletedRooms ?? {};
       if (remoteRoom.status === "cancelled" || store.deletedRooms[clean]) {
         store.deletedRooms[clean] = store.deletedRooms[clean] ?? Date.now();
         delete store.rooms[clean];
@@ -1432,6 +1610,7 @@ export async function fetchX1RoomFromCloud(code: string): Promise<X1Room | null>
   }
 
   // 2. Consulta o snapshot geral do Lobby da nuvem
+  lastLobbyCloudSyncAt = 0;
   await syncX1WithPlayFabCloud(clean);
   const refreshed = loadStore();
   return refreshed.rooms[clean] ?? null;

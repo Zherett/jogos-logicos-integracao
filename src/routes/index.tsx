@@ -254,7 +254,7 @@ function Index() {
       void syncX1WithPlayFabCloud(activeX1Room?.code ?? null);
     };
     pulse();
-    const id = window.setInterval(pulse, 12000);
+    const id = window.setInterval(pulse, 5000);
     return () => window.clearInterval(id);
   }, [auth.profile, activeX1Room?.code]);
 
@@ -598,9 +598,14 @@ function Index() {
                     });
                     if (res.room) {
                       setIncomingInvite(null);
+                      setX1Open(false);
                       setActiveRankedGameId(null);
                       setActiveX1Room(res.room);
                       setView(res.room.gameId);
+                    } else {
+                      setIncomingInvite(null);
+                      setRejectNotice(res.error || "Esta sala X1 já foi desfeita ou expirou.");
+                      window.setTimeout(() => setRejectNotice(null), 4000);
                     }
                   }}
                   className="h-12 rounded-2xl font-display font-extrabold text-sm"

@@ -76,13 +76,14 @@ export function X1ArenaDialog({
   const [isJoining, setIsJoining] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [onlyMyStage, setOnlyMyStage] = useState(true);
+  const [onlyMyStage, setOnlyMyStage] = useState(false);
   const [tick, setTick] = useState(0);
 
   const enabledGameIds = ALL_GAME_IDS.filter((id) => auth.adminConfig.enabledGames[id]);
 
   // Se o jogador estiver fora da tela de espera da sala, destrói imediatamente qualquer sala em espera órfã criada por ele
   useEffect(() => {
+    waitingRoomCodeRef.current = waitingRoomCode;
     if (!profile?.id) return;
     if (!open || !waitingRoomCode) {
       if (!matchStartedRef.current) {
@@ -91,12 +92,30 @@ export function X1ArenaDialog({
     }
   }, [open, waitingRoomCode, profile?.id]);
 
+  // Se o jogador convidado recusar o desafio direto, encerra a sala de espera do anfitrião e avisa
+  useEffect(() => {
+    if (!open || !waitingRoomCode || !profile?.id) return;
+    const handleRejected = (e: Event) => {
+      const detail = (e as CustomEvent).detail as
+        | { roomCode?: string; rejectedByNick?: string }
+        | undefined;
+      if (!detail?.roomCode || detail.roomCode === waitingRoomCode) {
+        cancelWaitingX1Room(waitingRoomCode, profile.id);
+        waitingRoomCodeRef.current = null;
+        setWaitingRoomCode(null);
+        setError(`${detail?.rejectedByNick || "O colega"} recusou o seu desafio X1.`);
+      }
+    };
+    window.addEventListener("desafios:x1-invite-rejected", handleRejected);
+    return () => window.removeEventListener("desafios:x1-invite-rejected", handleRejected);
+  }, [open, waitingRoomCode, profile?.id]);
+
   // Keep player presence heartbeat active and listen for room updates (fast 1.2s polling when waiting for challenger)
   useEffect(() => {
     if (!open || !profile) return;
 
     const sendHeartbeat = () => {
-      const pStage = stageFromBirthdate(profile.birthdate);
+      const pStage = stageFromBirthdate(profile.birthdate, new Date(), profile.school);
       heartbeatOnlinePlayer({
         playerId: profile.id,
         nick: profile.nick,
@@ -278,7 +297,7 @@ export function X1ArenaDialog({
     );
   }
 
-  const myStage = stageFromBirthdate(profile.birthdate);
+  const myStage = stageFromBirthdate(profile.birthdate, new Date(), profile.school);
   const snapshot = getX1LobbySnapshot(profile.id);
   const allOtherOnline = snapshot.onlinePlayers.filter((p) => p.playerId !== profile.id);
   const otherOnlinePlayers = onlyMyStage
