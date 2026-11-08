@@ -22,6 +22,7 @@ import {
   selectBestTargetId,
   getStageFallDurationSeconds,
   FLOOR_COLLISION_PENALTY,
+  WRONG_ANSWER_PENALTY,
   AURA_CONFIGS,
   STARTING_LIVES,
   RECOVER_LIFE_CHANCE,
@@ -74,6 +75,72 @@ interface ExplosionEvent {
   xPercent: number;
   yPercent: number;
   particles: ExplosionParticle[];
+}
+
+interface SafeBoundaryProps {
+  children: React.ReactNode;
+  getFallbackStats: () => {
+    score: number;
+    correct: number;
+    wrong: number;
+    level: number;
+    isRanked?: boolean;
+  };
+  onReplay: () => void;
+  onExit: () => void;
+}
+
+interface SafeBoundaryState {
+  hasError: boolean;
+}
+
+class SpaceQuestSafeBoundary extends React.Component<SafeBoundaryProps, SafeBoundaryState> {
+  constructor(props: SafeBoundaryProps) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(): SafeBoundaryState {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: unknown) {
+    console.warn("SpaceQuestSafeBoundary recuperou transição de tela:", error);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      const stats = this.props.getFallbackStats();
+      return (
+        <div translate="no" className="notranslate space-y-4">
+          <GameTopBar
+            title="Space Quest"
+            onExit={this.props.onExit}
+            rightElement={
+              <div className="rounded-xl border border-sky-500/30 bg-slate-900/80 px-3 py-1 flex items-center gap-2 shadow-xs">
+                <Rocket className="h-4 w-4 text-sky-400" />
+                <span className="text-xs font-black text-sky-200">{`Fase ${stats.level}`}</span>
+              </div>
+            }
+          />
+          <ResultPanel
+            score={Math.max(0, stats.score)}
+            correct={stats.correct}
+            wrong={stats.wrong}
+            level={stats.level}
+            gameId="spacequest"
+            mode={stats.isRanked ? "torneio_semanal" : "padrao"}
+            onReplay={() => {
+              this.setState({ hasError: false });
+              this.props.onReplay();
+            }}
+            onMenu={this.props.onExit}
+          />
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
 export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponentProps) {
@@ -133,6 +200,7 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
   // Refs sincronizadas para leitura pura e atômica no loop de física e callbacks
   const phaseRef = useRef<"countdown" | "playing" | "gameover">("countdown");
   const finishedRef = useRef<boolean>(false);
+  const matchRecordedRef = useRef<boolean>(false);
   const fallingItemsRef = useRef<ActiveFallingQuestion[]>([]);
   const activeTargetIdRef = useRef<string | null>(null);
   const scoreRef = useRef<number>(0);
@@ -157,6 +225,7 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
   const scheduleTimeout = useCallback((fn: () => void, delayMs: number) => {
     const id = window.setTimeout(() => {
       timeoutsRef.current = timeoutsRef.current.filter((t) => t !== id);
+      if (finishedRef.current || phaseRef.current !== "playing") return;
       fn();
     }, delayMs);
     timeoutsRef.current.push(id);
@@ -175,11 +244,13 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
   }, []);
 
   const showBanner = useCallback((message: string, durationMs = 2500) => {
+    if (finishedRef.current || phaseRef.current !== "playing") return;
     if (bannerTimeoutRef.current !== null) {
       window.clearTimeout(bannerTimeoutRef.current);
     }
     setNotificationBanner(message);
     bannerTimeoutRef.current = window.setTimeout(() => {
+      if (finishedRef.current || phaseRef.current !== "playing") return;
       setNotificationBanner(null);
       bannerTimeoutRef.current = null;
     }, durationMs);
@@ -188,6 +259,7 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
   useEffect(() => {
     return () => {
       clearAllTimeouts();
+      stopHourglassTicking();
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
     };
   }, [clearAllTimeouts]);
@@ -204,6 +276,8 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
     setLastMatch(loadLastMatch("spacequest"));
   }, []);
 
+  // Encerramento imediato e total da partida quando o contador zera ou vidas chegam a 0:
+  // Desativa imediatamente todos os loops, sons, elementos em queda e efeitos antes de exibir o resultado
   const finishGame = useCallback(
     (reason: "timeout" | "no_lives" = "timeout") => {
       if (finishedRef.current) return;
@@ -216,29 +290,51 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
       }
       clearAllTimeouts();
       stopHourglassTicking();
+
+      // Limpa todas as referências e estados ativos do jogo para que nada continue ativo no DOM
+      fallingItemsRef.current = [];
+      activeTargetIdRef.current = null;
+      hasShieldRef.current = false;
+      shieldProgressRef.current = 0;
+      shieldCooldownEndsAtRef.current = null;
+      hourglassProgressRef.current = 0;
+      hourglassActiveEndsAtRef.current = null;
+      hourglassCooldownEndsAtRef.current = null;
+
+      setFallingItems([]);
+      setActiveTargetId(null);
+      setHasShield(false);
+      setShieldProgress(0);
+      setShieldCooldownEndsAt(null);
+      setHourglassProgress(0);
+      setHourglassActiveEndsAt(null);
+      setHourglassCooldownEndsAt(null);
       setLaserEffect(null);
       setExplosions([]);
       setNotificationBanner(null);
       setGameOverReason(reason);
       setPhase("gameover");
+    },
+    [clearAllTimeouts],
+  );
+
+  // Contabilização segura dos dados da partida após a transição para "gameover"
+  // (padrão utilizado pelos demais jogos para evitar cascata síncrona durante o tick do timer)
+  useEffect(() => {
+    if (phase !== "gameover" || matchRecordedRef.current) return;
+    matchRecordedRef.current = true;
+
+    stopHourglassTicking();
+    try {
       playVictory();
+    } catch {
+      // Ignora falha de áudio se navegador bloquear
+    }
 
-      const finalScore = Math.max(0, scoreRef.current);
-      const finalLevel = levelRef.current;
+    const finalScore = Math.max(0, scoreRef.current);
+    const finalLevel = levelRef.current;
 
-      // Conquista Platina: "Piloto Purista" (concluir com mais de 1 vida e sem ativar escudo ou ampulheta nenhuma vez)
-      if (
-        reason !== "no_lives" &&
-        livesRef.current > 1 &&
-        hourglassActivationsCountRef.current === 0 &&
-        shieldActivationsCountRef.current === 0 &&
-        finalScore > 0
-      ) {
-        if (authRef.current.awardSpaceQuestMedal) {
-          void authRef.current.awardSpaceQuestMedal("sq_purist_pilot");
-        }
-      }
-
+    try {
       updateBest("spacequest", finalScore, finalLevel);
       const lastM: LastMatch = {
         score: finalScore,
@@ -250,10 +346,35 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
       };
       saveLastMatch("spacequest", lastM);
       setLastMatch(lastM);
-      onStatsChangeRef.current();
-    },
-    [isRanked, clearAllTimeouts],
-  );
+    } catch (err) {
+      console.error("[SpaceQuest] Falha ao salvar estatísticas locais da partida:", err);
+    }
+
+    try {
+      onStatsChangeRef.current?.();
+    } catch (err) {
+      console.error("[SpaceQuest] Falha ao notificar atualização de estatísticas:", err);
+    }
+
+    // Conquista Platina: "Piloto Purista" (concluir com mais de 1 vida e sem ativar escudo ou ampulheta nenhuma vez)
+    if (
+      gameOverReason !== "no_lives" &&
+      livesRef.current > 1 &&
+      hourglassActivationsCountRef.current === 0 &&
+      shieldActivationsCountRef.current === 0 &&
+      finalScore > 0
+    ) {
+      try {
+        if (authRef.current.awardSpaceQuestMedal) {
+          void Promise.resolve(authRef.current.awardSpaceQuestMedal("sq_purist_pilot")).catch(
+            () => {},
+          );
+        }
+      } catch {
+        // Ignora erro na concessão assíncrona
+      }
+    }
+  }, [phase, isRanked, gameOverReason]);
 
   // Clock padronizado: 1 minuto (60s base), +3s por acerto, máx 90s
   const clock = useRoundClock(
@@ -263,6 +384,13 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
     3,
     30,
   );
+
+  // Garantia extra: se o contador zerar enquanto estiver jogando, encerra tudo imediatamente
+  useEffect(() => {
+    if (phase === "playing" && clock.time <= 0 && !finishedRef.current) {
+      finishGame("timeout");
+    }
+  }, [phase, clock.time, finishGame]);
 
   // Background stars generation (deterministic static positions)
   const stars = useRef(
@@ -278,19 +406,21 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
 
   // Level progression derived from score
   useEffect(() => {
+    if (phase !== "playing" || finishedRef.current) return;
     const nextLevel = Math.min(5, Math.floor(score / 70) + 1);
     if (nextLevel > levelRef.current) {
       levelRef.current = nextLevel;
       setLevel(nextLevel);
       playTone(720, 0.2, "sine", 0.08);
     }
-  }, [score]);
+  }, [score, phase]);
 
   // Start Playing transition from Countdown: Immediately spawn first question
   const handleStartPlaying = useCallback(() => {
     if (phaseRef.current !== "countdown") return;
 
     finishedRef.current = false;
+    matchRecordedRef.current = false;
     phaseRef.current = "playing";
     questionsSinceSpecialAuraRef.current = 10;
     spawnedAurasThisMatchRef.current = new Set();
@@ -512,8 +642,6 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
           setLives(collision.nextLives);
 
           if (collision.isGameOver) {
-            fallingItemsRef.current = nextList;
-            setFallingItems(nextList);
             finishGame("no_lives");
             return;
           }
@@ -733,6 +861,7 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
         }, 120);
       } else {
         // Resposta Incorreta: Dispara laser vermelho + som blaster + som específico de erro do Space Quest
+        // Contabiliza -5 pontos (ou a penalidade específica da aura da questão)
         playLaserShoot();
         playSpaceQuestWrong();
         setLaserEffect({
@@ -743,7 +872,13 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
         });
         scheduleTimeout(() => setLaserEffect(null), 200);
 
-        const nextScore = Math.max(0, scoreRef.current + res.scoreDelta);
+        const penaltyDelta =
+          res.scoreDelta < 0
+            ? res.scoreDelta
+            : targetItem.data.aura === "ambar"
+              ? 0
+              : -WRONG_ANSWER_PENALTY;
+        const nextScore = Math.max(0, scoreRef.current + penaltyDelta);
         scoreRef.current = nextScore;
         setScore(nextScore);
 
@@ -765,12 +900,14 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
   // Reiniciar partida com segurança total
   const handleReplay = useCallback(() => {
     clearAllTimeouts();
+    stopHourglassTicking();
     if (requestRef.current) {
       cancelAnimationFrame(requestRef.current);
       requestRef.current = null;
     }
 
     finishedRef.current = false;
+    matchRecordedRef.current = false;
     phaseRef.current = "countdown";
     questionsSinceSpecialAuraRef.current = 10;
     spawnedAurasThisMatchRef.current = new Set();
@@ -807,7 +944,6 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
     setShieldActivationsCount(0);
     setHourglassProgress(0);
     setHourglassActiveEndsAt(null);
-    stopHourglassTicking();
     setHourglassCooldownEndsAt(null);
     setHourglassActivationsCount(0);
     setLaserEffect(null);
@@ -887,558 +1023,583 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
     };
   }, [phase, isHourglassActive]);
 
-  // Se o jogo terminou, substitui a tela do jogo pelo Painel de Resultados (evita tela congelada)
-  if (phase === "gameover") {
-    return (
-      <div className="space-y-4">
-        <GameTopBar
-          title="Space Quest"
-          onExit={onExit}
-          rightElement={
-            <div className="rounded-xl border border-sky-500/30 bg-slate-900/80 px-3 py-1 flex items-center gap-2 shadow-xs">
-              <Rocket className="h-4 w-4 text-sky-400" />
-              <span className="text-xs font-black text-sky-200">Fase {level}</span>
-            </div>
-          }
-        />
-
-        {gameOverReason === "no_lives" ? (
-          <div className="mx-auto max-w-md rounded-2xl border border-rose-500/40 bg-rose-950/80 px-4 py-3 text-center text-rose-100 shadow-lg flex items-center justify-center gap-2.5">
-            <AlertTriangle className="h-5 w-5 text-rose-400 shrink-0" />
-            <span className="text-xs sm:text-sm font-bold">
-              Suas 5 vidas foram perdidas na Barreira Estelar!
-            </span>
-          </div>
-        ) : (
-          <div className="mx-auto max-w-md rounded-2xl border border-sky-500/40 bg-slate-900/85 px-4 py-3 text-center text-sky-100 shadow-lg flex items-center justify-center gap-2.5">
-            <Clock className="h-5 w-5 text-sky-400 shrink-0" />
-            <span className="text-xs sm:text-sm font-bold">
-              Tempo esgotado! Missão espacial finalizada.
-            </span>
-          </div>
-        )}
-
-        <ResultPanel
-          score={Math.max(0, score)}
-          correct={correctCount}
-          wrong={wrongCount}
-          level={level}
-          gameId="spacequest"
-          onReplay={handleReplay}
-          onMenu={onExit}
-        />
-      </div>
-    );
-  }
-
   const currentTarget = fallingItems.find(
     (it) => it.instanceId === activeTargetId && !it.isDestroying,
   );
 
+  // Renderização unificada com chaves explícitas ("sq-view-gameover" vs "sq-view-active")
+  // e blindagem contra mutação de DOM por extensões/auto-tradutor (translate="no")
   return (
-    <div className="space-y-3">
-      {/* Top Bar Navigation */}
-      <GameTopBar
-        title="Space Quest"
-        onExit={onExit}
-        rightElement={
-          <div className="rounded-xl border border-sky-500/30 bg-slate-900/80 px-3 py-1 flex items-center gap-2 shadow-xs">
-            <Rocket className="h-4 w-4 text-sky-400 animate-pulse" />
-            <span className="text-xs font-black text-sky-200">Fase {level}</span>
-          </div>
-        }
-      />
-
-      {/* Countdown overlay: 3, 2, 1, VAI! - clica para iniciar imediatamente ou aguarda término */}
-      {phase === "countdown" && (
-        <div
-          onClick={handleStartPlaying}
-          className="cursor-pointer"
-          title="Clique para iniciar imediatamente"
-        >
-          <Countdown onDone={handleStartPlaying} />
-        </div>
-      )}
-
-      {/* Main Cosmos Arcade Container */}
-      <div
-        ref={gameAreaRef}
-        style={{
-          backgroundColor: "#050714",
-          minHeight: "640px",
-          height: "76vh",
-          maxHeight: "820px",
-        }}
-        className="relative w-full rounded-3xl border-2 border-sky-500/40 shadow-[0_0_40px_rgba(56,189,248,0.25)] flex flex-col justify-between overflow-hidden p-4 select-none text-white font-sans"
-      >
-        {/* Dynamic Starfield Background */}
-        <div className="absolute inset-0 pointer-events-none overflow-hidden">
-          {stars.map((st) => (
-            <div
-              key={st.id}
-              className="absolute rounded-full bg-white"
-              style={{
-                left: `${st.x}%`,
-                top: `${st.y}%`,
-                width: `${st.size}px`,
-                height: `${st.size}px`,
-                opacity: st.opacity,
-                boxShadow:
-                  st.size > 2.2
-                    ? "0 0 8px rgba(56,189,248,0.9)"
-                    : "0 0 3px rgba(255,255,255,0.7)",
-                animation: `pulse ${2 + (st.id % 3)}s infinite ease-in-out`,
-                animationDelay: `${st.blinkDelay}s`,
-              }}
+    <SpaceQuestSafeBoundary
+      score={Math.max(0, score)}
+      correct={correctCount}
+      wrong={wrongCount}
+      level={level}
+      gameOverReason={gameOverReason}
+      onReplay={handleReplay}
+      onExit={onExit}
+    >
+      <div translate="no" className="notranslate">
+        {phase === "gameover" ? (
+          <div key="sq-view-gameover" className="space-y-4">
+            <GameTopBar
+              title="Space Quest"
+              onExit={onExit}
+              rightElement={
+                <div className="rounded-xl border border-sky-500/30 bg-slate-900/80 px-3 py-1 flex items-center gap-2 shadow-xs">
+                  <Rocket className="h-4 w-4 text-sky-400" />
+                  <span className="text-xs font-black text-sky-200">{`Fase ${level}`}</span>
+                </div>
+              }
             />
-          ))}
 
-          {/* Deep Space Cosmic Nebula Glows */}
-          <div className="absolute top-1/4 -left-20 w-80 h-80 rounded-full bg-indigo-900/25 blur-3xl pointer-events-none" />
-          <div className="absolute top-1/3 -right-20 w-96 h-96 rounded-full bg-purple-900/25 blur-3xl pointer-events-none" />
-          <div className="absolute bottom-1/4 left-1/3 w-96 h-96 rounded-full bg-sky-900/25 blur-3xl pointer-events-none" />
-        </div>
-
-        {/* HUD Superior: Vidas, Pontuação, Ampulheta, Escudo, Tempo */}
-        <div className="relative z-20 flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-2xl border border-sky-500/30 bg-slate-950/85 backdrop-blur-md shadow-xl">
-          {/* Lado Esquerdo: Pontuação e Combo */}
-          <div className="flex items-center gap-3">
-            <div className="flex flex-col">
-              <span className="text-[10px] font-black uppercase tracking-wider text-sky-400">
-                Pontos
-              </span>
-              <span className="font-display text-xl sm:text-2xl font-black text-white">
-                {score}
-              </span>
-            </div>
-
-            {combo > 1 && (
-              <div className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-amber-500/20 border border-amber-400/50 text-amber-300 animate-bounce">
-                <Flame className="h-4 w-4 fill-amber-400" />
-                <span className="text-xs font-black">x{combo}</span>
+            {gameOverReason === "no_lives" ? (
+              <div className="mx-auto max-w-md rounded-2xl border border-rose-500/40 bg-rose-950/80 px-4 py-3 text-center text-rose-100 shadow-lg flex items-center justify-center gap-2.5">
+                <AlertTriangle className="h-5 w-5 text-rose-400 shrink-0" />
+                <span className="text-xs sm:text-sm font-bold">
+                  Suas 5 vidas foram perdidas na Barreira Estelar!
+                </span>
+              </div>
+            ) : (
+              <div className="mx-auto max-w-md rounded-2xl border border-sky-500/40 bg-slate-900/85 px-4 py-3 text-center text-sky-100 shadow-lg flex items-center justify-center gap-2.5">
+                <Clock className="h-5 w-5 text-sky-400 shrink-0" />
+                <span className="text-xs sm:text-sm font-bold">
+                  Tempo esgotado! Missão espacial finalizada.
+                </span>
               </div>
             )}
+
+            <ResultPanel
+              score={Math.max(0, score)}
+              correct={correctCount}
+              wrong={wrongCount}
+              level={level}
+              gameId="spacequest"
+              onReplay={handleReplay}
+              onMenu={onExit}
+            />
           </div>
+        ) : (
+          <div key="sq-view-active" className="space-y-3">
+            {/* Top Bar Navigation */}
+            <GameTopBar
+              title="Space Quest"
+              onExit={onExit}
+              rightElement={
+                <div className="rounded-xl border border-sky-500/30 bg-slate-900/80 px-3 py-1 flex items-center gap-2 shadow-xs">
+                  <Rocket className="h-4 w-4 text-sky-400 animate-pulse" />
+                  <span className="text-xs font-black text-sky-200">{`Fase ${level}`}</span>
+                </div>
+              }
+            />
 
-          {/* Centro: Indicadores da Ampulheta e do Escudo */}
-          <div className="flex items-center gap-3">
-            {/* Widget da Ampulheta com Anel Reverso de Carregamento */}
-            <div
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-2xl border transition-all ${
-                isHourglassActive
-                  ? "border-cyan-400 bg-cyan-950/50 shadow-[0_0_15px_rgba(6,182,212,0.4)]"
-                  : isHourglassCooldown
-                    ? "border-rose-500 bg-rose-950/40"
-                    : "border-sky-500/20 bg-slate-900/50"
-              }`}
-            >
-              {/* Anel Circular SVG */}
-              <div className="relative flex items-center justify-center w-7 h-7">
-                <svg className="w-7 h-7 -rotate-90">
-                  <circle
-                    cx="14"
-                    cy="14"
-                    r="11"
-                    className="stroke-slate-800"
-                    strokeWidth="2.5"
-                    fill="none"
-                  />
-                  {(isHourglassActive || isHourglassCooldown) && (
-                    <circle
-                      cx="14"
-                      cy="14"
-                      r="11"
-                      className={isHourglassActive ? "stroke-cyan-400" : "stroke-rose-500"}
-                      strokeWidth="2.5"
-                      fill="none"
-                      strokeDasharray={2 * Math.PI * 11}
-                      strokeDashoffset={2 * Math.PI * 11 * (1 - hourglassProgressPercent / 100)}
-                      strokeLinecap="round"
-                    />
-                  )}
-                </svg>
-                <Hourglass
-                  className={`absolute h-3.5 w-3.5 ${
-                    isHourglassActive
-                      ? "text-cyan-400 animate-spin"
-                      : isHourglassCooldown
-                        ? "text-rose-400"
-                        : "text-slate-400"
-                  }`}
-                />
-              </div>
-
-              <div className="flex flex-col text-[11px] leading-tight">
-                {isHourglassActive ? (
-                  <>
-                    <span className="font-black text-cyan-300">LENTO (-50%)</span>
-                    <span className="font-mono text-[10px] text-cyan-200">
-                      {hourglassRemainingSec}s restantes
-                    </span>
-                  </>
-                ) : isHourglassCooldown ? (
-                  <>
-                    <span className="font-bold text-rose-400">COOLDOWN</span>
-                    <span className="font-mono text-[10px] text-rose-300">
-                      {hourglassRemainingSec}s
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <span className="font-bold text-slate-400">Ampulheta</span>
-                    <span className="font-mono text-[10px] text-sky-400">
-                      {hourglassProgress}/5
-                    </span>
-                  </>
-                )}
-              </div>
-            </div>
-
-            {/* Widget do Escudo de Blindagem */}
-            <div
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-2xl border transition-all ${
-                hasShield
-                  ? "border-sky-400 bg-sky-950/60 shadow-[0_0_15px_rgba(56,189,248,0.5)] animate-pulse"
-                  : isShieldCooldown
-                    ? "border-amber-500/40 bg-amber-950/30"
-                    : "border-sky-500/20 bg-slate-900/50"
-              }`}
-            >
-              <Shield
-                className={`h-4 w-4 ${
-                  hasShield
-                    ? "text-sky-300 fill-sky-400/40"
-                    : isShieldCooldown
-                      ? "text-amber-400"
-                      : "text-slate-400"
-                }`}
-              />
-              <div className="flex flex-col text-[11px] leading-tight">
-                {hasShield ? (
-                  <>
-                    <span className="font-black text-sky-300">BLINDADO</span>
-                    <span className="text-[10px] text-sky-200">Tank 1 impacto</span>
-                  </>
-                ) : isShieldCooldown ? (
-                  <>
-                    <span className="font-bold text-amber-400">RECARGA</span>
-                    <span className="font-mono text-[10px] text-amber-300">
-                      {shieldCooldownSec}s
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <span className="font-bold text-slate-400">Escudo</span>
-                    <span className="font-mono text-[10px] text-sky-400">{shieldProgress}/10</span>
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Lado Direito: Vidas (5 Corações) e Tempo Padronizado */}
-          <div className="flex items-center gap-4">
-            {/* 5 Vidas (Corações) */}
-            <div className="flex items-center gap-1 bg-slate-900/60 px-2.5 py-1 rounded-xl border border-rose-500/30">
-              {Array.from({ length: STARTING_LIVES }).map((_, i) => (
-                <Heart
-                  key={i}
-                  className={`h-4 w-4 transition-all duration-300 ${
-                    i < lives
-                      ? "fill-rose-500 text-rose-500 drop-shadow-[0_0_6px_rgba(244,63,94,0.7)]"
-                      : "text-slate-700"
-                  } ${lives === 1 && i === 0 ? "animate-ping" : ""}`}
-                />
-              ))}
-            </div>
-
-            {/* Tempo Padronizado (ex: 1:00) */}
-            <div className="flex items-center gap-1.5">
-              <span className="text-[10px] font-bold text-slate-400 hidden sm:inline">Tempo:</span>
-              <span
-                className={`font-mono text-lg sm:text-xl font-black px-2.5 py-0.5 rounded-lg ${
-                  clock.time <= 15
-                    ? "bg-red-500/20 text-red-300 border border-red-500/50 animate-pulse"
-                    : "bg-sky-500/15 text-sky-300 border border-sky-400/40"
-                }`}
-              >
-                {formatTime(clock.time)}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {/* Notificações de Alerta */}
-        {notificationBanner && (
-          <div className="absolute top-18 left-1/2 -translate-x-1/2 z-30 px-6 py-2 rounded-2xl bg-gradient-to-r from-sky-600 to-indigo-600 text-white font-black text-xs sm:text-sm shadow-2xl border border-sky-300 animate-in zoom-in-95 duration-150">
-            {notificationBanner}
-          </div>
-        )}
-
-        {/* Área de Trilha Espacial com Questões em Queda */}
-        <div className="relative flex-1 w-full my-2 min-h-[340px]">
-          {fallingItems.map((item) => {
-            const auraCfg = AURA_CONFIGS[item.data.aura];
-            const isTarget = item.instanceId === activeTargetId && !item.isDestroying;
-
-            return (
+            {/* Countdown overlay: 3, 2, 1, VAI! - clica para iniciar imediatamente ou aguarda término */}
+            {phase === "countdown" && (
               <div
-                key={item.instanceId}
-                onClick={() => {
-                  if (!item.isDestroying) {
-                    activeTargetIdRef.current = item.instanceId;
-                    setActiveTargetId(item.instanceId);
-                  }
-                }}
-                className={`absolute -translate-x-1/2 cursor-pointer transition-all duration-75 select-none ${
-                  item.isDestroying
-                    ? "scale-90 opacity-20 pointer-events-none"
-                    : isTarget
-                      ? "scale-105 z-20"
-                      : "opacity-90 z-10 hover:opacity-100"
-                }`}
-                style={{
-                  left: `${item.laneXPercent}%`,
-                  top: `${item.yPercent}%`,
-                }}
+                onClick={handleStartPlaying}
+                className="cursor-pointer"
+                title="Clique para iniciar imediatamente"
               >
-                <div
-                  className={`relative flex flex-col items-center rounded-2xl border-2 px-4 py-2.5 shadow-2xl ${
-                    auraCfg.borderClass
-                  } ${
-                    isTarget ? "ring-2 ring-sky-300 ring-offset-2 ring-offset-neutral-950" : ""
-                  }`}
-                  style={{
-                    backgroundColor: "rgba(15, 23, 42, 0.94)",
-                  }}
-                >
-                  {/* Aura & Bonus Badge */}
-                  {item.data.aura !== "normal" && (
-                    <span className="absolute -top-3.5 px-2.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-slate-950 border border-white/40 text-amber-300 shadow-md">
-                      {auraCfg.badgeLabel}
+                <Countdown onDone={handleStartPlaying} />
+              </div>
+            )}
+
+            {/* Main Cosmos Arcade Container */}
+            <div
+              ref={gameAreaRef}
+              style={{
+                backgroundColor: "#050714",
+                minHeight: "640px",
+                height: "76vh",
+                maxHeight: "820px",
+              }}
+              className="relative w-full rounded-3xl border-2 border-sky-500/40 shadow-[0_0_40px_rgba(56,189,248,0.25)] flex flex-col justify-between overflow-hidden p-4 select-none text-white font-sans"
+            >
+              {/* Dynamic Starfield Background */}
+              <div className="absolute inset-0 pointer-events-none overflow-hidden">
+                {stars.map((st) => (
+                  <div
+                    key={st.id}
+                    className="absolute rounded-full bg-white"
+                    style={{
+                      left: `${st.x}%`,
+                      top: `${st.y}%`,
+                      width: `${st.size}px`,
+                      height: `${st.size}px`,
+                      opacity: st.opacity,
+                      boxShadow:
+                        st.size > 2.2
+                          ? "0 0 8px rgba(56,189,248,0.9)"
+                          : "0 0 3px rgba(255,255,255,0.7)",
+                      animation: `pulse ${2 + (st.id % 3)}s infinite ease-in-out`,
+                      animationDelay: `${st.blinkDelay}s`,
+                    }}
+                  />
+                ))}
+
+                {/* Deep Space Cosmic Nebula Glows */}
+                <div className="absolute top-1/4 -left-20 w-80 h-80 rounded-full bg-indigo-900/25 blur-3xl pointer-events-none" />
+                <div className="absolute top-1/3 -right-20 w-96 h-96 rounded-full bg-purple-900/25 blur-3xl pointer-events-none" />
+                <div className="absolute bottom-1/4 left-1/3 w-96 h-96 rounded-full bg-sky-900/25 blur-3xl pointer-events-none" />
+              </div>
+
+              {/* HUD Superior: Vidas, Pontuação, Ampulheta, Escudo, Tempo */}
+              <div className="relative z-20 flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-2xl border border-sky-500/30 bg-slate-950/85 backdrop-blur-md shadow-xl">
+                {/* Lado Esquerdo: Pontuação e Combo */}
+                <div className="flex items-center gap-3">
+                  <div className="flex flex-col">
+                    <span className="text-[10px] font-black uppercase tracking-wider text-sky-400">
+                      Pontos
                     </span>
+                    <span className="font-display text-xl sm:text-2xl font-black text-white">
+                      {score}
+                    </span>
+                  </div>
+
+                  {combo > 1 && (
+                    <div className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-amber-500/20 border border-amber-400/50 text-amber-300 animate-bounce">
+                      <Flame className="h-4 w-4 fill-amber-400" />
+                      <span className="text-xs font-black">{`x${combo}`}</span>
+                    </div>
                   )}
+                </div>
 
-                  {/* Operation Prompt text */}
-                  <span className="font-mono text-base sm:text-xl font-black text-white tracking-wide drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
-                    {item.data.prompt}
-                  </span>
+                {/* Centro: Indicadores da Ampulheta e do Escudo */}
+                <div className="flex items-center gap-3">
+                  {/* Widget da Ampulheta com Anel Reverso de Carregamento */}
+                  <div
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-2xl border transition-all ${
+                      isHourglassActive
+                        ? "border-cyan-400 bg-cyan-950/50 shadow-[0_0_15px_rgba(6,182,212,0.4)]"
+                        : isHourglassCooldown
+                          ? "border-rose-500 bg-rose-950/40"
+                          : "border-sky-500/20 bg-slate-900/50"
+                    }`}
+                  >
+                    {/* Anel Circular SVG */}
+                    <div className="relative flex items-center justify-center w-7 h-7">
+                      <svg className="w-7 h-7 -rotate-90">
+                        <circle
+                          cx="14"
+                          cy="14"
+                          r="11"
+                          className="stroke-slate-800"
+                          strokeWidth="2.5"
+                          fill="none"
+                        />
+                        {(isHourglassActive || isHourglassCooldown) && (
+                          <circle
+                            cx="14"
+                            cy="14"
+                            r="11"
+                            className={isHourglassActive ? "stroke-cyan-400" : "stroke-rose-500"}
+                            strokeWidth="2.5"
+                            fill="none"
+                            strokeDasharray={2 * Math.PI * 11}
+                            strokeDashoffset={
+                              2 * Math.PI * 11 * (1 - hourglassProgressPercent / 100)
+                            }
+                            strokeLinecap="round"
+                          />
+                        )}
+                      </svg>
+                      <Hourglass
+                        className={`absolute h-3.5 w-3.5 ${
+                          isHourglassActive
+                            ? "text-cyan-400 animate-spin"
+                            : isHourglassCooldown
+                              ? "text-rose-400"
+                              : "text-slate-400"
+                        }`}
+                      />
+                    </div>
 
-                  {/* Difficulty indicator & points preview */}
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className="text-[10px] font-black text-sky-300">
-                      +{item.data.pointsOnCorrect} pts
+                    <div className="flex flex-col text-[11px] leading-tight">
+                      {isHourglassActive ? (
+                        <>
+                          <span className="font-black text-cyan-300">LENTO (-50%)</span>
+                          <span className="font-mono text-[10px] text-cyan-200">
+                            {`${hourglassRemainingSec}s restantes`}
+                          </span>
+                        </>
+                      ) : isHourglassCooldown ? (
+                        <>
+                          <span className="font-bold text-rose-400">RECARGA</span>
+                          <span className="font-mono text-[10px] text-rose-300">
+                            {`${hourglassRemainingSec}s`}
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="font-bold text-slate-400">Ampulheta</span>
+                          <span className="font-mono text-[10px] text-sky-400">
+                            {`${hourglassProgress}/5`}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Widget do Escudo de Blindagem */}
+                  <div
+                    className={`flex items-center gap-2 px-3 py-1.5 rounded-2xl border transition-all ${
+                      hasShield
+                        ? "border-sky-400 bg-sky-950/60 shadow-[0_0_15px_rgba(56,189,248,0.5)] animate-pulse"
+                        : isShieldCooldown
+                          ? "border-amber-500/40 bg-amber-950/30"
+                          : "border-sky-500/20 bg-slate-900/50"
+                    }`}
+                  >
+                    <Shield
+                      className={`h-4 w-4 ${
+                        hasShield
+                          ? "text-sky-300 fill-sky-400/40"
+                          : isShieldCooldown
+                            ? "text-amber-400"
+                            : "text-slate-400"
+                      }`}
+                    />
+                    <div className="flex flex-col text-[11px] leading-tight">
+                      {hasShield ? (
+                        <>
+                          <span className="font-black text-sky-300">BLINDADO</span>
+                          <span className="text-[10px] text-sky-200">Absorve 1 impacto</span>
+                        </>
+                      ) : isShieldCooldown ? (
+                        <>
+                          <span className="font-bold text-amber-400">RECARGA</span>
+                          <span className="font-mono text-[10px] text-amber-300">
+                            {`${shieldCooldownSec}s`}
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="font-bold text-slate-400">Escudo</span>
+                          <span className="font-mono text-[10px] text-sky-400">
+                            {`${shieldProgress}/10`}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Lado Direito: Vidas (5 Corações) e Tempo Padronizado */}
+                <div className="flex items-center gap-4">
+                  {/* 5 Vidas (Corações) */}
+                  <div className="flex items-center gap-1 bg-slate-900/60 px-2.5 py-1 rounded-xl border border-rose-500/30">
+                    {Array.from({ length: STARTING_LIVES }).map((_, i) => (
+                      <Heart
+                        key={i}
+                        className={`h-4 w-4 transition-all duration-300 ${
+                          i < lives
+                            ? "fill-rose-500 text-rose-500 drop-shadow-[0_0_6px_rgba(244,63,94,0.7)]"
+                            : "text-slate-700"
+                        } ${lives === 1 && i === 0 ? "animate-ping" : ""}`}
+                      />
+                    ))}
+                  </div>
+
+                  {/* Tempo Padronizado (ex: 1:00) */}
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] font-bold text-slate-400 hidden sm:inline">
+                      Tempo:
                     </span>
-                    {item.data.penaltyOnWrong > 0 && (
-                      <span className="text-[10px] font-extrabold text-rose-400">
-                        -{item.data.penaltyOnWrong} erro
-                      </span>
-                    )}
+                    <span
+                      className={`font-mono text-lg sm:text-xl font-black px-2.5 py-0.5 rounded-lg ${
+                        clock.time <= 15
+                          ? "bg-red-500/20 text-red-300 border border-red-500/50 animate-pulse"
+                          : "bg-sky-500/15 text-sky-300 border border-sky-400/40"
+                      }`}
+                    >
+                      {formatTime(clock.time)}
+                    </span>
                   </div>
                 </div>
               </div>
-            );
-          })}
 
-          {/* Animação do Feixe Laser com Gradiente de Opacidade Realista */}
-          {laserEffect && (
-            <svg className="absolute inset-0 w-full h-full pointer-events-none z-30">
-              <defs>
-                <linearGradient
-                  id="plasmaLaserGrad"
-                  gradientUnits="userSpaceOnUse"
-                  x1="50%"
-                  y1="82%"
-                  x2={`${laserEffect.targetX}%`}
-                  y2={`${laserEffect.targetY + 4}%`}
-                >
-                  <stop offset="0%" stopColor={laserEffect.color} stopOpacity="0.25" />
-                  <stop offset="65%" stopColor={laserEffect.color} stopOpacity="0.85" />
-                  <stop offset="100%" stopColor="#ffffff" stopOpacity="1" />
-                </linearGradient>
-              </defs>
-              <line
-                x1="50%"
-                y1="82%"
-                x2={`${laserEffect.targetX}%`}
-                y2={`${laserEffect.targetY + 4}%`}
-                stroke="url(#plasmaLaserGrad)"
-                strokeWidth="5"
-                strokeLinecap="round"
-                style={{
-                  filter: `drop-shadow(0 0 12px ${laserEffect.color})`,
-                }}
-              />
-            </svg>
-          )}
+              {/* Notificações de Alerta */}
+              {notificationBanner && (
+                <div className="absolute top-18 left-1/2 -translate-x-1/2 z-30 px-6 py-2 rounded-2xl bg-gradient-to-r from-sky-600 to-indigo-600 text-white font-black text-xs sm:text-sm shadow-2xl border border-sky-300 animate-in zoom-in-95 duration-150">
+                  {notificationBanner}
+                </div>
+              )}
 
-          {/* Explosões Procedurais de Partículas Vetoriais */}
-          {explosions.map((exp) => (
-            <div
-              key={exp.id}
-              className="absolute pointer-events-none z-40"
-              style={{
-                left: `${exp.xPercent}%`,
-                top: `${exp.yPercent}%`,
-              }}
-            >
-              {exp.particles.map((p) => (
-                <div
-                  key={p.id}
-                  className="absolute rounded-full"
-                  style={{
-                    width: `${p.size}px`,
-                    height: `${p.size}px`,
-                    backgroundColor: p.color,
-                    boxShadow: `0 0 8px ${p.color}`,
-                    transform: `translate(${p.dx}px, ${p.dy}px)`,
-                    opacity: 0,
-                    transition: "all 350ms cubic-bezier(0.16, 1, 0.3, 1)",
-                  }}
-                />
-              ))}
-            </div>
-          ))}
+              {/* Área de Trilha Espacial com Questões em Queda */}
+              <div className="relative flex-1 w-full my-2 min-h-[340px]">
+                {fallingItems.map((item) => {
+                  const auraCfg = AURA_CONFIGS[item.data.aura];
+                  const isTarget = item.instanceId === activeTargetId && !item.isDestroying;
 
-          {/* Nave Estelar Pairando com Escudo Visual (Acima da Barreira Estelar) */}
-          <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center pointer-events-none">
-            {/* Cúpula de Plasma Protetora do Escudo */}
-            {hasShield && (
-              <div className="absolute -inset-4 rounded-full border-2 border-sky-300 bg-sky-500/15 shadow-[0_0_25px_rgba(56,189,248,0.85)] animate-pulse" />
-            )}
+                  return (
+                    <div
+                      key={item.instanceId}
+                      onClick={() => {
+                        if (!item.isDestroying) {
+                          activeTargetIdRef.current = item.instanceId;
+                          setActiveTargetId(item.instanceId);
+                        }
+                      }}
+                      className={`absolute -translate-x-1/2 cursor-pointer transition-all duration-75 select-none ${
+                        item.isDestroying
+                          ? "scale-90 opacity-20 pointer-events-none"
+                          : isTarget
+                            ? "scale-105 z-20"
+                            : "opacity-90 z-10 hover:opacity-100"
+                      }`}
+                      style={{
+                        left: `${item.laneXPercent}%`,
+                        top: `${item.yPercent}%`,
+                      }}
+                    >
+                      <div
+                        className={`relative flex flex-col items-center rounded-2xl border-2 px-4 py-2.5 shadow-2xl ${
+                          auraCfg.borderClass
+                        } ${
+                          isTarget
+                            ? "ring-2 ring-sky-300 ring-offset-2 ring-offset-neutral-950"
+                            : ""
+                        }`}
+                        style={{
+                          backgroundColor: "rgba(15, 23, 42, 0.94)",
+                        }}
+                      >
+                        {/* Aura & Bonus Badge */}
+                        {item.data.aura !== "normal" && (
+                          <span className="absolute -top-3.5 px-2.5 py-0.5 rounded-full text-[9px] font-black uppercase tracking-wider bg-slate-950 border border-white/40 text-amber-300 shadow-md">
+                            {auraCfg.badgeLabel}
+                          </span>
+                        )}
 
-            <div className="relative flex flex-col items-center animate-[sway_3s_ease-in-out_infinite]">
-              {/* Canhões de Plasma */}
-              <div className="absolute -top-3 left-2 w-1.5 h-4 bg-sky-400 rounded-t-full shadow-[0_0_8px_#38bdf8]" />
-              <div className="absolute -top-3 right-2 w-1.5 h-4 bg-sky-400 rounded-t-full shadow-[0_0_8px_#38bdf8]" />
+                        {/* Operation Prompt text */}
+                        <span className="font-mono text-base sm:text-xl font-black text-white tracking-wide drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
+                          {item.data.prompt}
+                        </span>
 
-              {/* Geometria Vetorial SVG da Nave */}
-              <svg
-                width="64"
-                height="64"
-                viewBox="0 0 64 64"
-                fill="none"
-                xmlns="http://www.w3.org/2000/svg"
-                className="drop-shadow-[0_0_14px_rgba(56,189,248,0.6)]"
-              >
-                <path
-                  d="M32 4L42 28L46 48L32 54L18 48L22 28L32 4Z"
-                  fill="url(#shipGrad)"
-                  stroke="#38bdf8"
-                  strokeWidth="1.5"
-                />
-                <path
-                  d="M32 14L36 26L32 30L28 26L32 14Z"
-                  fill="#38bdf8"
-                  opacity="0.9"
-                  className="animate-pulse"
-                />
-                <path
-                  d="M18 48L4 52L14 36L22 34L18 48Z"
-                  fill="#0369a1"
-                  stroke="#38bdf8"
-                  strokeWidth="1.2"
-                />
-                <path
-                  d="M46 48L60 52L50 36L42 34L46 48Z"
-                  fill="#0369a1"
-                  stroke="#38bdf8"
-                  strokeWidth="1.2"
-                />
-                <circle cx="32" cy="42" r="3" fill="#67e8f9" />
+                        {/* Difficulty indicator & points preview */}
+                        <div className="flex items-center gap-2 mt-1">
+                          <span className="text-[10px] font-black text-sky-300">
+                            {`+${item.data.pointsOnCorrect} pts`}
+                          </span>
+                          {item.data.penaltyOnWrong > 0 && (
+                            <span className="text-[10px] font-extrabold text-rose-400">
+                              {`-${item.data.penaltyOnWrong} erro`}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
 
-                <defs>
-                  <linearGradient
-                    id="shipGrad"
-                    x1="32"
-                    y1="4"
-                    x2="32"
-                    y2="54"
-                    gradientUnits="userSpaceOnUse"
+                {/* Animação do Feixe Laser com Gradiente de Opacidade Realista */}
+                {laserEffect && (
+                  <svg className="absolute inset-0 w-full h-full pointer-events-none z-30">
+                    <defs>
+                      <linearGradient
+                        id="plasmaLaserGrad"
+                        gradientUnits="userSpaceOnUse"
+                        x1="50%"
+                        y1="82%"
+                        x2={`${laserEffect.targetX}%`}
+                        y2={`${laserEffect.targetY + 4}%`}
+                      >
+                        <stop offset="0%" stopColor={laserEffect.color} stopOpacity="0.25" />
+                        <stop offset="65%" stopColor={laserEffect.color} stopOpacity="0.85" />
+                        <stop offset="100%" stopColor="#ffffff" stopOpacity="1" />
+                      </linearGradient>
+                    </defs>
+                    <line
+                      x1="50%"
+                      y1="82%"
+                      x2={`${laserEffect.targetX}%`}
+                      y2={`${laserEffect.targetY + 4}%`}
+                      stroke="url(#plasmaLaserGrad)"
+                      strokeWidth="5"
+                      strokeLinecap="round"
+                      style={{
+                        filter: `drop-shadow(0 0 12px ${laserEffect.color})`,
+                      }}
+                    />
+                  </svg>
+                )}
+
+                {/* Explosões Procedurais de Partículas Vetoriais */}
+                {explosions.map((exp) => (
+                  <div
+                    key={exp.id}
+                    className="absolute pointer-events-none z-40"
+                    style={{
+                      left: `${exp.xPercent}%`,
+                      top: `${exp.yPercent}%`,
+                    }}
                   >
-                    <stop stopColor="#0f172a" />
-                    <stop offset="0.5" stopColor="#1e293b" />
-                    <stop offset="1" stopColor="#0284c7" />
-                  </linearGradient>
-                </defs>
-              </svg>
-
-              {/* Propulsor de Plasma */}
-              <div className="w-4 h-6 -mt-1 bg-gradient-to-b from-sky-400 via-cyan-400 to-transparent rounded-b-full blur-[1px] animate-pulse shadow-[0_4px_14px_#38bdf8]" />
-            </div>
-          </div>
-
-          {/* Barreira Estelar Inferior (Linha Vermelha de Impacto na Base da Arena) */}
-          <div className="absolute bottom-0 inset-x-0 h-1.5 bg-gradient-to-r from-red-600/30 via-red-500/80 to-red-600/30 border-t border-red-500/50 shadow-[0_0_15px_rgba(239,68,68,0.5)] flex items-center justify-center z-10">
-            <span className="text-[8px] uppercase tracking-widest text-red-300/80 font-black">
-              Barreira Estelar (-1 Vida • -5 pts em colisão)
-            </span>
-          </div>
-        </div>
-
-        {/* Cockpit / Dock de Controle com Altura Estritamente Fixa (Elimina Recuo Visual) */}
-        <div className="relative z-20 w-full h-[105px] min-h-[105px] max-h-[105px] flex flex-col justify-center items-center rounded-2xl bg-slate-950/90 border border-sky-500/20 px-3 py-1 shadow-2xl">
-          {currentTarget ? (
-            <div className="w-full flex flex-col items-center justify-center h-full animate-in fade-in duration-100">
-              <div className="text-[11px] font-bold text-sky-300 flex items-center gap-1.5 mb-1.5 bg-slate-900/80 px-3 py-0.5 rounded-full border border-sky-400/30 shadow-xs">
-                <Target className="h-3.5 w-3.5 text-sky-400 animate-spin" />
-                <span>Alvo na Mira:</span>
-                <b className="text-white font-mono text-sm">{currentTarget.data.prompt}</b>
-              </div>
-
-              {/* Botões de Ação: V/F ou Alternativas Numéricas */}
-              <div className="flex items-center justify-center gap-2 sm:gap-3 w-full max-w-md">
-                {currentTarget.data.options.map((opt, idx) => (
-                  <button
-                    key={`${currentTarget.instanceId}_${opt}_${idx}`}
-                    type="button"
-                    onClick={() => handleAnswer(opt)}
-                    className={`flex-1 min-w-[70px] h-12 rounded-xl font-mono text-lg sm:text-xl font-black transition-all cursor-pointer shadow-lg active:scale-95 border-2 flex flex-col items-center justify-center leading-none ${
-                      currentTarget.data.kind === "logic"
-                        ? opt === "V"
-                          ? "bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/30 border-emerald-400"
-                          : "bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/30 border-rose-400"
-                        : "bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white shadow-sky-600/30 border-sky-400"
-                    }`}
-                  >
-                    <span>{opt}</span>
-                    <span className="text-[9px] font-sans font-normal opacity-80 mt-0.5">
-                      [{currentTarget.data.kind === "logic" ? (opt === "V" ? "V/1" : "F/2") : idx + 1}]
-                    </span>
-                  </button>
+                    {exp.particles.map((p) => (
+                      <div
+                        key={p.id}
+                        className="absolute rounded-full"
+                        style={{
+                          width: `${p.size}px`,
+                          height: `${p.size}px`,
+                          backgroundColor: p.color,
+                          boxShadow: `0 0 8px ${p.color}`,
+                          transform: `translate(${p.dx}px, ${p.dy}px)`,
+                          opacity: 0,
+                          transition: "all 350ms cubic-bezier(0.16, 1, 0.3, 1)",
+                        }}
+                      />
+                    ))}
+                  </div>
                 ))}
-              </div>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center h-full gap-1.5 text-sky-400/80 animate-in fade-in duration-100">
-              <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-slate-900/70 border border-sky-500/30">
-                <Target className="h-3.5 w-3.5 animate-spin text-sky-400" />
-                <span className="text-xs font-semibold">
-                  Rastreando operações estelares no radar...
-                </span>
-              </div>
-              <span className="text-[10px] text-slate-500">
-                Mire e dispare no teclado (1-4 ou V/F)
-              </span>
-            </div>
-          )}
-        </div>
-      </div>
 
-      {/* Sway animation styling */}
-      <style>{`
-        @keyframes sway {
-          0%, 100% {
-            transform: translateY(0px) rotate(0deg);
-          }
-          25% {
-            transform: translateY(-5px) translateX(-7px) rotate(-1.5deg);
-          }
-          75% {
-            transform: translateY(-4px) translateX(7px) rotate(1.5deg);
-          }
-        }
-      `}</style>
-    </div>
+                {/* Nave Estelar Pairando com Escudo Visual (Acima da Barreira Estelar) */}
+                <div className="absolute bottom-5 left-1/2 -translate-x-1/2 z-20 flex flex-col items-center pointer-events-none">
+                  {/* Cúpula de Plasma Protetora do Escudo */}
+                  {hasShield && (
+                    <div className="absolute -inset-4 rounded-full border-2 border-sky-300 bg-sky-500/15 shadow-[0_0_25px_rgba(56,189,248,0.85)] animate-pulse" />
+                  )}
+
+                  <div className="relative flex flex-col items-center animate-[sway_3s_ease-in-out_infinite]">
+                    {/* Canhões de Plasma */}
+                    <div className="absolute -top-3 left-2 w-1.5 h-4 bg-sky-400 rounded-t-full shadow-[0_0_8px_#38bdf8]" />
+                    <div className="absolute -top-3 right-2 w-1.5 h-4 bg-sky-400 rounded-t-full shadow-[0_0_8px_#38bdf8]" />
+
+                    {/* Geometria Vetorial SVG da Nave */}
+                    <svg
+                      width="64"
+                      height="64"
+                      viewBox="0 0 64 64"
+                      fill="none"
+                      xmlns="http://www.w3.org/2000/svg"
+                      className="drop-shadow-[0_0_14px_rgba(56,189,248,0.6)]"
+                    >
+                      <path
+                        d="M32 4L42 28L46 48L32 54L18 48L22 28L32 4Z"
+                        fill="url(#shipGrad)"
+                        stroke="#38bdf8"
+                        strokeWidth="1.5"
+                      />
+                      <path
+                        d="M32 14L36 26L32 30L28 26L32 14Z"
+                        fill="#38bdf8"
+                        opacity="0.9"
+                        className="animate-pulse"
+                      />
+                      <path
+                        d="M18 48L4 52L14 36L22 34L18 48Z"
+                        fill="#0369a1"
+                        stroke="#38bdf8"
+                        strokeWidth="1.2"
+                      />
+                      <path
+                        d="M46 48L60 52L50 36L42 34L46 48Z"
+                        fill="#0369a1"
+                        stroke="#38bdf8"
+                        strokeWidth="1.2"
+                      />
+                      <circle cx="32" cy="42" r="3" fill="#67e8f9" />
+
+                      <defs>
+                        <linearGradient
+                          id="shipGrad"
+                          x1="32"
+                          y1="4"
+                          x2="32"
+                          y2="54"
+                          gradientUnits="userSpaceOnUse"
+                        >
+                          <stop stopColor="#0f172a" />
+                          <stop offset="0.5" stopColor="#1e293b" />
+                          <stop offset="1" stopColor="#0284c7" />
+                        </linearGradient>
+                      </defs>
+                    </svg>
+
+                    {/* Propulsor de Plasma */}
+                    <div className="w-4 h-6 -mt-1 bg-gradient-to-b from-sky-400 via-cyan-400 to-transparent rounded-b-full blur-[1px] animate-pulse shadow-[0_4px_14px_#38bdf8]" />
+                  </div>
+                </div>
+
+                {/* Barreira Estelar Inferior (Linha Vermelha de Impacto na Base da Arena) */}
+                <div className="absolute bottom-0 inset-x-0 h-1.5 bg-gradient-to-r from-red-600/30 via-red-500/80 to-red-600/30 border-t border-red-500/50 shadow-[0_0_15px_rgba(239,68,68,0.5)] flex items-center justify-center z-10">
+                  <span className="text-[8px] uppercase tracking-widest text-red-300/80 font-black">
+                    Barreira Estelar (-1 Vida • -5 pts em colisão)
+                  </span>
+                </div>
+              </div>
+
+              {/* Cockpit / Dock de Controle com Altura Estritamente Fixa (Elimina Recuo Visual) */}
+              <div className="relative z-20 w-full h-[105px] min-h-[105px] max-h-[105px] flex flex-col justify-center items-center rounded-2xl bg-slate-950/90 border border-sky-500/20 px-3 py-1 shadow-2xl">
+                {currentTarget ? (
+                  <div className="w-full flex flex-col items-center justify-center h-full animate-in fade-in duration-100">
+                    <div className="text-[11px] font-bold text-sky-300 flex items-center gap-1.5 mb-1.5 bg-slate-900/80 px-3 py-0.5 rounded-full border border-sky-400/30 shadow-xs">
+                      <Target className="h-3.5 w-3.5 text-sky-400 animate-spin" />
+                      <span>Alvo na Mira:</span>
+                      <b className="text-white font-mono text-sm">{currentTarget.data.prompt}</b>
+                    </div>
+
+                    {/* Botões de Ação: V/F ou Alternativas Numéricas */}
+                    <div className="flex items-center justify-center gap-2 sm:gap-3 w-full max-w-md">
+                      {currentTarget.data.options.map((opt, idx) => (
+                        <button
+                          key={`${currentTarget.instanceId}_${opt}_${idx}`}
+                          type="button"
+                          onClick={() => handleAnswer(opt)}
+                          className={`flex-1 min-w-[70px] h-12 rounded-xl font-mono text-lg sm:text-xl font-black transition-all cursor-pointer shadow-lg active:scale-95 border-2 flex flex-col items-center justify-center leading-none ${
+                            currentTarget.data.kind === "logic"
+                              ? opt === "V"
+                                ? "bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/30 border-emerald-400"
+                                : "bg-rose-600 hover:bg-rose-500 text-white shadow-rose-600/30 border-rose-400"
+                              : "bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white shadow-sky-600/30 border-sky-400"
+                          }`}
+                        >
+                          <span>{opt}</span>
+                          <span className="text-[9px] font-sans font-normal opacity-80 mt-0.5">
+                            {`[${
+                              currentTarget.data.kind === "logic"
+                                ? opt === "V"
+                                  ? "V/1"
+                                  : "F/2"
+                                : idx + 1
+                            }]`}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-full gap-1.5 text-sky-400/80 animate-in fade-in duration-100">
+                    <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-slate-900/70 border border-sky-500/30">
+                      <Target className="h-3.5 w-3.5 animate-spin text-sky-400" />
+                      <span className="text-xs font-semibold">
+                        Rastreando operações estelares no radar...
+                      </span>
+                    </div>
+                    <span className="text-[10px] text-slate-500">
+                      Mire e dispare no teclado (1-4 ou V/F)
+                    </span>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Sway animation styling */}
+            <style>{`
+              @keyframes sway {
+                0%, 100% {
+                  transform: translateY(0px) rotate(0deg);
+                }
+                25% {
+                  transform: translateY(-5px) translateX(-7px) rotate(-1.5deg);
+                }
+                75% {
+                  transform: translateY(-4px) translateX(7px) rotate(1.5deg);
+                }
+              }
+            `}</style>
+          </div>
+        )}
+      </div>
+    </SpaceQuestSafeBoundary>
   );
 }

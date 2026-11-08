@@ -168,11 +168,11 @@ test("Space Quest Engine — Resolução de Respostas, Combos e Penalidades", ()
   assert.equal(resCombo5.comboBonusEarned, true);
   assert.equal(resCombo5.scoreDelta, 10 + COMBO_BONUS_POINTS); // 20 pts
 
-  // Erro quebra combo e não concede bônus
+  // Erro quebra combo, não concede bônus e desconta -5 pontos na questão normal
   const resWrong = resolveAnswer(qNormal, "9999", 5);
   assert.equal(resWrong.isCorrect, false);
   assert.equal(resWrong.newCombo, 0);
-  assert.equal(resWrong.scoreDelta, 0); // normal tem wrongPenalty 0
+  assert.equal(resWrong.scoreDelta, -5); // normal tem wrongPenalty 5 (-5 pontos)
 });
 
 test("Space Quest Engine — Auras Especiais e Concessão de Medalhas", () => {

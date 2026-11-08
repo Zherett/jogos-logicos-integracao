@@ -132,7 +132,7 @@ export const GAME_INSTRUCTIONS: Record<GameId, GameInstruction> = {
     ],
     controls: "Clique ou toque nas alternativas (V/F ou valores matemáticos) no painel da nave ou use o teclado.",
     tips: "Mantenha combos de 5 acertos seguidos para somar +10 pontos extras e priorize questões com auras raras!",
-    scoring: "Acerto: +10 pts (ou 2x a 4x com auras) • Combo x5: +10 pts extras • Queda no fundo: -5 pts • Erros penalizam de acordo com a aura.",
+    scoring: "Acerto: +10 pts (ou 2x a 4x com auras) • Erro no laser: -5 pts (ou penalidade da aura) • Combo x5: +10 pts extras • Queda na barreira: -5 pts e -1 vida.",
   },
 };
 

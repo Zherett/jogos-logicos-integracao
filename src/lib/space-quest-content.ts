@@ -44,6 +44,8 @@ export interface AuraDefinition {
   medalTitle?: string;
 }
 
+export const WRONG_ANSWER_PENALTY = 5; // -5 pontos para cada resposta errada disparada
+
 export const AURA_CONFIGS: Record<AuraType, AuraDefinition> = {
   normal: {
     type: "normal",
@@ -55,7 +57,7 @@ export const AURA_CONFIGS: Record<AuraType, AuraDefinition> = {
     textColor: "text-sky-300",
     chance: 0.924, // 92.4%
     scoreMultiplier: 1,
-    wrongPenalty: 0,
+    wrongPenalty: WRONG_ANSWER_PENALTY, // -5 pts por resposta errada
   },
   safira: {
     type: "safira",
