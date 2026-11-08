@@ -7,21 +7,92 @@ import {
   generateLogicQuestion,
   generateMathQuestion,
   generateSpaceQuestQuestion,
+  generateDoubleWaveQuestions,
   resolveAnswer,
   AURA_CONFIGS,
   FLOOR_COLLISION_PENALTY,
   BASE_CORRECT_POINTS,
   COMBO_BONUS_POINTS,
+  STARTING_LIVES,
+  RECOVER_LIFE_CHANCE,
+  DOUBLE_WAVE_CHANCE,
+  SLOW_MOTION_DURATION_MS,
+  SLOW_MOTION_COOLDOWN_MS,
+  AMPULHETA_COMBO_REQ,
+  SHIELD_COMBO_REQ,
+  SHIELD_COOLDOWN_MS,
   type AuraType,
 } from "./space-quest-content.ts";
+import { getAllAvailableMedals } from "./medals-catalog.ts";
 
-test("Space Quest Engine — Sorteio de Auras por Probabilidade", () => {
-  // 1% Âmbar, 5% Rubi, 10% Ametista, 20% Safira, 64% Normal
-  assert.equal(rollAura(0.005), "ambar");
-  assert.equal(rollAura(0.03), "rubi");
-  assert.equal(rollAura(0.12), "ametista");
-  assert.equal(rollAura(0.25), "safira");
-  assert.equal(rollAura(0.70), "normal");
+test("Space Quest Engine — Sorteio de Auras por Probabilidade Atualizada", () => {
+  // 0.5% Âmbar, 1% Rubi, 5% Ametista, 10% Safira, 83.5% Normal
+  assert.equal(rollAura(0.002), "ambar"); // < 0.005
+  assert.equal(rollAura(0.010), "rubi"); // 0.005 a 0.015
+  assert.equal(rollAura(0.040), "ametista"); // 0.015 a 0.065
+  assert.equal(rollAura(0.100), "safira"); // 0.065 a 0.165
+  assert.equal(rollAura(0.500), "normal"); // >= 0.165
+
+  // Verificação exata da soma das probabilidades
+  const total =
+    AURA_CONFIGS.ambar.chance +
+    AURA_CONFIGS.rubi.chance +
+    AURA_CONFIGS.ametista.chance +
+    AURA_CONFIGS.safira.chance +
+    AURA_CONFIGS.normal.chance;
+  assert.ok(Math.abs(total - 1.0) < 0.0001);
+});
+
+test("Space Quest Engine — Geração de Onda Dupla com Dificuldades Distintas (5% Chance)", () => {
+  assert.equal(DOUBLE_WAVE_CHANCE, 0.05);
+
+  // Testa 20 ondas duplas consecutivas: cada par deve ter dificuldades diferentes
+  for (let i = 0; i < 20; i++) {
+    const [q1, q2] = generateDoubleWaveQuestions(1);
+    assert.notEqual(
+      q1.difficulty,
+      q2.difficulty,
+      `Onda dupla ${i} gerou mesma dificuldade: ${q1.difficulty}`,
+    );
+  }
+});
+
+test("Space Quest Engine — Constantes de Sobrevivência, Ampulheta e Escudo", () => {
+  assert.equal(STARTING_LIVES, 5);
+  assert.equal(RECOVER_LIFE_CHANCE, 0.10);
+  assert.equal(SLOW_MOTION_DURATION_MS, 10000);
+  assert.equal(SLOW_MOTION_COOLDOWN_MS, 5000);
+  assert.equal(AMPULHETA_COMBO_REQ, 5);
+  assert.equal(SHIELD_COMBO_REQ, 10);
+  assert.equal(SHIELD_COOLDOWN_MS, 10000);
+
+  // Verificação de todas as medalhas específicas e geradas para o Space Quest
+  const allMedals = getAllAvailableMedals();
+  const sqMedalIds = [
+    // Medalhas por jogo geradas
+    "game_spacequest_lvl_master",
+    "game_spacequest_flawless",
+    "game_spacequest_matches_10",
+    "game_spacequest_matches_20",
+    "game_spacequest_matches_30",
+    "game_spacequest_matches_40",
+    "game_spacequest_matches_50",
+    // Auras Especiais
+    "sq_safira",
+    "sq_ametista",
+    "sq_rubi",
+    "sq_ambar",
+    // Novas Medalhas de Habilidade e Sobrevivência
+    "sq_hourglass_3x",
+    "sq_shield_2x",
+    "sq_divine_luck",
+    "sq_purist_pilot",
+  ];
+
+  for (const mId of sqMedalIds) {
+    const found = allMedals.find((m) => m.id === mId);
+    assert.ok(found, `Medalha ${mId} deve existir no catálogo de medalhas`);
+  }
 });
 
 test("Space Quest Engine — Velocidade de Queda Inversa à Dificuldade", () => {

@@ -53,7 +53,7 @@ export const AURA_CONFIGS: Record<AuraType, AuraDefinition> = {
     borderClass: "border-sky-400/40 shadow-[0_0_12px_rgba(56,189,248,0.25)]",
     bgGlowClass: "from-sky-950/40 to-slate-900/90",
     textColor: "text-sky-300",
-    chance: 0.64,
+    chance: 0.835, // 83.5%
     scoreMultiplier: 1,
     wrongPenalty: 0,
   },
@@ -65,7 +65,7 @@ export const AURA_CONFIGS: Record<AuraType, AuraDefinition> = {
     borderClass: "border-blue-500 shadow-[0_0_20px_rgba(37,99,235,0.7)] animate-pulse",
     bgGlowClass: "from-blue-950/70 via-indigo-950/50 to-slate-900/90",
     textColor: "text-blue-300 font-extrabold",
-    chance: 0.20,
+    chance: 0.10, // 10%
     fixedDifficulty: "medium",
     scoreMultiplier: 2, // 2x = 20 pts
     wrongPenalty: 20, // -20 pts
@@ -80,7 +80,7 @@ export const AURA_CONFIGS: Record<AuraType, AuraDefinition> = {
     borderClass: "border-purple-500 shadow-[0_0_22px_rgba(147,51,234,0.75)] animate-pulse",
     bgGlowClass: "from-purple-950/70 via-fuchsia-950/50 to-slate-900/90",
     textColor: "text-purple-300 font-extrabold",
-    chance: 0.10,
+    chance: 0.05, // 5%
     fixedDifficulty: "hard",
     scoreMultiplier: 3, // 3x = 30 pts
     wrongPenalty: 30, // -30 pts
@@ -95,7 +95,7 @@ export const AURA_CONFIGS: Record<AuraType, AuraDefinition> = {
     borderClass: "border-red-500 shadow-[0_0_25px_rgba(239,68,68,0.85)] animate-pulse",
     bgGlowClass: "from-red-950/70 via-rose-950/50 to-slate-900/90",
     textColor: "text-red-300 font-black",
-    chance: 0.05,
+    chance: 0.01, // 1%
     fixedDifficulty: "hard",
     scoreMultiplier: 4, // 4x = 40 pts
     wrongPenalty: 30, // 3x = -30 pts
@@ -110,7 +110,7 @@ export const AURA_CONFIGS: Record<AuraType, AuraDefinition> = {
     borderClass: "border-amber-400 shadow-[0_0_28px_rgba(245,158,11,0.9)] animate-pulse",
     bgGlowClass: "from-amber-950/70 via-yellow-950/50 to-slate-900/90",
     textColor: "text-amber-300 font-black",
-    chance: 0.01,
+    chance: 0.005, // 0.5%
     fixedDifficulty: "hard",
     scoreMultiplier: 4, // 4x = 40 pts
     wrongPenalty: 0, // sem penalidade de pontos negativos
@@ -124,17 +124,28 @@ export const BASE_CORRECT_POINTS = 10;
 export const COMBO_BONUS_POINTS = 10;
 export const COMBO_THRESHOLD = 5; // a cada 5 acertos consecutivos
 
+// Novas constantes de jogabilidade do Space Quest
+export const STARTING_LIVES = 5;
+export const RECOVER_LIFE_CHANCE = 0.10; // 10% de chance de restaurar 1 vida com 1 coração
+export const DOUBLE_WAVE_CHANCE = 0.05; // 5% de chance de vir 2 questões juntas
+export const SLOW_MOTION_DURATION_MS = 10000; // 10s de lentidão
+export const SLOW_MOTION_COOLDOWN_MS = 5000; // 5s de cooldown em vermelho
+export const SLOW_MOTION_SPEED_MULT = 0.5; // -50% velocidade
+export const AMPULHETA_COMBO_REQ = 5; // 5 acertos seguidos
+export const SHIELD_COMBO_REQ = 10; // 10 acertos seguidos
+export const SHIELD_COOLDOWN_MS = 10000; // 10s de cooldown após ativação do escudo
+
 /**
  * Randomly rolls an aura based on the exact probabilities:
- * 1% ambar (dourada), 5% rubi (vermelha), 10% ametista (roxa), 20% safira (azul), 64% normal
+ * 0.5% ambar (dourada), 1% rubi (vermelha), 5% ametista (roxa), 10% safira (azul), 83.5% normal
  */
 export function rollAura(forcedRandom?: number): AuraType {
   const roll = typeof forcedRandom === "number" ? forcedRandom : Math.random();
-  if (roll < 0.01) return "ambar";
-  if (roll < 0.06) return "rubi";
-  if (roll < 0.16) return "ametista";
-  if (roll < 0.36) return "safira";
-  return "normal";
+  if (roll < 0.005) return "ambar"; // 0.5%
+  if (roll < 0.015) return "rubi"; // 1.0%
+  if (roll < 0.065) return "ametista"; // 5.0%
+  if (roll < 0.165) return "safira"; // 10.0%
+  return "normal"; // 83.5%
 }
 
 /**
@@ -403,6 +414,27 @@ export function generateSpaceQuestQuestion(
   return kind === "logic"
     ? generateLogicQuestion(diff, aura)
     : generateMathQuestion(diff, aura);
+}
+
+/**
+ * Generates two questions guaranteed to have DIFFERENT difficulties for the double wave (5% chance).
+ * e.g., one easy and one medium or hard.
+ */
+export function generateDoubleWaveQuestions(
+  level: number,
+): [SpaceQuestQuestion, SpaceQuestQuestion] {
+  const q1 = generateSpaceQuestQuestion(level);
+  const allDiffs: QuestionDifficulty[] = ["easy", "medium", "hard"];
+  const otherDiffs = allDiffs.filter((d) => d !== q1.difficulty);
+  const diff2 = otherDiffs[Math.floor(Math.random() * otherDiffs.length)];
+  const aura2 = rollAura();
+  const kind2: QuestionKind = Math.random() < 0.5 ? "logic" : "math";
+  const q2 =
+    kind2 === "logic"
+      ? generateLogicQuestion(diff2, aura2)
+      : generateMathQuestion(diff2, aura2);
+
+  return [q1, q2];
 }
 
 export interface AnswerResolutionResult {

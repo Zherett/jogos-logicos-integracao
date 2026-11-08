@@ -41,6 +41,7 @@ import {
   syncAdminConfigFromPlayFab,
   grantSpecialRobotMedal,
   grantSpaceQuestAuraMedal,
+  type SpaceQuestMedalId,
   type GameStatRow,
   type PlayerProfile,
   type SignUpData,
@@ -95,7 +96,7 @@ interface AuthValue {
     medalId: "m_rpg_ametista" | "m_rpg_carmesim",
   ) => Promise<{ success: boolean; medal?: MedalDefinition; profile?: PlayerProfile }>;
   awardSpaceQuestMedal: (
-    medalId: "sq_safira" | "sq_ametista" | "sq_rubi" | "sq_ambar",
+    medalId: SpaceQuestMedalId,
   ) => Promise<{ success: boolean; medal?: MedalDefinition; profile?: PlayerProfile }>;
   updateAdminConfig: (next: PlatformAdminConfig) => Promise<void>;
   triggerReset: (options: {
@@ -325,7 +326,7 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
     );
 
     const awardSpaceQuestMedal = useCallback(
-      async (medalId: "sq_safira" | "sq_ametista" | "sq_rubi" | "sq_ambar") => {
+      async (medalId: SpaceQuestMedalId) => {
         const res = await grantSpaceQuestAuraMedal(medalId);
         if (res.success && res.profile) {
           setProfile({ ...res.profile });

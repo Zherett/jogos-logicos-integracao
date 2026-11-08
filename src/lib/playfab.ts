@@ -4751,11 +4751,21 @@ export async function grantSpecialRobotMedal(
   return { success: res.success, medal: def, profile: active?.profile };
 }
 
+export type SpaceQuestMedalId =
+  | "sq_safira"
+  | "sq_ametista"
+  | "sq_rubi"
+  | "sq_ambar"
+  | "sq_hourglass_3x"
+  | "sq_shield_2x"
+  | "sq_divine_luck"
+  | "sq_purist_pilot";
+
 /**
- * Concede medalha de questão especial com aura no Space Quest (Safira, Ametista, Rubi, Âmbar).
+ * Concede medalha especial de conquista ou aura no Space Quest.
  */
 export async function grantSpaceQuestAuraMedal(
-  medalId: "sq_safira" | "sq_ametista" | "sq_rubi" | "sq_ambar",
+  medalId: SpaceQuestMedalId,
 ): Promise<{ success: boolean; medal?: MedalDefinition; profile?: PlayerProfile }> {
   const session = loadStoredSession();
   if (!session) return { success: false };

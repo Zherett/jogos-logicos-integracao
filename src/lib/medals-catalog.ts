@@ -904,6 +904,44 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
       iconName: "Crown",
       condition: { type: "manual_event" },
     },
+    // 17. Novas Medalhas de Habilidade e Sobrevivência — Space Quest
+    {
+      id: "sq_hourglass_3x",
+      title: "Senhor do Tempo",
+      description: "Ativou a ampulheta de dilatação temporal 3 vezes em uma única partida no Space Quest!",
+      rarity: "prata",
+      category: "evento",
+      iconName: "Hourglass",
+      condition: { type: "manual_event" },
+    },
+    {
+      id: "sq_shield_2x",
+      title: "Sentinela Blindado",
+      description: "Ativou o escudo de blindagem de vida 2 vezes em uma única partida no Space Quest!",
+      rarity: "prata",
+      category: "evento",
+      iconName: "Shield",
+      condition: { type: "manual_event" },
+    },
+    {
+      id: "sq_divine_luck",
+      title: "Sorte Divina",
+      description: "Recuperou 1 vida milagrosamente ao responder uma questão estando com apenas 1 coração restante no Space Quest!",
+      rarity: "ouro",
+      category: "evento",
+      iconName: "Heart",
+      secret: true,
+      condition: { type: "manual_event" },
+    },
+    {
+      id: "sq_purist_pilot",
+      title: "Piloto Purista",
+      description: "Venceu uma partida no Space Quest com mais de 1 vida e sem ativar o escudo ou a ampulheta nenhuma vez!",
+      rarity: "platina",
+      category: "evento",
+      iconName: "Zap",
+      condition: { type: "manual_event" },
+    },
   );
 
   return medals;
