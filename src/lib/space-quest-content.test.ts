@@ -9,6 +9,8 @@ import {
   generateSpaceQuestQuestion,
   generateDoubleWaveQuestions,
   resolveAnswer,
+  resolveFloorCollision,
+  selectBestTargetId,
   AURA_CONFIGS,
   FLOOR_COLLISION_PENALTY,
   BASE_CORRECT_POINTS,
@@ -232,4 +234,75 @@ test("Space Quest Engine — Assinatura Flexível e Segura de generateSpaceQuest
   const q4 = generateSpaceQuestQuestion(3, "ametista", { allowSpecial: true });
   assert.equal(q4.aura, "ametista");
   assert.equal(q4.pointsOnCorrect, 30);
+});
+
+test("Space Quest Engine — Colisão na Barreira Estelar, Escudo, Zerar Combo e Fim de Jogo", () => {
+  // 1. Sem escudo: perde 1 vida, -5 pontos e zera o combo
+  const hitNoShield = resolveFloorCollision({
+    floorHits: 1,
+    currentLives: 5,
+    currentScore: 30,
+    hasShield: false,
+  });
+  assert.equal(hitNoShield.shieldConsumed, false);
+  assert.equal(hitNoShield.livesLost, 1);
+  assert.equal(hitNoShield.nextLives, 4);
+  assert.equal(hitNoShield.nextScore, 25);
+  assert.equal(hitNoShield.nextCombo, 0);
+  assert.equal(hitNoShield.isGameOver, false);
+
+  // 2. Com escudo e 1 impacto: escudo absorve, não perde vida nem pontos, mas zera combo
+  const hitWithShield = resolveFloorCollision({
+    floorHits: 1,
+    currentLives: 3,
+    currentScore: 40,
+    hasShield: true,
+  });
+  assert.equal(hitWithShield.shieldConsumed, true);
+  assert.equal(hitWithShield.livesLost, 0);
+  assert.equal(hitWithShield.nextLives, 3);
+  assert.equal(hitWithShield.nextScore, 40);
+  assert.equal(hitWithShield.nextCombo, 0);
+  assert.equal(hitWithShield.isGameOver, false);
+
+  // 3. Com escudo e 2 impactos simultâneos: escudo absorve 1 e o outro tira 1 vida
+  const doubleHitWithShield = resolveFloorCollision({
+    floorHits: 2,
+    currentLives: 2,
+    currentScore: 20,
+    hasShield: true,
+  });
+  assert.equal(doubleHitWithShield.shieldConsumed, true);
+  assert.equal(doubleHitWithShield.livesLost, 1);
+  assert.equal(doubleHitWithShield.nextLives, 1);
+  assert.equal(doubleHitWithShield.nextScore, 15);
+  assert.equal(doubleHitWithShield.isGameOver, false);
+
+  // 4. Última vida perdida aciona isGameOver = true e pontuação nunca fica negativa
+  const fatalHit = resolveFloorCollision({
+    floorHits: 1,
+    currentLives: 1,
+    currentScore: 0,
+    hasShield: false,
+  });
+  assert.equal(fatalHit.nextLives, 0);
+  assert.equal(fatalHit.nextScore, 0);
+  assert.equal(fatalHit.isGameOver, true);
+});
+
+test("Space Quest Engine — Seleção Inteligente de Alvo na Mira (selectBestTargetId)", () => {
+  const items = [
+    { instanceId: "q_top", yPercent: 25, isDestroying: false },
+    { instanceId: "q_bottom", yPercent: 65, isDestroying: false },
+    { instanceId: "q_exploding", yPercent: 80, isDestroying: true },
+  ];
+
+  // Sem alvo atual, escolhe o item válido mais próximo da base (ignora q_exploding)
+  assert.equal(selectBestTargetId(items, null), "q_bottom");
+
+  // Se o jogador clicou manualmente em q_top e ele ainda é válido, preserva q_top
+  assert.equal(selectBestTargetId(items, "q_top"), "q_top");
+
+  // Se o alvo atual está explodindo, troca automaticamente para o próximo válido mais baixo
+  assert.equal(selectBestTargetId(items, "q_exploding"), "q_bottom");
 });

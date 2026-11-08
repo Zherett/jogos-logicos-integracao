@@ -530,3 +530,85 @@ export function resolveAnswer(
     };
   }
 }
+
+export interface FloorCollisionResult {
+  shieldConsumed: boolean;
+  livesLost: number;
+  nextLives: number;
+  scoreDelta: number;
+  nextScore: number;
+  nextCombo: number;
+  isGameOver: boolean;
+}
+
+/**
+ * Pure evaluator for when one or more falling questions hit the bottom barrier (yPercent >= 88).
+ * Guarantees combo reset, shield absorption of 1 hit, life deduction, and game-over detection.
+ */
+export function resolveFloorCollision(params: {
+  floorHits: number;
+  currentLives: number;
+  currentScore: number;
+  hasShield: boolean;
+}): FloorCollisionResult {
+  const { floorHits, currentLives, currentScore, hasShield } = params;
+  if (floorHits <= 0) {
+    return {
+      shieldConsumed: false,
+      livesLost: 0,
+      nextLives: currentLives,
+      scoreDelta: 0,
+      nextScore: currentScore,
+      nextCombo: 0,
+      isGameOver: currentLives <= 0,
+    };
+  }
+
+  const shieldConsumed = hasShield;
+  const effectiveHits = hasShield ? Math.max(0, floorHits - 1) : floorHits;
+  const livesLost = effectiveHits;
+  const nextLives = Math.max(0, currentLives - livesLost);
+  const scoreDelta = -(FLOOR_COLLISION_PENALTY * effectiveHits);
+  const nextScore = Math.max(0, currentScore + scoreDelta);
+
+  return {
+    shieldConsumed,
+    livesLost,
+    nextLives,
+    scoreDelta,
+    nextScore,
+    nextCombo: 0,
+    isGameOver: nextLives <= 0,
+  };
+}
+
+export interface TargetableFallingItem {
+  instanceId: string;
+  yPercent: number;
+  hasFallen?: boolean;
+  isDestroying?: boolean;
+}
+
+/**
+ * Selects the best target question ID: preserves current target if still valid,
+ * otherwise selects the valid non-destroying question closest to the bottom barrier.
+ */
+export function selectBestTargetId(
+  items: TargetableFallingItem[],
+  currentId: string | null,
+): string | null {
+  const validItems = items.filter(
+    (it) => !it.isDestroying && !it.hasFallen && it.yPercent < 88,
+  );
+  if (validItems.length === 0) return null;
+  if (currentId && validItems.some((it) => it.instanceId === currentId)) {
+    return currentId;
+  }
+  let lowest = validItems[0];
+  for (let i = 1; i < validItems.length; i++) {
+    if (validItems[i].yPercent > lowest.yPercent) {
+      lowest = validItems[i];
+    }
+  }
+  return lowest.instanceId;
+}

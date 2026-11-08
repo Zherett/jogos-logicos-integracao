@@ -2,17 +2,12 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Rocket,
   Flame,
-  Zap,
   Target,
-  Trophy,
-  Volume2,
-  VolumeX,
-  Sparkles,
   Shield,
-  Award,
-  RotateCcw,
   Heart,
   Hourglass,
+  AlertTriangle,
+  Clock,
 } from "lucide-react";
 import { useRoundClock, formatTime } from "@/lib/use-countdown";
 import { GameTopBar } from "./GameTopBar";
@@ -23,6 +18,8 @@ import {
   generateSpaceQuestQuestion,
   generateDoubleWaveQuestions,
   resolveAnswer,
+  resolveFloorCollision,
+  selectBestTargetId,
   getStageFallDurationSeconds,
   FLOOR_COLLISION_PENALTY,
   AURA_CONFIGS,
@@ -39,7 +36,7 @@ import {
   type SpaceQuestQuestion,
   type AuraType,
 } from "@/lib/space-quest-content";
-import { playCorrect, playWrong, playTone, playVictory, useSoundMuted } from "@/lib/sound";
+import { playCorrect, playWrong, playTone, playVictory } from "@/lib/sound";
 import { usePlayerAuth } from "@/lib/player-auth";
 import type { GameComponentProps } from "@/lib/game-registry";
 
@@ -51,6 +48,7 @@ interface ActiveFallingQuestion {
   speedYPerSec: number;
   hasFallen: boolean;
   isDestroying?: boolean;
+  destroyingStartedAt?: number;
 }
 
 interface ExplosionParticle {
@@ -70,6 +68,7 @@ interface ExplosionEvent {
 
 export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponentProps) {
   const [phase, setPhase] = useState<"countdown" | "playing" | "gameover">("countdown");
+  const [gameOverReason, setGameOverReason] = useState<"timeout" | "no_lives" | null>(null);
   const [score, setScore] = useState(0);
   const [combo, setCombo] = useState(0);
   const [maxCombo, setMaxCombo] = useState(0);
@@ -108,18 +107,86 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
   const [notificationBanner, setNotificationBanner] = useState<string | null>(null);
   const [lastMatch, setLastMatch] = useState<LastMatch | null>(null);
 
-  const { muted, toggle: toggleMuted } = useSoundMuted();
   const auth = usePlayerAuth();
+  const authRef = useRef(auth);
+  authRef.current = auth;
+
+  const onStatsChangeRef = useRef(onStatsChange);
+  onStatsChangeRef.current = onStatsChange;
+
   const gameAreaRef = useRef<HTMLDivElement>(null);
   const lastSpawnTimeRef = useRef<number>(Date.now());
   const requestRef = useRef<number | null>(null);
-  const lastFrameTimeRef = useRef<number>(Date.now());
+  const lastFrameTimeRef = useRef<number>(0);
+  const lastTimestampUpdateRef = useRef<number>(0);
+
+  // Refs sincronizadas para leitura pura e atômica no loop de física e callbacks
+  const phaseRef = useRef<"countdown" | "playing" | "gameover">("countdown");
+  const finishedRef = useRef<boolean>(false);
+  const fallingItemsRef = useRef<ActiveFallingQuestion[]>([]);
+  const activeTargetIdRef = useRef<string | null>(null);
+  const scoreRef = useRef<number>(0);
+  const comboRef = useRef<number>(0);
+  const correctCountRef = useRef<number>(0);
+  const wrongCountRef = useRef<number>(0);
+  const levelRef = useRef<number>(1);
+  const livesRef = useRef<number>(STARTING_LIVES);
+  const hasShieldRef = useRef<boolean>(false);
+  const shieldProgressRef = useRef<number>(0);
+  const shieldCooldownEndsAtRef = useRef<number | null>(null);
+  const shieldActivationsCountRef = useRef<number>(0);
+  const hourglassProgressRef = useRef<number>(0);
+  const hourglassActiveEndsAtRef = useRef<number | null>(null);
+  const hourglassCooldownEndsAtRef = useRef<number | null>(null);
+  const hourglassActivationsCountRef = useRef<number>(0);
+
+  // Gerenciamento centralizado de timeouts para evitar disparos fantasmas após restart/unmount
+  const timeoutsRef = useRef<number[]>([]);
+  const bannerTimeoutRef = useRef<number | null>(null);
+
+  const scheduleTimeout = useCallback((fn: () => void, delayMs: number) => {
+    const id = window.setTimeout(() => {
+      timeoutsRef.current = timeoutsRef.current.filter((t) => t !== id);
+      fn();
+    }, delayMs);
+    timeoutsRef.current.push(id);
+    return id;
+  }, []);
+
+  const clearAllTimeouts = useCallback(() => {
+    for (const id of timeoutsRef.current) {
+      window.clearTimeout(id);
+    }
+    timeoutsRef.current = [];
+    if (bannerTimeoutRef.current !== null) {
+      window.clearTimeout(bannerTimeoutRef.current);
+      bannerTimeoutRef.current = null;
+    }
+  }, []);
+
+  const showBanner = useCallback((message: string, durationMs = 2500) => {
+    if (bannerTimeoutRef.current !== null) {
+      window.clearTimeout(bannerTimeoutRef.current);
+    }
+    setNotificationBanner(message);
+    bannerTimeoutRef.current = window.setTimeout(() => {
+      setNotificationBanner(null);
+      bannerTimeoutRef.current = null;
+    }, durationMs);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      clearAllTimeouts();
+      if (requestRef.current) cancelAnimationFrame(requestRef.current);
+    };
+  }, [clearAllTimeouts]);
 
   // Rastreamento estrito de auras especiais: cooldown de 5 questões e limite de 1 por tipo na partida
   const questionsSinceSpecialAuraRef = useRef<number>(10);
   const spawnedAurasThisMatchRef = useRef<Set<AuraType>>(new Set());
 
-  // Rastreamento de tempo atual para animação suave dos anéis
+  // Rastreamento de tempo atual para animação suave dos anéis de recarga/ampulheta
   const [nowTimestamp, setNowTimestamp] = useState(Date.now());
 
   // Load last match stats
@@ -127,49 +194,55 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
     setLastMatch(loadLastMatch("spacequest"));
   }, []);
 
-  const finishGame = useCallback((reason?: "timeout" | "no_lives") => {
-    setPhase("gameover");
-    playVictory();
+  const finishGame = useCallback(
+    (reason: "timeout" | "no_lives" = "timeout") => {
+      if (finishedRef.current) return;
+      finishedRef.current = true;
+      phaseRef.current = "gameover";
 
-    const finalScore = Math.max(0, score);
-    const finalLevel = level;
-
-    // Conquista Platina: "Piloto Purista" (vencer com mais de 1 vida e sem ativar escudo ou ampulheta nenhuma vez)
-    if (
-      lives > 1 &&
-      hourglassActivationsCount === 0 &&
-      shieldActivationsCount === 0 &&
-      finalScore > 0
-    ) {
-      if (auth.awardSpaceQuestMedal) {
-        void auth.awardSpaceQuestMedal("sq_purist_pilot");
+      if (requestRef.current) {
+        cancelAnimationFrame(requestRef.current);
+        requestRef.current = null;
       }
-    }
+      clearAllTimeouts();
+      setLaserEffect(null);
+      setExplosions([]);
+      setNotificationBanner(null);
+      setGameOverReason(reason);
+      setPhase("gameover");
+      playVictory();
 
-    updateBest("spacequest", finalScore, finalLevel);
-    const lastM: LastMatch = {
-      score: finalScore,
-      correct: correctCount,
-      wrong: wrongCount,
-      level: finalLevel,
-      at: Date.now(),
-      mode: isRanked ? "torneio_semanal" : "padrao",
-    };
-    saveLastMatch("spacequest", lastM);
-    setLastMatch(lastM);
-    onStatsChange();
-  }, [
-    score,
-    level,
-    correctCount,
-    wrongCount,
-    isRanked,
-    onStatsChange,
-    lives,
-    hourglassActivationsCount,
-    shieldActivationsCount,
-    auth,
-  ]);
+      const finalScore = Math.max(0, scoreRef.current);
+      const finalLevel = levelRef.current;
+
+      // Conquista Platina: "Piloto Purista" (concluir com mais de 1 vida e sem ativar escudo ou ampulheta nenhuma vez)
+      if (
+        reason !== "no_lives" &&
+        livesRef.current > 1 &&
+        hourglassActivationsCountRef.current === 0 &&
+        shieldActivationsCountRef.current === 0 &&
+        finalScore > 0
+      ) {
+        if (authRef.current.awardSpaceQuestMedal) {
+          void authRef.current.awardSpaceQuestMedal("sq_purist_pilot");
+        }
+      }
+
+      updateBest("spacequest", finalScore, finalLevel);
+      const lastM: LastMatch = {
+        score: finalScore,
+        correct: correctCountRef.current,
+        wrong: wrongCountRef.current,
+        level: finalLevel,
+        at: Date.now(),
+        mode: isRanked ? "torneio_semanal" : "padrao",
+      };
+      saveLastMatch("spacequest", lastM);
+      setLastMatch(lastM);
+      onStatsChangeRef.current();
+    },
+    [isRanked, clearAllTimeouts],
+  );
 
   // Clock padronizado: 1 minuto (60s base), +3s por acerto, máx 90s
   const clock = useRoundClock(
@@ -195,14 +268,19 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
   // Level progression derived from score
   useEffect(() => {
     const nextLevel = Math.min(5, Math.floor(score / 70) + 1);
-    if (nextLevel > level) {
+    if (nextLevel > levelRef.current) {
+      levelRef.current = nextLevel;
       setLevel(nextLevel);
       playTone(720, 0.2, "sine", 0.08);
     }
-  }, [score, level]);
+  }, [score]);
 
   // Start Playing transition from Countdown: Immediately spawn first question
   const handleStartPlaying = useCallback(() => {
+    if (phaseRef.current !== "countdown") return;
+
+    finishedRef.current = false;
+    phaseRef.current = "playing";
     questionsSinceSpecialAuraRef.current = 10;
     spawnedAurasThisMatchRef.current = new Set();
 
@@ -227,170 +305,219 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
       speedYPerSec: 100 / duration,
       hasFallen: false,
     };
+
+    fallingItemsRef.current = [firstItem];
+    activeTargetIdRef.current = firstItem.instanceId;
     setFallingItems([firstItem]);
     setActiveTargetId(firstItem.instanceId);
     lastSpawnTimeRef.current = Date.now();
+    lastFrameTimeRef.current = performance.now();
     setPhase("playing");
   }, []);
 
-  // Main game animation & physics loop
+  // Main game animation & physics loop (Estável: não reinicia ao pontuar ou perder vida)
   useEffect(() => {
     if (phase !== "playing") return;
 
     lastFrameTimeRef.current = performance.now();
 
     const loop = (time: number) => {
+      if (phaseRef.current !== "playing" || finishedRef.current) return;
+
       const now = Date.now();
-      setNowTimestamp(now);
+
+      // Atualiza nowTimestamp apenas quando há temporizadores visuais ativos (ampulheta ou escudo)
+      const hActiveEnd = hourglassActiveEndsAtRef.current;
+      const hCoolEnd = hourglassCooldownEndsAtRef.current;
+      const sCoolEnd = shieldCooldownEndsAtRef.current;
+      const hasActiveTimers =
+        (hActiveEnd !== null && now < hActiveEnd + 250) ||
+        (hCoolEnd !== null && now < hCoolEnd + 250) ||
+        (sCoolEnd !== null && now < sCoolEnd + 250);
+
+      if (hasActiveTimers && now - lastTimestampUpdateRef.current >= 100) {
+        lastTimestampUpdateRef.current = now;
+        setNowTimestamp(now);
+      }
 
       // Efeito da ampulheta: se ativa, velocidade cai 50%
-      const isSlowMotion = hourglassActiveEndsAt !== null && now < hourglassActiveEndsAt;
+      const isSlowMotion = hActiveEnd !== null && now < hActiveEnd;
       const speedFactor = isSlowMotion ? SLOW_MOTION_SPEED_MULT : 1.0;
 
-      const dt = Math.min(0.08, (time - lastFrameTimeRef.current) / 1000) * speedFactor;
+      const rawDt = (time - lastFrameTimeRef.current) / 1000;
+      const dt = Math.max(0, Math.min(0.08, rawDt)) * speedFactor;
       lastFrameTimeRef.current = time;
 
-      // Limite estrito de no máximo 2 questões ao mesmo tempo
+      const currentLevel = levelRef.current;
       const maxConcurrent = 2;
-      const spawnInterval = Math.max(2200, 4200 - level * 400);
+      const spawnInterval = Math.max(2200, 4200 - currentLevel * 400);
 
-      setFallingItems((prev) => {
-        let updated = [...prev];
+      // Remove automaticamente itens em destruição que já passaram de 180ms (impede travamento de slots)
+      let updated = fallingItemsRef.current.filter(
+        (it) => !it.isDestroying || now - (it.destroyingStartedAt ?? now) <= 180,
+      );
 
-        // 1. Spawning com chance de 5% de onda dupla quando houver espaço
-        if (
-          updated.length < maxConcurrent &&
-          (updated.length === 0 || now - lastSpawnTimeRef.current > spawnInterval)
-        ) {
-          lastSpawnTimeRef.current = now;
+      // Conta apenas questões ativas (não explodindo) para liberar o spawn imediatamente após acerto
+      const activeNonDestroying = updated.filter((it) => !it.isDestroying);
 
-          const allowSpecial =
-            questionsSinceSpecialAuraRef.current >= SPECIAL_AURA_COOLDOWN_QUESTIONS;
+      // 1. Spawning com chance de 5% de onda dupla quando houver espaço
+      if (
+        activeNonDestroying.length < maxConcurrent &&
+        (activeNonDestroying.length === 0 || now - lastSpawnTimeRef.current > spawnInterval)
+      ) {
+        lastSpawnTimeRef.current = now;
 
-          if (updated.length === 0 && Math.random() < DOUBLE_WAVE_CHANCE) {
-            // Onda Dupla: 2 questões de dificuldades distintas em pistas opostas (24% e 76%)
-            const [q1, q2] = generateDoubleWaveQuestions(level, {
-              allowSpecial,
-              excludedAuras: spawnedAurasThisMatchRef.current,
-            });
-            const specialInWave =
-              q1.aura !== "normal" ? q1.aura : q2.aura !== "normal" ? q2.aura : null;
-            if (specialInWave) {
-              questionsSinceSpecialAuraRef.current = 0;
-              spawnedAurasThisMatchRef.current.add(specialInWave);
-            } else {
-              questionsSinceSpecialAuraRef.current += 2;
-            }
+        const allowSpecial =
+          questionsSinceSpecialAuraRef.current >= SPECIAL_AURA_COOLDOWN_QUESTIONS;
 
-            const dur1 = getStageFallDurationSeconds(level, q1.difficulty);
-            const dur2 = getStageFallDurationSeconds(level, q2.difficulty);
+        if (activeNonDestroying.length === 0 && Math.random() < DOUBLE_WAVE_CHANCE) {
+          // Onda Dupla: 2 questões de dificuldades distintas em pistas opostas (24% e 76%)
+          const [q1, q2] = generateDoubleWaveQuestions(currentLevel, {
+            allowSpecial,
+            excludedAuras: spawnedAurasThisMatchRef.current,
+          });
+          const specialInWave =
+            q1.aura !== "normal" ? q1.aura : q2.aura !== "normal" ? q2.aura : null;
+          if (specialInWave) {
+            questionsSinceSpecialAuraRef.current = 0;
+            spawnedAurasThisMatchRef.current.add(specialInWave);
+          } else {
+            questionsSinceSpecialAuraRef.current += 2;
+          }
 
-            updated.push(
-              {
-                instanceId: `item_${now}_w1`,
-                data: q1,
-                laneXPercent: 24,
-                yPercent: 0,
-                speedYPerSec: 100 / dur1,
-                hasFallen: false,
-              },
-              {
-                instanceId: `item_${now}_w2`,
-                data: q2,
-                laneXPercent: 76,
-                yPercent: 0,
-                speedYPerSec: 100 / dur2,
-                hasFallen: false,
-              },
-            );
-          } else if (updated.length < maxConcurrent) {
-            // Questão Única: posiciona na pista oposta à questão existente para não sobrepor
-            const qData = generateSpaceQuestQuestion(level, {
-              allowSpecial,
-              excludedAuras: spawnedAurasThisMatchRef.current,
-            });
-            if (qData.aura !== "normal") {
-              questionsSinceSpecialAuraRef.current = 0;
-              spawnedAurasThisMatchRef.current.add(qData.aura);
-            } else {
-              questionsSinceSpecialAuraRef.current += 1;
-            }
+          const dur1 = getStageFallDurationSeconds(currentLevel, q1.difficulty);
+          const dur2 = getStageFallDurationSeconds(currentLevel, q2.difficulty);
 
-            const duration = getStageFallDurationSeconds(level, qData.difficulty);
-            const speedY = 100 / duration;
+          updated = [
+            ...updated,
+            {
+              instanceId: `item_${now}_w1`,
+              data: q1,
+              laneXPercent: 24,
+              yPercent: 0,
+              speedYPerSec: 100 / dur1,
+              hasFallen: false,
+            },
+            {
+              instanceId: `item_${now}_w2`,
+              data: q2,
+              laneXPercent: 76,
+              yPercent: 0,
+              speedYPerSec: 100 / dur2,
+              hasFallen: false,
+            },
+          ];
+        } else {
+          // Questão Única: posiciona na pista oposta à questão ativa existente para não sobrepor
+          const qData = generateSpaceQuestQuestion(currentLevel, {
+            allowSpecial,
+            excludedAuras: spawnedAurasThisMatchRef.current,
+          });
+          if (qData.aura !== "normal") {
+            questionsSinceSpecialAuraRef.current = 0;
+            spawnedAurasThisMatchRef.current.add(qData.aura);
+          } else {
+            questionsSinceSpecialAuraRef.current += 1;
+          }
 
-            let chosenLane = 50;
-            if (updated.length === 1) {
-              const existingLane = updated[0].laneXPercent;
-              chosenLane = existingLane < 50 ? 76 : 24;
-            } else {
-              const possibleLanes = [24, 50, 76];
-              chosenLane = possibleLanes[Math.floor(Math.random() * possibleLanes.length)];
-            }
+          const duration = getStageFallDurationSeconds(currentLevel, qData.difficulty);
+          const speedY = 100 / duration;
 
-            updated.push({
+          let chosenLane = 50;
+          if (activeNonDestroying.length === 1) {
+            const existingLane = activeNonDestroying[0].laneXPercent;
+            chosenLane = existingLane < 50 ? 76 : 24;
+          } else {
+            const possibleLanes = [24, 50, 76];
+            chosenLane = possibleLanes[Math.floor(Math.random() * possibleLanes.length)];
+          }
+
+          updated = [
+            ...updated,
+            {
               instanceId: `item_${now}_${Math.random().toString(36).slice(2, 6)}`,
               data: qData,
               laneXPercent: chosenLane,
               yPercent: 0,
               speedYPerSec: speedY,
               hasFallen: false,
-            });
-          }
+            },
+          ];
+        }
+      }
+
+      // 2. Mover questões para baixo & Detecção da Linha Vermelha (yPercent >= 88)
+      let floorHits = 0;
+      const nextList: ActiveFallingQuestion[] = [];
+
+      for (const item of updated) {
+        if (item.isDestroying) {
+          nextList.push(item);
+          continue;
         }
 
-        // 2. Mover questões para baixo & Detecção da Linha Vermelha (yPercent >= 88)
-        let floorHits = 0;
-        const nextList: ActiveFallingQuestion[] = [];
+        const nextY = item.yPercent + item.speedYPerSec * dt;
 
-        for (const item of updated) {
-          if (item.isDestroying) {
-            nextList.push(item);
-            continue;
-          }
+        if (nextY >= 88) {
+          floorHits++;
+        } else {
+          nextList.push({ ...item, yPercent: nextY });
+        }
+      }
 
-          const nextY = item.yPercent + item.speedYPerSec * dt;
+      // 3. Processamento atômico de impacto com a Barreira Estelar (fora de updaters de estado)
+      if (floorHits > 0) {
+        const collision = resolveFloorCollision({
+          floorHits,
+          currentLives: livesRef.current,
+          currentScore: scoreRef.current,
+          hasShield: hasShieldRef.current,
+        });
 
-          if (nextY >= 88) {
-            // Encostou na barreira vermelha! Invalidada imediatamente
-            floorHits++;
-            playTone(180, 0.18, "sawtooth", 0.05);
-          } else {
-            nextList.push({ ...item, yPercent: nextY });
-          }
+        // Colisão na barreira reseta o combo, o progresso da ampulheta e do escudo
+        comboRef.current = collision.nextCombo;
+        setCombo(collision.nextCombo);
+        hourglassProgressRef.current = 0;
+        setHourglassProgress(0);
+        shieldProgressRef.current = 0;
+        setShieldProgress(0);
+
+        if (collision.shieldConsumed) {
+          hasShieldRef.current = false;
+          setHasShield(false);
+          playTone(440, 0.25, "square", 0.08);
+          showBanner("🛡️ Escudo de Blindagem absorveu o impacto!", 2500);
         }
 
-        // 3. Processamento de impacto com a Barreira Estelar
-        if (floorHits > 0) {
-          // Erro/impacto na barreira reseta o progresso da ampulheta e do escudo
-          setHourglassProgress(0);
-          setShieldProgress(0);
+        if (collision.livesLost > 0) {
+          playTone(180, 0.18, "sawtooth", 0.05);
 
-          setHasShield((prevShield) => {
-            if (prevShield) {
-              // Escudo tanka o impacto! Nenhuma vida perdida
-              playTone(440, 0.25, "square", 0.08);
-              setNotificationBanner("🛡️ Escudo de Blindagem absorveu o impacto!");
-              setTimeout(() => setNotificationBanner(null), 2500);
-              return false; // Escudo quebra
-            } else {
-              // Sem escudo: perde vida e perde -5 pontos
-              setLives((prevLives) => {
-                const nextLives = Math.max(0, prevLives - floorHits);
-                if (nextLives <= 0) {
-                  setTimeout(() => finishGame("no_lives"), 50);
-                }
-                return nextLives;
-              });
-              setScore((s) => Math.max(0, s - FLOOR_COLLISION_PENALTY * floorHits));
-              setFloorCollisions((f) => f + floorHits);
-              return false;
-            }
-          });
+          scoreRef.current = collision.nextScore;
+          setScore(collision.nextScore);
+
+          setFloorCollisions((f) => f + collision.livesLost);
+
+          livesRef.current = collision.nextLives;
+          setLives(collision.nextLives);
+
+          if (collision.isGameOver) {
+            fallingItemsRef.current = nextList;
+            setFallingItems(nextList);
+            finishGame("no_lives");
+            return;
+          }
         }
+      }
 
-        return nextList;
-      });
+      // 4. Atualiza lista de questões e sincroniza a mira apenas quando necessário
+      fallingItemsRef.current = nextList;
+      setFallingItems(nextList);
+
+      const nextTargetId = selectBestTargetId(nextList, activeTargetIdRef.current);
+      if (nextTargetId !== activeTargetIdRef.current) {
+        activeTargetIdRef.current = nextTargetId;
+        setActiveTargetId(nextTargetId);
+      }
 
       requestRef.current = requestAnimationFrame(loop);
     };
@@ -398,36 +525,35 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
     requestRef.current = requestAnimationFrame(loop);
 
     return () => {
-      if (requestRef.current) cancelAnimationFrame(requestRef.current);
+      if (requestRef.current) {
+        cancelAnimationFrame(requestRef.current);
+        requestRef.current = null;
+      }
     };
-  }, [phase, level, hourglassActiveEndsAt, finishGame]);
-
-  // Sincronização do alvo ativo: mira sempre na questão válida mais próxima da base
-  useEffect(() => {
-    const validItems = fallingItems.filter((it) => !it.isDestroying && it.yPercent < 88);
-    if (validItems.length === 0) {
-      setActiveTargetId(null);
-      return;
-    }
-    const exists = validItems.some((it) => it.instanceId === activeTargetId);
-    if (!exists) {
-      const lowest = [...validItems].sort((a, b) => b.yPercent - a.yPercent)[0];
-      setActiveTargetId(lowest ? lowest.instanceId : null);
-    }
-  }, [fallingItems, activeTargetId]);
+  }, [phase, finishGame, showBanner]);
 
   // Submit answer handler
   const handleAnswer = useCallback(
     (selectedOption: string) => {
-      if (phase !== "playing" || !activeTargetId) return;
+      if (phaseRef.current !== "playing" || finishedRef.current) return;
 
-      const targetItem = fallingItems.find((it) => it.instanceId === activeTargetId);
-      // Blindagem atômica: se encostou na barreira ou está explodindo, não responde
-      if (!targetItem || targetItem.yPercent >= 88 || targetItem.hasFallen || targetItem.isDestroying) {
+      const currentTargetId = activeTargetIdRef.current;
+      if (!currentTargetId) return;
+
+      const targetItem = fallingItemsRef.current.find(
+        (it) => it.instanceId === currentTargetId,
+      );
+      // Blindagem atômica: se encostou na barreira ou já está explodindo, não responde
+      if (
+        !targetItem ||
+        targetItem.yPercent >= 88 ||
+        targetItem.hasFallen ||
+        targetItem.isDestroying
+      ) {
         return;
       }
 
-      const res = resolveAnswer(targetItem.data, selectedOption, combo);
+      const res = resolveAnswer(targetItem.data, selectedOption, comboRef.current);
       const now = Date.now();
 
       if (res.isCorrect) {
@@ -440,108 +566,140 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
           isCorrect: true,
         });
 
-        // Marca a questão como em processo de destruição para não aceitar outros cliques
-        setFallingItems((prev) =>
-          prev.map((it) => (it.instanceId === activeTargetId ? { ...it, isDestroying: true } : it)),
+        // Marca a questão como em processo de destruição com timestamp e já troca a mira para a próxima
+        const markedList = fallingItemsRef.current.map((it) =>
+          it.instanceId === currentTargetId
+            ? { ...it, isDestroying: true, destroyingStartedAt: now }
+            : it,
         );
+        fallingItemsRef.current = markedList;
+        setFallingItems(markedList);
+
+        const nextTargetId = selectBestTargetId(markedList, null);
+        activeTargetIdRef.current = nextTargetId;
+        setActiveTargetId(nextTargetId);
 
         // Pontuação e tempo bônus (+3s no relógio padrão)
         playCorrect();
-        setScore((s) => s + res.scoreDelta);
-        setCorrectCount((c) => c + 1);
+        const nextScore = scoreRef.current + res.scoreDelta;
+        scoreRef.current = nextScore;
+        setScore(nextScore);
+
+        const nextCorrect = correctCountRef.current + 1;
+        correctCountRef.current = nextCorrect;
+        setCorrectCount(nextCorrect);
+
+        comboRef.current = res.newCombo;
         setCombo(res.newCombo);
         setMaxCombo((m) => Math.max(m, res.newCombo));
         clock.addBonus(3);
 
         // 1. Mecânica de "Sorte Divina": 10% de chance de restaurar vida com 1 coração
-        if (lives === 1 && Math.random() < RECOVER_LIFE_CHANCE) {
+        if (livesRef.current === 1 && Math.random() < RECOVER_LIFE_CHANCE) {
+          livesRef.current = 2;
           setLives(2);
           playTone(660, 0.3, "sine", 0.15);
-          setNotificationBanner("❤️ Sorte Divina! Vida Recuperada (+1 Coração)!");
-          setTimeout(() => setNotificationBanner(null), 3000);
-          if (auth.awardSpaceQuestMedal) {
-            void auth.awardSpaceQuestMedal("sq_divine_luck");
+          showBanner("❤️ Sorte Divina! Vida Recuperada (+1 Coração)!", 3000);
+          if (authRef.current.awardSpaceQuestMedal) {
+            void authRef.current.awardSpaceQuestMedal("sq_divine_luck");
           }
         }
 
         // 2. Mecânica da Ampulheta: 5 acertos seguidos
-        const isHourglassActive = hourglassActiveEndsAt !== null && now < hourglassActiveEndsAt;
-        const isHourglassCooldown = hourglassCooldownEndsAt !== null && now < hourglassCooldownEndsAt;
+        const isHourglassActive =
+          hourglassActiveEndsAtRef.current !== null && now < hourglassActiveEndsAtRef.current;
+        const isHourglassCooldown =
+          hourglassCooldownEndsAtRef.current !== null && now < hourglassCooldownEndsAtRef.current;
 
         if (!isHourglassActive && !isHourglassCooldown) {
-          const nextHProg = hourglassProgress + 1;
+          const nextHProg = hourglassProgressRef.current + 1;
           if (nextHProg >= AMPULHETA_COMBO_REQ) {
             const endsAt = now + SLOW_MOTION_DURATION_MS;
+            const cooldownEnds = endsAt + SLOW_MOTION_COOLDOWN_MS;
+            hourglassActiveEndsAtRef.current = endsAt;
+            hourglassCooldownEndsAtRef.current = cooldownEnds;
+            hourglassProgressRef.current = 0;
+            setNowTimestamp(now);
             setHourglassActiveEndsAt(endsAt);
-            setHourglassCooldownEndsAt(endsAt + SLOW_MOTION_COOLDOWN_MS);
+            setHourglassCooldownEndsAt(cooldownEnds);
             setHourglassProgress(0);
-            setHourglassActivationsCount((cnt) => {
-              const nextCnt = cnt + 1;
-              if (nextCnt >= 3 && auth.awardSpaceQuestMedal) {
-                void auth.awardSpaceQuestMedal("sq_hourglass_3x");
-              }
-              return nextCnt;
-            });
+
+            const nextCnt = hourglassActivationsCountRef.current + 1;
+            hourglassActivationsCountRef.current = nextCnt;
+            setHourglassActivationsCount(nextCnt);
+            if (nextCnt >= 3 && authRef.current.awardSpaceQuestMedal) {
+              void authRef.current.awardSpaceQuestMedal("sq_hourglass_3x");
+            }
+
             playTone(520, 0.35, "sine", 0.1);
-            setNotificationBanner("⏳ Dilatação Temporal Ativada: Questões 50% Mais Lentas!");
-            setTimeout(() => setNotificationBanner(null), 2500);
+            showBanner("⏳ Dilatação Temporal Ativada: Questões 50% Mais Lentas!", 2500);
           } else {
+            hourglassProgressRef.current = nextHProg;
             setHourglassProgress(nextHProg);
           }
         }
 
         // 3. Mecânica do Escudo: 10 acertos seguidos
-        const isShieldCooldown = shieldCooldownEndsAt !== null && now < shieldCooldownEndsAt;
+        const isShieldCooldown =
+          shieldCooldownEndsAtRef.current !== null && now < shieldCooldownEndsAtRef.current;
 
-        if (!hasShield && !isShieldCooldown) {
-          const nextSProg = shieldProgress + 1;
+        if (!hasShieldRef.current && !isShieldCooldown) {
+          const nextSProg = shieldProgressRef.current + 1;
           if (nextSProg >= SHIELD_COMBO_REQ) {
+            const sCooldownEnds = now + SHIELD_COOLDOWN_MS;
+            hasShieldRef.current = true;
+            shieldCooldownEndsAtRef.current = sCooldownEnds;
+            shieldProgressRef.current = 0;
+            setNowTimestamp(now);
             setHasShield(true);
-            setShieldCooldownEndsAt(now + SHIELD_COOLDOWN_MS);
+            setShieldCooldownEndsAt(sCooldownEnds);
             setShieldProgress(0);
-            setShieldActivationsCount((cnt) => {
-              const nextCnt = cnt + 1;
-              if (nextCnt >= 2 && auth.awardSpaceQuestMedal) {
-                void auth.awardSpaceQuestMedal("sq_shield_2x");
-              }
-              return nextCnt;
-            });
+
+            const nextCnt = shieldActivationsCountRef.current + 1;
+            shieldActivationsCountRef.current = nextCnt;
+            setShieldActivationsCount(nextCnt);
+            if (nextCnt >= 2 && authRef.current.awardSpaceQuestMedal) {
+              void authRef.current.awardSpaceQuestMedal("sq_shield_2x");
+            }
+
             playTone(780, 0.3, "triangle", 0.12);
-            setNotificationBanner("🛡️ Blindagem de Vida Ativada! Próximo impacto neutralizado!");
-            setTimeout(() => setNotificationBanner(null), 2500);
+            showBanner("🛡️ Blindagem de Vida Ativada! Próximo impacto neutralizado!", 2500);
           } else {
+            shieldProgressRef.current = nextSProg;
             setShieldProgress(nextSProg);
           }
         }
 
         // Concessão de medalhas de aura especiais
-        if (res.unlockedMedalId && auth.awardSpaceQuestMedal) {
-          void auth.awardSpaceQuestMedal(res.unlockedMedalId as any);
-          setNotificationBanner(`Medalha Desbloqueada: ${AURA_CONFIGS[targetItem.data.aura].medalTitle}! 🎖️`);
-          setTimeout(() => setNotificationBanner(null), 3000);
+        if (res.unlockedMedalId && authRef.current.awardSpaceQuestMedal) {
+          void authRef.current.awardSpaceQuestMedal(res.unlockedMedalId as any);
+          showBanner(
+            `Medalha Desbloqueada: ${AURA_CONFIGS[targetItem.data.aura].medalTitle}! 🎖️`,
+            3000,
+          );
         }
 
         // Impacto do laser e explosão procedural de partículas
-        setTimeout(() => {
-          // Desativa o feixe laser
+        scheduleTimeout(() => {
           setLaserEffect(null);
 
-          // Gera 14 partículas vetoriais procedurais que expandem 360°
           const particleCount = 14;
-          const particles: ExplosionParticle[] = Array.from({ length: particleCount }).map((_, i) => {
-            const angle = (i / particleCount) * 2 * Math.PI + (Math.random() * 0.4 - 0.2);
-            const dist = 26 + Math.random() * 32;
-            return {
-              id: `part_${i}`,
-              dx: Math.cos(angle) * dist,
-              dy: Math.sin(angle) * dist,
-              size: 2.5 + Math.random() * 4,
-              color: auraCfg.glowColor,
-            };
-          });
+          const particles: ExplosionParticle[] = Array.from({ length: particleCount }).map(
+            (_, i) => {
+              const angle = (i / particleCount) * 2 * Math.PI + (Math.random() * 0.4 - 0.2);
+              const dist = 26 + Math.random() * 32;
+              return {
+                id: `part_${i}`,
+                dx: Math.cos(angle) * dist,
+                dy: Math.sin(angle) * dist,
+                size: 2.5 + Math.random() * 4,
+                color: auraCfg.glowColor,
+              };
+            },
+          );
 
           const expEvent: ExplosionEvent = {
-            id: `exp_${Date.now()}`,
+            id: `exp_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
             xPercent: targetItem.laneXPercent,
             yPercent: targetItem.yPercent,
             particles,
@@ -550,10 +708,14 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
           setExplosions((prev) => [...prev, expEvent]);
 
           // Remove a questão do jogo exatamente no impacto
-          setFallingItems((prev) => prev.filter((it) => it.instanceId !== targetItem.instanceId));
+          const filtered = fallingItemsRef.current.filter(
+            (it) => it.instanceId !== targetItem.instanceId,
+          );
+          fallingItemsRef.current = filtered;
+          setFallingItems(filtered);
 
           // Limpa a explosão após a animação de dispersão de 350ms
-          setTimeout(() => {
+          scheduleTimeout(() => {
             setExplosions((prev) => prev.filter((e) => e.id !== expEvent.id));
           }, 360);
         }, 120);
@@ -566,31 +728,81 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
           color: "#ef4444",
           isCorrect: false,
         });
-        setTimeout(() => setLaserEffect(null), 200);
+        scheduleTimeout(() => setLaserEffect(null), 200);
 
-        setScore((s) => Math.max(0, s + res.scoreDelta));
-        setWrongCount((w) => w + 1);
+        const nextScore = Math.max(0, scoreRef.current + res.scoreDelta);
+        scoreRef.current = nextScore;
+        setScore(nextScore);
+
+        const nextWrong = wrongCountRef.current + 1;
+        wrongCountRef.current = nextWrong;
+        setWrongCount(nextWrong);
+
+        comboRef.current = 0;
         setCombo(0);
+        hourglassProgressRef.current = 0;
         setHourglassProgress(0);
+        shieldProgressRef.current = 0;
         setShieldProgress(0);
       }
     },
-    [
-      phase,
-      activeTargetId,
-      fallingItems,
-      combo,
-      clock,
-      lives,
-      hourglassProgress,
-      hourglassActiveEndsAt,
-      hourglassCooldownEndsAt,
-      shieldProgress,
-      hasShield,
-      shieldCooldownEndsAt,
-      auth,
-    ],
+    [clock, scheduleTimeout, showBanner],
   );
+
+  // Reiniciar partida com segurança total
+  const handleReplay = useCallback(() => {
+    clearAllTimeouts();
+    if (requestRef.current) {
+      cancelAnimationFrame(requestRef.current);
+      requestRef.current = null;
+    }
+
+    finishedRef.current = false;
+    phaseRef.current = "countdown";
+    questionsSinceSpecialAuraRef.current = 10;
+    spawnedAurasThisMatchRef.current = new Set();
+
+    scoreRef.current = 0;
+    comboRef.current = 0;
+    correctCountRef.current = 0;
+    wrongCountRef.current = 0;
+    levelRef.current = 1;
+    livesRef.current = STARTING_LIVES;
+    hasShieldRef.current = false;
+    shieldProgressRef.current = 0;
+    shieldCooldownEndsAtRef.current = null;
+    shieldActivationsCountRef.current = 0;
+    hourglassProgressRef.current = 0;
+    hourglassActiveEndsAtRef.current = null;
+    hourglassCooldownEndsAtRef.current = null;
+    hourglassActivationsCountRef.current = 0;
+    fallingItemsRef.current = [];
+    activeTargetIdRef.current = null;
+
+    setGameOverReason(null);
+    setScore(0);
+    setCombo(0);
+    setMaxCombo(0);
+    setCorrectCount(0);
+    setWrongCount(0);
+    setFloorCollisions(0);
+    setLevel(1);
+    setLives(STARTING_LIVES);
+    setShieldProgress(0);
+    setHasShield(false);
+    setShieldCooldownEndsAt(null);
+    setShieldActivationsCount(0);
+    setHourglassProgress(0);
+    setHourglassActiveEndsAt(null);
+    setHourglassCooldownEndsAt(null);
+    setHourglassActivationsCount(0);
+    setLaserEffect(null);
+    setExplosions([]);
+    setNotificationBanner(null);
+    setFallingItems([]);
+    setActiveTargetId(null);
+    setPhase("countdown");
+  }, [clearAllTimeouts]);
 
   // Keyboard controls: 1, 2, 3, 4 for math / V, F for logic
   useEffect(() => {
@@ -598,7 +810,11 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
 
     const handleKeyDown = (e: KeyboardEvent) => {
       const key = e.key.toUpperCase();
-      const currentTarget = fallingItems.find((it) => it.instanceId === activeTargetId);
+      const currentTargetId = activeTargetIdRef.current;
+      if (!currentTargetId) return;
+      const currentTarget = fallingItemsRef.current.find(
+        (it) => it.instanceId === currentTargetId,
+      );
       if (!currentTarget || currentTarget.isDestroying) return;
 
       if (currentTarget.data.kind === "logic") {
@@ -615,9 +831,55 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [phase, activeTargetId, fallingItems, handleAnswer]);
+  }, [phase, handleAnswer]);
 
-  const currentTarget = fallingItems.find((it) => it.instanceId === activeTargetId && !it.isDestroying);
+  // Se o jogo terminou, substitui a tela do jogo pelo Painel de Resultados (evita tela congelada)
+  if (phase === "gameover") {
+    return (
+      <div className="space-y-4">
+        <GameTopBar
+          title="Space Quest"
+          onExit={onExit}
+          rightElement={
+            <div className="rounded-xl border border-sky-500/30 bg-slate-900/80 px-3 py-1 flex items-center gap-2 shadow-xs">
+              <Rocket className="h-4 w-4 text-sky-400" />
+              <span className="text-xs font-black text-sky-200">Fase {level}</span>
+            </div>
+          }
+        />
+
+        {gameOverReason === "no_lives" ? (
+          <div className="mx-auto max-w-md rounded-2xl border border-rose-500/40 bg-rose-950/80 px-4 py-3 text-center text-rose-100 shadow-lg flex items-center justify-center gap-2.5">
+            <AlertTriangle className="h-5 w-5 text-rose-400 shrink-0" />
+            <span className="text-xs sm:text-sm font-bold">
+              Suas 5 vidas foram perdidas na Barreira Estelar!
+            </span>
+          </div>
+        ) : (
+          <div className="mx-auto max-w-md rounded-2xl border border-sky-500/40 bg-slate-900/85 px-4 py-3 text-center text-sky-100 shadow-lg flex items-center justify-center gap-2.5">
+            <Clock className="h-5 w-5 text-sky-400 shrink-0" />
+            <span className="text-xs sm:text-sm font-bold">
+              Tempo esgotado! Missão espacial finalizada.
+            </span>
+          </div>
+        )}
+
+        <ResultPanel
+          score={Math.max(0, score)}
+          correct={correctCount}
+          wrong={wrongCount}
+          level={level}
+          gameId="spacequest"
+          onReplay={handleReplay}
+          onMenu={onExit}
+        />
+      </div>
+    );
+  }
+
+  const currentTarget = fallingItems.find(
+    (it) => it.instanceId === activeTargetId && !it.isDestroying,
+  );
 
   // Cálculo dos tempos da ampulheta
   const isHourglassActive = hourglassActiveEndsAt !== null && nowTimestamp < hourglassActiveEndsAt;
@@ -660,7 +922,11 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
 
       {/* Countdown overlay: 3, 2, 1, VAI! - clica para iniciar imediatamente ou aguarda término */}
       {phase === "countdown" && (
-        <div onClick={handleStartPlaying} className="cursor-pointer" title="Clique para iniciar imediatamente">
+        <div
+          onClick={handleStartPlaying}
+          className="cursor-pointer"
+          title="Clique para iniciar imediatamente"
+        >
           <Countdown onDone={handleStartPlaying} />
         </div>
       )}
@@ -688,7 +954,10 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
                 width: `${st.size}px`,
                 height: `${st.size}px`,
                 opacity: st.opacity,
-                boxShadow: st.size > 2.2 ? "0 0 8px rgba(56,189,248,0.9)" : "0 0 3px rgba(255,255,255,0.7)",
+                boxShadow:
+                  st.size > 2.2
+                    ? "0 0 8px rgba(56,189,248,0.9)"
+                    : "0 0 3px rgba(255,255,255,0.7)",
                 animation: `pulse ${2 + (st.id % 3)}s infinite ease-in-out`,
                 animationDelay: `${st.blinkDelay}s`,
               }}
@@ -774,17 +1043,23 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
                 {isHourglassActive ? (
                   <>
                     <span className="font-black text-cyan-300">LENTO (-50%)</span>
-                    <span className="font-mono text-[10px] text-cyan-200">{hourglassRemainingSec}s restantes</span>
+                    <span className="font-mono text-[10px] text-cyan-200">
+                      {hourglassRemainingSec}s restantes
+                    </span>
                   </>
                 ) : isHourglassCooldown ? (
                   <>
                     <span className="font-bold text-rose-400">COOLDOWN</span>
-                    <span className="font-mono text-[10px] text-rose-300">{hourglassRemainingSec}s</span>
+                    <span className="font-mono text-[10px] text-rose-300">
+                      {hourglassRemainingSec}s
+                    </span>
                   </>
                 ) : (
                   <>
                     <span className="font-bold text-slate-400">Ampulheta</span>
-                    <span className="font-mono text-[10px] text-sky-400">{hourglassProgress}/5</span>
+                    <span className="font-mono text-[10px] text-sky-400">
+                      {hourglassProgress}/5
+                    </span>
                   </>
                 )}
               </div>
@@ -802,7 +1077,11 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
             >
               <Shield
                 className={`h-4 w-4 ${
-                  hasShield ? "text-sky-300 fill-sky-400/40" : isShieldCooldown ? "text-amber-400" : "text-slate-400"
+                  hasShield
+                    ? "text-sky-300 fill-sky-400/40"
+                    : isShieldCooldown
+                      ? "text-amber-400"
+                      : "text-slate-400"
                 }`}
               />
               <div className="flex flex-col text-[11px] leading-tight">
@@ -814,7 +1093,9 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
                 ) : isShieldCooldown ? (
                   <>
                     <span className="font-bold text-amber-400">RECARGA</span>
-                    <span className="font-mono text-[10px] text-amber-300">{shieldCooldownSec}s</span>
+                    <span className="font-mono text-[10px] text-amber-300">
+                      {shieldCooldownSec}s
+                    </span>
                   </>
                 ) : (
                   <>
@@ -875,10 +1156,17 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
               <div
                 key={item.instanceId}
                 onClick={() => {
-                  if (!item.isDestroying) setActiveTargetId(item.instanceId);
+                  if (!item.isDestroying) {
+                    activeTargetIdRef.current = item.instanceId;
+                    setActiveTargetId(item.instanceId);
+                  }
                 }}
                 className={`absolute -translate-x-1/2 cursor-pointer transition-all duration-75 select-none ${
-                  item.isDestroying ? "scale-90 opacity-20 pointer-events-none" : isTarget ? "scale-105 z-20" : "opacity-90 z-10 hover:opacity-100"
+                  item.isDestroying
+                    ? "scale-90 opacity-20 pointer-events-none"
+                    : isTarget
+                      ? "scale-105 z-20"
+                      : "opacity-90 z-10 hover:opacity-100"
                 }`}
                 style={{
                   left: `${item.laneXPercent}%`,
@@ -1031,7 +1319,14 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
                 <circle cx="32" cy="42" r="3" fill="#67e8f9" />
 
                 <defs>
-                  <linearGradient id="shipGrad" x1="32" y1="4" x2="32" y2="54" gradientUnits="userSpaceOnUse">
+                  <linearGradient
+                    id="shipGrad"
+                    x1="32"
+                    y1="4"
+                    x2="32"
+                    y2="54"
+                    gradientUnits="userSpaceOnUse"
+                  >
                     <stop stopColor="#0f172a" />
                     <stop offset="0.5" stopColor="#1e293b" />
                     <stop offset="1" stopColor="#0284c7" />
@@ -1066,7 +1361,7 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
               <div className="flex items-center justify-center gap-2 sm:gap-3 w-full max-w-md">
                 {currentTarget.data.options.map((opt, idx) => (
                   <button
-                    key={opt}
+                    key={`${currentTarget.instanceId}_${opt}_${idx}`}
                     type="button"
                     onClick={() => handleAnswer(opt)}
                     className={`flex-1 min-w-[70px] h-12 rounded-xl font-mono text-lg sm:text-xl font-black transition-all cursor-pointer shadow-lg active:scale-95 border-2 flex flex-col items-center justify-center leading-none ${
@@ -1089,48 +1384,17 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
             <div className="flex flex-col items-center justify-center h-full gap-1.5 text-sky-400/80 animate-in fade-in duration-100">
               <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-slate-900/70 border border-sky-500/30">
                 <Target className="h-3.5 w-3.5 animate-spin text-sky-400" />
-                <span className="text-xs font-semibold">Rastreando operações estelares no radar...</span>
+                <span className="text-xs font-semibold">
+                  Rastreando operações estelares no radar...
+                </span>
               </div>
-              <span className="text-[10px] text-slate-500">Mire e dispare no teclado (1-4 ou V/F)</span>
+              <span className="text-[10px] text-slate-500">
+                Mire e dispare no teclado (1-4 ou V/F)
+              </span>
             </div>
           )}
         </div>
       </div>
-
-      {/* Game Over / Painel de Resultados */}
-      {phase === "gameover" && (
-        <ResultPanel
-          score={Math.max(0, score)}
-          correct={correctCount}
-          wrong={wrongCount}
-          level={level}
-          gameId="spacequest"
-          onReplay={() => {
-            questionsSinceSpecialAuraRef.current = 10;
-            spawnedAurasThisMatchRef.current = new Set();
-            setScore(0);
-            setCombo(0);
-            setMaxCombo(0);
-            setCorrectCount(0);
-            setWrongCount(0);
-            setFloorCollisions(0);
-            setLevel(1);
-            setLives(STARTING_LIVES);
-            setShieldProgress(0);
-            setHasShield(false);
-            setShieldCooldownEndsAt(null);
-            setShieldActivationsCount(0);
-            setHourglassProgress(0);
-            setHourglassActiveEndsAt(null);
-            setHourglassCooldownEndsAt(null);
-            setHourglassActivationsCount(0);
-            setFallingItems([]);
-            setActiveTargetId(null);
-            setPhase("countdown");
-          }}
-          onMenu={onExit}
-        />
-      )}
 
       {/* Sway animation styling */}
       <style>{`
