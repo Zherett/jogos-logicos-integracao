@@ -254,6 +254,17 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
   const [evHasPointsMultiplier, setEvHasPointsMultiplier] = useState(false);
   const [evPointsMultiplier, setEvPointsMultiplier] = useState<number>(2);
   const [evDurationHours, setEvDurationHours] = useState<number>(24);
+  const [evStartMode, setEvStartMode] = useState<"now" | "scheduled">("now");
+  const [evScheduledStartInput, setEvScheduledStartInput] = useState<string>(() =>
+    toDatetimeLocalString(new Date()),
+  );
+  const [evDurationMode, setEvDurationMode] = useState<"preset" | "days" | "end_date">("preset");
+  const [evCustomDays, setEvCustomDays] = useState<number>(4);
+  const [evCustomEndInput, setEvCustomEndInput] = useState<string>(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 4);
+    return toDatetimeLocalString(d);
+  });
   const [evLinkedMedalId, setEvLinkedMedalId] = useState<string>("");
   const [evObjective, setEvObjective] = useState<string>("");
 
@@ -617,6 +628,45 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
     await auth.updateAdminConfig(draft);
     onConfigSaved?.();
     flashCloudResult("Jogos e códigos salvos com sucesso!");
+  }
+
+  async function handleSaveTournamentGame(val: string) {
+    const gameId = val === "auto" || val === "" ? null : (val as GameId);
+    const updated: PlatformAdminConfig = {
+      ...draft,
+      tournamentGameOverride: gameId,
+    };
+    setDraft(updated);
+    await auth.updateAdminConfig(updated);
+    onConfigSaved?.();
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("desafios:weekly-tournament-updated"));
+      window.dispatchEvent(new CustomEvent("desafios:admin-config-updated", { detail: updated }));
+    }
+    flashCloudResult(
+      gameId
+        ? `🎯 Jogo do Torneio Semanal fixado em "${GAME_NAMES[gameId]}" com sucesso!`
+        : "🔄 Torneio Semanal configurado para rotação automática semanal!",
+    );
+  }
+
+  async function handleToggleTournamentEnabled(enabled: boolean) {
+    const updated: PlatformAdminConfig = {
+      ...draft,
+      tournamentEnabled: enabled,
+    };
+    setDraft(updated);
+    await auth.updateAdminConfig(updated);
+    onConfigSaved?.();
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("desafios:weekly-tournament-updated"));
+      window.dispatchEvent(new CustomEvent("desafios:admin-config-updated", { detail: updated }));
+    }
+    flashCloudResult(
+      enabled
+        ? "🏆 Torneio Semanal Ranqueado ATIVADO com sucesso!"
+        : "⛔ Torneio Semanal Ranqueado DESATIVADO!",
+    );
   }
 
   async function handleToggleRequireCodeGate() {
@@ -1024,12 +1074,26 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
     setEvTitle(ev.title);
     setEvDesc(ev.description || "");
     setEvScope(ev.scope);
+
+    const sDate = new Date(ev.startsAt);
+    const eDate = new Date(ev.endsAt);
     const durationHours =
       Math.max(
         1,
-        Math.round((new Date(ev.endsAt).getTime() - new Date(ev.startsAt).getTime()) / (3600 * 1000))
+        Math.round((eDate.getTime() - sDate.getTime()) / (3600 * 1000))
       ) || 24;
+
     setEvDurationHours(durationHours);
+    setEvScheduledStartInput(toDatetimeLocalString(sDate));
+    setEvCustomEndInput(toDatetimeLocalString(eDate));
+    setEvStartMode("scheduled");
+    if (durationHours % 24 === 0) {
+      setEvDurationMode("days");
+      setEvCustomDays(Math.max(1, Math.round(durationHours / 24)));
+    } else {
+      setEvDurationMode("preset");
+    }
+
     setEvHasMultiplier(Boolean(ev.xpMultiplier && ev.xpMultiplier > 1));
     setEvMultiplier(ev.xpMultiplier || 2);
     setEvHasMatchCap(Boolean(ev.matchXpCap && ev.matchXpCap > 20));
@@ -1057,6 +1121,29 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
       flashSaved("Marque pelo menos uma caixa de bônus ou vincule uma medalha ao evento.");
       return;
     }
+
+    const startObj =
+      evStartMode === "now"
+        ? new Date()
+        : parseDatetimeLocal(evScheduledStartInput) || new Date();
+
+    let endObj: Date;
+    if (evDurationMode === "preset") {
+      endObj = new Date(startObj.getTime() + Number(evDurationHours) * 3600 * 1000);
+    } else if (evDurationMode === "days") {
+      endObj = new Date(startObj.getTime() + Math.max(1, Number(evCustomDays)) * 24 * 3600 * 1000);
+    } else {
+      endObj = parseDatetimeLocal(evCustomEndInput) || new Date(startObj.getTime() + 24 * 3600 * 1000);
+    }
+
+    if (endObj.getTime() <= startObj.getTime()) {
+      flashSaved("⚠️ O término do evento deve ser em data e horário posterior ao início.");
+      return;
+    }
+
+    const calculatedStartsAt = startObj.toISOString();
+    const calculatedEndsAt = endObj.toISOString();
+
     const newCustoms = [...(draft.customMedals ?? [])];
     const linkedIds: string[] = [];
     for (const m of evAttachedMedals) {
@@ -1069,8 +1156,6 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
     if (editingSpecialEventId) {
       const list = specialEvents.map((existing) => {
         if (existing.id !== editingSpecialEventId) return existing;
-        const startsAtTime = new Date(existing.startsAt).getTime();
-        const nextEndsAt = new Date(startsAtTime + Number(evDurationHours) * 3600 * 1000).toISOString();
         return {
           ...existing,
           title: evTitle.trim(),
@@ -1089,7 +1174,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
           pointsMultiplier: evHasPointsMultiplier ? Number(evPointsMultiplier) : undefined,
           matchXpCap: evHasMatchCap ? Number(evMatchXpCap) : undefined,
           dailyXpCap: evHasDailyCap ? 1000 + Number(evDailyExtraXp) : undefined,
-          endsAt: nextEndsAt,
+          startsAt: calculatedStartsAt,
+          endsAt: calculatedEndsAt,
           linkedMedalId: linkedIds[0] ?? (evLinkedMedalId || existing.linkedMedalId || null),
           linkedMedalIds: linkedIds.length > 0 ? linkedIds : existing.linkedMedalIds,
           objectiveDescription: evObjective?.trim() || null,
@@ -1129,6 +1215,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
       matchXpCap: evHasMatchCap ? Number(evMatchXpCap) : undefined,
       dailyXpCap: evHasDailyCap ? 1000 + Number(evDailyExtraXp) : undefined,
       durationHours: Number(evDurationHours),
+      startsAt: calculatedStartsAt,
+      endsAt: calculatedEndsAt,
       linkedMedalId: linkedIds[0] ?? (evLinkedMedalId || null),
       linkedMedalIds: linkedIds,
       objectiveDescription: evObjective || null,
@@ -1714,23 +1802,24 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
                     </div>
                     <Switch
                       checked={draft.tournamentEnabled ?? true}
-                      onCheckedChange={(v) => setDraft({ ...draft, tournamentEnabled: v })}
+                      onCheckedChange={(v) => void handleToggleTournamentEnabled(v)}
                     />
                   </div>
 
                   {(draft.tournamentEnabled ?? true) && (
-                    <div className="rounded-xl border bg-background/80 p-3 space-y-1.5">
-                      <Label className="text-xs font-bold">Jogo do Torneio desta Semana</Label>
+                    <div className="rounded-xl border bg-background/80 p-3 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <Label className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                          <Trophy className="h-4 w-4 text-accent" /> Jogo do Torneio desta Semana
+                        </Label>
+                        <span className="rounded-full bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-extrabold text-emerald-600 dark:text-emerald-400">
+                          Salvo Imediatamente na Nuvem
+                        </span>
+                      </div>
                       <select
                         value={draft.tournamentGameOverride ?? "auto"}
-                        onChange={(e) =>
-                          setDraft({
-                            ...draft,
-                            tournamentGameOverride:
-                              e.target.value === "auto" ? null : (e.target.value as GameId),
-                          })
-                        }
-                        className="h-10 w-full rounded-xl border bg-card px-3 font-display text-sm font-bold"
+                        onChange={(e) => void handleSaveTournamentGame(e.target.value)}
+                        className="h-10 w-full rounded-xl border bg-card px-3 font-display text-sm font-bold shadow-xs transition-colors hover:border-primary focus:ring-2 focus:ring-primary/30"
                       >
                         <option value="auto">🔄 Rotação Automática Semanal (1 jogo por semana)</option>
                         {ALL_GAME_IDS.map((id) => (
@@ -1739,6 +1828,17 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
                           </option>
                         ))}
                       </select>
+                      <p className="text-[11px] text-muted-foreground">
+                        {draft.tournamentGameOverride ? (
+                          <span>
+                            Jogo atualmente fixado: <b>{GAME_NAMES[draft.tournamentGameOverride]}</b>. Os alunos só pontuarão neste jogo durante esta semana.
+                          </span>
+                        ) : (
+                          <span>
+                            O jogo do torneio muda automaticamente a cada virada de domingo às 23:59.
+                          </span>
+                        )}
+                      </p>
                     </div>
                   )}
                 </div>
@@ -2274,25 +2374,22 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
                         </div>
                         <Switch
                           checked={draft.tournamentEnabled !== false}
-                          onCheckedChange={(checked) =>
-                            setDraft((d) => ({ ...d, tournamentEnabled: checked }))
-                          }
+                          onCheckedChange={(checked) => void handleToggleTournamentEnabled(checked)}
                         />
                       </div>
 
                       {/* Escolha do Jogo da Semana */}
-                      <div className="rounded-xl border bg-secondary/20 p-3.5 space-y-1.5">
-                        <Label className="font-bold text-xs">Jogo Oficial da Semana</Label>
+                      <div className="rounded-xl border bg-secondary/20 p-3.5 space-y-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <Label className="font-bold text-xs">Jogo Oficial da Semana</Label>
+                          <span className="rounded-full bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-extrabold text-emerald-600 dark:text-emerald-400">
+                            Salvo Imediatamente
+                          </span>
+                        </div>
                         <select
                           value={draft.tournamentGameOverride || ""}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setDraft((d) => ({
-                              ...d,
-                              tournamentGameOverride: val ? (val as GameId) : null,
-                            }));
-                          }}
-                          className="w-full rounded-xl border bg-background px-3 py-2 text-xs font-semibold"
+                          onChange={(e) => void handleSaveTournamentGame(e.target.value)}
+                          className="w-full rounded-xl border bg-background px-3 py-2 text-xs font-semibold shadow-xs transition-colors hover:border-primary focus:ring-2 focus:ring-primary/30"
                         >
                           <option value="">🔄 Rotação Automática Semanal (Pelo Calendário)</option>
                           {ALL_GAME_IDS.map((gId) => (
@@ -2462,11 +2559,11 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
 
                     {/* Tabela de Classificação do Torneio */}
                     {snap.allStandings.length === 0 ? (
-                      <div className="rounded-xl bg-secondary/40 p-8 text-center text-xs text-muted-foreground">
+                      <div className="flex flex-col items-center justify-center rounded-xl bg-secondary/40 p-8 text-center text-xs text-muted-foreground min-h-[280px]">
                         Nenhum jogador pontuou no torneio semanal nesta etapa até o momento.
                       </div>
                     ) : (
-                      <div className="overflow-x-auto rounded-xl border">
+                      <div className="overflow-x-auto rounded-xl border min-h-[320px]">
                         <table className="w-full text-left text-xs">
                           <thead className="border-b bg-secondary/50 font-bold text-muted-foreground">
                             <tr>
@@ -2636,6 +2733,14 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
                             setEvDesc("");
                             setEvObjective("");
                             setEvAttachedMedals([]);
+                            setEvStartMode("now");
+                            setEvScheduledStartInput(toDatetimeLocalString(new Date()));
+                            setEvDurationMode("preset");
+                            setEvDurationHours(24);
+                            setEvCustomDays(4);
+                            const d = new Date();
+                            d.setDate(d.getDate() + 4);
+                            setEvCustomEndInput(toDatetimeLocalString(d));
                             setIsCreatingEvent(true);
                           }
                         }}
@@ -2855,19 +2960,231 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
                           </div>
                         </div>
 
-                        <div className="space-y-1">
-                          <Label className="text-xs font-bold">Duração do Evento</Label>
-                          <select
-                            value={evDurationHours}
-                            onChange={(e) => setEvDurationHours(Number(e.target.value))}
-                            className="h-9 w-full max-w-sm rounded-xl border bg-background px-3 text-xs font-bold"
-                          >
-                            <option value={12}>12 Horas</option>
-                            <option value={24}>1 Dia (24 horas)</option>
-                            <option value={48}>2 Dias (Fim de Semana)</option>
-                            <option value={72}>3 Dias (72 horas)</option>
-                            <option value={168}>1 Semana Completa (7 dias)</option>
-                          </select>
+                        {/* Área Específica: Período, Data/Hora de Início e Duração do Evento */}
+                        <div className="rounded-2xl border-2 border-primary/30 bg-primary/5 p-4 space-y-4">
+                          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 pb-2.5">
+                            <div>
+                              <div className="font-display text-xs font-black uppercase text-primary flex items-center gap-1.5">
+                                <CalendarClock className="h-4 w-4" /> Período e Duração do Evento
+                              </div>
+                              <p className="text-[11px] text-muted-foreground mt-0.5">
+                                Defina quando o evento começa (imediato ou agendado) e quanto tempo ele vai durar.
+                              </p>
+                            </div>
+                            <span className="rounded-full bg-primary/15 px-2.5 py-0.5 text-[10px] font-black text-primary uppercase">
+                              Agendamento Completo
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {/* 1. Início do Evento (Agora ou Data e Hora Específica) */}
+                            <div className="space-y-2 rounded-xl border bg-card p-3 shadow-xs">
+                              <Label className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                                <span>🚀</span> 1. Início do Evento
+                              </Label>
+                              <div className="grid grid-cols-2 gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => setEvStartMode("now")}
+                                  className={`rounded-xl border py-2 px-2.5 text-xs font-bold transition-all ${
+                                    evStartMode === "now"
+                                      ? "border-emerald-500 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 shadow-xs"
+                                      : "border-border bg-background text-muted-foreground hover:bg-secondary/40"
+                                  }`}
+                                >
+                                  🟢 Começar Imediatamente
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setEvStartMode("scheduled")}
+                                  className={`rounded-xl border py-2 px-2.5 text-xs font-bold transition-all ${
+                                    evStartMode === "scheduled"
+                                      ? "border-primary bg-primary text-primary-foreground shadow-xs"
+                                      : "border-border bg-background text-muted-foreground hover:bg-secondary/40"
+                                  }`}
+                                >
+                                  🗓️ Agendar Data e Hora
+                                </button>
+                              </div>
+
+                              {evStartMode === "scheduled" ? (
+                                <div className="space-y-1 pt-1.5 animate-in fade-in-50">
+                                  <Label className="text-[11px] font-bold text-muted-foreground">
+                                    Escolha a Data e Hora de Início:
+                                  </Label>
+                                  <Input
+                                    type="datetime-local"
+                                    value={evScheduledStartInput}
+                                    onChange={(e) => setEvScheduledStartInput(e.target.value)}
+                                    className="h-9 rounded-xl font-mono text-xs font-bold bg-background"
+                                    required
+                                  />
+                                </div>
+                              ) : (
+                                <p className="text-[11px] text-muted-foreground pt-1">
+                                  O evento entrará no ar no mesmo instante em que for salvo.
+                                </p>
+                              )}
+                            </div>
+
+                            {/* 2. Duração e Encerramento (Padrões, Dias Personalizados ou Data Final) */}
+                            <div className="space-y-2 rounded-xl border bg-card p-3 shadow-xs">
+                              <Label className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                                <span>⏳</span> 2. Duração / Encerramento
+                              </Label>
+                              <div className="grid grid-cols-3 gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => setEvDurationMode("preset")}
+                                  className={`rounded-lg py-1.5 px-1.5 text-[11px] font-bold transition-all text-center ${
+                                    evDurationMode === "preset"
+                                      ? "bg-primary text-primary-foreground shadow-xs"
+                                      : "border bg-background text-muted-foreground hover:bg-secondary/40"
+                                  }`}
+                                >
+                                  Padrões
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setEvDurationMode("days")}
+                                  className={`rounded-lg py-1.5 px-1.5 text-[11px] font-bold transition-all text-center ${
+                                    evDurationMode === "days"
+                                      ? "bg-primary text-primary-foreground shadow-xs"
+                                      : "border bg-background text-muted-foreground hover:bg-secondary/40"
+                                  }`}
+                                >
+                                  Em Dias
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setEvDurationMode("end_date")}
+                                  className={`rounded-lg py-1.5 px-1.5 text-[11px] font-bold transition-all text-center ${
+                                    evDurationMode === "end_date"
+                                      ? "bg-primary text-primary-foreground shadow-xs"
+                                      : "border bg-background text-muted-foreground hover:bg-secondary/40"
+                                  }`}
+                                >
+                                  Data Final
+                                </button>
+                              </div>
+
+                              {evDurationMode === "preset" && (
+                                <div className="space-y-1 pt-1 animate-in fade-in-50">
+                                  <Label className="text-[11px] font-bold text-muted-foreground">
+                                    Selecione a Duração Pré-definida:
+                                  </Label>
+                                  <select
+                                    value={evDurationHours}
+                                    onChange={(e) => setEvDurationHours(Number(e.target.value))}
+                                    className="h-9 w-full rounded-xl border bg-background px-3 text-xs font-bold"
+                                  >
+                                    <option value={12}>12 Horas (Meio dia)</option>
+                                    <option value={24}>1 Dia (24 horas)</option>
+                                    <option value={48}>2 Dias (Fim de Semana / 48 horas)</option>
+                                    <option value={72}>3 Dias (72 horas)</option>
+                                    <option value={96}>4 Dias (96 horas)</option>
+                                    <option value={120}>5 Dias (120 horas)</option>
+                                    <option value={168}>1 Semana Completa (7 dias)</option>
+                                    <option value={336}>2 Semanas (14 dias)</option>
+                                  </select>
+                                </div>
+                              )}
+
+                              {evDurationMode === "days" && (
+                                <div className="space-y-1.5 pt-1 animate-in fade-in-50">
+                                  <Label className="text-[11px] font-bold text-muted-foreground">
+                                    Informe a Quantidade Exata de Dias:
+                                  </Label>
+                                  <div className="flex items-center gap-2">
+                                    <Input
+                                      type="number"
+                                      min={1}
+                                      max={60}
+                                      value={evCustomDays}
+                                      onChange={(e) => setEvCustomDays(Math.max(1, Math.min(60, Number(e.target.value) || 1)))}
+                                      className="h-9 rounded-xl font-bold text-sm bg-background w-28"
+                                    />
+                                    <span className="text-xs font-extrabold text-foreground">
+                                      {evCustomDays === 1 ? "dia completo" : "dias de duração"}
+                                    </span>
+                                  </div>
+                                  <p className="text-[10px] text-muted-foreground">
+                                    Exemplo: 4 dias = 96 horas a partir do horário de início.
+                                  </p>
+                                </div>
+                              )}
+
+                              {evDurationMode === "end_date" && (
+                                <div className="space-y-1 pt-1 animate-in fade-in-50">
+                                  <Label className="text-[11px] font-bold text-muted-foreground">
+                                    Escolha a Data e Hora de Término do Evento:
+                                  </Label>
+                                  <Input
+                                    type="datetime-local"
+                                    value={evCustomEndInput}
+                                    onChange={(e) => setEvCustomEndInput(e.target.value)}
+                                    className="h-9 rounded-xl font-mono text-xs font-bold bg-background"
+                                    required
+                                  />
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Resumo Dinâmico do Período Calculado em Tempo Real */}
+                          {(() => {
+                            const pStart = evStartMode === "now" ? new Date() : (parseDatetimeLocal(evScheduledStartInput) || new Date());
+                            let pEnd = new Date(pStart.getTime() + 24 * 3600 * 1000);
+                            if (evDurationMode === "preset") {
+                              pEnd = new Date(pStart.getTime() + Number(evDurationHours) * 3600 * 1000);
+                            } else if (evDurationMode === "days") {
+                              pEnd = new Date(pStart.getTime() + Math.max(1, Number(evCustomDays)) * 24 * 3600 * 1000);
+                            } else {
+                              pEnd = parseDatetimeLocal(evCustomEndInput) || new Date(pStart.getTime() + 24 * 3600 * 1000);
+                            }
+                            const diffTotalMs = pEnd.getTime() - pStart.getTime();
+                            const totalHours = Math.max(0, Math.round(diffTotalMs / (3600 * 1000)));
+                            const daysPart = Math.floor(totalHours / 24);
+                            const remHoursPart = totalHours % 24;
+                            const isScheduledFuture = pStart.getTime() > Date.now();
+
+                            return (
+                              <div className="rounded-xl border border-primary/20 bg-background/90 p-3 space-y-1.5 text-xs">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <span className="font-display font-black text-foreground">
+                                    Resumo do Período Programado:
+                                  </span>
+                                  {isScheduledFuture ? (
+                                    <span className="rounded-full bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 text-[10px] font-black text-amber-600 dark:text-amber-400">
+                                      ⏳ Agendado para o Futuro
+                                    </span>
+                                  ) : (
+                                    <span className="rounded-full bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-black text-emerald-600 dark:text-emerald-400">
+                                      🟢 Ativo Imediatamente
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 text-[11px]">
+                                  <div className="rounded-lg bg-card p-2 border">
+                                    <span className="text-muted-foreground block text-[10px] font-semibold">Início:</span>
+                                    <b className="text-foreground">{formatDateTimeBR(pStart)}</b>
+                                  </div>
+                                  <div className="rounded-lg bg-card p-2 border">
+                                    <span className="text-muted-foreground block text-[10px] font-semibold">Término:</span>
+                                    <b className="text-primary">{formatDateTimeBR(pEnd)}</b>
+                                  </div>
+                                  <div className="rounded-lg bg-card p-2 border">
+                                    <span className="text-muted-foreground block text-[10px] font-semibold">Duração Calculada:</span>
+                                    <b className="text-foreground">
+                                      {daysPart > 0 ? `${daysPart} ${daysPart === 1 ? "dia" : "dias"}` : ""}
+                                      {remHoursPart > 0 ? ` ${remHoursPart}h` : ""}
+                                      {daysPart === 0 && remHoursPart === 0 ? `${totalHours} horas` : ""}
+                                    </b>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })()}
                         </div>
 
                         {/* Seção de Medalhas Atribuídas ao Evento */}

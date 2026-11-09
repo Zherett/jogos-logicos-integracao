@@ -547,4 +547,21 @@ describe("Torneio Semanal Ranqueado (Nível 3+) e Regras da Arena X1 (Nível 5+,
     assert.equal(aligned.profile.tournamentRankId, "bronze_2");
     assert.equal(aligned.profile.tournamentWeekKey, weekKey);
   });
+
+  it("restaura pontuação e patente automaticamente a partir de bestTournamentPoints se points foi zerado indevidamente na virada de semana", () => {
+    const mockAccount: any = {
+      profile: {
+        id: "ana-banana",
+        tournamentWeekKey: "2026-W45", // semana anterior
+        tournamentPoints: 0, // zerado acidentalmente
+        bestTournamentPoints: 145, // havia alcançado Prata II
+        tournamentRankId: "bronze_1",
+      },
+      stats: [],
+    };
+
+    const aligned = ensurePlayerSeasonAligned(mockAccount, {} as any);
+    assert.equal(aligned.profile.tournamentPoints, 145);
+    assert.equal(aligned.profile.tournamentRankId, "prata_2");
+  });
 });

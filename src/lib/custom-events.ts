@@ -363,14 +363,25 @@ export function createSpecialEvent(args: {
   pointsMultiplier?: number;
   matchXpCap?: number;
   dailyXpCap?: number;
-  durationHours: number;
+  durationHours?: number;
+  startsAt?: string;
+  endsAt?: string;
   linkedMedalId?: string | null;
   linkedMedalIds?: string[];
   objectiveDescription?: string | null;
   now?: Date;
 }): SpecialEvent {
   const now = args.now ?? new Date();
-  const endsAt = new Date(now.getTime() + args.durationHours * 3600 * 1000).toISOString();
+  const resolvedStartsAt = args.startsAt
+    ? new Date(args.startsAt).toISOString()
+    : now.toISOString();
+
+  const startTimeMs = new Date(resolvedStartsAt).getTime();
+  const defaultDurationHours = args.durationHours && args.durationHours > 0 ? args.durationHours : 24;
+  const resolvedEndsAt = args.endsAt
+    ? new Date(args.endsAt).toISOString()
+    : new Date(startTimeMs + defaultDurationHours * 3600 * 1000).toISOString();
+
   const finalLinkedIds = Array.isArray(args.linkedMedalIds)
     ? [...args.linkedMedalIds]
     : args.linkedMedalId
@@ -389,8 +400,8 @@ export function createSpecialEvent(args: {
     pointsMultiplier: args.pointsMultiplier,
     matchXpCap: args.matchXpCap,
     dailyXpCap: args.dailyXpCap,
-    startsAt: now.toISOString(),
-    endsAt,
+    startsAt: resolvedStartsAt,
+    endsAt: resolvedEndsAt,
     active: true,
     linkedMedalId: finalLinkedIds[0] ?? null,
     linkedMedalIds: finalLinkedIds,

@@ -114,7 +114,7 @@ import {
   RANKED_WIN_POINTS,
 } from "./career-points.ts";
 import { removePlayerFromPresence } from "./presence.ts";
-import { removePlayerFromTournament } from "./weekly-tournament.ts";
+import { removePlayerFromTournament, getTournamentRank } from "./weekly-tournament.ts";
 import {
   createInboxMessage,
   recordDeviceSecurityAlert,
@@ -1096,22 +1096,22 @@ export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdmin
     acc.profile.weeklyX1Wins = 0;
     acc.profile.weeklyX1WeekKey = currentWeekKey;
   }
-  // Ao reiniciar a semana (domingo 23:59 -> segunda 00:00), todos os alunos retornam ao Bronze I (0 pts)
-  if (acc.profile.tournamentWeekKey && acc.profile.tournamentWeekKey !== currentWeekKey) {
-    acc.profile.tournamentPoints = 0;
-    acc.profile.tournamentRankId = "bronze_1";
-    acc.profile.tournamentWeekKey = currentWeekKey;
-  } else {
-    if (!acc.profile.tournamentWeekKey) {
-      acc.profile.tournamentWeekKey = currentWeekKey;
-    }
-    if (typeof acc.profile.tournamentPoints !== "number") {
-      acc.profile.tournamentPoints = 0;
-    }
-    if (!acc.profile.tournamentRankId) {
-      acc.profile.tournamentRankId = "bronze_1";
+
+  // Preserva os pontos da ranqueada acumulados na temporada (definida por 14 dias ou término do ADM).
+  // Se tiver ocorrido zeramento acidental pela virada de semana (domingo -> segunda à meia-noite), restaura via bestTournamentPoints.
+  if (
+    (!acc.profile.tournamentPoints || acc.profile.tournamentPoints === 0) &&
+    typeof acc.profile.bestTournamentPoints === "number" &&
+    acc.profile.bestTournamentPoints > 0
+  ) {
+    acc.profile.tournamentPoints = acc.profile.bestTournamentPoints;
+    acc.profile.tournamentRankId = getTournamentRank(acc.profile.tournamentPoints).currentRank.id;
+  } else if (!acc.profile.tournamentRankId || acc.profile.tournamentRankId === "bronze_1") {
+    if (typeof acc.profile.tournamentPoints === "number" && acc.profile.tournamentPoints > 0) {
+      acc.profile.tournamentRankId = getTournamentRank(acc.profile.tournamentPoints).currentRank.id;
     }
   }
+  acc.profile.tournamentWeekKey = currentWeekKey;
 
   // As medalhas do Torneio Semanal são prêmios exclusivos concedidos no encerramento de ciclo (domingo às 23:59).
   // Remove qualquer medalha indevida emitida antes do término da semana corrente:

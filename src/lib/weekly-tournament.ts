@@ -764,9 +764,11 @@ function loadTournamentStore(now = new Date()): WeeklyTournamentStore {
       const raw = window.localStorage.getItem(TOURNAMENT_STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw) as Partial<WeeklyTournamentStore>;
-        if (parsed.weekKey === weekKey && parsed.records) {
+        // Preserva os registros acumulados da temporada independentemente da virada da chave semanal
+        if (parsed.records) {
           Object.assign(baseRecords, parsed.records);
-        } else if (parsed.weekKey && parsed.records && Object.keys(parsed.records).length > 0) {
+        }
+        if (parsed.weekKey && parsed.weekKey !== weekKey && parsed.records && Object.keys(parsed.records).length > 0) {
           void finalizeWeeklyTournamentSeason(parsed as WeeklyTournamentStore);
         }
       }
@@ -781,9 +783,12 @@ function loadTournamentStore(now = new Date()): WeeklyTournamentStore {
     for (const p of players) {
       const pId = p.id || p.nickNormalized;
       if (!pId || pId.startsWith("admin-system")) continue;
-      const pts = typeof p.tournamentPoints === "number" ? p.tournamentPoints : 0;
-      if (pts > 0 || (p.dailyTournamentEntries ?? 0) > 0) {
-        const existing = baseRecords[p.id] || baseRecords[p.nickNormalized];
+      const pts = Math.max(
+        typeof p.tournamentPoints === "number" ? p.tournamentPoints : 0,
+        typeof p.bestTournamentPoints === "number" ? p.bestTournamentPoints : 0,
+      );
+      const existing = baseRecords[p.id] || baseRecords[p.nickNormalized];
+      if (pts > 0 || (p.dailyTournamentEntries ?? 0) > 0 || existing) {
         const pAge = p.birthdate ? ageFrom(p.birthdate, now) : 10;
         const pStage = p.birthdate
           ? stageFromBirthdate(p.birthdate, now, p.school).id

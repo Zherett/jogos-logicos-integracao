@@ -768,43 +768,45 @@ export function X1ArenaDialog({
                     </span>
                   </div>
 
-                  {otherOnlinePlayers.length === 0 ? (
-                    <div className="rounded-xl bg-secondary/40 p-4 text-center text-xs text-muted-foreground">
-                      Nenhum outro colega com a Arena aberta neste instante. Você também pode criar
-                      uma sala e passar o <b>código de 4 dígitos</b> para o colega ao lado!
-                    </div>
-                  ) : (
-                    <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                      {otherOnlinePlayers.map((p) => (
-                        <div
-                          key={p.playerId}
-                          className="flex items-center justify-between gap-3 rounded-xl border bg-background p-3"
-                        >
-                          <div className="min-w-0">
-                            <div className="font-display text-sm font-bold truncate">
-                              {p.nick}{" "}
-                              <span className="rounded-full bg-secondary px-1.5 py-0.5 text-[10px] font-bold">
-                                {getAgeStageInfo(p.stage ?? "etapa_1").shortLabel}
-                              </span>{" "}
-                              <span className="text-xs font-normal text-muted-foreground">
-                                • Nv. {p.level}
-                              </span>
-                            </div>
-                            <div className="text-xs text-muted-foreground truncate">{p.school}</div>
-                          </div>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => handleCreateRoom(p.playerId, p.nick)}
-                            className="rounded-xl font-bold shrink-0"
+                  <div className="min-h-[160px] flex flex-col justify-center">
+                    {otherOnlinePlayers.length === 0 ? (
+                      <div className="rounded-xl bg-secondary/40 p-6 text-center text-xs text-muted-foreground">
+                        Nenhum outro colega com a Arena aberta neste instante. Você também pode criar
+                        uma sala e passar o <b>código de 4 dígitos</b> para o colega ao lado!
+                      </div>
+                    ) : (
+                      <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                        {otherOnlinePlayers.map((p) => (
+                          <div
+                            key={p.playerId}
+                            className="flex items-center justify-between gap-3 rounded-xl border bg-background p-3"
                           >
-                            <Swords className="mr-1.5 h-3.5 w-3.5 text-accent" /> Desafiar
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                            <div className="min-w-0">
+                              <div className="font-display text-sm font-bold truncate">
+                                {p.nick}{" "}
+                                <span className="rounded-full bg-secondary px-1.5 py-0.2 text-[10px] font-bold">
+                                  {getAgeStageInfo(p.stage ?? "etapa_1").shortLabel}
+                                </span>{" "}
+                                <span className="text-xs font-normal text-muted-foreground">
+                                  • Nv. {p.level}
+                                </span>
+                              </div>
+                              <div className="text-xs text-muted-foreground truncate">{p.school}</div>
+                            </div>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="secondary"
+                              onClick={() => handleCreateRoom(p.playerId, p.nick)}
+                              className="rounded-xl font-bold shrink-0"
+                            >
+                              <Swords className="mr-1.5 h-3.5 w-3.5 text-accent" /> Desafiar
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             )}

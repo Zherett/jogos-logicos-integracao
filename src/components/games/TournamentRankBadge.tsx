@@ -88,12 +88,24 @@ export function TournamentRankBadge({
     mestre: "bg-gradient-to-br from-rose-200 via-red-300 to-amber-200 dark:from-rose-950 dark:via-red-950 dark:to-amber-950",
   }[rank.tier];
 
+  const rankTooltip = useMemo(() => {
+    if (typeof points === "number") {
+      const nextRank = TOURNAMENT_RANKS.find((r) => r.minPoints > rank.minPoints);
+      if (!nextRank) {
+        return `${rank.name} • ${points} pts (Patente Máxima)`;
+      }
+      const needed = Math.max(0, nextRank.minPoints - points);
+      return `${rank.name} • ${points} pts (Faltam ${needed} pts para ${nextRank.name})`;
+    }
+    return `${rank.name} • Requer ${rank.minPoints}+ pontos na Ranqueada`;
+  }, [rank, points]);
+
   return (
     <div className={`inline-flex items-center gap-2 ${className}`}>
       <div
         className={`relative flex items-center justify-center shrink-0 select-none transition-transform hover:scale-105 ${sizeClasses.box} ${shapeClasses} ${gradientBg} ${rank.borderColor}`}
         style={{ boxShadow: `0 0 12px ${rank.glowHex}40` }}
-        title={`${rank.name} • ${rank.minPoints}+ pontos na Ranqueada`}
+        title={rankTooltip}
       >
         {/* Core center: Roman Numeral or Crown for Mestre */}
         {rank.tier === "mestre" ? (

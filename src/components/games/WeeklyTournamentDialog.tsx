@@ -42,6 +42,50 @@ interface Props {
   onRequireLogin: () => void;
 }
 
+function WeeklyTournamentTop5Skeleton() {
+  return (
+    <div className="space-y-2" aria-label="Carregando Top 5 da semana...">
+      {Array.from({ length: 5 }).map((_, idx) => (
+        <div
+          key={idx}
+          className="flex items-center justify-between gap-3 rounded-2xl border border-border/60 bg-background/60 p-3 animate-pulse"
+        >
+          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+            <span
+              className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl text-xs font-black border shadow-xs ${
+                idx === 0
+                  ? "bg-yellow-400/20 text-yellow-600 border-yellow-500/30"
+                  : idx === 1
+                    ? "bg-slate-300/25 text-slate-500 border-slate-400/30"
+                    : idx === 2
+                      ? "bg-amber-700/20 text-amber-600 border-amber-800/30"
+                      : "bg-secondary/70 text-muted-foreground/60 border-border/50"
+              }`}
+            >
+              {idx + 1}º
+            </span>
+            <div className="h-6 w-14 rounded-lg bg-muted/60" />
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <div className="flex items-center gap-2">
+                <div
+                  className="h-3.5 rounded-md bg-muted/80"
+                  style={{ width: `${60 + idx * 16}px` }}
+                />
+                <div className="h-3 w-12 rounded-md bg-muted/50" />
+              </div>
+              <div className="h-2.5 w-32 rounded-md bg-muted/40" />
+            </div>
+          </div>
+          <div className="flex flex-col items-end gap-1 shrink-0">
+            <div className="h-4 w-14 rounded-md bg-accent/20" />
+            <div className="h-2.5 w-10 rounded-md bg-muted/40" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function WeeklyTournamentDialog({
   open,
   onOpenChange,
@@ -54,6 +98,7 @@ export function WeeklyTournamentDialog({
   const [activeTab, setActiveTab] = useState<"desafio" | "ranking">("desafio");
   const [confirmPaidOpen, setConfirmPaidOpen] = useState(false);
   const [spendingEntry, setSpendingEntry] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
 
   const myStageId = profile
     ? stageFromBirthdate(profile.birthdate, new Date(), profile.school).id
@@ -73,13 +118,22 @@ export function WeeklyTournamentDialog({
 
   useEffect(() => {
     if (!open) return;
-    void syncWeeklyTournamentWithPlayFab().then(() => setTick((t) => t + 1));
+    let active = true;
+    setInitialLoading(true);
+    void syncWeeklyTournamentWithPlayFab()
+      .then(() => {
+        if (active) setTick((t) => t + 1);
+      })
+      .finally(() => {
+        if (active) setInitialLoading(false);
+      });
     const handleUpdate = () => setTick((t) => t + 1);
     window.addEventListener("desafios:weekly-tournament-updated", handleUpdate);
     const id = window.setInterval(() => {
       void syncWeeklyTournamentWithPlayFab().then(() => setTick((t) => t + 1));
     }, 5000);
     return () => {
+      active = false;
       window.removeEventListener("desafios:weekly-tournament-updated", handleUpdate);
       window.clearInterval(id);
     };
@@ -482,7 +536,7 @@ export function WeeklyTournamentDialog({
             )}
 
             {/* Lista do Top Ranking */}
-            <div className="rounded-2xl border bg-card p-4 space-y-3">
+            <div className="rounded-2xl border bg-card p-4 space-y-3 min-h-[380px]">
               <div className="flex items-center justify-between">
                 <span className="font-display text-sm font-extrabold flex items-center gap-1.5">
                   <Medal className="h-4 w-4 text-accent" /> Top Jogadores da Semana
@@ -492,8 +546,10 @@ export function WeeklyTournamentDialog({
                 </span>
               </div>
 
-              {snap.top5.length === 0 ? (
-                <div className="rounded-xl bg-secondary/40 p-6 text-center text-xs text-muted-foreground space-y-1">
+              {initialLoading && snap.top5.length === 0 ? (
+                <WeeklyTournamentTop5Skeleton />
+              ) : snap.top5.length === 0 ? (
+                <div className="flex flex-col items-center justify-center rounded-xl bg-secondary/40 p-8 text-center text-xs text-muted-foreground space-y-1 min-h-[260px]">
                   <p className="font-bold text-foreground">Ninguém pontuou no torneio desta semana ainda.</p>
                   <p>Jogue sua 1ª entrada ranqueada para assumir o <b>1º lugar</b> da sua etapa!</p>
                 </div>
