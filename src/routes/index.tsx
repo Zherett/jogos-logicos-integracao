@@ -57,6 +57,7 @@ import semed from "@/assets/semed.png";
 import {
   ageFrom,
   getLocalDateKey,
+  isAdminOrTestAccount,
   isMatchVictory,
   isX1WindowOpen,
   stageFromBirthdate,
@@ -263,11 +264,13 @@ function Index() {
     if (!auth.profile) return;
     const myId = auth.profile.id;
     const myNick = auth.profile.nick;
+    const isAdminBypass = isAdminOrTestAccount(auth.profile, auth.isAdmin);
     const isArenaClosed =
-      auth.adminConfig.x1Enabled === false || Boolean(auth.adminConfig.x1ArenaClosed);
+      !isAdminBypass &&
+      (auth.adminConfig.x1Enabled === false || Boolean(auth.adminConfig.x1ArenaClosed));
 
     const checkInvites = () => {
-      if (isArenaClosed) {
+      if (isArenaClosed || activeX1Room) {
         if (incomingInvite) setIncomingInvite(null);
         return;
       }
@@ -310,7 +313,14 @@ function Index() {
       window.clearInterval(pollId);
       window.removeEventListener("desafios:x1-invite-rejected", handleReject);
     };
-  }, [auth.profile, auth.adminConfig.x1Enabled, auth.adminConfig.x1ArenaClosed, incomingInvite]);
+  }, [
+    auth.profile,
+    auth.isAdmin,
+    auth.adminConfig.x1Enabled,
+    auth.adminConfig.x1ArenaClosed,
+    incomingInvite,
+    activeX1Room,
+  ]);
 
   useEffect(() => {
     if (auth.unlocked.length === 0) return;

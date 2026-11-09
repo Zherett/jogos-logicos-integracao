@@ -23,7 +23,7 @@ import {
 import type { AllStats, GameId } from "@/lib/game-storage";
 import { GAME_NAMES } from "@/lib/game-storage";
 import { GAME_REGISTRY, type GameRegistration } from "@/lib/game-registry";
-import { TOURNAMENT_MIN_LEVEL, X1_MIN_LEVEL } from "@/lib/player-profile";
+import { isAdminOrTestAccount, TOURNAMENT_MIN_LEVEL, X1_MIN_LEVEL } from "@/lib/player-profile";
 import {
   getAllActiveEvents,
   calculateCumulativeActiveBonuses,
@@ -109,8 +109,11 @@ export function Menu({
       isGameAllowedForUser(g.id) &&
       (!requireCodeGate || unlocked.includes(g.id)),
   );
-  const canTournament = Boolean(playerProfile && playerLevel >= TOURNAMENT_MIN_LEVEL);
-  const canX1 = Boolean(playerProfile && playerLevel >= X1_MIN_LEVEL && x1OpenNow);
+  const isAdminBypass = isAdminOrTestAccount(playerProfile, isAdmin);
+  const effectiveX1Enabled = Boolean(x1Enabled || isAdminBypass);
+  const effectiveX1ArenaClosed = Boolean(x1ArenaClosed && !isAdminBypass);
+  const canTournament = Boolean(playerProfile && (isAdminBypass || playerLevel >= TOURNAMENT_MIN_LEVEL));
+  const canX1 = Boolean(playerProfile && (isAdminBypass || (playerLevel >= X1_MIN_LEVEL && x1OpenNow)));
 
   const stageId = playerProfile
     ? stageFromBirthdate(playerProfile.birthdate, new Date(), playerProfile.school).id
@@ -165,7 +168,7 @@ export function Menu({
   };
 
   const handleX1Click = () => {
-    if (x1ArenaClosed) return;
+    if (effectiveX1ArenaClosed) return;
     if (!playerProfile) {
       if (onOpenAuth) onOpenAuth();
       return;
@@ -424,7 +427,7 @@ export function Menu({
       />
 
       {/* 4. Modos Competitivos Especiais: Torneio Semanal (Nv 3+) & Arena X1 (Nv 5+, 07h–19h) com Cores Diferenciadas */}
-      {(tournamentEnabled || x1Enabled) && (
+      {(tournamentEnabled || effectiveX1Enabled) && (
         <div className="grid sm:grid-cols-2 gap-3.5 sm:gap-4">
           {tournamentEnabled && (
             <button
@@ -470,19 +473,19 @@ export function Menu({
             </button>
           )}
 
-          {x1Enabled && (
+          {effectiveX1Enabled && (
             <button
               type="button"
               onClick={handleX1Click}
-              disabled={x1ArenaClosed}
+              disabled={effectiveX1ArenaClosed}
               className={`group relative flex flex-col justify-between overflow-hidden rounded-3xl border-2 p-4.5 sm:p-5 text-left transition-all min-h-[160px] ${
-                x1ArenaClosed
+                effectiveX1ArenaClosed
                   ? "border-destructive/60 bg-gradient-to-br from-red-950/70 via-slate-900/95 to-neutral-950/90 cursor-not-allowed opacity-90 shadow-none"
                   : "border-orange-500/70 bg-gradient-to-br from-orange-950/80 via-slate-900/90 to-amber-950/60 shadow-[0_4px_25px_rgba(249,115,22,0.18)] hover:-translate-y-0.5 hover:shadow-[0_8px_30px_rgba(249,115,22,0.3)] hover:border-orange-400 cursor-pointer"
               }`}
             >
               {/* Faixa Vermelha de Aviso quando a Arena for Fechada pela Coordenação */}
-              {x1ArenaClosed && (
+              {effectiveX1ArenaClosed && (
                 <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-red-950/85 backdrop-blur-[2px] p-4 text-center border-2 border-destructive animate-in fade-in duration-200">
                   <span className="rounded-full bg-destructive/30 px-3 py-1 font-mono text-xs font-black uppercase text-red-200 border border-destructive/50">
                     ⛔ ARENA FECHADA PELA COORDENAÇÃO
@@ -512,12 +515,14 @@ export function Menu({
               </div>
 
               <div className="mt-3.5 inline-flex items-center gap-1.5 rounded-xl bg-orange-500 hover:bg-orange-400 px-4 py-2 text-xs font-black text-white shadow-md shadow-orange-500/30 w-fit group-hover:scale-[1.02] transition-transform">
-                {x1ArenaClosed ? (
+                {effectiveX1ArenaClosed ? (
                   "Arena Fechada pela Coordenação"
                 ) : !playerProfile ? (
                   <>
                     <LogIn className="h-3.5 w-3.5" /> Entrar para Duelar →
                   </>
+                ) : isAdminBypass && (!x1OpenNow || playerLevel < X1_MIN_LEVEL || x1ArenaClosed || !x1Enabled) ? (
+                  "🔓 Abrir Arena X1 (Modo ADM/Teste) →"
                 ) : playerLevel < X1_MIN_LEVEL ? (
                   `Bloqueado (Alcance o Nível ${X1_MIN_LEVEL})`
                 ) : !x1OpenNow ? (

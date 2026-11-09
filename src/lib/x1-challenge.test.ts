@@ -4,19 +4,31 @@ import {
   applyX1RobotBattleAnswer,
   cancelAllWaitingRoomsForHost,
   cancelWaitingX1Room,
+  clearX1MatchHistory,
   computeScoreRaceBlueShare,
   createX1Room,
   forfeitX1Match,
+  generateDeterministicRobotClashQuestion,
   generateRoomCode,
   getActiveRotatedX1Game,
   getX1LobbySnapshot,
   getX1Room,
+  heartbeatOnlinePlayer,
   joinX1Room,
+  loadX1HistoryMeta,
+  loadX1MatchHistory,
+  markAllX1MatchesRead,
   mergeX1RoomStates,
+  recordX1MatchFinished,
   resolveX1Winner,
+  saveX1MatchHistory,
+  startX1MatchAfterCountdown,
+  timeoutX1MinadoTurnSelection,
+  X1_MINADO_TURN_SELECT_TIMEOUT_SEC,
   X1_ROBOT_INITIAL_HP,
   type X1Room,
 } from "./x1-challenge.ts";
+import { isAdminOrTestAccount } from "./player-profile.ts";
 
 function makeSampleRoom(): X1Room {
   return {
@@ -401,5 +413,164 @@ describe("Arena de Desafio X1 Online (1v1 Versus Mode)", () => {
     });
     const snap = getX1LobbySnapshot("new_target_session", "alvox1");
     assert.ok(snap.myInvites.some((i) => i.roomCode === r.code));
+  });
+
+  it("gera questões determinísticas específicas para todos os jogos do catálogo e Batalha de Robôs", () => {
+    const allRaceGames = [
+      "logica",
+      "porcentagem",
+      "variaveis",
+      "cartesiano",
+      "formas",
+      "robogrid",
+      "memoria",
+      "spacequest",
+      "completar",
+    ] as const;
+
+    for (const gid of allRaceGames) {
+      const r = createX1Room({
+        host: { playerId: `h_${gid}`, nick: `Host_${gid}`, school: "SEMED", level: 6 },
+        gameId: gid,
+      });
+      const joined = joinX1Room({
+        code: r.code,
+        guest: { playerId: `g_${gid}`, nick: `Guest_${gid}`, school: "SEMED", level: 6 },
+      });
+      assert.equal(joined.error, null);
+      assert.equal(joined.room?.questionList?.length, 25);
+      const q0 = joined.room!.questionList![0]!;
+      assert.ok(q0.options.includes(q0.answer));
+    }
+
+    // Batalha de Robôs gera a mesma questão para a mesma seed + passo
+    const rq1 = generateDeterministicRobotClashQuestion(777888, 0);
+    const rq2 = generateDeterministicRobotClashQuestion(777888, 0);
+    assert.equal(rq1.text, rq2.text);
+    assert.equal(rq1.answer, rq2.answer);
+  });
+
+  it("filtra entradas legadas de 'Robô Desafiante' e persiste limpar / marcar como lido no histórico do ADM", () => {
+    clearX1MatchHistory();
+    const room = makeSampleRoom();
+    room.code = "9911";
+    room.status = "finished";
+    room.finishedAt = Date.now() + 2000;
+    room.winnerId = "host_1";
+    recordX1MatchFinished(room);
+
+    // Tenta injetar um registro legado com Robô Desafiante
+    const current = loadX1MatchHistory();
+    assert.equal(current.length, 1);
+    saveX1MatchHistory([
+      ...current,
+      {
+        id: "legacy_bot_1",
+        roomCode: "0001",
+        gameId: "rpg",
+        hostNick: "QUEMUEL",
+        hostSchool: "SEMED - Gestão Central",
+        hostScore: 130,
+        guestNick: "Robô Desafiante",
+        guestSchool: "SEMED - Gestão Central",
+        guestScore: 70,
+        winnerNick: "QUEMUEL",
+        finishedAt: new Date(Date.now() + 3000).toISOString(),
+        read: false,
+      },
+    ]);
+
+    // O filtro sanitizador remove automaticamente qualquer registro de Robô Desafiante
+    const afterFilter = loadX1MatchHistory();
+    assert.equal(afterFilter.some((e) => e.guestNick.includes("Robô")), false);
+    assert.equal(afterFilter.length, 1);
+    assert.equal(afterFilter[0]?.read, false);
+
+    // Marcar todos como lidos atualiza read = true e persiste readUpToAt
+    markAllX1MatchesRead();
+    const afterRead = loadX1MatchHistory();
+    assert.equal(afterRead[0]?.read, true);
+    assert.ok(loadX1HistoryMeta().readUpToAt > 0);
+
+    // Limpar histórico zera a lista e grava clearedAt para impedir ressurreição da nuvem
+    clearX1MatchHistory();
+    assert.equal(loadX1MatchHistory().length, 0);
+    assert.ok(loadX1HistoryMeta().clearedAt > 0);
+  });
+
+  it("libera acesso irrestrito aos perfis ADM e de teste (JOSINEY, QUEMUEL, ZHERET, LORD) mesmo abaixo do Nível 5 e oculta jogadores já em partida ativa", () => {
+    for (const nick of ["JOSINEY", "QUEMUEL", "ZHERET", "LORD"]) {
+      assert.equal(isAdminOrTestAccount({ nick }), true);
+    }
+    assert.equal(isAdminOrTestAccount({ nick: "ALUNO_COMUM" }), false);
+
+    // ZHERET e LORD no Nível 1 aparecem na lista online da Arena X1
+    heartbeatOnlinePlayer({
+      playerId: "test_zheret",
+      nick: "ZHERET",
+      fullName: "Zheret Test",
+      school: "SEMED",
+      level: 1,
+    });
+    heartbeatOnlinePlayer({
+      playerId: "test_lord",
+      nick: "LORD",
+      fullName: "Lord Test",
+      school: "SEMED",
+      level: 2,
+    });
+    const snapBefore = getX1LobbySnapshot("viewer_1", "Viewer");
+    assert.equal(snapBefore.onlinePlayers.some((p) => p.nick === "ZHERET"), true);
+    assert.equal(snapBefore.onlinePlayers.some((p) => p.nick === "LORD"), true);
+
+    // Quando ZHERET e LORD entram em uma partida ativa, deixam de aparecer como livres para convite
+    const matchRoom = createX1Room({
+      host: { playerId: "test_zheret", nick: "ZHERET", school: "SEMED", level: 1 },
+      gameId: "rpg",
+    });
+    joinX1Room({
+      code: matchRoom.code,
+      guest: { playerId: "test_lord", nick: "LORD", school: "SEMED", level: 2 },
+    });
+    const snapDuring = getX1LobbySnapshot("viewer_1", "Viewer");
+    assert.equal(snapDuring.onlinePlayers.some((p) => p.nick === "ZHERET"), false);
+    assert.equal(snapDuring.onlinePlayers.some((p) => p.nick === "LORD"), false);
+  });
+
+  it("passa a vez automaticamente no Campo Minado 1v1 após 25s de inatividade na escolha de carta", () => {
+    const created = createX1Room({
+      host: { playerId: "min_h", nick: "MinHost", school: "SEMED", level: 5 },
+      gameId: "minado",
+    });
+    joinX1Room({
+      code: created.code,
+      guest: { playerId: "min_g", nick: "MinGuest", school: "SEMED", level: 5 },
+    });
+    const started = startX1MatchAfterCountdown(created.code)!;
+    assert.equal(started.status, "playing");
+    const initialTurn = started.minadoState!.currentTurnPlayerId;
+
+    // Simula que o turno começou há 26 segundos
+    started.minadoState!.turnStartedAt = Date.now() - (X1_MINADO_TURN_SELECT_TIMEOUT_SEC + 1) * 1000;
+    const afterTimeout = timeoutX1MinadoTurnSelection(created.code);
+    assert.ok(afterTimeout.room);
+    assert.notEqual(afterTimeout.room!.minadoState!.currentTurnPlayerId, initialTurn);
+  });
+
+  it("desempata corrida de pontos pelo menor tempo de conclusão quando ambos concluem todas as questões empatados", () => {
+    const room = makeSampleRoom();
+    room.gameId = "logica";
+    room.host.score = 200;
+    room.guest!.score = 200;
+    room.host.correct = 20;
+    room.guest!.correct = 20;
+    room.host.wrong = 5;
+    room.guest!.wrong = 5;
+    room.host.finished = true;
+    room.guest!.finished = true;
+    room.host.updatedAt = 1_000_000;
+    room.guest!.updatedAt = 1_005_000; // Guest terminou 5s depois
+
+    assert.equal(resolveX1Winner(room), "host_1");
   });
 });

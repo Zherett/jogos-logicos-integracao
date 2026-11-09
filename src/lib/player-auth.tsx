@@ -282,9 +282,10 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
       return;
     }
     onMatchSaved((id, match) => {
-      // Partidas do Torneio Semanal Ranqueado são processadas exclusivamente pelo finishRankedEntry
-      // para calcular pontos ranqueados, patentes e evitar condições de corrida na nuvem
-      if (match.mode === "torneio_semanal") {
+      // Partidas do Torneio Semanal Ranqueado e da Arena X1 Online são processadas exclusivamente
+      // por seus controladores dedicados (finishRankedEntry e X1MatchOverlay) para preservar isDraw,
+      // evitar duplicidade de XP/vitórias/pontos de carreira e não poluir recordes de etapa.
+      if (match.mode === "torneio_semanal" || match.mode === "x1_online") {
         return;
       }
       if (match.score > 0) {

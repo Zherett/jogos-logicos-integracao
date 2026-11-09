@@ -10,7 +10,7 @@ import {
   isPlayFabConfigured,
   loadStoredSession,
 } from "./playfab.ts";
-import type { AgeStageId } from "./player-profile.ts";
+import { isAdminOrTestAccount, type AgeStageId } from "./player-profile.ts";
 import { recordPlayerHeartbeat } from "./presence.ts";
 import { type Shape } from "./shapes-content.ts";
 import {
@@ -30,6 +30,7 @@ export const X1_ROBOT_INITIAL_HP = 5; // 5 Vidas na Batalha dos Robôs
 export const X1_ROOM_EXPIRATION_MS = 120_000; // Sala de espera expira em 2 minutos se ninguém entrar
 export const X1_POST_MATCH_AUTOCLOSE_MS = 60_000; // Sala fechada e apagada em 1 minuto pós-partida
 export const X1_COUNTDOWN_DURATION_SEC = 10; // 10 segundos de contagem regressiva sincronizada
+export const X1_MINADO_TURN_SELECT_TIMEOUT_SEC = 25; // 25s para escolher uma carta no Campo Minado 1v1
 export const X1_VICTORY_BONUS_XP = 50;
 export const X1_PARTICIPATION_BONUS_XP = 20;
 
@@ -62,7 +63,6 @@ export interface X1PlayerSideState {
   maxHp: number;
   finished: boolean;
   currentQuestionIdx?: number;
-  isBot?: boolean;
   updatedAt: number;
 }
 
@@ -162,23 +162,100 @@ interface X1LobbyStore {
 }
 
 const X1_MATCH_HISTORY_KEY = "desafios-x1-match-history-v1";
+const X1_MATCH_HISTORY_META_KEY = "desafios-x1-match-history-meta-v1";
+
+export interface X1MatchHistoryMeta {
+  clearedAt: number;
+  readUpToAt: number;
+}
+
 let memoryMatchHistoryFallback: X1MatchLogEntry[] = [];
+let memoryHistoryMetaFallback: X1MatchHistoryMeta = { clearedAt: 0, readUpToAt: 0 };
+
+export function loadX1HistoryMeta(): X1MatchHistoryMeta {
+  if (typeof window === "undefined") return { ...memoryHistoryMetaFallback };
+  try {
+    const raw = localStorage.getItem(X1_MATCH_HISTORY_META_KEY);
+    if (!raw) return { clearedAt: 0, readUpToAt: 0 };
+    const parsed = JSON.parse(raw) as Partial<X1MatchHistoryMeta>;
+    return {
+      clearedAt: typeof parsed.clearedAt === "number" ? parsed.clearedAt : 0,
+      readUpToAt: typeof parsed.readUpToAt === "number" ? parsed.readUpToAt : 0,
+    };
+  } catch {
+    return { clearedAt: 0, readUpToAt: 0 };
+  }
+}
+
+export function saveX1HistoryMeta(meta: X1MatchHistoryMeta): void {
+  memoryHistoryMetaFallback = { ...meta };
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(X1_MATCH_HISTORY_META_KEY, JSON.stringify(meta));
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Filtra qualquer registro legado que tenha envolvido robô de teste ("Robô Desafiante")
+ * antes da diretriz oficial de 100% jogador vs jogador.
+ */
+export function isBotMatchEntry(entry?: Partial<X1MatchLogEntry> | null): boolean {
+  if (!entry) return true;
+  const host = (entry.hostNick ?? "").trim().toLowerCase();
+  const guest = (entry.guestNick ?? "").trim().toLowerCase();
+  const winner = (entry.winnerNick ?? "").trim().toLowerCase();
+  const id = (entry.id ?? "").trim().toLowerCase();
+  const botTerms = ["robô desafiante", "robo desafiante", "bot_challenger", "x1_bot"];
+  return botTerms.some(
+    (term) =>
+      host.includes(term) ||
+      guest.includes(term) ||
+      winner.includes(term) ||
+      id.includes(term),
+  );
+}
+
+function sanitizeHistoryEntries(
+  entries: X1MatchLogEntry[],
+  meta = loadX1HistoryMeta(),
+): X1MatchLogEntry[] {
+  const result: X1MatchLogEntry[] = [];
+  for (const item of entries) {
+    if (!item || !item.id || !item.roomCode || isBotMatchEntry(item)) continue;
+    const finishedMs = new Date(item.finishedAt).getTime();
+    if (meta.clearedAt > 0 && Number.isFinite(finishedMs) && finishedMs <= meta.clearedAt + 1000) {
+      continue;
+    }
+    const isRead =
+      Boolean(item.read) ||
+      (meta.readUpToAt > 0 && Number.isFinite(finishedMs) && finishedMs <= meta.readUpToAt + 1000);
+    result.push({ ...item, read: isRead });
+  }
+  return result;
+}
 
 export function loadX1MatchHistory(): X1MatchLogEntry[] {
-  if (typeof window === "undefined") return [...memoryMatchHistoryFallback];
+  const meta = loadX1HistoryMeta();
+  if (typeof window === "undefined") {
+    return sanitizeHistoryEntries(memoryMatchHistoryFallback, meta);
+  }
   try {
     const raw = localStorage.getItem(X1_MATCH_HISTORY_KEY);
-    return raw ? (JSON.parse(raw) as X1MatchLogEntry[]) : [];
+    const parsed = raw ? (JSON.parse(raw) as X1MatchLogEntry[]) : [];
+    return sanitizeHistoryEntries(Array.isArray(parsed) ? parsed : [], meta);
   } catch {
     return [];
   }
 }
 
 export function saveX1MatchHistory(entries: X1MatchLogEntry[]): void {
-  memoryMatchHistoryFallback = [...entries];
+  const clean = sanitizeHistoryEntries(entries);
+  memoryMatchHistoryFallback = [...clean];
   if (typeof window === "undefined") return;
   try {
-    localStorage.setItem(X1_MATCH_HISTORY_KEY, JSON.stringify(entries));
+    localStorage.setItem(X1_MATCH_HISTORY_KEY, JSON.stringify(clean));
     window.dispatchEvent(new CustomEvent("desafios:x1-history-updated"));
   } catch {
     // ignore
@@ -226,18 +303,35 @@ export function recordX1MatchFinished(room: X1Room): void {
     read: false,
   };
 
+  if (isBotMatchEntry(entry)) return;
+
   history.unshift(entry);
   saveX1MatchHistory(history.slice(0, 100));
 }
 
 export function markAllX1MatchesRead(): void {
+  const now = Date.now();
+  const meta = loadX1HistoryMeta();
+  saveX1HistoryMeta({
+    clearedAt: meta.clearedAt,
+    readUpToAt: Math.max(meta.readUpToAt, now),
+  });
   const history = loadX1MatchHistory();
   const updated = history.map((h) => ({ ...h, read: true }));
   saveX1MatchHistory(updated);
+  lastLobbyCloudSyncAt = 0;
+  void syncX1WithPlayFabCloud();
 }
 
 export function clearX1MatchHistory(): void {
+  const now = Date.now();
+  saveX1HistoryMeta({
+    clearedAt: now,
+    readUpToAt: now,
+  });
   saveX1MatchHistory([]);
+  lastLobbyCloudSyncAt = 0;
+  void syncX1WithPlayFabCloud();
 }
 
 /* --------------------- Pure Logic & Deterministic Generators (Testable) --------------------- */
@@ -328,10 +422,62 @@ export function buildX1Board(seed: number): MineCard[] {
 }
 
 /**
- * Gera uma lista determinística idêntica de questões a partir da semente da sala (seed).
- * Garante que ambos os jogadores recebam os mesmos problemas na mesma ordem.
+ * Gera determinísticamente a pergunta número `stepIndex` para a Batalha de Robôs (`rpg`) no X1,
+ * usando a semente (`seed`) da sala para que ambos os jogadores enfrentem exatamente a mesma sequência.
  */
-export function generateDeterministicQuestionList(seed: number, gameId: GameId): X1QuestionEntry[] {
+export function generateDeterministicRobotClashQuestion(
+  seed: number,
+  stepIndex: number,
+): { text: string; answer: boolean } {
+  const nextRnd = createSeededRng(seed + stepIndex * 7919 + 101);
+  const ri = (n: number) => Math.floor(nextRnd() * n);
+  const rand = <T>(arr: readonly T[]): T => arr[ri(arr.length)];
+
+  const kind = ri(3);
+  if (kind === 0) {
+    const a = 2 + ri(16);
+    const b = 2 + ri(14);
+    const op = rand(["+", "−", "×"] as const);
+    const exprA = op === "−" ? Math.max(a, b) : a;
+    const exprB = op === "−" ? Math.min(a, b) : b;
+    const real = op === "+" ? exprA + exprB : op === "−" ? exprA - exprB : exprA * exprB;
+    const isTrue = nextRnd() < 0.5;
+    const shown = isTrue ? real : real + rand([-4, -3, -2, -1, 1, 2, 3, 4]);
+    return {
+      text: `${exprA} ${op} ${exprB} = ${shown}`,
+      answer: shown === real,
+    };
+  }
+  if (kind === 1) {
+    const a = 2 + ri(15);
+    const b = 2 + ri(15);
+    const c = 2 + ri(15);
+    const d = 2 + ri(15);
+    const cmp = rand([">", "<"] as const);
+    const left = a + b;
+    const right = c + d;
+    const ans = cmp === ">" ? left > right : left < right;
+    return {
+      text: `${a} + ${b} ${cmp} ${c} + ${d}`,
+      answer: ans,
+    };
+  }
+  const n = 4 + ri(25);
+  const askEven = nextRnd() < 0.5;
+  return {
+    text: askEven ? `${n} é um número PAR` : `${n} é um número ÍMPAR`,
+    answer: askEven ? n % 2 === 0 : n % 2 !== 0,
+  };
+}
+
+/**
+ * Gera uma lista determinística idêntica de questões a partir da semente da sala (seed).
+ * Garante que ambos os jogadores recebam os mesmos problemas na mesma ordem para qualquer modalidade habilitada.
+ */
+export function generateDeterministicQuestionList(
+  seed: number,
+  gameId: GameId | string,
+): X1QuestionEntry[] {
   const nextRnd = createSeededRng(seed);
   const ri = (n: number) => Math.floor(nextRnd() * n);
   const rand = <T>(arr: readonly T[]): T => arr[ri(arr.length)];
@@ -366,7 +512,141 @@ export function generateDeterministicQuestionList(seed: number, gameId: GameId):
         answer: String(correctAns),
         points: 15,
       });
-    } else if (gameId === "operacoes") {
+    } else if (gameId === "variaveis") {
+      const x = 1 + ri(12);
+      const mult = rand([1, 2, 3, 4] as const);
+      const add = 1 + ri(15);
+      const isAdd = nextRnd() < 0.65;
+      const total = isAdd ? mult * x + add : mult * x + add;
+      const expr =
+        mult === 1
+          ? isAdd
+            ? `X + ${add} = ${x + add}`
+            : `X − ${add} = ${x}`
+          : `${mult}X + ${add} = ${total}`;
+      const correctAns = mult === 1 && !isAdd ? x + add : x;
+      const opts = new Set<number>([correctAns]);
+      while (opts.size < 4) {
+        const cand = correctAns + rand([-5, -3, -2, -1, 1, 2, 3, 5]);
+        if (cand > 0) opts.add(cand);
+      }
+      list.push({
+        id: `q_var_${seed}_${i}`,
+        prompt: "Descubra o valor da incógnita X:",
+        question: expr,
+        expr,
+        options: shuffle([...opts]).map(String),
+        answer: String(correctAns),
+        points: 15,
+      });
+    } else if (gameId === "cartesiano") {
+      const isMove = i % 2 === 0;
+      if (isMove) {
+        const x0 = -4 + ri(9);
+        const y0 = -4 + ri(9);
+        const dx = rand([-3, -2, -1, 1, 2, 3] as const);
+        const dy = rand([-3, -2, -1, 1, 2, 3] as const);
+        const xf = x0 + dx;
+        const yf = y0 + dy;
+        const ans = `(${xf}, ${yf})`;
+        const opts = new Set<string>([
+          ans,
+          `(${x0 - dx}, ${yf})`,
+          `(${xf}, ${y0 - dy})`,
+          `(${yf}, ${xf})`,
+        ]);
+        let step = 1;
+        while (opts.size < 4) {
+          opts.add(`(${xf + step}, ${yf - step})`);
+          step++;
+        }
+        const expr = `Início (${x0}, ${y0}) → X ${dx > 0 ? `+${dx}` : dx}, Y ${dy > 0 ? `+${dy}` : dy}`;
+        list.push({
+          id: `q_cart_${seed}_${i}`,
+          prompt: "Qual é a coordenada final (X, Y) no Plano Cartesiano?",
+          question: expr,
+          expr,
+          options: shuffle([...opts]),
+          answer: ans,
+          points: 15,
+        });
+      } else {
+        const qNum = 1 + ri(4);
+        const ax = 1 + ri(8);
+        const ay = 1 + ri(8);
+        const px = qNum === 1 || qNum === 4 ? ax : -ax;
+        const py = qNum === 1 || qNum === 2 ? ay : -ay;
+        const labels = ["1º Quadrante", "2º Quadrante", "3º Quadrante", "4º Quadrante"];
+        const ans = labels[qNum - 1];
+        const expr = `Ponto P(${px}, ${py})`;
+        list.push({
+          id: `q_cart_${seed}_${i}`,
+          prompt: "Em qual quadrante do Plano Cartesiano está o ponto?",
+          question: expr,
+          expr,
+          options: labels,
+          answer: ans,
+          points: 15,
+        });
+      }
+    } else if (gameId === "formas") {
+      const catalog = [
+        { q: "Polígono regular com 3 lados e 3 vértices", a: "Triângulo" },
+        { q: "Polígono com 4 lados iguais e 4 ângulos retos", a: "Quadrado" },
+        { q: "Polígono com 5 lados e 5 vértices", a: "Pentágono" },
+        { q: "Polígono com 6 lados e 6 vértices", a: "Hexágono" },
+        { q: "Figura plana perfeitamente redonda sem vértices", a: "Círculo" },
+        { q: "Quadrilátero com lados opostos paralelos e 4 lados iguais", a: "Losango" },
+      ];
+      const allLabels = ["Triângulo", "Quadrado", "Pentágono", "Hexágono", "Círculo", "Losango"];
+      const chosen = rand(catalog);
+      const others = shuffle(allLabels.filter((l) => l !== chosen.a)).slice(0, 3);
+      list.push({
+        id: `q_frm_${seed}_${i}`,
+        prompt: "Qual é a forma geométrica descrita?",
+        question: chosen.q,
+        expr: chosen.q,
+        options: shuffle([chosen.a, ...others]),
+        answer: chosen.a,
+        points: 15,
+      });
+    } else if (gameId === "robogrid") {
+      const dirs = ["Norte", "Leste", "Sul", "Oeste"] as const;
+      const startIdx = ri(4);
+      const turn = rand(["Girar à Direita", "Girar à Esquerda", "Meia-volta (180°)"] as const);
+      const endIdx =
+        turn === "Girar à Direita"
+          ? (startIdx + 1) % 4
+          : turn === "Girar à Esquerda"
+            ? (startIdx + 3) % 4
+            : (startIdx + 2) % 4;
+      const expr = `Olhando p/ ${dirs[startIdx]} → [${turn}]`;
+      list.push({
+        id: `q_rbg_${seed}_${i}`,
+        prompt: "Para qual direção o robô ficará apontando?",
+        question: expr,
+        expr,
+        options: [...dirs],
+        answer: dirs[endIdx],
+        points: 15,
+      });
+    } else if (gameId === "memoria") {
+      const colors = ["Azul", "Verde", "Amarelo", "Vermelho"] as const;
+      const c1 = colors[ri(4)];
+      const c2 = colors[( colors.indexOf(c1) + 1 + ri(3) ) % 4];
+      const c3 = colors[( colors.indexOf(c2) + 1 + ri(3) ) % 4];
+      const pattern = [c1, c2, c3, c1, c2, "?"];
+      const expr = pattern.join(" → ");
+      list.push({
+        id: `q_mem_${seed}_${i}`,
+        prompt: "Qual cor completa o padrão de memória?",
+        question: expr,
+        expr,
+        options: [...colors],
+        answer: c3,
+        points: 15,
+      });
+    } else if (gameId === "operacoes" || gameId === "spacequest") {
       const a = 2 + ri(18);
       const b = 2 + ri(12);
       const op = rand(["+", "−", "×"] as const);
@@ -388,7 +668,7 @@ export function generateDeterministicQuestionList(seed: number, gameId: GameId):
         answer: String(correctAns),
         points: 15,
       });
-    } else if (gameId === "sequencias") {
+    } else if (gameId === "sequencias" || gameId === "completar") {
       const start = 1 + ri(10);
       const step = 2 + ri(6);
       const seq = [start, start + step, start + step * 2, start + step * 3];
@@ -635,6 +915,10 @@ export function resolveX1Winner(room: X1Room): string | "draw" {
   }
   if (room.host.wrong !== room.guest.wrong) {
     return room.host.wrong < room.guest.wrong ? room.host.playerId : room.guest.playerId;
+  }
+  // Desempate por velocidade quando ambos concluíram todas as questões com a mesma pontuação/acertos/erros
+  if (room.host.finished && room.guest.finished && room.host.updatedAt !== room.guest.updatedAt) {
+    return room.host.updatedAt < room.guest.updatedAt ? room.host.playerId : room.guest.playerId;
   }
   return "draw";
 }
@@ -1258,30 +1542,61 @@ async function runSyncX1WithPlayFabCloud(activeRoomCode?: string | null): Promis
       }
 
       // Mescla histórico de partidas X1 concluídas para a Caixa de Entrada do ADM em qualquer dispositivo
-      const remoteHistory = (remoteStore as { matchHistory?: X1MatchLogEntry[] }).matchHistory;
+      const remotePayload = remoteStore as {
+        matchHistory?: X1MatchLogEntry[];
+        historyClearedAt?: number;
+        historyReadUpToAt?: number;
+      };
+      const localMeta = loadX1HistoryMeta();
+      const mergedMeta: X1MatchHistoryMeta = {
+        clearedAt: Math.max(localMeta.clearedAt, Number(remotePayload.historyClearedAt) || 0),
+        readUpToAt: Math.max(localMeta.readUpToAt, Number(remotePayload.historyReadUpToAt) || 0),
+      };
+      const metaChanged =
+        mergedMeta.clearedAt !== localMeta.clearedAt ||
+        mergedMeta.readUpToAt !== localMeta.readUpToAt;
+      if (metaChanged) {
+        saveX1HistoryMeta(mergedMeta);
+      }
+
+      const localHistory = sanitizeHistoryEntries(loadX1MatchHistory(), mergedMeta);
+      const byId = new Map(localHistory.map((h) => [h.id, h]));
+      let historyChanged = metaChanged;
+
+      const remoteHistory = remotePayload.matchHistory;
       if (Array.isArray(remoteHistory) && remoteHistory.length > 0) {
-        const localHistory = loadX1MatchHistory();
-        const byId = new Map(localHistory.map((h) => [h.id, h]));
-        let historyAdded = false;
         for (const rEntry of remoteHistory) {
           if (!rEntry || !rEntry.id || !rEntry.roomCode) continue;
-          const alreadyHasRoom = localHistory.some(
+          if (isBotMatchEntry(rEntry)) continue;
+          const finishedMs = new Date(rEntry.finishedAt).getTime();
+          if (Number.isFinite(finishedMs) && finishedMs <= mergedMeta.clearedAt + 1000) {
+            continue;
+          }
+          const existing = localHistory.find(
             (h) =>
               h.id === rEntry.id ||
               (h.roomCode === rEntry.roomCode &&
-                Math.abs(new Date(h.finishedAt).getTime() - new Date(rEntry.finishedAt).getTime()) < 600_000),
+                Math.abs(new Date(h.finishedAt).getTime() - finishedMs) < 600_000),
           );
-          if (!alreadyHasRoom && !byId.has(rEntry.id)) {
-            byId.set(rEntry.id, { ...rEntry, read: false });
-            historyAdded = true;
+          const isRead = Boolean(
+            existing?.read ||
+              rEntry.read ||
+              (Number.isFinite(finishedMs) && finishedMs <= mergedMeta.readUpToAt + 1000),
+          );
+          if (!existing && !byId.has(rEntry.id)) {
+            byId.set(rEntry.id, { ...rEntry, read: isRead });
+            historyChanged = true;
+          } else if (existing && existing.read !== isRead) {
+            byId.set(existing.id, { ...existing, read: isRead });
+            historyChanged = true;
           }
         }
-        if (historyAdded) {
-          const mergedHistory = Array.from(byId.values())
-            .sort((a, b) => new Date(b.finishedAt).getTime() - new Date(a.finishedAt).getTime())
-            .slice(0, 100);
-          saveX1MatchHistory(mergedHistory);
-        }
+      }
+      if (historyChanged) {
+        const mergedHistory = Array.from(byId.values())
+          .sort((a, b) => new Date(b.finishedAt).getTime() - new Date(a.finishedAt).getTime())
+          .slice(0, 100);
+        saveX1MatchHistory(mergedHistory);
       }
     } catch {
       /* ignore */
@@ -1294,6 +1609,7 @@ async function runSyncX1WithPlayFabCloud(activeRoomCode?: string | null): Promis
 
   // Push merged snapshot (usando o store mais recente para nunca sobrescrever ações concorrentes)
   const latestStore = loadStore();
+  const latestMeta = loadX1HistoryMeta();
   const latestHistory = loadX1MatchHistory().slice(0, 40);
   await callPlayFabSharedGroup("UpdateSharedGroupData", {
     SharedGroupId: LOBBY_SHARED_GROUP_ID,
@@ -1304,6 +1620,8 @@ async function runSyncX1WithPlayFabCloud(activeRoomCode?: string | null): Promis
         deletedRooms: latestStore.deletedRooms,
         invites: latestStore.invites,
         matchHistory: latestHistory,
+        historyClearedAt: latestMeta.clearedAt,
+        historyReadUpToAt: latestMeta.readUpToAt,
       }),
     },
     Permission: "Public",
@@ -1443,8 +1761,24 @@ export function getX1LobbySnapshot(currentPlayerId?: string, currentPlayerNick?:
   const store = loadStore();
   const myNick = currentPlayerNick ?? (currentPlayerId ? store.players[currentPlayerId]?.nick : undefined);
 
+  const activeMatches = Object.values(store.rooms)
+    .filter((r) => r.status === "playing" || r.status === "countdown")
+    .sort((a, b) => b.createdAt - a.createdAt);
+
   const onlinePlayers = Object.values(store.players)
-    .filter((p) => p.level >= 5 && (Date.now() - p.lastSeenAt) <= 60_000)
+    .filter((p) => {
+      if (Date.now() - p.lastSeenAt > 60_000) return false;
+      const meetsLevelOrBypass =
+        p.level >= 5 ||
+        isAdminOrTestAccount({ id: p.playerId, nick: p.nick, full_name: p.fullName });
+      if (!meetsLevelOrBypass) return false;
+      const isInActiveMatch = activeMatches.some(
+        (m) =>
+          isSameX1Identity(m.host.playerId, m.host.nick, p.playerId, p.nick) ||
+          (m.guest && isSameX1Identity(m.guest.playerId, m.guest.nick, p.playerId, p.nick)),
+      );
+      return !isInActiveMatch;
+    })
     .sort((a, b) => b.lastSeenAt - a.lastSeenAt);
 
   // Nunca exibe a sala criada pelo próprio jogador como disponível para ele mesmo entrar
@@ -1455,10 +1789,6 @@ export function getX1LobbySnapshot(currentPlayerId?: string, currentPlayerNick?:
         !store.deletedRooms?.[r.code] &&
         !isSameX1Identity(r.host.playerId, r.host.nick, currentPlayerId, myNick),
     )
-    .sort((a, b) => b.createdAt - a.createdAt);
-
-  const activeMatches = Object.values(store.rooms)
-    .filter((r) => r.status === "playing" || r.status === "countdown")
     .sort((a, b) => b.createdAt - a.createdAt);
 
   const myInvites =
@@ -1688,7 +2018,7 @@ export function cancelAllWaitingRoomsForHost(
 
 export function joinX1Room(args: {
   code: string;
-  guest: { playerId: string; nick: string; school: string; level: number; isBot?: boolean };
+  guest: { playerId: string; nick: string; school: string; level: number };
 }): { room: X1Room | null; error: string | null } {
   const clean = args.code.trim().toUpperCase();
   const store = loadStore();
@@ -1701,7 +2031,6 @@ export function joinX1Room(args: {
     return { room: null, error: "Sala não encontrada, cancelada ou expirada (limite de 2 minutos)." };
   }
   if (
-    !args.guest.isBot &&
     isSameX1Identity(room.host.playerId, room.host.nick, args.guest.playerId, args.guest.nick)
   ) {
     return {
@@ -1728,7 +2057,6 @@ export function joinX1Room(args: {
     maxHp: X1_ROBOT_INITIAL_HP,
     finished: false,
     currentQuestionIdx: 0,
-    isBot: args.guest.isBot,
     updatedAt: now,
   };
 
@@ -1773,6 +2101,9 @@ export function startX1MatchAfterCountdown(code: string): X1Room | null {
     const now = Date.now();
     room.status = "playing";
     room.startedAt = room.startedAt ?? now;
+    if (room.minadoState) {
+      room.minadoState.turnStartedAt = now;
+    }
     room.revision = (room.revision ?? 1) + 1;
     store.rooms[clean] = room;
     saveStore(store);
@@ -1827,7 +2158,7 @@ export async function fetchX1RoomFromCloud(code: string): Promise<X1Room | null>
  */
 export async function joinX1RoomAsync(args: {
   code: string;
-  guest: { playerId: string; nick: string; school: string; level: number; isBot?: boolean };
+  guest: { playerId: string; nick: string; school: string; level: number };
 }): Promise<{ room: X1Room | null; error: string | null }> {
   const clean = args.code.trim().toUpperCase();
   if (clean.length !== 4) {
@@ -1838,7 +2169,6 @@ export async function joinX1RoomAsync(args: {
   const localCheck = getX1Room(clean);
   if (
     localCheck &&
-    !args.guest.isBot &&
     isSameX1Identity(
       localCheck.host.playerId,
       localCheck.host.nick,
@@ -2150,6 +2480,47 @@ export function timeoutX1MinadoQuestion(
     room.winnerId = resolveX1Winner(room);
     recordX1MatchFinished(room);
   }
+
+  store.rooms[room.code] = room;
+  saveStore(store);
+  void pushRoomToPlayFab(room);
+  return { room };
+}
+
+/**
+ * Computa estouro de tempo (25s) sem escolher nenhuma carta na vez do jogador no Campo Minado 1v1.
+ * Aplica penalidade leve (-2 pts) e passa a vez para o oponente para evitar travamento da sala.
+ */
+export function timeoutX1MinadoTurnSelection(
+  codeOrArgs: string | { code: string },
+): { room: X1Room | null } {
+  const code = typeof codeOrArgs === "string" ? codeOrArgs : codeOrArgs.code;
+  const store = loadStore();
+  const room = store.rooms[code.trim().toUpperCase()];
+  if (!room || !room.minadoState || room.status !== "playing") {
+    return { room: null };
+  }
+  const minado = room.minadoState;
+  if (minado.activeQuestion) return { room };
+
+  const now = Date.now();
+  const elapsed = now - (minado.turnStartedAt || now);
+  if (elapsed < (X1_MINADO_TURN_SELECT_TIMEOUT_SEC - 1) * 1000) {
+    return { room };
+  }
+
+  const isHost = room.host.playerId === minado.currentTurnPlayerId;
+  const me = isHost ? room.host : room.guest;
+  const opp = isHost ? room.guest : room.host;
+  if (!me || !opp) return { room };
+
+  room.revision = (room.revision ?? 1) + 1;
+  me.score = Math.max(0, me.score - 2);
+  me.wrong += 1;
+  me.updatedAt = now;
+
+  minado.currentTurnPlayerId = opp.playerId;
+  minado.turnStartedAt = now;
 
   store.rooms[room.code] = room;
   saveStore(store);

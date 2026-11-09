@@ -176,6 +176,7 @@ export function playfabUsernameFromNick(nick: string): string {
  * devendo ser ignoradas para não tomar o pioneirismo dos alunos reais.
  */
 export function isPioneerExcludedAccount(p?: {
+  id?: string;
   nick?: string;
   nickNormalized?: string;
   full_name?: string;
@@ -183,6 +184,7 @@ export function isPioneerExcludedAccount(p?: {
 } | null): boolean {
   if (!p) return false;
   if (p.isAdmin) return true;
+  if (p.id === "admin-system" || p.id?.startsWith("admin-")) return true;
 
   const rawNick = (p.nick ?? "").toLowerCase();
   const slugNick = (p.nickNormalized ?? nickSlug(p.nick ?? "")).toLowerCase();
@@ -208,6 +210,25 @@ export function isPioneerExcludedAccount(p?: {
   }
 
   return false;
+}
+
+/**
+ * Identifica se um perfil pertence à administração (JOSINEY, QUEMUEL, isAdmin)
+ * ou é um perfil de jogador comum utilizado pelo administrador para testes (ZHERET, LORD).
+ * Esses perfis possuem passe livre total (sem trava de horário, nível ou arena fechada) no modo X1.
+ */
+export function isAdminOrTestAccount(
+  p?: {
+    id?: string;
+    nick?: string;
+    nickNormalized?: string;
+    full_name?: string;
+    isAdmin?: boolean;
+  } | null,
+  isAdminSession = false,
+): boolean {
+  if (isAdminSession) return true;
+  return isPioneerExcludedAccount(p);
 }
 
 /** Formats a student's full name in UPPERCASE (pt-BR locale) as they type or save. */

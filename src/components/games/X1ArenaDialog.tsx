@@ -25,6 +25,7 @@ import {
   ageFrom,
   getAgeStageInfo,
   getLocalDateKey,
+  isAdminOrTestAccount,
   isX1WindowOpen,
   stageFromBirthdate,
   X1_DAILY_EXTRA_XP_CAP,
@@ -81,8 +82,10 @@ export function X1ArenaDialog({
   const [tick, setTick] = useState(0);
 
   const enabledGameIds = ALL_GAME_IDS.filter((id) => auth.adminConfig.enabledGames[id]);
-  const isArenaDisabledByAdmin =
+  const isAdminBypass = isAdminOrTestAccount(profile, auth.isAdmin);
+  const rawArenaClosed =
     auth.adminConfig.x1Enabled === false || Boolean(auth.adminConfig.x1ArenaClosed);
+  const isArenaDisabledByAdmin = !isAdminBypass && rawArenaClosed;
 
   useEffect(() => {
     if (allowedX1Games.length > 0 && !allowedX1Games.includes(selectedGame)) {
@@ -236,8 +239,9 @@ export function X1ArenaDialog({
   const cfg = auth.adminConfig;
   const openHour = cfg.x1OpenHour ?? 7;
   const closeHour = cfg.x1CloseHour ?? 19;
-  const isTimeOpen = isX1WindowOpen(new Date(), openHour, closeHour, cfg.x1ForceOpen ?? false);
-  const meetsLevel = profile.level >= X1_MIN_LEVEL;
+  const rawTimeOpen = isX1WindowOpen(new Date(), openHour, closeHour, cfg.x1ForceOpen ?? false);
+  const isTimeOpen = isAdminBypass || rawTimeOpen;
+  const meetsLevel = isAdminBypass || profile.level >= X1_MIN_LEVEL;
   const todayKey = getLocalDateKey();
   const dailyX1Xp =
     profile.dailyXpDate === todayKey ? Math.max(0, profile.dailyX1Xp ?? 0) : 0;
@@ -456,6 +460,12 @@ export function X1ArenaDialog({
             Duelos 1v1 em tempo real
           </span>
         </div>
+
+        {isAdminBypass && (rawArenaClosed || !rawTimeOpen || profile.level < X1_MIN_LEVEL) && (
+          <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-[11px] font-bold text-amber-600 dark:text-amber-400 flex items-center justify-between">
+            <span>🔓 Acesso Livre ADM/Teste ativo (sem travas de horário, nível ou fechamento)</span>
+          </div>
+        )}
 
         {/* TELA DE ESPERA DA SALA CRIADA */}
         {waitingRoom ? (

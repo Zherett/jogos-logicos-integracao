@@ -22,13 +22,15 @@ import { Button } from "@/components/ui/button";
 import { ShapeSvg } from "./ShapeSvg";
 import { GAME_NAMES, saveLastMatch, updateBest } from "@/lib/game-storage";
 import { usePlayerAuth } from "@/lib/player-auth";
-import { generateClashQuestion, type ClashQuestion } from "@/lib/rpg-content";
+import { type ClashQuestion } from "@/lib/rpg-content";
 import { playCorrect, playTone, playWrong } from "@/lib/sound";
 import {
+  X1_MINADO_TURN_SELECT_TIMEOUT_SEC,
   answerX1MinadoQuestion,
   closeX1Room,
   finishX1RoomByTimeout,
   forfeitX1Match,
+  generateDeterministicRobotClashQuestion,
   getX1Room,
   openX1MinadoCard,
   startX1MatchAfterCountdown,
@@ -36,6 +38,7 @@ import {
   subscribeX1Updates,
   syncX1WithPlayFabCloud,
   timeoutX1MinadoQuestion,
+  timeoutX1MinadoTurnSelection,
   updateX1PlayerProgress,
   type X1Room,
 } from "@/lib/x1-challenge";
@@ -60,13 +63,13 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
 
   const [secondsLeft, setSecondsLeft] = useState(initialRoom.durationSec);
   const [nowTick, setNowTick] = useState(() => Date.now());
-  const [question, setQuestion] = useState<ClashQuestion>(() => generateClashQuestion(2));
+  const [question, setQuestion] = useState<ClashQuestion>(() =>
+    generateDeterministicRobotClashQuestion(initialRoom.seed, me.correct + me.wrong),
+  );
   const [stunned, setStunned] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
   const [minadoFeedback, setMinadoFeedback] = useState<string | null>(null);
   const rewardSavedRef = useRef(false);
-  const recentTextsRef = useRef<string[]>([]);
-  const recentAnsRef = useRef<boolean[]>([]);
   const [myQuestionIdx, setMyQuestionIdx] = useState(() => me.currentQuestionIdx ?? 0);
   const [confirmForfeitOpen, setConfirmForfeitOpen] = useState(false);
 
@@ -177,6 +180,44 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
     return () => window.clearInterval(timer);
   }, [room.gameId, room.status, room.minadoState?.activeQuestion, room.code, myId]);
 
+  // Campo Minado turn selection timer (25s sem abrir carta)
+  useEffect(() => {
+    if (room.gameId !== "minado" || room.status !== "playing") return;
+    const minado = room.minadoState;
+    if (!minado || minado.activeQuestion) return;
+
+    const turnStartedAt = minado.turnStartedAt || room.startedAt || room.createdAt;
+    const isMyTurn = minado.currentTurnPlayerId === myId;
+    const deadline =
+      turnStartedAt +
+      X1_MINADO_TURN_SELECT_TIMEOUT_SEC * 1000 +
+      (isMyTurn ? 0 : 3000);
+
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      setNowTick(now);
+      if (now >= deadline) {
+        playWrong();
+        setMinadoFeedback("⏱️ Tempo de escolha esgotado! (−2 pts, vez passada)");
+        window.setTimeout(() => setMinadoFeedback(null), 2200);
+        const updated = timeoutX1MinadoTurnSelection(room.code);
+        if (updated.room) setRoom({ ...updated.room });
+      }
+    }, 400);
+
+    return () => window.clearInterval(timer);
+  }, [
+    room.gameId,
+    room.status,
+    room.minadoState?.activeQuestion,
+    room.minadoState?.currentTurnPlayerId,
+    room.minadoState?.turnStartedAt,
+    room.startedAt,
+    room.createdAt,
+    room.code,
+    myId,
+  ]);
+
   // Auto-close countdown (1 minute) on finished screen
   useEffect(() => {
     if (room.status !== "finished") return;
@@ -230,7 +271,6 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
     (chosen: boolean) => {
       if (room.status !== "playing" || stunned) return;
       const isCorrect = chosen === question.answer;
-      recentAnsRef.current = [...recentAnsRef.current.slice(-8), question.answer];
 
       if (!isCorrect) {
         playWrong();
@@ -254,11 +294,11 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
 
       if (res.room) setRoom({ ...res.room });
 
-      const nextQ = generateClashQuestion(2, recentTextsRef.current, recentAnsRef.current);
-      recentTextsRef.current = [...recentTextsRef.current.slice(-12), nextQ.text];
+      const nextStep = me.correct + me.wrong + 1;
+      const nextQ = generateDeterministicRobotClashQuestion(room.seed, nextStep);
       setQuestion(nextQ);
     },
-    [room.status, room.code, stunned, question, myId],
+    [room.status, room.code, room.seed, stunned, question, myId, me.correct, me.wrong],
   );
 
   // Score-race deterministic question answer handler (Logica / Porcentagem)
@@ -593,7 +633,16 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
     const isMyTurn = mState.currentTurnPlayerId === myId;
     const activeQ = mState.activeQuestion;
     const isQActive = Boolean(activeQ && !activeQ.answered);
-    const qSecsLeft = activeQ ? Math.max(0, Math.ceil((activeQ.expiresAt - Date.now()) / 1000)) : 0;
+    const qSecsLeft = activeQ ? Math.max(0, Math.ceil((activeQ.expiresAt - nowTick) / 1000)) : 0;
+    const turnStartedAt = mState.turnStartedAt || room.startedAt || room.createdAt;
+    const turnSelectLeftSec = !isQActive
+      ? Math.max(
+          0,
+          Math.ceil(
+            (turnStartedAt + X1_MINADO_TURN_SELECT_TIMEOUT_SEC * 1000 - nowTick) / 1000,
+          ),
+        )
+      : 0;
 
     return (
       <div className="mx-auto max-w-3xl rounded-3xl border-2 bg-card p-4 sm:p-6 shadow-xl space-y-4">
@@ -634,14 +683,24 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
           }`}
         >
           {isMyTurn ? (
-            <div className="flex items-center justify-center gap-2 text-sm sm:text-base">
+            <div className="flex items-center justify-center gap-2 text-sm sm:text-base flex-wrap">
               <Sparkles className="h-4 w-4 animate-bounce" />
               <span>🎯 SUA VEZ DE JOGAR! Escolha uma carta do tabuleiro abaixo.</span>
+              {!isQActive && (
+                <span className="rounded-full bg-emerald-500/20 px-2.5 py-0.5 font-mono text-xs font-black">
+                  ⏱️ {turnSelectLeftSec}s
+                </span>
+              )}
             </div>
           ) : (
-            <div className="flex items-center justify-center gap-2 text-xs sm:text-sm">
+            <div className="flex items-center justify-center gap-2 text-xs sm:text-sm flex-wrap">
               <Loader2 className="h-4 w-4 animate-spin" />
               <span>Vez de <b>{opponent?.nick ?? "Oponente"}</b>... Aguardando jogada.</span>
+              {!isQActive && (
+                <span className="rounded-full bg-secondary px-2 py-0.5 font-mono text-[11px] font-bold">
+                  ⏱️ {turnSelectLeftSec}s
+                </span>
+              )}
             </div>
           )}
         </div>
