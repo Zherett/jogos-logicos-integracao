@@ -251,6 +251,12 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
   const [cancelingMsg, setCancelingMsg] = useState<SystemInboxMessage | null>(null);
   const [isCanceling, setIsCanceling] = useState(false);
 
+  // Controle de sincronização e atualização de leitores do histórico
+  const [readersRefreshCount, setReadersRefreshCount] = useState(0);
+  const [isSyncingReaders, setIsSyncingReaders] = useState(false);
+  const [isBackgroundSyncing, setIsBackgroundSyncing] = useState(false);
+  const isAnySyncing = isSyncingReaders || isBackgroundSyncing;
+
   // Histórico ordenado conforme a preferência selecionada
   const sortedSentHistory = useMemo(() => {
     return [...sentHistory].sort((a, b) => {
@@ -405,11 +411,6 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
       setSelectedMedalId(availableMedals[0].id);
     }
   }, [availableMedals, selectedMedalId]);
-
-  const [readersRefreshCount, setReadersRefreshCount] = useState(0);
-  const [isSyncingReaders, setIsSyncingReaders] = useState(false);
-  const [isBackgroundSyncing, setIsBackgroundSyncing] = useState(false);
-  const isAnySyncing = isSyncingReaders || isBackgroundSyncing;
 
   // Carrega histórico de mensagens enviadas
   const refreshHistory = () => {
