@@ -32,6 +32,7 @@ import { AdminPanelDialog } from "./AdminPanelDialog";
 import { PlayerMedalsInventory } from "./PlayerMedalsInventory";
 import { PlayerInboxModal } from "./PlayerInboxModal";
 import { TournamentRankBadge } from "./TournamentRankBadge";
+import { getTournamentStoreRecord } from "@/lib/weekly-tournament";
 import { ThemeToggle } from "./ThemeToggle";
 import {
   aggregateStatsByGame,
@@ -557,7 +558,11 @@ export function PlayerMenu({ onConfigChanged }: Props) {
                     {/* Badges de Informações Compactas (Rank, Medalhas, Colocação) subindo e bem encaixadas */}
                     <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 pt-0.5">
                       <TournamentRankBadge
-                        points={profile.tournamentPoints ?? 0}
+                        points={Math.max(
+                          profile.tournamentPoints ?? 0,
+                          profile.bestTournamentPoints ?? 0,
+                          getTournamentStoreRecord(profile.id, profile.nick)?.tournamentPoints ?? 0,
+                        )}
                         size="sm"
                         showLabel
                         showPoints

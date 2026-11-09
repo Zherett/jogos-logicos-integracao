@@ -831,6 +831,32 @@ function loadTournamentStore(now = new Date()): WeeklyTournamentStore {
   };
 }
 
+/**
+ * Recupera o registro da ranqueada de um jogador diretamente do armazenamento do Torneio Semanal.
+ */
+export function getTournamentStoreRecord(
+  playerId?: string | null,
+  nick?: string | null,
+): TournamentPlayerRecord | null {
+  if (!playerId && !nick) return null;
+  const store = loadTournamentStore();
+  const cleanId = (playerId ?? "").toLowerCase().trim();
+  const cleanNick = (nick ?? "").toLowerCase().trim();
+
+  if (cleanId && store.records[cleanId]) return store.records[cleanId];
+  if (cleanNick && store.records[cleanNick]) return store.records[cleanNick];
+
+  for (const rec of Object.values(store.records)) {
+    if (
+      (cleanId && (rec.playerId.toLowerCase() === cleanId || rec.nick.toLowerCase() === cleanId)) ||
+      (cleanNick && (rec.nick.toLowerCase() === cleanNick || rec.playerId.toLowerCase() === cleanNick))
+    ) {
+      return rec;
+    }
+  }
+  return null;
+}
+
 function saveTournamentStore(store: WeeklyTournamentStore) {
   if (typeof window === "undefined") return;
   store.updatedAt = Date.now();

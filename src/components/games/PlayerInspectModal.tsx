@@ -60,6 +60,7 @@ import { PlayerMedalsInventory } from "./PlayerMedalsInventory";
 import { PresenceDot } from "./PresenceDot";
 import { PlayerActivityBadge } from "./PlayerActivityBadge";
 import { TournamentRankBadge } from "./TournamentRankBadge";
+import { getTournamentStoreRecord } from "@/lib/weekly-tournament";
 
 interface Props {
   playerId: string | null;
@@ -71,6 +72,16 @@ interface Props {
 export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpdated }: Props) {
   const auth = usePlayerAuth();
   const [profile, setProfile] = useState<PlayerProfile | null>(null);
+
+  const effectiveTournamentPoints = useMemo(() => {
+    if (!profile) return 0;
+    const tourRecord = getTournamentStoreRecord(profile.id, profile.nick);
+    return Math.max(
+      profile.tournamentPoints ?? 0,
+      profile.bestTournamentPoints ?? 0,
+      tourRecord?.tournamentPoints ?? 0,
+    );
+  }, [profile]);
 
   // Estados de edição pelo Administrador
   const [isEditing, setIsEditing] = useState(false);
@@ -281,7 +292,7 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                 <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs">
                   {/* Rank Ranqueado do Torneio */}
                   <TournamentRankBadge
-                    points={profile.tournamentPoints ?? 0}
+                    points={effectiveTournamentPoints}
                     size="xs"
                     showLabel
                   />

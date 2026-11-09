@@ -114,7 +114,7 @@ import {
   RANKED_WIN_POINTS,
 } from "./career-points.ts";
 import { removePlayerFromPresence } from "./presence.ts";
-import { removePlayerFromTournament, getTournamentRank } from "./weekly-tournament.ts";
+import { removePlayerFromTournament, getTournamentRank, getTournamentStoreRecord } from "./weekly-tournament.ts";
 import {
   createInboxMessage,
   recordDeviceSecurityAlert,
@@ -1097,18 +1097,28 @@ export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdmin
     acc.profile.weeklyX1WeekKey = currentWeekKey;
   }
 
-  // Preserva os pontos da ranqueada acumulados na temporada (definida por 14 dias ou término do ADM).
-  // Se tiver ocorrido zeramento acidental pela virada de semana (domingo -> segunda à meia-noite), restaura via bestTournamentPoints.
-  if (
-    (!acc.profile.tournamentPoints || acc.profile.tournamentPoints === 0) &&
-    typeof acc.profile.bestTournamentPoints === "number" &&
-    acc.profile.bestTournamentPoints > 0
-  ) {
-    acc.profile.tournamentPoints = acc.profile.bestTournamentPoints;
-    acc.profile.tournamentRankId = getTournamentRank(acc.profile.tournamentPoints).currentRank.id;
-  } else if (!acc.profile.tournamentRankId || acc.profile.tournamentRankId === "bronze_1") {
-    if (typeof acc.profile.tournamentPoints === "number" && acc.profile.tournamentPoints > 0) {
-      acc.profile.tournamentRankId = getTournamentRank(acc.profile.tournamentPoints).currentRank.id;
+  // Preserva e sincroniza os pontos da ranqueada acumulados na temporada (definida por 14 dias ou término do ADM).
+  // Sincroniza diretamente com o registro oficial do Torneio Semanal para manter 100% de paridade entre a lista do rank e o perfil.
+  const tourRec = getTournamentStoreRecord(acc.profile.id, acc.profile.nick);
+  const tourPoints = tourRec?.tournamentPoints ?? 0;
+  const maxTournamentPts = Math.max(
+    acc.profile.tournamentPoints ?? 0,
+    acc.profile.bestTournamentPoints ?? 0,
+    tourPoints,
+  );
+
+  if (maxTournamentPts > 0) {
+    acc.profile.tournamentPoints = maxTournamentPts;
+    acc.profile.bestTournamentPoints = Math.max(acc.profile.bestTournamentPoints ?? 0, maxTournamentPts);
+    acc.profile.tournamentRankId = (tourRec?.highestRankId && tourPoints === maxTournamentPts)
+      ? tourRec.highestRankId
+      : getTournamentRank(maxTournamentPts).currentRank.id;
+  } else {
+    if (typeof acc.profile.tournamentPoints !== "number") {
+      acc.profile.tournamentPoints = 0;
+    }
+    if (!acc.profile.tournamentRankId) {
+      acc.profile.tournamentRankId = "bronze_1";
     }
   }
   acc.profile.tournamentWeekKey = currentWeekKey;
