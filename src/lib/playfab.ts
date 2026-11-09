@@ -1153,6 +1153,7 @@ export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdmin
     // Sincroniza diretamente com o registro oficial do Torneio Semanal para manter 100% de paridade entre a lista do rank e o perfil.
     const tourRec =
       getTournamentStoreRecord(acc.profile.id, acc.profile.nick) ||
+      (acc.profile.playfabId ? getTournamentStoreRecord(acc.profile.playfabId, acc.profile.nick) : null) ||
       (acc.profile.nickNormalized ? getTournamentStoreRecord(acc.profile.nickNormalized, acc.profile.nickNormalized) : null);
     const tourPoints = Math.max(tourRec?.tournamentPoints ?? 0, tourRec?.bestScore ?? 0);
     const maxTournamentPts = Math.max(
@@ -2848,13 +2849,28 @@ export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Prom
             turma: parsed.turma ?? existing?.profile.turma ?? udProf?.turma ?? null,
             birthdate:
               parsed.birthdate || existing?.profile.birthdate || udProf?.birthdate || "2015-01-01",
-            xp: Math.max(parsed.xp ?? 0, existing?.profile.xp ?? 0, udProf?.xp ?? 0, lbXp),
-            seasonXp: Math.max(
-              parsed.seasonXp ?? 0,
-              existing?.profile.seasonXp ?? 0,
-              udProf?.seasonXp ?? 0,
-              lbXp,
-            ),
+            xp: (() => {
+              const isStudent = !isSpecialAdminAccount(parsed) && !parsed.isAdmin;
+              const existingIsAdmin = isSpecialAdminAccount(existing?.profile) || existing?.profile.isAdmin;
+              const existingMatches = Math.max(parsed.matchesPlayed ?? 0, existing?.profile.matchesPlayed ?? 0);
+              const validExistingXp = existingIsAdmin && isStudent
+                ? 0
+                : (isStudent && (existing?.profile.xp ?? 0) > 10000 && existingMatches < 30)
+                  ? 0
+                  : (existing?.profile.xp ?? 0);
+              return Math.max(parsed.xp ?? 0, validExistingXp, udProf?.xp ?? 0, lbXp);
+            })(),
+            seasonXp: (() => {
+              const isStudent = !isSpecialAdminAccount(parsed) && !parsed.isAdmin;
+              const existingIsAdmin = isSpecialAdminAccount(existing?.profile) || existing?.profile.isAdmin;
+              const existingMatches = Math.max(parsed.matchesPlayed ?? 0, existing?.profile.matchesPlayed ?? 0);
+              const validExistingSeasonXp = existingIsAdmin && isStudent
+                ? 0
+                : (isStudent && (existing?.profile.seasonXp ?? 0) > 10000 && existingMatches < 30)
+                  ? 0
+                  : (existing?.profile.seasonXp ?? 0);
+              return Math.max(parsed.seasonXp ?? 0, validExistingSeasonXp, udProf?.seasonXp ?? 0, lbXp);
+            })(),
             level: Math.max(parsed.level ?? 1, existing?.profile.level ?? 1, udProf?.level ?? 1),
             levelStageProgress:
               parsed.levelStageProgress ??
@@ -2947,9 +2963,10 @@ export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Prom
               const cloudTourPts = Math.max(
                 tourStandingsBySlug.get(slug) ?? 0,
                 tourStandingsBySlug.get(parsed.id?.toLowerCase().trim() ?? "") ?? 0,
+                tourStandingsBySlug.get(parsed.playfabId?.toLowerCase().trim() ?? "") ?? 0,
                 tourStandingsBySlug.get(parsed.nick?.toLowerCase().trim() ?? "") ?? 0,
               );
-              const tourRec = getTournamentStoreRecord(parsed.id, slug);
+              const tourRec = getTournamentStoreRecord(parsed.id, slug) || (parsed.playfabId ? getTournamentStoreRecord(parsed.playfabId, slug) : null);
               const tourPts = Math.max(tourRec?.tournamentPoints ?? 0, tourRec?.bestScore ?? 0);
               const finalPts = Math.max(
                 cloudTourPts,
@@ -2970,9 +2987,10 @@ export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Prom
               const cloudTourPts = Math.max(
                 tourStandingsBySlug.get(slug) ?? 0,
                 tourStandingsBySlug.get(parsed.id?.toLowerCase().trim() ?? "") ?? 0,
+                tourStandingsBySlug.get(parsed.playfabId?.toLowerCase().trim() ?? "") ?? 0,
                 tourStandingsBySlug.get(parsed.nick?.toLowerCase().trim() ?? "") ?? 0,
               );
-              const tourRec = getTournamentStoreRecord(parsed.id, slug);
+              const tourRec = getTournamentStoreRecord(parsed.id, slug) || (parsed.playfabId ? getTournamentStoreRecord(parsed.playfabId, slug) : null);
               const tourPts = Math.max(tourRec?.tournamentPoints ?? 0, tourRec?.bestScore ?? 0);
               const curPts = Math.max(
                 cloudTourPts,
@@ -2995,9 +3013,10 @@ export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Prom
               const cloudTourPts = Math.max(
                 tourStandingsBySlug.get(slug) ?? 0,
                 tourStandingsBySlug.get(parsed.id?.toLowerCase().trim() ?? "") ?? 0,
+                tourStandingsBySlug.get(parsed.playfabId?.toLowerCase().trim() ?? "") ?? 0,
                 tourStandingsBySlug.get(parsed.nick?.toLowerCase().trim() ?? "") ?? 0,
               );
-              const tourRec = getTournamentStoreRecord(parsed.id, slug);
+              const tourRec = getTournamentStoreRecord(parsed.id, slug) || (parsed.playfabId ? getTournamentStoreRecord(parsed.playfabId, slug) : null);
               const tourPts = Math.max(tourRec?.tournamentPoints ?? 0, tourRec?.bestScore ?? 0);
               const curPts = Math.max(
                 cloudTourPts,
