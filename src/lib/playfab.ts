@@ -434,13 +434,23 @@ export async function getAdminPlayFabTicket(): Promise<string | null> {
 export function isSpecialAdminAccount(p?: {
   id?: string;
   nickNormalized?: string;
+  nick?: string;
   isAdmin?: boolean;
 } | null): boolean {
   if (!p) return false;
   if (p.isAdmin) return true;
   if (p.id === "admin-system" || p.id?.startsWith("admin-")) return true;
   const n = p.nickNormalized?.toLowerCase();
-  return n === "admin" || n === "josiney" || n === "quemuel";
+  const raw = (p as any).nick?.toLowerCase()?.trim();
+  return (
+    n === "admin" ||
+    n === "josiney" ||
+    n === "quemuel" ||
+    n === "lord" ||
+    raw === "lord" ||
+    raw === "quemuel" ||
+    raw === "josiney"
+  );
 }
 
 export function isAdminUnlockedSession(): boolean {
@@ -1185,18 +1195,41 @@ export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdmin
   }
   acc.profile.tournamentWeekKey = currentWeekKey;
 
+  const currentSeasonId = cfg.rankedSeasonId ?? 1;
+  const currentSeasonKey = `Season_${currentSeasonId}`;
+  const isAdminAcc = isSpecialAdminAccount(acc.profile);
+
   // As medalhas do Torneio Semanal são prêmios exclusivos concedidos no encerramento de ciclo (domingo às 23:59).
-  // Remove qualquer medalha indevida emitida antes do término da semana corrente:
+  // Remove qualquer medalha indevida emitida antes do término da semana corrente ou temporada ativa não encerrada:
   if (Array.isArray(acc.profile.tournamentMedals)) {
     acc.profile.tournamentMedals = acc.profile.tournamentMedals
       .map((m) => {
         if (Array.isArray(m.historyWeeks)) {
-          m.historyWeeks = m.historyWeeks.filter((w) => w !== currentWeekKey);
+          m.historyWeeks = m.historyWeeks.filter((w) => w !== currentWeekKey && w !== currentSeasonKey);
           m.count = Math.max(1, m.historyWeeks.length);
         }
         return m;
       })
-      .filter((m) => m.weekKey !== currentWeekKey);
+      .filter((m) => m.weekKey !== currentWeekKey && m.weekKey !== currentSeasonKey && !m.id?.startsWith("projected_"));
+  }
+
+  // Remove medalhas de pódio ranqueado e segredos de pódio emitidos indevidamente durante a temporada ativa:
+  if (Array.isArray(acc.profile.unlockedMedals)) {
+    acc.profile.unlockedMedals = acc.profile.unlockedMedals.filter((m: any) => {
+      const medalId = typeof m === "string" ? m : (m?.medalId ?? m?.id ?? "");
+      const isPodiumMedal =
+        medalId === "tournament_top_1_gold" ||
+        medalId === "tournament_top_2_silver" ||
+        medalId === "tournament_top_3_bronze" ||
+        medalId.startsWith("secret_top5_weeks_") ||
+        medalId.startsWith("secret_top1_consecutive_");
+      if (isPodiumMedal && !isAdminAcc) {
+        const hasPastSeasonMedal = Array.isArray(acc.profile.tournamentMedals) &&
+          acc.profile.tournamentMedals.some((tm) => tm.weekKey && tm.weekKey !== currentSeasonKey && tm.weekKey !== currentWeekKey);
+        return hasPastSeasonMedal;
+      }
+      return true;
+    });
   }
 
   // Retroverificação e Limpeza do X1:
@@ -1216,8 +1249,6 @@ export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdmin
     acc.profile.x1Wins = 0;
     acc.profile.weeklyX1Wins = 0;
   }
-
-  const isAdminAcc = isSpecialAdminAccount(acc.profile);
 
   // Filter out invalid, synthetic tournament, or disabled games from student stats
   if (!isAdminAcc && Array.isArray(acc.stats)) {
@@ -1265,6 +1296,54 @@ export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdmin
   acc.profile.wins = totalWins;
   acc.profile.level = effProg.level;
   acc.profile.levelStageProgress = effProg.stageProgress;
+
+  // Sanitiza inflação indevida de XP em contas de alunos regulares (ex: vazamento de moedas como XP ou cache local compartilhado)
+  const isCorruptedStudentXp =
+    !isAdminAcc &&
+    (((acc.profile.xp ?? 0) > 8000 && totalMatchesCount < 30) ||
+      ((acc.profile.xp ?? 0) > Math.max(500, totalMatchesCount * 50)));
+
+  if (isCorruptedStudentXp) {
+    const legitimateXp = aggregatedRows.reduce((sum, r) => sum + Math.min(r.plays * 25, 1000), 0) + (totalWins * 15);
+    acc.profile.xp = legitimateXp;
+    acc.profile.seasonXp = legitimateXp;
+    const stageRes = syncLevelStageProgress({
+      xp: legitimateXp,
+      lifetimeMatches: totalMatchesCount,
+      lifetimeWins: totalWins,
+      lifetimeDistinctGames: distinctGames,
+      playedGameIds: aggregatedRows.map((r) => r.game_id),
+      currentLevel: effProg.level > 4 ? (totalMatchesCount >= 20 ? 3 : 2) : effProg.level,
+      existingStage: acc.profile.levelStageProgress ?? null,
+      maxAvailableGames: ALL_GAME_IDS.length,
+    });
+    acc.profile.level = stageRes.level;
+    acc.profile.levelStageProgress = stageRes.stageProgress;
+
+    // Remove badges de XP e nível infladas
+    if (Array.isArray(acc.profile.badges)) {
+      acc.profile.badges = acc.profile.badges.filter(
+        (b) => b && b.id !== "xp_1000" && b.id !== "xp_5000" && b.id !== "nivel_5" && b.id !== "nivel_10"
+      );
+    }
+    // Remove medalhas de nível 5+
+    if (Array.isArray(acc.profile.unlockedMedals)) {
+      acc.profile.unlockedMedals = acc.profile.unlockedMedals.filter((m: any) => {
+        const mId = typeof m === "string" ? m : (m?.medalId ?? m?.id ?? "");
+        return !(
+          mId.startsWith("lvl_5") ||
+          mId.startsWith("lvl_6") ||
+          mId.startsWith("lvl_7") ||
+          mId.startsWith("lvl_8") ||
+          mId.startsWith("lvl_9") ||
+          mId.startsWith("lvl_10") ||
+          mId === "xp_1000" ||
+          mId === "xp_5000"
+        );
+      });
+    }
+  }
+
   acc.profile.badges = computeBadges({
     existing: acc.profile.badges ?? [],
     xp: acc.profile.xp,
@@ -1522,7 +1601,7 @@ export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdmin
     acc.profile.seasonId = cfg.seasonId;
     acc.profile.seasonXp = 0;
     acc.stats = [];
-    if (cfg.resetHistory[0]?.resetXp) {
+    if (cfg.resetHistory?.[0]?.resetXp) {
       acc.profile.xp = 0;
       acc.profile.level = 1;
       acc.profile.levelStageProgress = {
@@ -1892,10 +1971,11 @@ export async function playfabSignUp(data: SignUpData): Promise<{
     streakDays: 0,
     activeDates: [],
     badges: [],
-    isAdmin: slug === "admin" || slug === "semed_admin",
+    isAdmin: isSpecialAdminAccount({ nickNormalized: slug }) || slug === "admin" || slug === "semed_admin",
     seasonId: cfg.seasonId,
     activeSessionId: newActiveSessionId,
     activeSessionUpdatedAt: new Date().toISOString(),
+    createdAt: new Date().toISOString(),
   };
 
   const account: StoredAccount = {
@@ -1903,6 +1983,7 @@ export async function playfabSignUp(data: SignUpData): Promise<{
     passwordHash: simpleHash(derivedPassword),
     unlocked: [],
     stats: [],
+    createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
 
@@ -2437,6 +2518,13 @@ export function playfabSignOut() {
   setAdminUnlockedSession(false);
   clearLocalStats();
   clearUnlocked();
+  if (typeof window !== "undefined") {
+    try {
+      window.sessionStorage.clear();
+    } catch {
+      /* ignore */
+    }
+  }
 }
 
 export function getActiveAccount(): StoredAccount | null {
@@ -2806,17 +2894,48 @@ export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Prom
           const udProf = recoveredUd?.profile;
           const lbXp = leaderboardXpBySlug.get(slug) ?? 0;
 
-          const isStudent = !isSpecialAdminAccount(parsed) && !parsed.isAdmin;
-          const existingMatches = Math.max(parsed.matchesPlayed ?? 0, existing?.profile.matchesPlayed ?? 0);
+          const isStudent =
+            !isSpecialAdminAccount(parsed) &&
+            !parsed.isAdmin &&
+            slug !== "lord" &&
+            slug !== "quemuel" &&
+            slug !== "josiney" &&
+            slug !== "admin" &&
+            slug !== "semed_admin";
+          const existingMatches = Math.max(
+            parsed.matchesPlayed ?? 0,
+            existing?.profile.matchesPlayed ?? 0,
+            (parsed as any)?.totalMatches ?? 0,
+            (existing?.profile as any)?.totalMatches ?? 0,
+          );
+
+          // Validação e detecção universal de corrupção ou inflação de XP/níveis (inclusive vinda da nuvem parsed):
+          const isCorruptedParsed =
+            isStudent &&
+            (((parsed.xp ?? 0) > 8000 && existingMatches < 30) ||
+              ((parsed.xp ?? 0) > Math.max(400, existingMatches * 50)) ||
+              ((parsed.level ?? 1) >= 5 && existingMatches < 15));
+
           const isCorruptedExisting =
             isStudent &&
-            (((existing?.profile.xp ?? 0) > 10000 && existingMatches < 30) ||
-              ((existing?.profile.level ?? 1) >= 6 && existingMatches < 30));
+            (((existing?.profile.xp ?? 0) > 8000 && existingMatches < 30) ||
+              ((existing?.profile.xp ?? 0) > Math.max(400, existingMatches * 50)) ||
+              ((existing?.profile.level ?? 1) >= 5 && existingMatches < 15));
+
           const isCorruptedUd =
             isStudent &&
-            (((udProf?.xp ?? 0) > 10000 && existingMatches < 30) ||
-              ((udProf?.level ?? 1) >= 6 && existingMatches < 30));
-          const validLbXp = isStudent && lbXp > 10000 && existingMatches < 30 ? 0 : lbXp;
+            (((udProf?.xp ?? 0) > 8000 && existingMatches < 30) ||
+              ((udProf?.xp ?? 0) > Math.max(400, existingMatches * 50)) ||
+              ((udProf?.level ?? 1) >= 5 && existingMatches < 15));
+
+          const isCorruptedLb =
+            isStudent &&
+            ((lbXp > 8000 && existingMatches < 30) || lbXp > Math.max(400, existingMatches * 50));
+          const validLbXp = isCorruptedLb ? 0 : lbXp;
+
+          if (isCorruptedParsed || isCorruptedExisting || isCorruptedUd || isCorruptedLb) {
+            needsCloudSanitize.add(slug);
+          }
 
           // Merge unlockedMedals union across cloud roster, local registry, and individual PlayFab UserData
           const medalMap = new Map<string, PlayerUnlockedMedal>();
@@ -2830,7 +2949,7 @@ export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Prom
               if (m && m.medalId) {
                 if (
                   isStudent &&
-                  (parsed.xp ?? 0) < 2000 &&
+                  ((parsed.xp ?? 0) < 2000 || isCorruptedParsed || isCorruptedExisting) &&
                   (m.medalId.startsWith("lvl_5") ||
                     m.medalId.startsWith("lvl_6") ||
                     m.medalId.startsWith("lvl_7") ||
@@ -2840,6 +2959,18 @@ export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Prom
                     m.medalId === "xp_1000" ||
                     m.medalId === "xp_5000")
                 ) {
+                  needsCloudSanitize.add(slug);
+                  continue;
+                }
+                if (
+                  isStudent &&
+                  (m.medalId === "tournament_top_1_gold" ||
+                    m.medalId === "tournament_top_2_silver" ||
+                    m.medalId === "tournament_top_3_bronze" ||
+                    m.medalId.startsWith("secret_top5_weeks_") ||
+                    m.medalId.startsWith("secret_top1_consecutive_"))
+                ) {
+                  needsCloudSanitize.add(slug);
                   continue;
                 }
                 const prev = medalMap.get(m.medalId);
@@ -2901,28 +3032,33 @@ export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Prom
               parsed.birthdate || existing?.profile.birthdate || udProf?.birthdate || "2015-01-01",
             xp: (() => {
               const existingIsAdmin = isSpecialAdminAccount(existing?.profile) || existing?.profile.isAdmin;
-              const validExistingXp = existingIsAdmin && isStudent
-                ? 0
-                : isCorruptedExisting
-                  ? 0
-                  : (existing?.profile.xp ?? 0);
+              if (existingIsAdmin && isStudent) return 0;
+              const validParsedXp = isCorruptedParsed ? 0 : (parsed.xp ?? 0);
+              const validExistingXp = isCorruptedExisting ? 0 : (existing?.profile.xp ?? 0);
               const validUdXp = isCorruptedUd ? 0 : (udProf?.xp ?? 0);
-              return Math.max(parsed.xp ?? 0, validExistingXp, validUdXp, validLbXp);
+              const maxVal = Math.max(validParsedXp, validExistingXp, validUdXp, validLbXp);
+              if (maxVal > 0) return maxVal;
+              return Math.min(8433, Math.max(0, existingMatches * 25));
             })(),
             seasonXp: (() => {
               const existingIsAdmin = isSpecialAdminAccount(existing?.profile) || existing?.profile.isAdmin;
-              const validExistingSeasonXp = existingIsAdmin && isStudent
-                ? 0
-                : isCorruptedExisting
-                  ? 0
-                  : (existing?.profile.seasonXp ?? 0);
+              if (existingIsAdmin && isStudent) return 0;
+              const validParsedSeasonXp = isCorruptedParsed ? 0 : (parsed.seasonXp ?? 0);
+              const validExistingSeasonXp = isCorruptedExisting ? 0 : (existing?.profile.seasonXp ?? 0);
               const validUdSeasonXp = isCorruptedUd ? 0 : (udProf?.seasonXp ?? 0);
-              return Math.max(parsed.seasonXp ?? 0, validExistingSeasonXp, validUdSeasonXp, validLbXp);
+              const maxVal = Math.max(validParsedSeasonXp, validExistingSeasonXp, validUdSeasonXp, validLbXp);
+              if (maxVal > 0) return maxVal;
+              return Math.min(8433, Math.max(0, existingMatches * 25));
             })(),
             level: (() => {
+              const validParsedLvl = isCorruptedParsed ? 1 : (parsed.level ?? 1);
               const validExistingLvl = isCorruptedExisting ? 1 : (existing?.profile.level ?? 1);
               const validUdLvl = isCorruptedUd ? 1 : (udProf?.level ?? 1);
-              return Math.max(parsed.level ?? 1, validExistingLvl, validUdLvl);
+              const maxLvl = Math.max(validParsedLvl, validExistingLvl, validUdLvl);
+              if (isCorruptedParsed || isCorruptedExisting || isCorruptedUd) {
+                return existingMatches >= 20 ? 3 : existingMatches >= 10 ? 2 : 1;
+              }
+              return maxLvl;
             })(),
             levelStageProgress:
               parsed.levelStageProgress ??
@@ -2996,11 +3132,26 @@ export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Prom
                 ...(udProf?.lastActiveDate ? [udProf.lastActiveDate] : []),
               ]),
             ).sort(),
-            tournamentMedals:
-              parsed.tournamentMedals ??
-              existing?.profile.tournamentMedals ??
-              udProf?.tournamentMedals ??
-              [],
+            tournamentMedals: (() => {
+              const rawM =
+                parsed.tournamentMedals ??
+                existing?.profile.tournamentMedals ??
+                udProf?.tournamentMedals ??
+                [];
+              const activeSeasonKey = `Season_${cfg.rankedSeasonId ?? 1}`;
+              const activeWeekKey = getCurrentWeekKey();
+              const clean = rawM.filter(
+                (m) =>
+                  m &&
+                  m.weekKey !== activeWeekKey &&
+                  m.weekKey !== activeSeasonKey &&
+                  !m.id?.startsWith("projected_")
+              );
+              if (clean.length !== rawM.length) {
+                needsCloudSanitize.add(slug);
+              }
+              return clean;
+            })(),
             dailyTournamentEntries: Math.max(
               parsed.dailyTournamentEntries ?? 0,
               existing?.profile.dailyTournamentEntries ?? 0,

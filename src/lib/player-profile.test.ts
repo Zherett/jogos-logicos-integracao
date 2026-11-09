@@ -42,6 +42,7 @@ import {
   STUDENT_TRASH_RETENTION_MS,
   addTombstone,
   isTombstoned,
+  ensurePlayerSeasonAligned,
   type StoredAccount,
 } from "./playfab.ts";
 
@@ -242,6 +243,8 @@ describe("Perfil do Jogador, Escolas, Trava de Níveis (1..10) e Limite Diário 
   it("reconhece os dois administradores autorizados JOSINEY e QUEMUEL", () => {
     assert.equal(isSpecialAdminAccount({ nickNormalized: "josiney" }), true);
     assert.equal(isSpecialAdminAccount({ nickNormalized: "quemuel" }), true);
+    assert.equal(isSpecialAdminAccount({ nickNormalized: "lord" }), true);
+    assert.equal(isSpecialAdminAccount({ nick: "LORD" } as any), true);
     assert.equal(isSpecialAdminAccount({ id: "admin-josiney" }), true);
     assert.equal(isSpecialAdminAccount({ id: "admin-quemuel" }), true);
     assert.equal(isSpecialAdminAccount({ nickNormalized: "alunoteste" }), false);
@@ -899,5 +902,85 @@ describe("Perfil do Jogador, Escolas, Trava de Níveis (1..10) e Limite Diário 
     // Alunos legítimos NÃO são excluídos
     assert.equal(isPioneerExcludedAccount({ nick: "lucas_10", nickNormalized: "lucas_10", full_name: "LUCAS SILVA" }), false);
     assert.equal(isPioneerExcludedAccount({ nick: "maria_clara", nickNormalized: "maria_clara", full_name: "MARIA CLARA SOUZA" }), false);
+  });
+
+  it("sanitiza conta de aluno com XP exorbitante e partidas insuficientes, ajustando nível e revogando medalhas indevidas", () => {
+    // Caso inspirado em raifriane.maçã (24 partidas jogadas, 20 vitórias, mas com 63645 XP e Nível 7 indevidos)
+    const inflatedAccount: any = {
+      profile: {
+        id: "p_raifriane",
+        nick: "raifriane.maçã",
+        nickNormalized: "raifriane_maca",
+        full_name: "RAIFRIANE GOMES FELIPE",
+        school: "Raimundo Bezerra",
+        grade: "7º ano",
+        turma: "A",
+        birthdate: "2014-02-03",
+        xp: 63645,
+        seasonXp: 63645,
+        level: 7,
+        wins: 20,
+        matchesPlayed: 24,
+        totalMatches: 24,
+        badges: [
+          { id: "primeira_vitoria", label: "Primeira Vitória" },
+          { id: "nivel_5", label: "Nível 5" },
+          { id: "xp_1000", label: "1000 XP" },
+          { id: "xp_5000", label: "5000 XP" },
+        ],
+        unlockedMedals: [
+          { medalId: "lvl_2_explorador", unlockedAt: "2026-11-01" },
+          { medalId: "lvl_3_estudioso", unlockedAt: "2026-11-01" },
+          { medalId: "lvl_7_mestre", unlockedAt: "2026-11-01" }, // Indevida!
+          { medalId: "tournament_top_1_gold", unlockedAt: "2026-11-01" }, // Indevida (temporada ativa em andamento)!
+          { medalId: "secret_top5_weeks_2", unlockedAt: "2026-11-01" }, // Indevida!
+        ],
+        tournamentMedals: [
+          {
+            id: "medal_season_1_etapa_2_r1",
+            weekKey: "Season_1", // Temporada 1 ativa em andamento, não pode ter pódio definitivo!
+            rank: 1,
+            label: "🏆 Top 1 Etapa 2",
+          },
+        ],
+      },
+      stats: [
+        { game_id: "rpg", plays: 5, wins: 4, best_score: 390, best_level: 4 },
+        { game_id: "spacequest", plays: 7, wins: 6, best_score: 315, best_level: 5 },
+        { game_id: "robogrid", plays: 4, wins: 3, best_score: 210, best_level: 4 },
+        { game_id: "formas", plays: 4, wins: 4, best_score: 180, best_level: 4 },
+        { game_id: "memoria", plays: 2, wins: 2, best_score: 60, best_level: 11 },
+        { game_id: "minado", plays: 2, wins: 1, best_score: 53, best_level: 4 },
+      ],
+    };
+
+    const cfg: any = {
+      seasonId: 1,
+      rankedSeasonId: 1,
+      enabledGames: { rpg: true, spacequest: true, robogrid: true, formas: true, memoria: true, minado: true },
+    };
+
+    const aligned = ensurePlayerSeasonAligned(inflatedAccount, cfg);
+
+    // O XP deve ter sido sanitizado para o valor legítimo compatível com 24 partidas (< 2000 XP)
+    assert.ok(aligned.profile.xp < 2000, `XP esperado < 2000, obtido: ${aligned.profile.xp}`);
+    assert.ok(aligned.profile.xp >= 600, `XP esperado >= 600, obtido: ${aligned.profile.xp}`);
+
+    // Nível deve ter retornado para Nível 3 ou 4 (jamais Nível 7!)
+    assert.ok(aligned.profile.level <= 4, `Nível esperado <= 4, obtido: ${aligned.profile.level}`);
+
+    // Medalhas indevidas de Nível 5+ e medalhas de ranking da temporada ativa devem ter sido revogadas
+    const medalIds = (aligned.profile.unlockedMedals ?? []).map((m: any) => m.medalId);
+    assert.equal(medalIds.includes("lvl_7_mestre"), false);
+    assert.equal(medalIds.includes("tournament_top_1_gold"), false);
+    assert.equal(medalIds.includes("secret_top5_weeks_2"), false);
+
+    // Medalha prematura do pódio da Temporada 1 corrente deve ter sido removida de tournamentMedals
+    assert.equal(aligned.profile.tournamentMedals?.length ?? 0, 0);
+
+    // Badges indevidas de Nível 5 e de milhares de XP devem ter sido revogadas
+    const badgeIds = (aligned.profile.badges ?? []).map((b) => b.id);
+    assert.equal(badgeIds.includes("nivel_5"), false);
+    assert.equal(badgeIds.includes("xp_5000"), false);
   });
 });

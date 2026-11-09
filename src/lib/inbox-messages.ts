@@ -453,6 +453,7 @@ export interface AdminBroadcastDraft {
   targetSchool?: string;
   targetStage?: string;
   targetStudentIds?: string[];
+  singleStudentId?: string;
   excludedStudentIds?: string[];
   title: string;
   body: string;
@@ -667,8 +668,13 @@ export function sendAdminBroadcastMessage(draft: AdminBroadcastDraft): SystemInb
   const defaultEventTitle = defaultEvent?.eventTitle || draft.mentionedEventTitle || undefined;
   const defaultLinkDetails = defaultEvent?.linkEventDetails ?? (draft.linkEventDetails !== false);
 
+  const targetRecipientId =
+    draft.mode === "students" && (draft.singleStudentId || (draft.targetStudentIds && draft.targetStudentIds.length === 1))
+      ? (draft.singleStudentId || draft.targetStudentIds![0])
+      : "ALL";
+
   const msg = createInboxMessage({
-    recipientId: draft.mode === "students" && draft.targetStudentIds?.length === 1 ? draft.targetStudentIds[0] : "ALL",
+    recipientId: targetRecipientId,
     recipientFilter: broadcastFilter,
     sender: "adm",
     senderName: "Administração SEMED",
@@ -732,6 +738,16 @@ export function isMessageEligibleForPlayer(
 
   // Mensagem de transmissão ("ALL")
   if (msg.recipientId === "ALL") {
+    // Alunos recém-criados não recebem mensagens antigas com recompensas anteriores à criação de sua conta
+    if (msg.reward && (player as any).createdAt && msg.createdAt) {
+      const msgTime = new Date(msg.createdAt).getTime();
+      const playerCreatedTime = new Date((player as any).createdAt).getTime();
+      // Tolerância de 10 minutos para relógios locais
+      if (!isNaN(msgTime) && !isNaN(playerCreatedTime) && playerCreatedTime > msgTime + 10 * 60 * 1000) {
+        return false;
+      }
+    }
+
     const filter = msg.recipientFilter;
     if (!filter) return true;
 
@@ -1225,6 +1241,12 @@ export function claimInboxReward(
     return { success: false, error: "Nenhuma recompensa encontrada nesta mensagem.", profile };
   }
 
+  if (msg.recipientId !== "ALL") {
+    if (!matchPlayerIdentifier(msg.recipientId, profile)) {
+      return { success: false, error: "Esta recompensa não pertence a este perfil de aluno.", profile };
+    }
+  }
+
   if (msg.recipientId !== "ALL" && msg.reward.claimed) {
     return { success: false, error: "Esta recompensa já foi resgatada anteriormente.", profile };
   }
@@ -1265,7 +1287,8 @@ export function claimInboxReward(
     const tm = (reward.itemData as any)?.tournamentMedal as TournamentMedal | undefined;
     if (tm) {
       profile.tournamentMedals = accumulateTournamentMedal(profile.tournamentMedals ?? [], tm);
-      const bonusXp = tm.bonusXpAwarded || reward.pointsAmount || 0;
+      // Concede exclusivamente o bônus de XP previsto na medalha ranqueada (jamais converte pointsAmount de moedas/loja em XP!)
+      const bonusXp = tm.bonusXpAwarded ?? 0;
       if (bonusXp > 0) {
         profile.xp = (profile.xp ?? 0) + bonusXp;
         profile.seasonXp = (profile.seasonXp ?? 0) + bonusXp;

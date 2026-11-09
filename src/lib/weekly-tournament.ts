@@ -878,12 +878,9 @@ function loadTournamentStore(now = new Date()): WeeklyTournamentStore {
       const raw = window.localStorage.getItem(TOURNAMENT_STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw) as Partial<WeeklyTournamentStore>;
-        // Se pertencer a uma temporada anterior, encerra o pódio oficial daquela temporada
+        // Se pertencer a uma temporada anterior, nova temporada inicia com registros limpos
         if (typeof parsed.seasonId === "number" && parsed.seasonId < currentSeasonId) {
-          if (parsed.records && Object.keys(parsed.records).length > 0) {
-            void finalizeRankedSeasonAndAwardMedalsViaInbox(parsed.seasonId, parsed as WeeklyTournamentStore);
-          }
-          // Nova temporada inicia com registros limpos
+          // Registros da temporada anterior são descartados do armazenamento local ativo
         } else {
           // Temporada corrente: preserva integralmente os registros
           if (parsed.records) {

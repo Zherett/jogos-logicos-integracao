@@ -24,6 +24,8 @@ import {
   cancelInboxMessage,
   isMessageCanceled,
   loadCanceledMessageIds,
+  saveAllInboxMessages,
+  isMessageEligibleForPlayer,
 } from "./inbox-messages.ts";
 import type { PlayerProfile } from "./playfab.ts";
 
@@ -790,6 +792,124 @@ describe("Sistema Completo de Caixa de Entrada e Correio (inbox-messages)", () =
       const countsAfter = getInboxCountsForPlayer(student1);
       assert.equal(countsAfter.unreadCount, countsBefore.unreadCount - 1);
       assert.equal(countsAfter.unclaimedRewardsCount, countsBefore.unclaimedRewardsCount - 1);
+    });
+  });
+
+  describe("Proteção contra vazamento de mensagens, herança retroativa e validação de recompensas", () => {
+    it("atribui recipientId específico quando a mensagem é destinada a 1 aluno único com singleStudentId", () => {
+      const student1 = createTestStudent({ id: "aluno_direto_1", nick: "Lucas" });
+      const msg = sendAdminBroadcastMessage({
+        mode: "students",
+        singleStudentId: student1.id,
+        targetStudentIds: [student1.id, "lucas", "pf_lucas"],
+        title: "Mensagem Privada",
+        body: "Apenas para você, Lucas!",
+      });
+
+      assert.equal(msg.recipientId, "aluno_direto_1");
+      const forLucas = getInboxMessagesForPlayer(student1);
+      assert.equal(forLucas.some((m) => m.id === msg.id), true);
+
+      const otherStudent = createTestStudent({ id: "outro_aluno_2", nick: "Pedro" });
+      const forOther = getInboxMessagesForPlayer(otherStudent);
+      assert.equal(forOther.some((m) => m.id === msg.id), false);
+    });
+
+    it("impede que conta de aluno criada hoje receba retroativamente transmissão antiga com recompensa", () => {
+      // Mensagem broadcast enviada há 2 dias
+      const twoDaysAgo = new Date(Date.now() - 48 * 3600 * 1000).toISOString();
+      const pastMsg = createInboxMessage({
+        createdAt: twoDaysAgo,
+        recipientId: "ALL",
+        sender: "adm",
+        category: "recompensa_especial",
+        title: "Recompensa de Sexta",
+        body: "Recompensa enviada no passado",
+        reward: {
+          id: "rew_past_1",
+          type: "points",
+          pointsAmount: 100,
+          isSecret: false,
+          claimed: false,
+        },
+      });
+      saveAllInboxMessages([pastMsg]);
+
+      // Aluno veterano criado antes da mensagem
+      const veteranStudent = createTestStudent({
+        id: "aluno_veterano",
+        createdAt: new Date(Date.now() - 72 * 3600 * 1000).toISOString(),
+      });
+      assert.equal(isMessageEligibleForPlayer(pastMsg, veteranStudent), true);
+
+      // Aluno novato criado HOJE (depois da mensagem)
+      const newStudent = createTestStudent({
+        id: "aluno_novato_hoje",
+        createdAt: new Date().toISOString(),
+      });
+      assert.equal(isMessageEligibleForPlayer(pastMsg, newStudent), false);
+    });
+
+    it("bloqueia resgate de recompensa quando o aluno logado não é o destinatário direto", () => {
+      const targetStudent = createTestStudent({ id: "aluno_dono", nick: "Dono" });
+      const imposterStudent = createTestStudent({ id: "aluno_impostor", nick: "Impostor" });
+
+      const directMsg = createInboxMessage({
+        recipientId: "aluno_dono",
+        sender: "adm",
+        category: "recompensa_especial",
+        title: "Recompensa Exclusiva",
+        body: "Só para você",
+        reward: {
+          id: "rew_exclusive_1",
+          type: "points",
+          pointsAmount: 200,
+          isSecret: false,
+          claimed: false,
+        },
+      });
+      saveAllInboxMessages([directMsg]);
+
+      // Impostor tenta resgatar a recompensa da mensagem que não pertence a ele
+      const imposterRes = claimInboxReward(directMsg.id, imposterStudent as any);
+      assert.equal(imposterRes.success, false);
+      assert.match(imposterRes.error ?? "", /não pertence a este perfil/i);
+
+      // Dono legítimo consegue resgatar
+      const legitRes = claimInboxReward(directMsg.id, targetStudent as any);
+      assert.equal(legitRes.success, true);
+    });
+
+    it("desacopla pointsAmount de moedas do XP ao resgatar medalha do torneio ranqueado", () => {
+      const student = createTestStudent({ id: "aluno_torneio_xp", xp: 100, seasonXp: 100 });
+      const tourMsg = createInboxMessage({
+        recipientId: student.id,
+        sender: "adm",
+        category: "recompensa_especial",
+        title: "Medalha de Campeão",
+        body: "Parabéns!",
+        reward: {
+          id: "rew_tour_medal_1",
+          type: "medal",
+          medalId: "tournament_top_1_gold",
+          pointsAmount: 500, // 500 pontos de carreira / loja
+          isSecret: false,
+          claimed: false,
+          itemData: {
+            tournamentMedal: {
+              id: "tm_1",
+              rank: 1,
+              bonusXpAwarded: 150, // Apenas 150 XP oficial de torneio!
+            },
+          },
+        },
+      });
+      saveAllInboxMessages([tourMsg]);
+
+      const res = claimInboxReward(tourMsg.id, student as any);
+      assert.equal(res.success, true);
+      // O XP ganho deve ser exatamente 150 (bonusXpAwarded) e JAMAIS os 500 pointsAmount!
+      assert.equal(res.profile.xp, 250);
     });
   });
 });

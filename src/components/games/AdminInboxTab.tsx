@@ -637,6 +637,10 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
       }
       return next;
     });
+    // Se o administrador interage marcando alunos específicos, atualiza automaticamente o modo para "students"
+    if (recipientMode !== "students") {
+      setRecipientMode("students");
+    }
   };
 
   // Mídias indexadas dinamicamente com numeração incremental por tipo (gif1, gif2... img1, img2...)
@@ -765,11 +769,19 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
 
     const foundMentionEvent = allConfiguredEvents.find((e) => e.id === selectedMentionEventId);
 
+    const isSingleStudent = selectedStudents.length === 1;
+    const effectiveMode: "all" | "school" | "stage" | "students" = isSingleStudent
+      ? "students"
+      : recipientMode === "all" && selectedStudents.length > 0 && selectedStudents.length < studentsList.length
+      ? "students"
+      : recipientMode;
+
     const draft: AdminBroadcastDraft = {
-      mode: recipientMode,
-      targetSchool: recipientMode === "school" ? selectedSchool : undefined,
-      targetStage: recipientMode === "stage" ? selectedStage : undefined,
+      mode: effectiveMode,
+      targetSchool: effectiveMode === "school" ? selectedSchool : undefined,
+      targetStage: effectiveMode === "stage" ? selectedStage : undefined,
       targetStudentIds: targetIdentifiers,
+      singleStudentId: isSingleStudent ? selectedStudents[0].id : undefined,
       excludedStudentIds: excludedStudentIds,
       title: title.trim(),
       body: body.trim(),
