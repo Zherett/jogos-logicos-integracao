@@ -16,6 +16,7 @@ import {
   syncStudentRosterFromPlayFab,
   loadRegistry,
   saveRegistry,
+  getStudentRosterCloudKey,
   type PlayerProfile,
 } from "./playfab.ts";
 import { createInboxMessage } from "./inbox-messages.ts";
@@ -1193,7 +1194,7 @@ export async function syncWeeklyTournamentWithPlayFab(): Promise<void> {
           regUpdated = true;
 
           if (acc.profile.nickNormalized) {
-            rosterUpdatesForCloud[`stu_${acc.profile.nickNormalized}`] = JSON.stringify({
+            rosterUpdatesForCloud[getStudentRosterCloudKey(acc.profile)] = JSON.stringify({
               ...acc.profile,
               stats: acc.stats,
               updatedAt: acc.updatedAt,

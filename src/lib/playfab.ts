@@ -135,6 +135,22 @@ const ADMIN_AUTH_KEY = "desafios-playfab-admin-auth-v1";
 const ADMIN_PIN_KEY = "desafios-playfab-admin-pin-v1";
 export const ROSTER_SHARED_GROUP_ID = "SEMED_STUDENT_ROSTER_V1";
 export const ADMIN_CONFIG_SHARED_GROUP_ID = "SEMED_PLATFORM_CONFIG_V1";
+
+/**
+ * Retorna a chave canônica oficial para o registro do aluno no grupo compartilhado SEMED_STUDENT_ROSTER_V1.
+ * O formato canônico é RIGOROSAMENTE `stu_${nickNormalized}`.
+ * NUNCA utiliza PlayFabId ou outros IDs como chave do Shared Group para prevenir duplicatas e conflitos.
+ */
+export function getStudentRosterCloudKey(profileOrSlug: Partial<PlayerProfile> | string | undefined | null): string {
+  if (!profileOrSlug) return "stu_desconhecido";
+  if (typeof profileOrSlug === "string") {
+    const clean = nickSlug(profileOrSlug.replace(/^stu_/, ""));
+    return `stu_${clean}`;
+  }
+  const rawNick = profileOrSlug.nickNormalized || profileOrSlug.nick || profileOrSlug.id || "";
+  const clean = nickSlug(String(rawNick).replace(/^stu_/, ""));
+  return `stu_${clean}`;
+}
 export const TOMBSTONES_STORAGE_KEY = "desafios:deleted-students-tombstones-v1";
 const inMemoryTombstones = new Set<string>();
 
@@ -2627,7 +2643,7 @@ async function pushProfileToPlayFab(account: StoredAccount, sessionTicket?: stri
         {
           SharedGroupId: ROSTER_SHARED_GROUP_ID,
           Data: {
-            [`stu_${p.nickNormalized}`]: JSON.stringify({
+            [getStudentRosterCloudKey(p)]: JSON.stringify({
               id: p.id,
               playfabId: p.playfabId,
               nick: p.nick,
@@ -2889,17 +2905,117 @@ export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Prom
       /* ignore tournament shared group errors */
     }
 
-    // 1. If we received students from the cloud, merge them into local registry
+    // 1. If we received students from the cloud, deduplicate and merge them into local registry
     if (data && Object.keys(data).length > 0) {
-      for (const item of Object.values(data)) {
-        if (!item?.Value) continue;
+      // Pré-passo de deduplicação e higienização:
+      // Agrupa todas as entradas por slug canônico de nick.
+      // Se houver mais de uma entrada para o mesmo aluno (ex: chaves legadas com PlayFabId),
+      // combina as informações retendo o maior progresso e agenda a exclusão da chave legada na nuvem.
+      const cloudItemsBySlug = new Map<string, { primary: Partial<PlayerProfile>; allKeys: string[] }>();
+
+      for (const [key, item] of Object.entries(data)) {
+        if (!item?.Value || key.startsWith("_")) continue;
         try {
-          const parsed = JSON.parse(item.Value) as Partial<PlayerProfile>;
-          if (!parsed.nickNormalized) continue;
-          const slug = parsed.nickNormalized;
+          const parsedItem = JSON.parse(item.Value) as Partial<PlayerProfile>;
+          const rawNick = parsedItem.nickNormalized || parsedItem.nick || parsedItem.id || "";
+          if (!rawNick) {
+            keysToRemoveFromCloud.push(key);
+            continue;
+          }
+          const itemSlug = nickSlug(rawNick);
+          const canonicalKey = getStudentRosterCloudKey(itemSlug);
+          if (key !== canonicalKey) {
+            keysToRemoveFromCloud.push(key);
+          }
+
+          const existingEntry = cloudItemsBySlug.get(itemSlug);
+          if (!existingEntry) {
+            cloudItemsBySlug.set(itemSlug, { primary: parsedItem, allKeys: [key] });
+          } else {
+            existingEntry.allKeys.push(key);
+            const p = existingEntry.primary;
+            const pMatches = Math.max(p.matchesPlayed ?? 0, (p as any)?.totalMatches ?? 0);
+            const incMatches = Math.max(parsedItem.matchesPlayed ?? 0, (parsedItem as any)?.totalMatches ?? 0);
+
+            // Combina medalhas
+            const combinedMedals = [...(p.unlockedMedals ?? []), ...(parsedItem.unlockedMedals ?? [])];
+            const dedupMedals = new Map<string, PlayerUnlockedMedal>();
+            for (const m of combinedMedals) {
+              if (m?.medalId) {
+                const prev = dedupMedals.get(m.medalId);
+                if (!prev) dedupMedals.set(m.medalId, { ...m });
+                else dedupMedals.set(m.medalId, { ...prev, count: Math.max(prev.count ?? 1, m.count ?? 1) });
+              }
+            }
+
+            // Combina estatísticas
+            const combinedStats = [...((p as any).stats ?? []), ...((parsedItem as any).stats ?? [])];
+            const statMap = new Map<string, any>();
+            for (const s of combinedStats) {
+              if (s?.game_id) {
+                const sKey = `${s.game_id}__${s.mode || "padrao"}`;
+                const cur = statMap.get(sKey);
+                if (!cur) statMap.set(sKey, { ...s });
+                else {
+                  statMap.set(sKey, {
+                    ...cur,
+                    plays: Math.max(cur.plays ?? 0, s.plays ?? 0),
+                    wins: Math.max(cur.wins ?? 0, s.wins ?? 0),
+                    flawless_wins: Math.max(cur.flawless_wins ?? 0, s.flawless_wins ?? 0),
+                    best_score: Math.max(cur.best_score ?? 0, s.best_score ?? 0),
+                    best_level: Math.max(cur.best_level ?? 1, s.best_level ?? 1),
+                  });
+                }
+              }
+            }
+
+            // Escolhe stageProgress com maior forLevel
+            const pStage = p.levelStageProgress;
+            const incStage = parsedItem.levelStageProgress;
+            let chosenStage = pStage;
+            if (incStage && (!pStage || (incStage.forLevel ?? 1) > (pStage.forLevel ?? 1))) {
+              chosenStage = incStage;
+            } else if (incStage && pStage && incStage.forLevel === pStage.forLevel && (incStage.matches ?? 0) > (pStage.matches ?? 0)) {
+              chosenStage = incStage;
+            }
+
+            existingEntry.primary = {
+              ...p,
+              id: p.id || parsedItem.id,
+              playfabId: p.playfabId || parsedItem.playfabId,
+              nick: incMatches > pMatches ? (parsedItem.nick || p.nick) : p.nick,
+              full_name: p.full_name || parsedItem.full_name,
+              school: p.school || parsedItem.school,
+              grade: p.grade ?? parsedItem.grade,
+              turma: p.turma ?? parsedItem.turma,
+              birthdate: p.birthdate || parsedItem.birthdate,
+              xp: Math.max(p.xp ?? 0, parsedItem.xp ?? 0),
+              seasonXp: Math.max(p.seasonXp ?? 0, parsedItem.seasonXp ?? 0),
+              level: Math.max(p.level ?? 1, parsedItem.level ?? 1),
+              levelStageProgress: chosenStage,
+              wins: Math.max(p.wins ?? 0, parsedItem.wins ?? 0),
+              matchesPlayed: Math.max(pMatches, incMatches),
+              distinctGamesPlayed: Math.max(p.distinctGamesPlayed ?? 0, parsedItem.distinctGamesPlayed ?? 0),
+              careerPoints: Math.max(p.careerPoints ?? 0, parsedItem.careerPoints ?? 0),
+              pointsBalance: Math.max(p.pointsBalance ?? 0, parsedItem.pointsBalance ?? 0),
+              tournamentPoints: Math.max(p.tournamentPoints ?? 0, parsedItem.tournamentPoints ?? 0),
+              bestTournamentPoints: Math.max(p.bestTournamentPoints ?? 0, parsedItem.bestTournamentPoints ?? 0),
+              unlockedMedals: Array.from(dedupMedals.values()),
+              stats: Array.from(statMap.values()),
+            };
+          }
+        } catch {
+          keysToRemoveFromCloud.push(key);
+        }
+      }
+
+      for (const [slug, { primary: parsed, allKeys }] of cloudItemsBySlug.entries()) {
+        try {
+          if (!parsed.nickNormalized) parsed.nickNormalized = slug;
 
           if (isTombstoned(slug) || isTombstoned(parsed.id)) {
-            keysToRemoveFromCloud.push(`stu_${slug}`);
+            keysToRemoveFromCloud.push(...allKeys);
+            keysToRemoveFromCloud.push(getStudentRosterCloudKey(slug));
             if (parsed.id && parsed.id !== slug) keysToRemoveFromCloud.push(`stu_${parsed.id}`);
             delete reg[slug];
             if (parsed.id) delete reg[parsed.id];
@@ -3078,10 +3194,22 @@ export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Prom
               }
               return maxLvl;
             })(),
-            levelStageProgress:
-              parsed.levelStageProgress ??
-              existing?.profile.levelStageProgress ??
-              udProf?.levelStageProgress,
+            levelStageProgress: (() => {
+              const existingStage = existing?.profile.levelStageProgress;
+              const incomingStage = parsed.levelStageProgress ?? udProf?.levelStageProgress;
+              if (!incomingStage) return existingStage;
+              if (!existingStage) return incomingStage;
+              // Invariante anti-regressão: se o estágio recebido for de nível inferior ao atual do aluno, preserva o estágio mais avançado
+              if ((incomingStage.forLevel ?? 1) < (existingStage.forLevel ?? 1)) {
+                return existingStage;
+              }
+              if ((incomingStage.forLevel ?? 1) > (existingStage.forLevel ?? 1)) {
+                return incomingStage;
+              }
+              const incMatches = incomingStage.matches ?? 0;
+              const exMatches = existingStage.matches ?? 0;
+              return incMatches >= exMatches ? incomingStage : existingStage;
+            })(),
             wins: Math.max(parsed.wins ?? 0, existing?.profile.wins ?? 0, udProf?.wins ?? 0),
             x1Wins: Math.max(parsed.x1Wins ?? 0, existing?.profile.x1Wins ?? 0, udProf?.x1Wins ?? 0),
             weeklyX1Wins: Math.max(
@@ -3461,7 +3589,7 @@ export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Prom
       const acc = ensurePlayerSeasonAligned(rawAcc, cfg);
       reg[slug] = acc;
       if (isSpecialAdminAccount(acc.profile)) continue;
-      const key = `stu_${slug}`;
+      const key = getStudentRosterCloudKey(slug);
       if (!data || !data[key] || needsCloudSanitize.has(slug) || acc.profile.deletedAt) {
         missingInCloud[key] = JSON.stringify({
           id: acc.profile.id,
@@ -4048,7 +4176,7 @@ export async function updateStudentProfileByAdmin(args: {
         {
           SharedGroupId: ROSTER_SHARED_GROUP_ID,
           Data: {
-            [`stu_${acc.profile.nickNormalized}`]: JSON.stringify({
+            [getStudentRosterCloudKey(acc.profile)]: JSON.stringify({
               ...acc.profile,
               stats: acc.stats ?? acc.profile.stats ?? [],
               updatedAt: acc.updatedAt,
@@ -5055,7 +5183,7 @@ export async function moveStudentToTrash(
           {
             SharedGroupId: ROSTER_SHARED_GROUP_ID,
             Data: {
-              [`stu_${pNorm}`]: JSON.stringify({
+              [getStudentRosterCloudKey(pNorm)]: JSON.stringify({
                 ...targetAcc.profile,
                 stats: targetAcc.stats ?? [],
                 deletedAt: nowIso,
@@ -5123,7 +5251,7 @@ export async function restoreStudentFromTrash(
           {
             SharedGroupId: ROSTER_SHARED_GROUP_ID,
             Data: {
-              [`stu_${pNorm}`]: JSON.stringify({
+              [getStudentRosterCloudKey(pNorm)]: JSON.stringify({
                 ...targetAcc.profile,
                 stats: targetAcc.stats ?? [],
                 updatedAt: nowIso,
@@ -5214,7 +5342,7 @@ export async function permanentlyDeleteStudent(
     try {
       const ticket = (await getAdminPlayFabTicket()) ?? currentSession?.sessionTicket;
       if (ticket) {
-        const keysToRemove = [`stu_${pNorm}`];
+        const keysToRemove = [getStudentRosterCloudKey(pNorm)];
         if (pId && pId !== pNorm) keysToRemove.push(`stu_${pId}`);
         await callPlayFabClient(
           "UpdateSharedGroupData",
@@ -5251,7 +5379,7 @@ export async function emptyStudentTrash(): Promise<{ success: boolean; count: nu
       if (pId) addTombstone(pId);
       if (pNick) addTombstone(pNick);
 
-      keysToRemoveFromCloud.push(`stu_${pNorm}`);
+      keysToRemoveFromCloud.push(getStudentRosterCloudKey(pNorm));
       if (pId && pId !== pNorm) keysToRemoveFromCloud.push(`stu_${pId}`);
 
       try {
@@ -5917,7 +6045,7 @@ export async function runRetroactiveMedalsAudit(
         medalsAwarded: awardedForStudent,
       });
 
-      cloudRosterUpdates[`stu_${aligned.profile.nickNormalized}`] = JSON.stringify({
+      cloudRosterUpdates[getStudentRosterCloudKey(aligned.profile)] = JSON.stringify({
         ...aligned.profile,
         stats: aligned.stats ?? [],
         updatedAt: nowIso,
