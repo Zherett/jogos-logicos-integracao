@@ -18,7 +18,7 @@ import {
   RARITY_INFO,
   type MedalDefinition,
 } from "./medals-catalog.ts";
-import { ALL_GAME_IDS } from "./game-storage.ts";
+import { ALL_GAME_IDS, type GameId } from "./game-storage.ts";
 import {
   ensurePlayerSeasonAligned,
   type PlayerProfile,
