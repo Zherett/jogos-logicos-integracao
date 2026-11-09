@@ -2954,8 +2954,11 @@ export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Prom
               const finalPts = Math.max(
                 cloudTourPts,
                 parsed.tournamentPoints ?? 0,
+                parsed.bestTournamentPoints ?? 0,
                 existing?.profile.tournamentPoints ?? 0,
+                existing?.profile.bestTournamentPoints ?? 0,
                 udProf?.tournamentPoints ?? 0,
+                udProf?.bestTournamentPoints ?? 0,
                 tourPts,
               );
               if (finalPts > (parsed.tournamentPoints ?? 0)) {
@@ -2974,8 +2977,11 @@ export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Prom
               const curPts = Math.max(
                 cloudTourPts,
                 parsed.tournamentPoints ?? 0,
+                parsed.bestTournamentPoints ?? 0,
                 existing?.profile.tournamentPoints ?? 0,
+                existing?.profile.bestTournamentPoints ?? 0,
                 udProf?.tournamentPoints ?? 0,
+                udProf?.bestTournamentPoints ?? 0,
                 tourPts,
               );
               return Math.max(
@@ -2996,8 +3002,11 @@ export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Prom
               const curPts = Math.max(
                 cloudTourPts,
                 parsed.tournamentPoints ?? 0,
+                parsed.bestTournamentPoints ?? 0,
                 existing?.profile.tournamentPoints ?? 0,
+                existing?.profile.bestTournamentPoints ?? 0,
                 udProf?.tournamentPoints ?? 0,
+                udProf?.bestTournamentPoints ?? 0,
                 tourPts,
               );
               return curPts > 0
@@ -5467,12 +5476,22 @@ export function getPlayerPublicProfile(identifier: string): PlayerProfile | null
   const cfg = checkAndApplyScheduledReset();
   const reg = loadRegistry();
   const clean = identifier.trim().toLowerCase();
+  const cleanStripped = clean.replace(/^stu_/, "");
   for (const acc of Object.values(reg)) {
     const p = acc.profile;
+    const pId = p.id.toLowerCase();
+    const pPfId = (p.playfabId || "").toLowerCase();
+    const pNorm = (p.nickNormalized || "").toLowerCase();
+    const pNick = p.nick.toLowerCase();
     if (
-      p.id.toLowerCase() === clean ||
-      p.nickNormalized === clean ||
-      p.nick.toLowerCase() === clean
+      pId === clean ||
+      pId === cleanStripped ||
+      (pPfId && (pPfId === clean || pPfId === cleanStripped)) ||
+      pNorm === clean ||
+      pNorm === cleanStripped ||
+      pNick === clean ||
+      pNick === cleanStripped ||
+      pNick.replace(/[^a-z0-9_]/g, "") === cleanStripped
     ) {
       const aligned = ensurePlayerSeasonAligned(acc, cfg);
       saveRegistry(reg);
