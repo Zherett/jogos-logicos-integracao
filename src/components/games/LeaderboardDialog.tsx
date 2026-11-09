@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import {
   Trophy,
   Medal,
@@ -32,6 +32,103 @@ interface Props {
 
 type TabKind = "pontos" | "medalhas" | "geral" | "jogos" | "escolas";
 
+// Cache em memória de sessão para alternância instantânea (0ms) entre abas e etapas
+const leaderboardSessionCache = new Map<string, LeaderboardEntry[]>();
+
+function getLeaderboardCacheKey(
+  tab: TabKind,
+  stage: RankingFilterCategory,
+  game: GameId,
+  school: string,
+  seasonId: number | string,
+): string {
+  return `${tab}::${stage}::${game}::${school}::${seasonId}`;
+}
+
+async function fetchEntriesForFilter(
+  targetTab: TabKind,
+  stage: RankingFilterCategory,
+  game: GameId,
+  school: string,
+): Promise<LeaderboardEntry[]> {
+  if (targetTab === "pontos") {
+    return fetchLeaderboard({ kind: "points", stage }, 50);
+  }
+  if (targetTab === "medalhas") {
+    return fetchLeaderboard({ kind: "medals", stage }, 50);
+  }
+  if (targetTab === "geral") {
+    return fetchLeaderboard({ kind: "xp_season", stage }, 50);
+  }
+  if (targetTab === "jogos") {
+    return fetchLeaderboard({ kind: "game", gameId: game, stage }, 50);
+  }
+  if (targetTab === "escolas" && school !== "TODAS") {
+    return fetchLeaderboard({ kind: "school", school, stage }, 50);
+  }
+  return [];
+}
+
+/**
+ * Renderiza 10 slots esqueletos com dimensões e proporções físicas exatas dos cards reais,
+ * garantindo estabilidade vertical permanente (Zero Layout Shift) enquanto os dados carregam.
+ */
+function Leaderboard10SlotsSkeleton() {
+  return (
+    <div className="space-y-2" aria-label="Carregando classificação...">
+      {Array.from({ length: 10 }).map((_, idx) => (
+        <div
+          key={idx}
+          className="flex items-center justify-between gap-3 rounded-2xl border border-border/60 bg-card/60 px-4 py-3 animate-pulse"
+        >
+          <div className="flex items-center gap-3 min-w-0 flex-1">
+            {/* Slot de Posição / Medalha */}
+            <span
+              className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl font-display text-sm font-extrabold border shadow-xs ${
+                idx === 0
+                  ? "bg-yellow-400/20 text-yellow-600 dark:text-yellow-400 border-yellow-500/30"
+                  : idx === 1
+                    ? "bg-slate-300/25 text-slate-500 border-slate-400/30"
+                    : idx === 2
+                      ? "bg-amber-700/20 text-amber-600 border-amber-800/30"
+                      : "bg-secondary/70 text-muted-foreground/60 border-border/50"
+              }`}
+            >
+              {idx <= 2 ? <Medal className="h-5 w-5 opacity-40" /> : `${idx + 1}º`}
+            </span>
+
+            <div className="min-w-0 flex-1 space-y-1.5">
+              {/* Apelido e Nível simulados */}
+              <div className="flex items-center gap-2">
+                <div
+                  className="h-4 rounded-md bg-muted/80"
+                  style={{ width: `${70 + (idx % 4) * 22}px` }}
+                />
+                <div className="h-3.5 w-16 rounded-full bg-muted/50" />
+              </div>
+
+              {/* Escola e Etapa simuladas */}
+              <div className="flex items-center gap-2">
+                <div
+                  className="h-3 rounded-md bg-muted/60"
+                  style={{ width: `${110 + (idx % 3) * 35}px` }}
+                />
+                <div className="h-3 w-16 rounded-md bg-muted/40" />
+              </div>
+            </div>
+          </div>
+
+          {/* Lado Direito: Pontuação e Vitórias simuladas */}
+          <div className="flex flex-col items-end gap-1.5 shrink-0">
+            <div className="h-5 w-20 rounded-md bg-primary/20" />
+            <div className="h-3 w-14 rounded-md bg-muted/40" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function LeaderboardDialog({ open, onOpenChange }: Props) {
   const auth = usePlayerAuth();
   const defaultPlayerCategory = resolveDefaultRankingCategory(auth.profile);
@@ -60,33 +157,68 @@ export function LeaderboardDialog({ open, onOpenChange }: Props) {
     prevOpenRef.current = open;
   }, [open, auth.profile]);
 
+  // Pré-carregamento silencioso em background das abas irmãs ("pontos", "medalhas", "geral")
+  const prefetchSisterTabs = useCallback(
+    async (stage: RankingFilterCategory, seasonId: number | string) => {
+      const sisterTabs: TabKind[] = ["medalhas", "pontos", "geral"];
+      for (const t of sisterTabs) {
+        const k = getLeaderboardCacheKey(t, stage, selectedGame, selectedSchool, seasonId);
+        if (!leaderboardSessionCache.has(k)) {
+          try {
+            const sisterRes = await fetchEntriesForFilter(t, stage, selectedGame, selectedSchool);
+            leaderboardSessionCache.set(k, sisterRes);
+          } catch {
+            // Silencioso em caso de erro na prefetch de fundo
+          }
+        }
+      }
+    },
+    [selectedGame, selectedSchool],
+  );
+
+  // Carregamento com Stale-While-Revalidate:
+  // Se já há cache, exibe instantaneamente (0ms) e revalida em segundo plano sem apagar a tela.
+  // Se não há cache, exibe os 10 slots esqueletos já dimensionados (Zero Cumulative Layout Shift).
   useEffect(() => {
     if (!open) return;
     let active = true;
-    setLoading(true);
+
+    // Aba de escolas com visão agregada geral é síncrona local
+    if (tab === "escolas" && selectedSchool === "TODAS") {
+      setLoading(false);
+      return;
+    }
+
+    const currentKey = getLeaderboardCacheKey(
+      tab,
+      selectedStage,
+      selectedGame,
+      selectedSchool,
+      cfg.seasonId,
+    );
+    const cached = leaderboardSessionCache.get(currentKey);
+
+    if (cached && cached.length > 0) {
+      // 1. Dados já existentes em cache: exibição instantânea (0ms), mantendo a tela fixa e estável
+      setEntries(cached);
+      setLoading(false);
+    } else {
+      // 2. Primeira vez nesta aba: exibe os 10 slots esqueletos com altura já pré-alocada
+      setLoading(true);
+    }
 
     const load = async () => {
-      let res: LeaderboardEntry[] = [];
-      if (tab === "pontos") {
-        res = await fetchLeaderboard({ kind: "points", stage: selectedStage }, 50);
-      } else if (tab === "medalhas") {
-        res = await fetchLeaderboard({ kind: "medals", stage: selectedStage }, 50);
-      } else if (tab === "geral") {
-        res = await fetchLeaderboard({ kind: "xp_season", stage: selectedStage }, 50);
-      } else if (tab === "jogos") {
-        res = await fetchLeaderboard(
-          { kind: "game", gameId: selectedGame, stage: selectedStage },
-          50,
-        );
-      } else if (tab === "escolas" && selectedSchool !== "TODAS") {
-        res = await fetchLeaderboard(
-          { kind: "school", school: selectedSchool, stage: selectedStage },
-          50,
-        );
-      }
-      if (active) {
+      try {
+        const res = await fetchEntriesForFilter(tab, selectedStage, selectedGame, selectedSchool);
+        if (!active) return;
+        leaderboardSessionCache.set(currentKey, res);
         setEntries(res);
         setLoading(false);
+
+        // Dispara o pré-carregamento em background das outras abas para que a troca seja imediata
+        void prefetchSisterTabs(selectedStage, cfg.seasonId);
+      } catch {
+        if (active) setLoading(false);
       }
     };
 
@@ -100,11 +232,9 @@ export function LeaderboardDialog({ open, onOpenChange }: Props) {
     selectedGame,
     selectedSchool,
     selectedStage,
-    auth.stats,
-    auth.profile?.xp,
-    auth.profile?.unlockedMedals?.length,
     cfg.seasonId,
     refreshCounter,
+    prefetchSisterTabs,
   ]);
 
   const scheduledDate = cfg.seasonEndAt
@@ -398,13 +528,11 @@ export function LeaderboardDialog({ open, onOpenChange }: Props) {
           </div>
         ) : (
           /* Individual Player Leaderboard */
-          <div className="space-y-2">
+          <div className="space-y-2 min-h-[580px]">
             {loading ? (
-              <p className="py-8 text-center text-sm text-muted-foreground">
-                Carregando classificação...
-              </p>
+              <Leaderboard10SlotsSkeleton />
             ) : entries.length === 0 ? (
-              <div className="rounded-2xl border border-dashed p-8 text-center">
+              <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed p-8 text-center min-h-[300px]">
                 <Trophy className="mx-auto h-8 w-8 text-muted-foreground/60" />
                 <p className="mt-2 font-display font-bold">Ainda não há pontuações registradas nesta categoria</p>
                 <p className="mt-1 text-xs text-muted-foreground">
@@ -553,6 +681,7 @@ export function LeaderboardDialog({ open, onOpenChange }: Props) {
           open={Boolean(inspectPlayerId)}
           onOpenChange={(v) => !v && setInspectPlayerId(null)}
           onStudentUpdated={() => {
+            leaderboardSessionCache.clear();
             setRefreshCounter((c) => c + 1);
             void auth.refresh();
           }}
