@@ -6,6 +6,7 @@ import {
   createRootRouteWithContext,
   useRouter,
 } from "@tanstack/react-router";
+import { PlayerAuthProvider } from "@/lib/player-auth";
 
 function NotFoundComponent() {
   return (
@@ -85,7 +86,9 @@ function RootComponent() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <Outlet />
+      <PlayerAuthProvider>
+        <Outlet />
+      </PlayerAuthProvider>
     </QueryClientProvider>
   );
 }

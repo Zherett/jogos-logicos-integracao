@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
+import { Link } from "@tanstack/react-router";
 import {
   User,
   LogOut,
@@ -28,7 +29,6 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { PlayerAuthDialog } from "./PlayerAuthDialog";
 import { LeaderboardDialog } from "./LeaderboardDialog";
-import { AdminPanelDialog } from "./AdminPanelDialog";
 import { PlayerMedalsInventory } from "./PlayerMedalsInventory";
 import { PlayerInboxModal } from "./PlayerInboxModal";
 import { TournamentRankBadge } from "./TournamentRankBadge";
@@ -117,7 +117,6 @@ export function PlayerMenu({ onConfigChanged }: Props) {
   const [authOpen, setAuthOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [rankingOpen, setRankingOpen] = useState(false);
-  const [adminOpen, setAdminOpen] = useState(false);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [inboxCounts, setInboxCounts] = useState({ unreadCount: 0, unclaimedRewardsCount: 0, totalAlerts: 0 });
 
@@ -413,16 +412,15 @@ export function PlayerMenu({ onConfigChanged }: Props) {
 
         {/* Admin Panel Button — Only visible when Admin is already logged in */}
         {auth.isAdmin && (
-          <button
-            type="button"
-            onClick={() => setAdminOpen(true)}
-            className="flex h-11 items-center gap-1.5 rounded-2xl border border-primary/50 bg-primary/10 text-primary px-3 shadow-sm transition-all hover:bg-primary/20 active:scale-95"
+          <Link
+            to="/admin"
+            className="flex h-11 items-center gap-1.5 rounded-2xl border border-primary/50 bg-primary/10 text-primary px-3 shadow-sm transition-all hover:bg-primary/20 active:scale-95 cursor-pointer"
             aria-label="Painel do Administrador"
-            title="Configurações do Administrador (ADM)"
+            title="Abrir Painel do Administrador em tela cheia rápida"
           >
             <ShieldCheck className="h-4 w-4" />
             <span className="font-display text-xs font-bold uppercase">ADM</span>
-          </button>
+          </Link>
         )}
 
         {/* Player Profile / Login Button */}
@@ -457,11 +455,6 @@ export function PlayerMenu({ onConfigChanged }: Props) {
 
       <PlayerAuthDialog open={authOpen} onOpenChange={setAuthOpen} />
       <LeaderboardDialog open={rankingOpen} onOpenChange={setRankingOpen} />
-      <AdminPanelDialog
-        open={adminOpen}
-        onOpenChange={setAdminOpen}
-        onConfigSaved={onConfigChanged}
-      />
       <PlayerInboxModal
         open={inboxOpen}
         onOpenChange={setInboxOpen}

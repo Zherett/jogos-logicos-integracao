@@ -97,11 +97,7 @@ export const Route = createFileRoute("/")({
 });
 
 export function IndexPage() {
-  return (
-    <PlayerAuthProvider>
-      <Index />
-    </PlayerAuthProvider>
-  );
+  return <Index />;
 }
 
 function Index() {
