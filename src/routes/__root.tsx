@@ -42,6 +42,16 @@ function ErrorComponent({ error, reset }: ErrorComponentProps) {
         <p className="mt-2 text-sm text-muted-foreground">
           Ocorreu um erro inesperado. Você pode tentar recarregar ou voltar ao menu inicial.
         </p>
+        {error && (
+          <details className="mt-3 text-left">
+            <summary className="cursor-pointer text-xs text-muted-foreground hover:underline">
+              Detalhes técnicos do erro
+            </summary>
+            <pre className="mt-2 max-h-40 overflow-auto rounded-lg bg-destructive/10 p-2 font-mono text-[11px] text-destructive whitespace-pre-wrap break-all">
+              {error instanceof Error ? error.stack || error.message : String(error)}
+            </pre>
+          </details>
+        )}
         <div className="mt-6 flex flex-wrap justify-center gap-2">
           <button
             onClick={() => {

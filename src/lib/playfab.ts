@@ -1203,20 +1203,24 @@ export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdmin
   // Remove qualquer medalha indevida emitida antes do término da semana corrente ou temporada ativa não encerrada:
   if (Array.isArray(acc.profile.tournamentMedals)) {
     acc.profile.tournamentMedals = acc.profile.tournamentMedals
+      .filter((m): m is any => Boolean(m && typeof m === "object"))
       .map((m) => {
         if (Array.isArray(m.historyWeeks)) {
-          m.historyWeeks = m.historyWeeks.filter((w) => w !== currentWeekKey && w !== currentSeasonKey);
+          m.historyWeeks = m.historyWeeks.filter((w: string) => w !== currentWeekKey && w !== currentSeasonKey);
           m.count = Math.max(1, m.historyWeeks.length);
         }
         return m;
       })
-      .filter((m) => m.weekKey !== currentWeekKey && m.weekKey !== currentSeasonKey && !m.id?.startsWith("projected_"));
+      .filter((m) => Boolean(m && m.weekKey !== currentWeekKey && m.weekKey !== currentSeasonKey && !String(m.id || "").startsWith("projected_")));
   }
 
   // Remove medalhas de pódio ranqueado e segredos de pódio emitidos indevidamente durante a temporada ativa:
   if (Array.isArray(acc.profile.unlockedMedals)) {
     acc.profile.unlockedMedals = acc.profile.unlockedMedals.filter((m: any) => {
-      const medalId = typeof m === "string" ? m : (m?.medalId ?? m?.id ?? "");
+      if (!m) return false;
+      const rawId = typeof m === "string" ? m : (m?.medalId ?? m?.id ?? "");
+      const medalId = typeof rawId === "string" ? rawId : String(rawId || "");
+      if (!medalId) return false;
       const isPodiumMedal =
         medalId === "tournament_top_1_gold" ||
         medalId === "tournament_top_2_silver" ||
@@ -1225,7 +1229,7 @@ export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdmin
         medalId.startsWith("secret_top1_consecutive_");
       if (isPodiumMedal && !isAdminAcc) {
         const hasPastSeasonMedal = Array.isArray(acc.profile.tournamentMedals) &&
-          acc.profile.tournamentMedals.some((tm) => tm.weekKey && tm.weekKey !== currentSeasonKey && tm.weekKey !== currentWeekKey);
+          acc.profile.tournamentMedals.some((tm) => tm && tm.weekKey && tm.weekKey !== currentSeasonKey && tm.weekKey !== currentWeekKey);
         return hasPastSeasonMedal;
       }
       return true;
@@ -1237,7 +1241,10 @@ export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdmin
   // obtidas indevidamente antes do lançamento oficial:
   if (Array.isArray(acc.profile.unlockedMedals)) {
     acc.profile.unlockedMedals = acc.profile.unlockedMedals.filter((m: any) => {
-      const medalId = typeof m === "string" ? m : (m?.medalId ?? m?.id ?? "");
+      if (!m) return false;
+      const rawId = typeof m === "string" ? m : (m?.medalId ?? m?.id ?? "");
+      const medalId = typeof rawId === "string" ? rawId : String(rawId || "");
+      if (!medalId) return false;
       const isX1Medal =
         medalId.startsWith("x1_wins_") ||
         medalId.startsWith("x1_weekly_") ||
@@ -1329,7 +1336,10 @@ export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdmin
     // Remove medalhas de nível 5+
     if (Array.isArray(acc.profile.unlockedMedals)) {
       acc.profile.unlockedMedals = acc.profile.unlockedMedals.filter((m: any) => {
-        const mId = typeof m === "string" ? m : (m?.medalId ?? m?.id ?? "");
+        if (!m) return false;
+        const rawId = typeof m === "string" ? m : (m?.medalId ?? m?.id ?? "");
+        const mId = typeof rawId === "string" ? rawId : String(rawId || "");
+        if (!mId) return false;
         return !(
           mId.startsWith("lvl_5") ||
           mId.startsWith("lvl_6") ||
@@ -1372,20 +1382,24 @@ export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdmin
 
   // Reconcile all unlocked medals so any improperly awarded medal returns to its proper progress
   if (acc.profile.unlockedMedals && acc.profile.unlockedMedals.length > 0 && !isAdminAcc) {
-    let filtered = acc.profile.unlockedMedals.filter((m) => {
+    let filtered = acc.profile.unlockedMedals.filter((m: any) => {
+      if (!m) return false;
+      const rawId = typeof m === "string" ? m : (m?.medalId ?? m?.id ?? "");
+      const mId = typeof rawId === "string" ? rawId : String(rawId || "");
+      if (!mId) return false;
       // Legacy X1 IDs
-      if (m.medalId.startsWith("m_x1_win_") && (acc.profile.x1Wins ?? 0) === 0) {
+      if (mId.startsWith("m_x1_win_") && (acc.profile.x1Wins ?? 0) === 0) {
         return false;
       }
       // Permanent immunity for Beta Tester and Special Robot boss medals
       if (
-        m.medalId === "m_rpg_ametista" ||
-        m.medalId === "m_rpg_carmesim" ||
-        m.medalId.startsWith("beta_tester_")
+        mId === "m_rpg_ametista" ||
+        mId === "m_rpg_carmesim" ||
+        mId.startsWith("beta_tester_")
       ) {
         return true;
       }
-      const def = medalDefMap.get(m.medalId);
+      const def = medalDefMap.get(mId);
       if (!def) return true;
       const cond = def.condition;
 
@@ -1485,16 +1499,20 @@ export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdmin
     });
 
     // Check total_medals_count (meta_collector_50 / meta_collector_80) after filtering
-    filtered = filtered.filter((m) => {
+    filtered = filtered.filter((m: any) => {
+      if (!m) return false;
+      const rawId = typeof m === "string" ? m : (m?.medalId ?? m?.id ?? "");
+      const mId = typeof rawId === "string" ? rawId : String(rawId || "");
+      if (!mId) return false;
       // Permanent immunity for Beta Tester and Special Robot boss medals
       if (
-        m.medalId === "m_rpg_ametista" ||
-        m.medalId === "m_rpg_carmesim" ||
-        m.medalId.startsWith("beta_tester_")
+        mId === "m_rpg_ametista" ||
+        mId === "m_rpg_carmesim" ||
+        mId.startsWith("beta_tester_")
       ) {
         return true;
       }
-      const def = medalDefMap.get(m.medalId);
+      const def = medalDefMap.get(mId);
       if (def?.condition.type === "total_medals_count") {
         return filtered.length >= (def.condition.threshold ?? 50);
       }
@@ -5764,7 +5782,11 @@ export async function runRetroactiveMedalsAudit(
       const pKey = (acc.profile.nickNormalized || acc.profile.id || k).toLowerCase().trim();
       initialUnlockedByPlayer.set(
         pKey,
-        new Set((acc.profile.unlockedMedals ?? []).map((m) => m.medalId)),
+        new Set(
+          (acc.profile.unlockedMedals ?? [])
+            .map((m: any) => (typeof m === "string" ? m : (m?.medalId ?? m?.id ?? "")))
+            .filter(Boolean),
+        ),
       );
     }
   }
@@ -5802,7 +5824,13 @@ export async function runRetroactiveMedalsAudit(
     });
 
     const pKey = (acc.profile.nickNormalized || acc.profile.id || key).toLowerCase().trim();
-    const initialUnlockedSet = initialUnlockedByPlayer.get(pKey) ?? new Set((acc.profile.unlockedMedals ?? []).map((m) => m.medalId));
+    const initialUnlockedSet =
+      initialUnlockedByPlayer.get(pKey) ??
+      new Set(
+        (acc.profile.unlockedMedals ?? [])
+          .map((m: any) => (typeof m === "string" ? m : (m?.medalId ?? m?.id ?? "")))
+          .filter(Boolean),
+      );
 
     const aligned = ensurePlayerSeasonAligned(acc, cfg);
     const isAdminAcc = aligned.profile.isAdmin || isSpecialAdminAccount(aligned.profile);
@@ -5846,17 +5874,21 @@ export async function runRetroactiveMedalsAudit(
 
     // Identifica todas as medalhas que foram concedidas retroativamente nesta execução
     const currentUnlocked = aligned.profile.unlockedMedals ?? [];
-    const freshlyGrantedMedals = currentUnlocked.filter((m) => !initialUnlockedSet.has(m.medalId));
+    const freshlyGrantedMedals = currentUnlocked.filter((m: any) => {
+      const mId = typeof m === "string" ? m : (m?.medalId ?? m?.id ?? "");
+      return Boolean(mId && !initialUnlockedSet.has(mId));
+    });
 
     if (freshlyGrantedMedals.length > 0) {
       const nowIso = new Date().toISOString();
       const awardedForStudent: Array<{ id: string; title: string; rarity: string }> = [];
 
       for (const m of freshlyGrantedMedals) {
-        const def = allMedals.find((d) => d.id === m.medalId);
+        const mId = typeof m === "string" ? m : (m?.medalId ?? m?.id ?? "");
+        const def = allMedals.find((d) => d.id === mId);
         awardedForStudent.push({
-          id: m.medalId,
-          title: def?.title ?? m.medalId,
+          id: mId,
+          title: def?.title ?? mId,
           rarity: def?.rarity ?? "bronze",
         });
       }

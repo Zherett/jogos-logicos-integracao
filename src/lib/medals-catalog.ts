@@ -1180,7 +1180,9 @@ export function getTopShowcaseMedals(
   const list: MedalDefinition[] = [];
 
   for (const um of unlockedMedals) {
-    const def = defMap.get(um.medalId);
+    if (!um) continue;
+    const mId = typeof um === "string" ? um : ((um as any).medalId ?? (um as any).id ?? "");
+    const def = defMap.get(mId);
     if (def) list.push(def);
   }
 
@@ -1433,26 +1435,29 @@ export function getDistinctGamesPlayed(
   let minFromMedalsAndBadges = 0;
   if (profile && Array.isArray(profile.unlockedMedals)) {
     for (const m of profile.unlockedMedals) {
-      if (!m || !m.medalId) continue;
+      if (!m) continue;
+      const rawId = typeof m === "string" ? m : ((m as any).medalId ?? (m as any).id ?? "");
+      const mId = typeof rawId === "string" ? rawId : String(rawId || "");
+      if (!mId) continue;
       for (const gId of ALL_GAME_IDS) {
         if (!enabledSet.has(gId)) continue;
-        if (m.medalId.startsWith(`game_${gId}_`)) {
+        if (mId.startsWith(`game_${gId}_`)) {
           playedSet.add(gId);
           break;
         }
       }
-      if (m.medalId === "explore_3_games" || m.medalId === "flawless_3_games") {
+      if (mId === "explore_3_games" || mId === "flawless_3_games") {
         minFromMedalsAndBadges = Math.max(minFromMedalsAndBadges, 3);
-      } else if (m.medalId === "explore_5_games" || m.medalId === "flawless_5_games") {
+      } else if (mId === "explore_5_games" || mId === "flawless_5_games") {
         minFromMedalsAndBadges = Math.max(minFromMedalsAndBadges, 5);
-      } else if (m.medalId === "beta_tester_prata") {
+      } else if (mId === "beta_tester_prata") {
         minFromMedalsAndBadges = Math.max(minFromMedalsAndBadges, 4);
-      } else if (m.medalId === "beta_tester_ouro") {
+      } else if (mId === "beta_tester_ouro") {
         minFromMedalsAndBadges = Math.max(minFromMedalsAndBadges, 6);
-      } else if (m.medalId === "beta_tester_bronze") {
+      } else if (mId === "beta_tester_bronze") {
         minFromMedalsAndBadges = Math.max(minFromMedalsAndBadges, 1);
-      } else if (m.medalId.startsWith("lvl_")) {
-        const lvlNum = Number(m.medalId.replace("lvl_", ""));
+      } else if (mId.startsWith("lvl_")) {
+        const lvlNum = Number(mId.replace("lvl_", ""));
         if (lvlNum >= 2 && lvlNum <= 10) {
           const req = LEVEL_REQUIREMENTS[lvlNum - 1];
           if (req) {
@@ -1654,7 +1659,11 @@ export function evaluatePlayerMedals(
   allMedals = getAllAvailableMedals(),
   now = new Date(),
 ): MedalDefinition[] {
-  const existingSet = new Set((ctx.profile.unlockedMedals ?? []).map((m) => m.medalId));
+  const existingSet = new Set(
+    (ctx.profile.unlockedMedals ?? [])
+      .map((m: any) => (typeof m === "string" ? m : (m?.medalId ?? m?.id ?? "")))
+      .filter(Boolean),
+  );
   const newlyAwarded: MedalDefinition[] = [];
 
   const p = ctx.profile;
@@ -2173,7 +2182,11 @@ export function calculateMedalProgress(
     }
     case "distinct_specialist_games": {
       const enabledSet = getEnabledGameIdsSet(enabledGamesOverride);
-      const unlockedSet = new Set((profile?.unlockedMedals ?? []).map((m) => m.medalId));
+      const unlockedSet = new Set(
+        (profile?.unlockedMedals ?? [])
+          .map((m: any) => (typeof m === "string" ? m : (m?.medalId ?? m?.id ?? "")))
+          .filter(Boolean),
+      );
       const count = Array.from(enabledSet).filter((gId) => {
         const s = effectiveStatsMap.get(gId);
         return Boolean((s && s.plays > 0 && s.best_level >= 3) || unlockedSet.has(`game_${gId}_lvl_master`));
@@ -2187,7 +2200,11 @@ export function calculateMedalProgress(
     }
     case "distinct_games_with_50_matches": {
       const enabledSet = getEnabledGameIdsSet(enabledGamesOverride);
-      const unlockedSet = new Set((profile?.unlockedMedals ?? []).map((m) => m.medalId));
+      const unlockedSet = new Set(
+        (profile?.unlockedMedals ?? [])
+          .map((m: any) => (typeof m === "string" ? m : (m?.medalId ?? m?.id ?? "")))
+          .filter(Boolean),
+      );
       const count = Array.from(enabledSet).filter((gId) => {
         const s = effectiveStatsMap.get(gId);
         return Boolean((s && s.plays >= 50) || unlockedSet.has(`game_${gId}_matches_50`));
