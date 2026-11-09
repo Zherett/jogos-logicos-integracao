@@ -9,7 +9,12 @@
 import type { PlayerProfile } from "./playfab.ts";
 import { awardCareerPoints } from "./career-points.ts";
 import { getAllAvailableMedals, type PlayerUnlockedMedal } from "./medals-catalog.ts";
-import { stageFromBirthdate } from "./player-profile.ts";
+import {
+  stageFromBirthdate,
+  accumulateTournamentMedal,
+  calculatePlayerLevel,
+  type TournamentMedal,
+} from "./player-profile.ts";
 import { GAME_NAMES, type GameId } from "./game-storage.ts";
 
 export type InboxRewardType = "points" | "medal" | "future_item";
@@ -1233,24 +1238,43 @@ export function claimInboxReward(
   }
 
   // 2. Conceder Medalha se houver
-  if (reward.type === "medal" && reward.medalId) {
-    const allMedals = getAllAvailableMedals();
-    const medalDef = allMedals.find((m) => m.id === reward.medalId);
-    if (medalDef) {
-      if (!Array.isArray(profile.unlockedMedals)) {
-        profile.unlockedMedals = [];
+  if (reward.type === "medal") {
+    if (reward.medalId) {
+      const allMedals = getAllAvailableMedals();
+      const medalDef = allMedals.find((m) => m.id === reward.medalId);
+      if (medalDef) {
+        if (!Array.isArray(profile.unlockedMedals)) {
+          profile.unlockedMedals = [];
+        }
+        const existing = profile.unlockedMedals.find((u) => u.medalId === reward.medalId);
+        if (!existing) {
+          const newUnlocked: PlayerUnlockedMedal = {
+            medalId: medalDef.id,
+            unlockedAt: nowIso,
+            count: 1,
+            rarity: medalDef.rarity,
+          };
+          profile.unlockedMedals.push(newUnlocked);
+        } else {
+          existing.count = (existing.count ?? 1) + 1;
+        }
       }
-      const existing = profile.unlockedMedals.find((u) => u.medalId === reward.medalId);
-      if (!existing) {
-        const newUnlocked: PlayerUnlockedMedal = {
-          medalId: medalDef.id,
-          unlockedAt: nowIso,
-          count: 1,
-          rarity: medalDef.rarity,
-        };
-        profile.unlockedMedals.push(newUnlocked);
-      } else {
-        existing.count = (existing.count ?? 1) + 1;
+    }
+
+    // Se houver dados de medalha do torneio ranqueado no itemData
+    const tm = (reward.itemData as any)?.tournamentMedal as TournamentMedal | undefined;
+    if (tm) {
+      profile.tournamentMedals = accumulateTournamentMedal(profile.tournamentMedals ?? [], tm);
+      const bonusXp = tm.bonusXpAwarded || reward.pointsAmount || 0;
+      if (bonusXp > 0) {
+        profile.xp = (profile.xp ?? 0) + bonusXp;
+        profile.seasonXp = (profile.seasonXp ?? 0) + bonusXp;
+        profile.level = calculatePlayerLevel({
+          xp: profile.xp,
+          matchesPlayed: profile.matchesPlayed ?? 0,
+          wins: profile.wins ?? 0,
+          distinctGames: profile.distinctGamesPlayed ?? 0,
+        });
       }
     }
   }

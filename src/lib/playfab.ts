@@ -114,7 +114,12 @@ import {
   RANKED_WIN_POINTS,
 } from "./career-points.ts";
 import { removePlayerFromPresence } from "./presence.ts";
-import { removePlayerFromTournament, getTournamentRank, getTournamentStoreRecord } from "./weekly-tournament.ts";
+import {
+  removePlayerFromTournament,
+  getTournamentRank,
+  getTournamentStoreRecord,
+  finalizeRankedSeasonAndAwardMedalsViaInbox,
+} from "./weekly-tournament.ts";
 import {
   createInboxMessage,
   recordDeviceSecurityAlert,
@@ -244,6 +249,7 @@ export interface PlayerProfile {
   badges: Badge[];
   isAdmin?: boolean;
   seasonId: number;
+  rankedSeasonId?: number;
   activeSessionId?: string;
   activeSessionUpdatedAt?: string;
   deletedAt?: string;
@@ -615,18 +621,34 @@ async function callPlayFabClient<T>(
 /** Checks if the ADM scheduled a ranking reset whose timestamp has arrived,
  *  and executes it automatically if due. */
 export function checkAndApplyScheduledReset(): PlatformAdminConfig {
-  const cfg = loadAdminConfig();
-  const targetEnd = cfg.seasonEndAt || cfg.scheduledResetAt;
-  if (!targetEnd) return cfg;
-  const dueTime = new Date(targetEnd).getTime();
-  if (Number.isNaN(dueTime) || Date.now() < dueTime) return cfg;
+  let cfg = loadAdminConfig();
 
-  const durationLabel = cfg.seasonDurationDays ? `${cfg.seasonDurationDays} dias` : "período regular";
-  return executeRankingReset({
-    clearXp: cfg.scheduledResetClearXp,
-    newSeasonName: `Temporada ${cfg.seasonId + 1} • SEMED Coari`,
-    reason: `Encerramento automático da Temporada ${cfg.seasonId} (${durationLabel}) agendado para ${new Date(targetEnd).toLocaleString("pt-BR")}`,
-  });
+  // 1. Encerramento automático agendado da Temporada Geral de Atividades (BETA / 60 dias)
+  const targetEnd = cfg.seasonEndAt || cfg.scheduledResetAt;
+  if (targetEnd) {
+    const dueTime = new Date(targetEnd).getTime();
+    if (!Number.isNaN(dueTime) && Date.now() >= dueTime) {
+      const durationLabel = cfg.seasonDurationDays ? `${cfg.seasonDurationDays} dias` : "período regular";
+      cfg = executeRankingReset({
+        clearXp: cfg.scheduledResetClearXp,
+        newSeasonName: `Temporada ${cfg.seasonId + 1} • SEMED Coari`,
+        reason: `Encerramento automático da Temporada ${cfg.seasonId} (${durationLabel}) agendado para ${new Date(targetEnd).toLocaleString("pt-BR")}`,
+      });
+    }
+  }
+
+  // 2. Encerramento automático agendado da Temporada do Modo Ranqueado (14 dias ou definido no ADM)
+  const rankedEnd = cfg.rankedSeasonEndAt;
+  if (rankedEnd) {
+    const dueRanked = new Date(rankedEnd).getTime();
+    if (!Number.isNaN(dueRanked) && Date.now() >= dueRanked) {
+      cfg = executeRankedSeasonReset({
+        reason: `Encerramento automático da Temporada de Ranqueada ${cfg.rankedSeasonId ?? 1} agendado para ${new Date(rankedEnd).toLocaleString("pt-BR")}`,
+      });
+    }
+  }
+
+  return cfg;
 }
 
 export function executeRankingReset(options: {
@@ -750,6 +772,18 @@ export function executeRankedSeasonReset(options?: {
   const currentRankedSeasonId = cfg.rankedSeasonId ?? 1;
   const nextRankedSeasonId = currentRankedSeasonId + 1;
 
+  // 1. Encerra oficialmente a temporada anterior, congela o pódio e envia as medalhas com carta oficial ao Correio dos vencedores
+  void finalizeRankedSeasonAndAwardMedalsViaInbox(currentRankedSeasonId);
+
+  // 2. Limpa o armazenamento local do Torneio Semanal para iniciar a nova Temporada com registros limpos
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.removeItem("desafios-weekly-tournament-v1");
+    } catch {
+      /* ignore */
+    }
+  }
+
   const durationDays = cfg.rankedSeasonDurationDays && cfg.rankedSeasonDurationDays > 0 ? cfg.rankedSeasonDurationDays : 14;
   const { start: nStart, end: nEnd } = computeSeasonDates(new Date(nowIso), durationDays);
 
@@ -772,16 +806,23 @@ export function executeRankedSeasonReset(options?: {
     resetHistory: [entry, ...cfg.resetHistory].slice(0, 25),
   });
 
-  // Zera os pontos ranqueados de todos os alunos registrados
+  // Zera os pontos ranqueados de todos os alunos registrados e alinha com a nova temporada
   const reg = loadRegistry();
   for (const key of Object.keys(reg)) {
     const acc = reg[key];
     acc.profile.tournamentPoints = 0;
+    acc.profile.bestTournamentPoints = 0;
     acc.profile.tournamentRankId = "bronze_1";
+    acc.profile.rankedSeasonId = nextRankedSeasonId;
     acc.profile.dailyTournamentEntries = 0;
     acc.updatedAt = nowIso;
   }
   saveRegistry(reg);
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("desafios:weekly-tournament-updated"));
+    window.dispatchEvent(new CustomEvent("desafios:profile-updated"));
+  }
 
   return nextConfig;
 }
@@ -1097,28 +1138,38 @@ export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdmin
     acc.profile.weeklyX1WeekKey = currentWeekKey;
   }
 
-  // Preserva e sincroniza os pontos da ranqueada acumulados na temporada (definida por 14 dias ou término do ADM).
-  // Sincroniza diretamente com o registro oficial do Torneio Semanal para manter 100% de paridade entre a lista do rank e o perfil.
-  const tourRec = getTournamentStoreRecord(acc.profile.id, acc.profile.nick);
-  const tourPoints = tourRec?.tournamentPoints ?? 0;
-  const maxTournamentPts = Math.max(
-    acc.profile.tournamentPoints ?? 0,
-    acc.profile.bestTournamentPoints ?? 0,
-    tourPoints,
-  );
+  const currentRankedSeason = cfg.rankedSeasonId ?? 1;
+  const playerRankedSeason = acc.profile.rankedSeasonId ?? 1;
 
-  if (maxTournamentPts > 0) {
-    acc.profile.tournamentPoints = maxTournamentPts;
-    acc.profile.bestTournamentPoints = Math.max(acc.profile.bestTournamentPoints ?? 0, maxTournamentPts);
-    acc.profile.tournamentRankId = (tourRec?.highestRankId && tourPoints === maxTournamentPts)
-      ? tourRec.highestRankId
-      : getTournamentRank(maxTournamentPts).currentRank.id;
+  // Se a temporada de ranqueada avançou no ADM, zera os pontos do jogador para a nova temporada
+  if (playerRankedSeason < currentRankedSeason) {
+    acc.profile.tournamentPoints = 0;
+    acc.profile.bestTournamentPoints = 0;
+    acc.profile.tournamentRankId = "bronze_1";
+    acc.profile.rankedSeasonId = currentRankedSeason;
   } else {
-    if (typeof acc.profile.tournamentPoints !== "number") {
-      acc.profile.tournamentPoints = 0;
-    }
-    if (!acc.profile.tournamentRankId) {
-      acc.profile.tournamentRankId = "bronze_1";
+    acc.profile.rankedSeasonId = currentRankedSeason;
+    // Preserva e sincroniza os pontos da ranqueada acumulados na temporada (definida por 14 dias ou término do ADM).
+    // Sincroniza diretamente com o registro oficial do Torneio Semanal para manter 100% de paridade entre a lista do rank e o perfil.
+    const tourRec = getTournamentStoreRecord(acc.profile.id, acc.profile.nick);
+    const tourPoints = tourRec?.tournamentPoints ?? 0;
+    const maxTournamentPts = Math.max(
+      acc.profile.tournamentPoints ?? 0,
+      acc.profile.bestTournamentPoints ?? 0,
+      tourPoints,
+    );
+
+    if (maxTournamentPts > 0) {
+      acc.profile.tournamentPoints = maxTournamentPts;
+      acc.profile.bestTournamentPoints = Math.max(acc.profile.bestTournamentPoints ?? 0, maxTournamentPts);
+      acc.profile.tournamentRankId = getTournamentRank(maxTournamentPts).currentRank.id;
+    } else {
+      if (typeof acc.profile.tournamentPoints !== "number") {
+        acc.profile.tournamentPoints = 0;
+      }
+      if (!acc.profile.tournamentRankId) {
+        acc.profile.tournamentRankId = "bronze_1";
+      }
     }
   }
   acc.profile.tournamentWeekKey = currentWeekKey;
@@ -2855,23 +2906,51 @@ export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Prom
               existing?.profile.dailyTournamentXp ?? 0,
               udProf?.dailyTournamentXp ?? 0,
             ),
-            tournamentPoints: Math.max(
-              parsed.tournamentPoints ?? 0,
-              existing?.profile.tournamentPoints ?? 0,
-              udProf?.tournamentPoints ?? 0,
-            ),
-            bestTournamentPoints: Math.max(
-              parsed.bestTournamentPoints ?? 0,
-              existing?.profile.bestTournamentPoints ?? 0,
-              udProf?.bestTournamentPoints ?? 0,
-              parsed.tournamentPoints ?? 0,
-              existing?.profile.tournamentPoints ?? 0,
-            ),
-            tournamentRankId:
-              parsed.tournamentRankId ??
-              existing?.profile.tournamentRankId ??
-              udProf?.tournamentRankId ??
-              "bronze_1",
+            tournamentPoints: (() => {
+              const tourRec = getTournamentStoreRecord(slug, parsed.id);
+              const tourPts = tourRec?.tournamentPoints ?? 0;
+              return Math.max(
+                parsed.tournamentPoints ?? 0,
+                existing?.profile.tournamentPoints ?? 0,
+                udProf?.tournamentPoints ?? 0,
+                tourPts,
+              );
+            })(),
+            bestTournamentPoints: (() => {
+              const tourRec = getTournamentStoreRecord(slug, parsed.id);
+              const tourPts = tourRec?.tournamentPoints ?? 0;
+              const curPts = Math.max(
+                parsed.tournamentPoints ?? 0,
+                existing?.profile.tournamentPoints ?? 0,
+                udProf?.tournamentPoints ?? 0,
+                tourPts,
+              );
+              return Math.max(
+                parsed.bestTournamentPoints ?? 0,
+                existing?.profile.bestTournamentPoints ?? 0,
+                udProf?.bestTournamentPoints ?? 0,
+                curPts,
+              );
+            })(),
+            tournamentRankId: (() => {
+              const tourRec = getTournamentStoreRecord(slug, parsed.id);
+              const tourPts = tourRec?.tournamentPoints ?? 0;
+              const curPts = Math.max(
+                parsed.tournamentPoints ?? 0,
+                existing?.profile.tournamentPoints ?? 0,
+                udProf?.tournamentPoints ?? 0,
+                tourPts,
+              );
+              return curPts > 0
+                ? getTournamentRank(curPts).currentRank.id
+                : (parsed.tournamentRankId ?? existing?.profile.tournamentRankId ?? udProf?.tournamentRankId ?? "bronze_1");
+            })(),
+            rankedSeasonId:
+              parsed.rankedSeasonId ??
+              existing?.profile.rankedSeasonId ??
+              udProf?.rankedSeasonId ??
+              cfg.rankedSeasonId ??
+              1,
             tournamentWeekKey:
               parsed.tournamentWeekKey ??
               existing?.profile.tournamentWeekKey ??
@@ -3097,6 +3176,7 @@ export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Prom
           tournamentPoints: acc.profile.tournamentPoints ?? 0,
           bestTournamentPoints: acc.profile.bestTournamentPoints ?? 0,
           tournamentRankId: acc.profile.tournamentRankId ?? "bronze_1",
+          rankedSeasonId: acc.profile.rankedSeasonId ?? cfg.rankedSeasonId ?? 1,
           tournamentWeekKey: acc.profile.tournamentWeekKey,
           matchesPlayed: acc.profile.matchesPlayed,
           distinctGamesPlayed: acc.profile.distinctGamesPlayed ?? 0,

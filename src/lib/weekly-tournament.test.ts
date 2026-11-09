@@ -4,6 +4,8 @@ import {
   computeTop5HoldMetrics,
   evaluateTournamentStandings,
   finalizeWeeklyTournamentSeason,
+  finalizeRankedSeasonAndAwardMedalsViaInbox,
+  getTournamentSeasonGroupId,
   getTournamentRank,
   getWeekInfo,
   recordWeeklyTournamentAttempt,
@@ -16,6 +18,7 @@ import {
   TOURNAMENT_MIN_LEVEL,
   TOURNAMENT_XP_PER_ENTRY,
   type TournamentPlayerRecord,
+  type WeeklyTournamentStore,
 } from "./weekly-tournament.ts";
 import {
   isX1WindowOpen,
@@ -24,6 +27,7 @@ import {
 } from "./player-profile.ts";
 import { evaluatePlayerMedals } from "./medals-catalog.ts";
 import { accumulateTournamentMedal, ensurePlayerSeasonAligned } from "./playfab.ts";
+import { getInboxMessagesForRecipient, claimInboxReward } from "./inbox-messages.ts";
 
 describe("Torneio Semanal Ranqueado (Nível 3+) e Regras da Arena X1 (Nível 5+, 07h–19h)", () => {
   it("valida os requisitos de nível e limites de XP extra diário (100 XP X1 + 100 XP Ranqueada em 10 entradas gratuitas e até 60 entradas diárias totais)", () => {
@@ -563,5 +567,108 @@ describe("Torneio Semanal Ranqueado (Nível 3+) e Regras da Arena X1 (Nível 5+,
     const aligned = ensurePlayerSeasonAligned(mockAccount, {} as any);
     assert.equal(aligned.profile.tournamentPoints, 145);
     assert.equal(aligned.profile.tournamentRankId, "prata_2");
+  });
+
+  it("calcula a chave correta do grupo de torneio compartilhado por temporada (TOURNAMENT_SEASON_X)", () => {
+    assert.equal(getTournamentSeasonGroupId(1), "TOURNAMENT_SEASON_1");
+    assert.equal(getTournamentSeasonGroupId(2), "TOURNAMENT_SEASON_2");
+    assert.equal(getTournamentSeasonGroupId(10), "TOURNAMENT_SEASON_10");
+  });
+
+  it("rito solene de encerramento: envia cartas oficiais com medalhas anexadas ao Correio dos 5 primeiros colocados e permite resgate", async () => {
+    const mockStore: WeeklyTournamentStore = {
+      seasonId: 1,
+      weekKey: "2026-W45",
+      gameId: "calc-rapido",
+      records: {
+        "campeao-etapa2": {
+          playerId: "campeao-etapa2",
+          nick: "campeao2",
+          fullName: "Aluno Campeão Etapa 2",
+          school: "Escola Modelo",
+          age: 13,
+          stage: "etapa_2",
+          level: 8,
+          bestScore: 250,
+          totalEntries: 20,
+          tournamentPoints: 250,
+          activeTop5Since: null,
+          accumulatedTop5Ms: 120_000,
+          updatedAt: Date.now(),
+        },
+        "vice-etapa2": {
+          playerId: "vice-etapa2",
+          nick: "vice2",
+          fullName: "Aluno Vice Etapa 2",
+          school: "Escola Modelo",
+          age: 13,
+          stage: "etapa_2",
+          level: 7,
+          bestScore: 200,
+          totalEntries: 15,
+          tournamentPoints: 200,
+          activeTop5Since: null,
+          accumulatedTop5Ms: 90_000,
+          updatedAt: Date.now(),
+        },
+      },
+      updatedAt: Date.now(),
+    };
+
+    const res = await finalizeRankedSeasonAndAwardMedalsViaInbox(1, mockStore);
+    assert.ok(res.totalMedalsAwarded >= 2);
+    assert.ok(res.podiumSummary.etapa_2.length >= 2);
+
+    // Verifica que a mensagem chegou ao correio do campeão
+    const inbox = getInboxMessagesForRecipient("campeao-etapa2");
+    const seasonMsg = inbox.find((m) => m.title.includes("Campeão da Temporada 1"));
+    assert.ok(seasonMsg, "Carta de campeão deve existir no correio do aluno");
+    assert.equal(seasonMsg.reward?.type, "medal");
+    assert.equal(seasonMsg.reward?.medalId, "tournament_top_1_gold");
+    assert.equal(seasonMsg.reward?.pointsAmount, 150);
+
+    // O aluno agora pode resgatar a medalha pelo correio
+    const mockStudentProfile: any = {
+      id: "campeao-etapa2",
+      nick: "campeao2",
+      xp: 1000,
+      seasonXp: 1000,
+      level: 4,
+      tournamentMedals: [],
+      unlockedMedals: [],
+      claimedInboxRewardIds: [],
+    };
+
+    const claimRes = claimInboxReward(seasonMsg.id, mockStudentProfile);
+    assert.equal(claimRes.success, true);
+    assert.equal(claimRes.profile.tournamentMedals?.length, 1);
+    assert.equal(claimRes.profile.tournamentMedals?.[0].rank, 1);
+    assert.equal(claimRes.profile.tournamentMedals?.[0].tier, "gold");
+    assert.equal(claimRes.profile.xp, 1150); // 1000 + 150 bônus do 1º lugar
+  });
+
+  it("reseta deterministamente os pontos de ranqueada apenas quando rankedSeasonId do ADM avança", () => {
+    const mockAccount: any = {
+      profile: {
+        id: "aluno-teste",
+        rankedSeasonId: 1,
+        tournamentPoints: 120,
+        bestTournamentPoints: 120,
+        tournamentRankId: "prata_1",
+      },
+      stats: [],
+    };
+
+    // Caso 1: Dentro da Temporada 1 -> mantém 120 pts
+    const alignedS1 = ensurePlayerSeasonAligned(mockAccount, { rankedSeasonId: 1 } as any);
+    assert.equal(alignedS1.profile.tournamentPoints, 120);
+    assert.equal(alignedS1.profile.tournamentRankId, "prata_1");
+
+    // Caso 2: Nova Temporada 2 iniciada no ADM -> zera deterministamente para Bronze I
+    const alignedS2 = ensurePlayerSeasonAligned(mockAccount, { rankedSeasonId: 2 } as any);
+    assert.equal(alignedS2.profile.tournamentPoints, 0);
+    assert.equal(alignedS2.profile.bestTournamentPoints, 0);
+    assert.equal(alignedS2.profile.tournamentRankId, "bronze_1");
+    assert.equal(alignedS2.profile.rankedSeasonId, 2);
   });
 });

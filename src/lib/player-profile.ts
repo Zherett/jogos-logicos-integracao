@@ -816,6 +816,51 @@ export interface TournamentMedal {
   historyWeeks?: string[]; // Semanas em que esta medalha foi conquistada (ex: ["2026-W43", "2026-W44"])
 }
 
+/**
+ * Concede ou acumula uma Medalha de Pódio do Torneio Ranqueado no inventário permanente do perfil.
+ * Preserva histórico, não duplica cartões desnecessários e incrementa o multiplicador `count`.
+ */
+export function accumulateTournamentMedal(
+  existing: TournamentMedal[],
+  medal: TournamentMedal,
+): TournamentMedal[] {
+  const copy = [...existing];
+  const sameWeekIndex = copy.findIndex((m) => m.id === medal.id || m.weekKey === medal.weekKey);
+
+  if (sameWeekIndex >= 0) {
+    const cur = copy[sameWeekIndex];
+    const prevWeeks = cur.historyWeeks ?? [cur.weekKey];
+    copy[sameWeekIndex] = {
+      ...cur,
+      rank: Math.min(cur.rank, medal.rank),
+      tier: medal.rank < cur.rank ? medal.tier : cur.tier,
+      label: medal.rank <= cur.rank ? medal.label : cur.label,
+      heldMinutes: Math.max(cur.heldMinutes, medal.heldMinutes),
+      count: cur.count ?? 1,
+      historyWeeks: Array.from(new Set([...prevWeeks, medal.weekKey])),
+    };
+    return copy;
+  }
+
+  // Acumula número no mesmo selo se o aluno já conquistou medalha dessa mesma colocação Top 5
+  const sameRankIndex = copy.findIndex((m) => m.rank === medal.rank);
+  if (sameRankIndex >= 0) {
+    const cur = copy[sameRankIndex];
+    const prevWeeks = cur.historyWeeks ?? [cur.weekKey];
+    copy[sameRankIndex] = {
+      ...cur,
+      count: (cur.count ?? 1) + 1,
+      heldMinutes: Math.max(cur.heldMinutes, medal.heldMinutes),
+      earnedAt: medal.earnedAt,
+      weekKey: medal.weekKey,
+      historyWeeks: Array.from(new Set([...prevWeeks, medal.weekKey])),
+    };
+    return copy;
+  }
+
+  return [{ ...medal, count: 1, historyWeeks: [medal.weekKey] }, ...copy];
+}
+
 export interface LevelRankTitle {
   minLevel: number;
   title: string;

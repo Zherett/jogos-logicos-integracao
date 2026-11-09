@@ -14,8 +14,11 @@ import {
   isPlayFabConfigured,
   loadStoredSession,
   syncStudentRosterFromPlayFab,
+  loadRegistry,
+  saveRegistry,
   type PlayerProfile,
 } from "./playfab.ts";
+import { createInboxMessage } from "./inbox-messages.ts";
 import {
   getActiveEventBonuses,
   type SpecialEvent,
@@ -486,7 +489,12 @@ export interface TournamentStandingRow {
   };
 }
 
-interface WeeklyTournamentStore {
+export function getTournamentSeasonGroupId(seasonId: number): string {
+  return `TOURNAMENT_SEASON_${seasonId}`;
+}
+
+export interface WeeklyTournamentStore {
+  seasonId?: number;
   weekKey: string;
   gameId: GameId;
   records: Record<string, TournamentPlayerRecord>;
@@ -716,40 +724,146 @@ export function evaluateTournamentStandings(
 /* --------------------- Local & PlayFab Persistence --------------------- */
 
 /**
- * Conclui e consolida a temporada da semana anterior ao virar o domingo (23:59 -> segunda 00:00).
- * Avalia o ranking final oficial de cada etapa e concede as medalhas legítimas aos Top 5 vencedores.
+ * Executa o encerramento consolidado e solene da Temporada do Modo Ranqueado:
+ * 1. Congela o Pódio Oficial Top 5 de cada uma das 3 etapas (1ª, 2ª e 3ª Etapa).
+ * 2. Concede as medalhas oficiais e XP diretamente no Correio (Inbox) de cada medalhista com carta oficial e anexo de resgate.
+ * 3. Se o jogador estiver na sessão local ativa, atualiza também imediatamente o inventário permanente de medalhas.
  */
-export async function finalizeWeeklyTournamentSeason(pastStore: WeeklyTournamentStore): Promise<void> {
-  if (!pastStore || !pastStore.records || Object.keys(pastStore.records).length === 0) return;
+export async function finalizeRankedSeasonAndAwardMedalsViaInbox(
+  seasonId: number,
+  pastStore?: WeeklyTournamentStore,
+): Promise<{ totalMedalsAwarded: number; podiumSummary: Record<string, string[]> }> {
+  const store = pastStore ?? loadTournamentStore();
   const stages: AgeStageId[] = ["etapa_1", "etapa_2", "etapa_3"];
+  let totalMedalsAwarded = 0;
+  const podiumSummary: Record<string, string[]> = {};
+
+  if (!store || !store.records || Object.keys(store.records).length === 0) {
+    return { totalMedalsAwarded: 0, podiumSummary };
+  }
 
   for (const st of stages) {
-    const evaluated = evaluateTournamentStandings(pastStore.records, pastStore.updatedAt, st);
-    for (const row of evaluated.top5) {
-      if (row.rank <= 5) {
-        const medal: TournamentMedal = {
-          id: `medal_${pastStore.weekKey}_${st}_r${row.rank}`,
-          weekKey: pastStore.weekKey,
-          gameId: pastStore.gameId,
-          rank: row.rank,
-          tier: row.projectedMedal.tier,
-          label: `${row.projectedMedal.emoji} Top ${row.rank} ${row.stageLabel} (${GAME_NAMES[pastStore.gameId]})`,
-          heldMinutes: row.holdMinutes,
-          bonusXpAwarded: row.rank === 1 ? 150 : row.rank === 2 ? 100 : row.rank === 3 ? 75 : 50,
-          earnedAt: new Date(pastStore.updatedAt).toISOString(),
-        };
-        try {
-          await grantPlayerTournamentMedal(medal);
-        } catch {
-          /* ignore */
-        }
+    const evaluated = evaluateTournamentStandings(store.records, store.updatedAt, st);
+    const winners = evaluated.top5.filter((r) => r.rank <= 5);
+    podiumSummary[st] = [];
+
+    for (const row of winners) {
+      const proj = projectedMedalForRank(row.rank, row.holdMinutes);
+      const medalId =
+        row.rank === 1
+          ? "tournament_top_1_gold"
+          : row.rank === 2
+          ? "tournament_top_2_silver"
+          : row.rank === 3
+          ? "tournament_top_3_bronze"
+          : "tour_master_bronze";
+
+      const tourMedal: TournamentMedal = {
+        id: `medal_season_${seasonId}_${st}_r${row.rank}`,
+        weekKey: `Season_${seasonId}`,
+        gameId: store.gameId,
+        rank: row.rank,
+        tier: proj.tier,
+        label: `${proj.emoji} Top ${row.rank} ${row.stageLabel} (Temporada ${seasonId})`,
+        heldMinutes: row.holdMinutes,
+        bonusXpAwarded: proj.bonusXp,
+        earnedAt: new Date(store.updatedAt).toISOString(),
+      };
+
+      const title =
+        row.rank === 1
+          ? `🏆 Campeão da Temporada ${seasonId} Ranqueada!`
+          : row.rank === 2
+          ? `🥈 Vice-Campeão da Temporada ${seasonId} Ranqueada!`
+          : row.rank === 3
+          ? `🥉 3º Lugar da Temporada ${seasonId} Ranqueada!`
+          : `🎖️ Top ${row.rank} de Elite da Temporada ${seasonId} Ranqueada!`;
+
+      const body =
+        row.rank === 1
+          ? `Parabéns pelo feito extraordinário! Você conquistou o 1º Lugar na sua etapa (${row.stageLabel}) durante a Temporada ${seasonId} do Modo Ranqueado da SEMED Coari. Sua dedicação e conhecimento levaram você ao topo mais alto do pódio! Reivindique sua Medalha de Ouro Oficial de Campeão e seus pontos de prestígio abaixo.`
+          : row.rank === 2
+          ? `Parabéns pela grande conquista! Você conquistou o 2º Lugar na sua etapa (${row.stageLabel}) durante a Temporada ${seasonId} do Modo Ranqueado da SEMED Coari. Excelente desempenho e determinação! Reivindique sua Medalha de Prata Oficial de Vice-Campeão e seus pontos de prestígio abaixo.`
+          : row.rank === 3
+          ? `Parabéns pelo pódio! Você garantiu o 3º Lugar na sua etapa (${row.stageLabel}) durante a Temporada ${seasonId} do Modo Ranqueado da SEMED Coari. Você faz parte dos melhores da rede municipal! Reivindique sua Medalha de Bronze Oficial de 3º Lugar e seus pontos de prestígio abaixo.`
+          : `Parabéns! Você alcançou o Top ${row.rank} na sua etapa (${row.stageLabel}) durante a Temporada ${seasonId} do Modo Ranqueado da SEMED Coari, consolidando-se entre os melhores competidores da rede municipal! Reivindique sua Medalha de Honra de Elite Oficial e seus pontos de prestígio abaixo.`;
+
+      const rewId = `rew_rnk_s${seasonId}_${st}_r${row.rank}_${Date.now()}`;
+      createInboxMessage({
+        recipientId: row.playerId,
+        sender: "adm",
+        senderName: "Coordenação de Torneios SEMED",
+        category: "recompensa_especial",
+        title,
+        body,
+        reward: {
+          id: rewId,
+          type: "medal",
+          medalId,
+          pointsAmount: proj.bonusXp,
+          isSecret: false,
+          claimed: false,
+          itemData: {
+            tournamentMedal: tourMedal,
+            seasonId,
+            stage: st,
+            rank: row.rank,
+            tier: proj.tier,
+          },
+        },
+      });
+
+      if (row.nick && row.nick.toLowerCase() !== row.playerId.toLowerCase()) {
+        createInboxMessage({
+          recipientId: row.nick,
+          sender: "adm",
+          senderName: "Coordenação de Torneios SEMED",
+          category: "recompensa_especial",
+          title,
+          body,
+          reward: {
+            id: `${rewId}_nick`,
+            type: "medal",
+            medalId,
+            pointsAmount: proj.bonusXp,
+            isSecret: false,
+            claimed: false,
+            itemData: {
+              tournamentMedal: tourMedal,
+              seasonId,
+              stage: st,
+              rank: row.rank,
+              tier: proj.tier,
+            },
+          },
+        });
       }
+
+      try {
+        await grantPlayerTournamentMedal(tourMedal);
+      } catch {
+        /* ignore */
+      }
+
+      podiumSummary[st].push(`Top ${row.rank}: ${row.nick} (${row.tournamentPoints ?? row.bestScore} pts)`);
+      totalMedalsAwarded++;
     }
   }
+
+  return { totalMedalsAwarded, podiumSummary };
+}
+
+/**
+ * Conclui e consolida a temporada de ranqueada e concede as medalhas legítimas aos Top 5 vencedores.
+ */
+export async function finalizeWeeklyTournamentSeason(pastStore: WeeklyTournamentStore): Promise<void> {
+  const cfg = loadAdminConfig();
+  await finalizeRankedSeasonAndAwardMedalsViaInbox(pastStore.seasonId ?? cfg.rankedSeasonId ?? 1, pastStore);
 }
 
 function loadTournamentStore(now = new Date()): WeeklyTournamentStore {
   const cfg = loadAdminConfig();
+  const currentSeasonId = cfg.rankedSeasonId ?? 1;
   const { weekKey, weekIndex } = getWeekInfo(now);
   const activeGame = resolveWeeklyTournamentGame(
     weekIndex,
@@ -764,12 +878,17 @@ function loadTournamentStore(now = new Date()): WeeklyTournamentStore {
       const raw = window.localStorage.getItem(TOURNAMENT_STORAGE_KEY);
       if (raw) {
         const parsed = JSON.parse(raw) as Partial<WeeklyTournamentStore>;
-        // Preserva os registros acumulados da temporada independentemente da virada da chave semanal
-        if (parsed.records) {
-          Object.assign(baseRecords, parsed.records);
-        }
-        if (parsed.weekKey && parsed.weekKey !== weekKey && parsed.records && Object.keys(parsed.records).length > 0) {
-          void finalizeWeeklyTournamentSeason(parsed as WeeklyTournamentStore);
+        // Se pertencer a uma temporada anterior, encerra o pódio oficial daquela temporada
+        if (typeof parsed.seasonId === "number" && parsed.seasonId < currentSeasonId) {
+          if (parsed.records && Object.keys(parsed.records).length > 0) {
+            void finalizeRankedSeasonAndAwardMedalsViaInbox(parsed.seasonId, parsed as WeeklyTournamentStore);
+          }
+          // Nova temporada inicia com registros limpos
+        } else {
+          // Temporada corrente: preserva integralmente os registros
+          if (parsed.records) {
+            Object.assign(baseRecords, parsed.records);
+          }
         }
       }
     } catch {
@@ -824,6 +943,7 @@ function loadTournamentStore(now = new Date()): WeeklyTournamentStore {
   }
 
   return {
+    seasonId: currentSeasonId,
     weekKey,
     gameId: activeGame,
     records: baseRecords,
@@ -887,11 +1007,13 @@ export async function syncWeeklyTournamentWithPlayFab(): Promise<void> {
   }
   if (!ticket) return;
 
+  const cfg = loadAdminConfig();
+  const seasonId = cfg.rankedSeasonId ?? 1;
   const store = loadTournamentStore();
-  const groupId = `TOURNAMENT_${store.weekKey.replace(/[^A-Z0-9_]/gi, "_")}`;
+  const groupId = getTournamentSeasonGroupId(seasonId);
 
   try {
-    // 1. Assegura que o grupo compartilhado existe (ignora se já criado)
+    // 1. Assegura que o grupo compartilhado da temporada existe (ignora se já criado)
     await fetch(`https://${titleId}.playfabapi.com/Client/CreateSharedGroup`, {
       method: "POST",
       headers: {
@@ -901,7 +1023,7 @@ export async function syncWeeklyTournamentWithPlayFab(): Promise<void> {
       body: JSON.stringify({ TitleId: titleId, SharedGroupId: groupId }),
     });
 
-    // 2. Busca os competidores remotos na nuvem PlayFab
+    // 2. Busca os competidores remotos no grupo oficial da temporada
     const getRes = await fetch(`https://${titleId}.playfabapi.com/Client/GetSharedGroupData`, {
       method: "POST",
       headers: {
@@ -915,22 +1037,58 @@ export async function syncWeeklyTournamentWithPlayFab(): Promise<void> {
     };
 
     let changed = false;
+    let remoteRecords: Record<string, TournamentPlayerRecord> = {};
     if (json.data?.Data?.Standings?.Value) {
-      const remoteRecords = JSON.parse(json.data.Data.Standings.Value) as Record<
-        string,
-        TournamentPlayerRecord
-      >;
-      for (const [id, r] of Object.entries(remoteRecords)) {
-        const local = store.records[id];
-        if (
-          !local ||
-          (r.tournamentPoints ?? 0) > (local.tournamentPoints ?? 0) ||
-          r.bestScore > local.bestScore ||
-          r.updatedAt > local.updatedAt
-        ) {
-          store.records[id] = r;
-          changed = true;
+      try {
+        remoteRecords = JSON.parse(json.data.Data.Standings.Value);
+      } catch {
+        remoteRecords = {};
+      }
+    }
+
+    // Se for Temporada 1 e o grupo oficial ainda não tiver todos os dados, migra da chave semanal legada
+    if (seasonId === 1) {
+      try {
+        const legacyGroupId = `TOURNAMENT_${store.weekKey.replace(/[^A-Z0-9_]/gi, "_")}`;
+        const legacyRes = await fetch(`https://${titleId}.playfabapi.com/Client/GetSharedGroupData`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Authorization": ticket,
+          },
+          body: JSON.stringify({ TitleId: titleId, SharedGroupId: legacyGroupId }),
+        });
+        const legacyJson = (await legacyRes.json()) as {
+          data?: { Data?: Record<string, { Value: string }> };
+        };
+        if (legacyJson.data?.Data?.Standings?.Value) {
+          const legacyRecords = JSON.parse(legacyJson.data.Data.Standings.Value) as Record<
+            string,
+            TournamentPlayerRecord
+          >;
+          for (const [id, lr] of Object.entries(legacyRecords)) {
+            const cur = remoteRecords[id];
+            if (!cur || (lr.tournamentPoints ?? 0) > (cur.tournamentPoints ?? 0)) {
+              remoteRecords[id] = lr;
+              changed = true;
+            }
+          }
         }
+      } catch {
+        /* ignore legacy fallback error */
+      }
+    }
+
+    for (const [id, r] of Object.entries(remoteRecords)) {
+      const local = store.records[id];
+      if (
+        !local ||
+        (r.tournamentPoints ?? 0) > (local.tournamentPoints ?? 0) ||
+        r.bestScore > local.bestScore ||
+        r.updatedAt > local.updatedAt
+      ) {
+        store.records[id] = r;
+        changed = true;
       }
     }
 
@@ -938,7 +1096,34 @@ export async function syncWeeklyTournamentWithPlayFab(): Promise<void> {
     store.records = evaluated.updatedRecords;
     saveTournamentStore(store);
 
-    // 3. Atualiza na nuvem com os dados mesclados
+    // 3. Atualiza o catálogo local de alunos no registro para sincronizar tournamentPoints e rankId
+    const reg = loadRegistry();
+    let regUpdated = false;
+    for (const [id, r] of Object.entries(store.records)) {
+      const matchKey = Object.keys(reg).find(
+        (k) =>
+          k.toLowerCase() === id.toLowerCase() ||
+          reg[k].profile.id?.toLowerCase() === id.toLowerCase() ||
+          reg[k].profile.nick?.toLowerCase() === r.nick.toLowerCase() ||
+          reg[k].profile.nickNormalized?.toLowerCase() === r.nick.toLowerCase(),
+      );
+      if (matchKey) {
+        const acc = reg[matchKey];
+        const rPts = r.tournamentPoints ?? r.bestScore ?? 0;
+        if (rPts > (acc.profile.tournamentPoints ?? 0)) {
+          acc.profile.tournamentPoints = rPts;
+          acc.profile.bestTournamentPoints = Math.max(acc.profile.bestTournamentPoints ?? 0, rPts);
+          acc.profile.tournamentRankId = getTournamentRank(rPts).currentRank.id;
+          acc.updatedAt = new Date().toISOString();
+          regUpdated = true;
+        }
+      }
+    }
+    if (regUpdated) {
+      saveRegistry(reg);
+    }
+
+    // 4. Atualiza na nuvem com os dados mesclados
     await fetch(`https://${titleId}.playfabapi.com/Client/UpdateSharedGroupData`, {
       method: "POST",
       headers: {
@@ -953,7 +1138,7 @@ export async function syncWeeklyTournamentWithPlayFab(): Promise<void> {
       }),
     });
 
-    // 4. Notifica todas as abas e componentes da tela em tempo real
+    // 5. Notifica todas as abas e componentes da tela em tempo real
     if (typeof window !== "undefined") {
       window.dispatchEvent(
         new CustomEvent("desafios:weekly-tournament-updated", { detail: store }),
@@ -969,8 +1154,16 @@ export function getWeeklyTournamentSnapshot(
   stageFilter?: AgeStageId | "TODAS",
 ) {
   const now = new Date();
+  const cfg = loadAdminConfig();
+  const currentSeasonId = cfg.rankedSeasonId ?? 1;
   const store = loadTournamentStore(now);
-  const { weekKey, endsAtLabel } = getWeekInfo(now);
+  const { weekKey, endsAtLabel: defaultWeekEnd } = getWeekInfo(now);
+  const seasonEnd = cfg.rankedSeasonEndAt ? new Date(cfg.rankedSeasonEndAt) : null;
+  const endsAtLabel =
+    seasonEnd && !Number.isNaN(seasonEnd.getTime())
+      ? `${seasonEnd.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })} às 23:59`
+      : defaultWeekEnd;
+  const seasonLabel = `Temporada ${currentSeasonId}`;
   const playerStageInfo = profile
     ? stageFromBirthdate(profile.birthdate, now, profile.school)
     : AGE_STAGES[0];
@@ -1023,6 +1216,8 @@ export function getWeeklyTournamentSnapshot(
 
   return {
     weekKey,
+    seasonLabel,
+    seasonId: currentSeasonId,
     endsAtLabel,
     gameId: store.gameId,
     gameName: GAME_NAMES[store.gameId] ?? store.gameId,

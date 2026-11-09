@@ -683,6 +683,11 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                                   <span>+{activeMessage.reward.pointsAmount} Pontos Conquistados</span>
                                 )}
                                 {activeMessage.reward.type === "medal" && (() => {
+                                  const itemData = activeMessage.reward?.itemData as any;
+                                  const tourMedal = itemData?.tournamentMedal;
+                                  if (tourMedal?.label) {
+                                    return <span>{tourMedal.label}</span>;
+                                  }
                                   const def = allCatalogMedals.find(
                                     (m) => m.id === activeMessage.reward?.medalId
                                   );
@@ -696,7 +701,9 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                               <div className="text-xs text-muted-foreground">
                                 {activeMessage.reward.type === "points"
                                   ? "Pontos serão somados à sua carteira e Hall da Fama"
-                                  : "Adicionada à sua galeria de troféus e medalhas"}
+                                  : (activeMessage.reward?.itemData as any)?.tournamentMedal
+                                    ? `+${(activeMessage.reward?.itemData as any).tournamentMedal.bonusXpAwarded ?? 0} XP Extra e Medalha de Pódio Oficial`
+                                    : "Adicionada à sua galeria de troféus e medalhas"}
                               </div>
                             </div>
                           </div>

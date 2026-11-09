@@ -60,7 +60,7 @@ import { PlayerMedalsInventory } from "./PlayerMedalsInventory";
 import { PresenceDot } from "./PresenceDot";
 import { PlayerActivityBadge } from "./PlayerActivityBadge";
 import { TournamentRankBadge } from "./TournamentRankBadge";
-import { getTournamentStoreRecord } from "@/lib/weekly-tournament";
+import { getTournamentStoreRecord, syncWeeklyTournamentWithPlayFab } from "@/lib/weekly-tournament";
 
 interface Props {
   playerId: string | null;
@@ -120,7 +120,10 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
         setSelfTurma(found.turma || "");
       }
       let cancelled = false;
-      void syncStudentRosterFromPlayFab().then(() => {
+      void Promise.all([
+        syncStudentRosterFromPlayFab(),
+        syncWeeklyTournamentWithPlayFab(),
+      ]).then(() => {
         if (cancelled) return;
         const refreshed = getPlayerPublicProfile(playerId);
         if (refreshed) {
@@ -128,8 +131,19 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
           onStudentUpdated?.();
         }
       });
+      const onTourUpdated = () => {
+        if (cancelled) return;
+        const refreshed = getPlayerPublicProfile(playerId);
+        if (refreshed) setProfile(refreshed);
+      };
+      if (typeof window !== "undefined") {
+        window.addEventListener("desafios:weekly-tournament-updated", onTourUpdated);
+      }
       return () => {
         cancelled = true;
+        if (typeof window !== "undefined") {
+          window.removeEventListener("desafios:weekly-tournament-updated", onTourUpdated);
+        }
       };
     } else {
       setProfile(null);
