@@ -243,10 +243,9 @@ describe("Perfil do Jogador, Escolas, Trava de Níveis (1..10) e Limite Diário 
   it("reconhece os dois administradores autorizados JOSINEY e QUEMUEL", () => {
     assert.equal(isSpecialAdminAccount({ nickNormalized: "josiney" }), true);
     assert.equal(isSpecialAdminAccount({ nickNormalized: "quemuel" }), true);
-    assert.equal(isSpecialAdminAccount({ nickNormalized: "lord" }), true);
-    assert.equal(isSpecialAdminAccount({ nick: "LORD" } as any), true);
     assert.equal(isSpecialAdminAccount({ id: "admin-josiney" }), true);
     assert.equal(isSpecialAdminAccount({ id: "admin-quemuel" }), true);
+    assert.equal(isSpecialAdminAccount({ nickNormalized: "lord" }), false);
     assert.equal(isSpecialAdminAccount({ nickNormalized: "alunoteste" }), false);
   });
 

@@ -16,6 +16,7 @@ import {
   type TournamentMedal,
 } from "./player-profile.ts";
 import { GAME_NAMES, type GameId } from "./game-storage.ts";
+import { recordScoreLedgerEntry } from "./score-history-ledger.ts";
 
 export type InboxRewardType = "points" | "medal" | "future_item";
 
@@ -1298,7 +1299,48 @@ export function claimInboxReward(
           wins: profile.wins ?? 0,
           distinctGames: profile.distinctGamesPlayed ?? 0,
         });
+        try {
+          recordScoreLedgerEntry({
+            playerId: profile.id,
+            playerNick: profile.nick,
+            type: "xp",
+            source: "torneio_semanal",
+            amount: bonusXp,
+            balanceAfter: profile.xp,
+            reason: `Bônus de XP do Torneio Ranqueado (${tm.title})`,
+            metadata: { messageId },
+          });
+        } catch {
+          /* ignore */
+        }
       }
+    }
+
+    try {
+      if (reward.type === "points" && (reward.pointsAmount ?? 0) > 0) {
+        recordScoreLedgerEntry({
+          playerId: profile.id,
+          playerNick: profile.nick,
+          type: "career_points",
+          source: "correio",
+          amount: reward.pointsAmount!,
+          balanceAfter: profile.careerPoints,
+          reason: `Recompensa Postal: ${reward.pointsAmount} Pontos`,
+          metadata: { messageId },
+        });
+      } else if (reward.type === "medal" && reward.medalId) {
+        recordScoreLedgerEntry({
+          playerId: profile.id,
+          playerNick: profile.nick,
+          type: "medal",
+          source: "correio",
+          amount: 1,
+          reason: `Medalha Resgatada da Caixa Postal (${reward.medalId})`,
+          metadata: { messageId, medalId: reward.medalId },
+        });
+      }
+    } catch {
+      /* ignore */
     }
   }
 

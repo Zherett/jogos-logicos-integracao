@@ -128,6 +128,7 @@ import {
   mergeStudentClaims,
 } from "./inbox-messages.ts";
 import { invalidatePioneersCache } from "./medal-pioneers.ts";
+import { recordScoreLedgerEntry } from "./score-history-ledger.ts";
 
 const SESSION_KEY = "desafios-playfab-session-v1";
 const REGISTRY_KEY = "desafios-playfab-registry-v1";
@@ -462,8 +463,6 @@ export function isSpecialAdminAccount(p?: {
     n === "admin" ||
     n === "josiney" ||
     n === "quemuel" ||
-    n === "lord" ||
-    raw === "lord" ||
     raw === "quemuel" ||
     raw === "josiney"
   );
@@ -3031,7 +3030,6 @@ export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Prom
           const isStudent =
             !isSpecialAdminAccount(parsed) &&
             !parsed.isAdmin &&
-            slug !== "lord" &&
             slug !== "quemuel" &&
             slug !== "josiney" &&
             slug !== "admin" &&
@@ -4486,6 +4484,25 @@ export async function playfabRecordMatch(args: {
   acc.profile.levelStageProgress = stageRes.stageProgress;
   checkLevelPromotionPoints(acc.profile.level, acc.profile, pointsMultiplier);
 
+  if (earnedXp > 0) {
+    try {
+      const gName = GAME_NAMES[args.gameId] || args.gameId;
+      const src = mode === "torneio_semanal" ? "torneio_semanal" : mode === "x1_online" ? "arena_x1" : "partida";
+      recordScoreLedgerEntry({
+        playerId: acc.profile.id || acc.profile.nick,
+        playerNick: acc.profile.nick,
+        type: "xp",
+        source: src,
+        amount: earnedXp,
+        balanceAfter: nextXp,
+        reason: `Partida ${won ? "Vencida" : "Concluída"} (${gName})`,
+        metadata: { gameId: args.gameId, mode, score: safeScore, level: safeLevel },
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+
   acc.profile.badges = computeBadges({
     existing: acc.profile.badges,
     xp: nextXp,
@@ -4606,6 +4623,19 @@ export async function playfabRecordMatch(args: {
       medalsBonusXp += MEDAL_XP_REWARDS[m.rarity] ?? 10;
       const ptsReward = MEDAL_POINTS_REWARDS[m.rarity] ?? 20;
       awardCareerPoints(acc.profile, ptsReward, m.title, pointsMultiplier);
+      try {
+        recordScoreLedgerEntry({
+          playerId: acc.profile.id,
+          playerNick: acc.profile.nick,
+          type: "medal",
+          source: "medalha",
+          amount: 1,
+          reason: `Medalha Conquistada: ${m.title}`,
+          metadata: { medalId: m.id, medalTitle: m.title },
+        });
+      } catch {
+        /* ignore */
+      }
     }
     acc.profile.unlockedMedals = currentUnlocked;
 
@@ -4613,6 +4643,19 @@ export async function playfabRecordMatch(args: {
     if (medalsBonusXp > 0) {
       acc.profile.xp += medalsBonusXp;
       acc.profile.seasonXp = (acc.profile.seasonXp ?? 0) + medalsBonusXp;
+      try {
+        recordScoreLedgerEntry({
+          playerId: acc.profile.id,
+          playerNick: acc.profile.nick,
+          type: "xp",
+          source: "medalha",
+          amount: medalsBonusXp,
+          balanceAfter: acc.profile.xp,
+          reason: "Bônus de XP por Medalhas Conquistadas",
+        });
+      } catch {
+        /* ignore */
+      }
       const syncedAfterBonus = syncLevelStageProgress({
         xp: acc.profile.xp,
         lifetimeMatches: acc.profile.matchesPlayed,

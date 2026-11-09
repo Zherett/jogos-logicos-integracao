@@ -2,6 +2,7 @@ import type { PlayerProfile } from "./playfab.ts";
 import { getAllAvailableMedals, type MedalRarity } from "./medals-catalog.ts";
 import { getLocalDateKey } from "./player-profile.ts";
 import { loadAllInboxMessages } from "./inbox-messages.ts";
+import { recordScoreLedgerEntry } from "./score-history-ledger.ts";
 
 /** Pontos concedidos por raridade de medalha */
 export const MEDAL_POINTS_REWARDS: Record<MedalRarity, number> = {
@@ -66,6 +67,37 @@ export function awardCareerPoints(
 
   profile.pointsBalance = Math.max(0, currentBalance + pointsAwarded);
   profile.careerPoints = Math.max(0, currentCareer + pointsAwarded);
+
+  try {
+    const rLower = (_reason || "").toLowerCase();
+    const source = rLower.includes("login")
+      ? "login_diario"
+      : rLower.includes("primeiro jogo")
+        ? "primeiro_jogo"
+        : rLower.includes("recorde")
+          ? "recorde"
+          : rLower.includes("ranqueada") || rLower.includes("torneio")
+            ? "torneio_semanal"
+            : rLower.includes("x1")
+              ? "arena_x1"
+              : rLower.includes("nível") || rLower.includes("nivel")
+                ? "promocao_nivel"
+                : rLower.includes("medalha")
+                  ? "medalha"
+                  : "partida";
+
+    recordScoreLedgerEntry({
+      playerId: profile.id || profile.nick,
+      playerNick: profile.nick || "Jogador",
+      type: "career_points",
+      source,
+      amount: pointsAwarded,
+      balanceAfter: profile.careerPoints,
+      reason: _reason || "Pontos Conquistados",
+    });
+  } catch {
+    /* ignore ledger recording error */
+  }
 
   return { profile, pointsAwarded };
 }

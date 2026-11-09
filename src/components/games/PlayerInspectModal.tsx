@@ -19,7 +19,21 @@ import {
   Trash2,
   AlertTriangle,
   RotateCcw,
+  FileText,
+  PlusCircle,
+  MinusCircle,
+  Filter,
+  Search,
+  ArrowUpRight,
 } from "lucide-react";
+import {
+  getPlayerScoreLedger,
+  calculateStudentScoreBreakdown,
+  recordScoreLedgerEntry,
+  TRANSACTION_SOURCE_LABELS,
+  TRANSACTION_TYPE_LABELS,
+  type ScoreTransactionType,
+} from "@/lib/score-history-ledger";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -108,6 +122,19 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteFeedback, setDeleteFeedback] = useState<string | null>(null);
 
+  // Estados para o Histórico de Pontuação & Auditoria (Score Ledger)
+  const [showLedger, setShowLedger] = useState(false);
+  const [ledgerFilterType, setLedgerFilterType] = useState<ScoreTransactionType | "all">("all");
+  const [ledgerSearch, setLedgerSearch] = useState("");
+  const [ledgerVersion, setLedgerVersion] = useState(0);
+
+  // Estados para ajuste manual de pontuação pelo Administrador
+  const [isAdjustmentOpen, setIsAdjustmentOpen] = useState(false);
+  const [adjType, setAdjType] = useState<"xp" | "career_points">("xp");
+  const [adjAmount, setAdjAmount] = useState<number>(50);
+  const [adjReason, setAdjReason] = useState<string>("");
+  const [adjSaving, setAdjSaving] = useState(false);
+
   useEffect(() => {
     if (open && playerId) {
       const found = getPlayerPublicProfile(playerId);
@@ -185,6 +212,52 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
     maxAvailableGames: effProg.maxAvailableGames,
   });
   const isMe = auth.profile?.id === profile.id;
+
+  const ledgerEntries = useMemo(() => {
+    if (!profile) return [];
+    const pId = profile.id || profile.nickNormalized || profile.nick;
+    return getPlayerScoreLedger(pId, {
+      type: ledgerFilterType === "all" ? undefined : ledgerFilterType,
+      search: ledgerSearch,
+      limit: 60,
+    });
+  }, [profile, ledgerFilterType, ledgerSearch, ledgerVersion]);
+
+  const ledgerBreakdown = useMemo(() => {
+    if (!profile) return null;
+    const pId = profile.id || profile.nickNormalized || profile.nick;
+    return calculateStudentScoreBreakdown(pId);
+  }, [profile, ledgerVersion]);
+
+  async function handleApplyAdminAdjustment() {
+    if (!profile || !adjAmount || !adjReason.trim()) return;
+    setAdjSaving(true);
+    try {
+      const pId = profile.id || profile.nickNormalized || profile.nick;
+      recordScoreLedgerEntry({
+        playerId: pId,
+        playerNick: profile.nick,
+        type: adjType,
+        source: "ajuste_adm",
+        amount: adjAmount,
+        reason: `Ajuste ADM: ${adjReason.trim()}`,
+        metadata: { adminUser: auth.profile?.nick || "ADM" },
+      });
+      if (adjType === "xp") {
+        profile.xp = Math.max(0, (profile.xp ?? 0) + adjAmount);
+        profile.seasonXp = Math.max(0, (profile.seasonXp ?? 0) + adjAmount);
+      } else {
+        profile.careerPoints = Math.max(0, (profile.careerPoints ?? 0) + adjAmount);
+        profile.pointsBalance = Math.max(0, (profile.pointsBalance ?? 0) + adjAmount);
+      }
+      setLedgerVersion((v) => v + 1);
+      setIsAdjustmentOpen(false);
+      setAdjReason("");
+      onStudentUpdated?.();
+    } finally {
+      setAdjSaving(false);
+    }
+  }
 
   async function handleSaveAdminEdit() {
     if (!profile) return;
@@ -378,15 +451,266 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                 </div>
               </div>
             </div>
-            <div className="text-right">
-              <span className="rounded-lg bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 font-mono text-[11px] font-black text-amber-600 dark:text-amber-400">
-                {profile.careerPoints ?? 0} pts totais
-              </span>
-              <div className="text-[9px] text-muted-foreground">
-                Hall da Fama
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowLedger((prev) => !prev)}
+                className={`inline-flex items-center gap-1.5 rounded-xl border px-2.5 py-1 text-xs font-bold transition-all shadow-xs ${
+                  showLedger
+                    ? "bg-amber-500 text-white border-amber-600"
+                    : "border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 text-amber-600 dark:text-amber-400"
+                }`}
+                title="Exibir histórico completo de pontuações, medalhas e extrato de auditoria"
+              >
+                <FileText className="h-3.5 w-3.5" />
+                {showLedger ? "Fechar Extrato" : "Extrato & Auditoria"}
+              </button>
+              <div className="text-right">
+                <span className="rounded-lg bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 font-mono text-[11px] font-black text-amber-600 dark:text-amber-400">
+                  {profile.careerPoints ?? 0} pts totais
+                </span>
+                <div className="text-[9px] text-muted-foreground">
+                  Hall da Fama
+                </div>
               </div>
             </div>
           </div>
+
+          {/* Seção Extrato de Pontuação e Ledger de Auditoria */}
+          {showLedger && (
+            <div className="rounded-2xl border-2 border-amber-500/40 bg-card p-4 space-y-3.5 animate-in fade-in duration-200">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 pb-2.5">
+                <div className="flex items-center gap-2">
+                  <span className="grid h-7 w-7 place-items-center rounded-lg bg-amber-500/20 text-sm">
+                    📜
+                  </span>
+                  <div>
+                    <h4 className="font-display text-sm font-black text-foreground">
+                      Extrato de Auditoria & Histórico de Pontuação
+                    </h4>
+                    <p className="text-[11px] text-muted-foreground">
+                      Registro de todas as pontuações, medalhas e bonificações recebidas pelo aluno
+                    </p>
+                  </div>
+                </div>
+
+                {auth.profile?.isAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => setIsAdjustmentOpen(true)}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-3 py-1 text-xs font-bold text-primary-foreground hover:bg-primary/90 transition-colors shadow-sm"
+                  >
+                    <PlusCircle className="h-3.5 w-3.5" /> Ajuste Manual (ADM)
+                  </button>
+                )}
+              </div>
+
+              {/* Resumo Consolidado de Origens */}
+              {ledgerBreakdown && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
+                  <div className="rounded-xl border bg-secondary/30 p-2">
+                    <span className="block text-[10px] font-bold text-muted-foreground">XP em Partidas</span>
+                    <span className="font-mono text-sm font-extrabold text-primary">
+                      +{ledgerBreakdown.totalXpFromMatches} XP
+                    </span>
+                  </div>
+                  <div className="rounded-xl border bg-secondary/30 p-2">
+                    <span className="block text-[10px] font-bold text-muted-foreground">XP em Medalhas</span>
+                    <span className="font-mono text-sm font-extrabold text-purple-600 dark:text-purple-400">
+                      +{ledgerBreakdown.totalXpFromMedals} XP
+                    </span>
+                  </div>
+                  <div className="rounded-xl border bg-secondary/30 p-2">
+                    <span className="block text-[10px] font-bold text-muted-foreground">Pontos Conquistados</span>
+                    <span className="font-mono text-sm font-extrabold text-amber-600 dark:text-amber-400">
+                      +{ledgerBreakdown.totalCareerPoints} pts
+                    </span>
+                  </div>
+                  <div className="rounded-xl border bg-secondary/30 p-2">
+                    <span className="block text-[10px] font-bold text-muted-foreground">Transações Registradas</span>
+                    <span className="font-mono text-sm font-extrabold text-foreground">
+                      {ledgerBreakdown.transactionsCount} registros
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Barra de Filtros e Busca */}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-1 overflow-x-auto text-xs">
+                  <span className="text-[11px] font-bold text-muted-foreground mr-1 flex items-center gap-1">
+                    <Filter className="h-3 w-3" /> Tipo:
+                  </span>
+                  {(
+                    [
+                      { id: "all", label: "Todos" },
+                      { id: "xp", label: "XP" },
+                      { id: "career_points", label: "Pontos" },
+                      { id: "tournament_pts", label: "Ranqueada" },
+                      { id: "medal", label: "Medalhas" },
+                    ] as const
+                  ).map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      onClick={() => setLedgerFilterType(f.id)}
+                      className={`rounded-lg px-2.5 py-1 text-[11px] font-bold transition-colors ${
+                        ledgerFilterType === f.id
+                          ? "bg-primary text-primary-foreground shadow-xs"
+                          : "bg-secondary text-muted-foreground hover:bg-secondary/80"
+                      }`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="relative min-w-[180px] max-w-xs flex-1">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                  <input
+                    type="text"
+                    value={ledgerSearch}
+                    onChange={(e) => setLedgerSearch(e.target.value)}
+                    placeholder="Filtrar por jogo, medalha ou motivo..."
+                    className="h-8 w-full rounded-xl border bg-background pl-8 pr-3 text-xs"
+                  />
+                </div>
+              </div>
+
+              {/* Modal de Concessão de Ajuste pelo ADM */}
+              {isAdjustmentOpen && auth.profile?.isAdmin && (
+                <div className="rounded-xl border-2 border-primary/40 bg-secondary/40 p-3 space-y-2.5 animate-in fade-in">
+                  <div className="flex items-center justify-between text-xs font-black text-primary">
+                    <span>Novo Ajuste Manual de Pontuação (Auditoria ADM)</span>
+                    <button
+                      type="button"
+                      onClick={() => setIsAdjustmentOpen(false)}
+                      className="text-muted-foreground hover:text-foreground"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <div>
+                      <label className="text-[10px] font-bold text-muted-foreground">Tipo de Recurso:</label>
+                      <select
+                        value={adjType}
+                        onChange={(e) => setAdjType(e.target.value as any)}
+                        className="h-8 w-full rounded-lg border bg-background px-2 text-xs font-semibold"
+                      >
+                        <option value="xp">⚡ Experiência (XP)</option>
+                        <option value="career_points">🪙 Pontos de Carreira</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-muted-foreground">Quantidade (+ ou -):</label>
+                      <input
+                        type="number"
+                        value={adjAmount}
+                        onChange={(e) => setAdjAmount(Number(e.target.value))}
+                        className="h-8 w-full rounded-lg border bg-background px-2 text-xs font-mono font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-muted-foreground">Motivo / Justificativa:</label>
+                      <input
+                        type="text"
+                        value={adjReason}
+                        onChange={(e) => setAdjReason(e.target.value)}
+                        placeholder="Ex: Correção de bug em sala, bônus de gincana..."
+                        className="h-8 w-full rounded-lg border bg-background px-2 text-xs"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-end gap-2 pt-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setIsAdjustmentOpen(false)}
+                      className="h-7 text-xs"
+                    >
+                      Cancelar
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={adjSaving || !adjAmount || !adjReason.trim()}
+                      onClick={handleApplyAdminAdjustment}
+                      className="h-7 text-xs font-bold"
+                    >
+                      {adjSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Confirmar e Gravar no Extrato"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {/* Feed de Transações */}
+              <div className="max-h-60 overflow-y-auto space-y-1.5 pr-1">
+                {ledgerEntries.length === 0 ? (
+                  <div className="py-6 text-center text-xs text-muted-foreground">
+                    Nenhuma movimentação de pontuação registrada com os filtros selecionados.
+                  </div>
+                ) : (
+                  ledgerEntries.map((tx) => {
+                    const srcInfo = TRANSACTION_SOURCE_LABELS[tx.source] || {
+                      label: tx.source,
+                      badgeColor: "bg-secondary text-muted-foreground",
+                    };
+                    const typeInfo = TRANSACTION_TYPE_LABELS[tx.type] || {
+                      symbol: "•",
+                      unit: "",
+                    };
+                    const isPositive = tx.amount >= 0;
+                    const dateFormatted = new Date(tx.timestamp).toLocaleString("pt-BR", {
+                      day: "2-digit",
+                      month: "2-digit",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                      second: "2-digit",
+                    });
+
+                    return (
+                      <div
+                        key={tx.id}
+                        className="flex items-center justify-between gap-2 rounded-xl border bg-card/60 p-2 text-xs hover:bg-card transition-colors"
+                      >
+                        <div className="min-w-0 flex items-center gap-2">
+                          <span className="text-base shrink-0">{typeInfo.symbol}</span>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-bold text-foreground truncate">{tx.reason}</span>
+                              <span
+                                className={`rounded-md border px-1.5 py-0.2 text-[9px] font-black uppercase ${srcInfo.badgeColor}`}
+                              >
+                                {srcInfo.label}
+                              </span>
+                            </div>
+                            <span className="text-[10px] text-muted-foreground">{dateFormatted}</span>
+                          </div>
+                        </div>
+
+                        <div className="text-right shrink-0">
+                          <span
+                            className={`font-mono font-extrabold text-xs ${
+                              isPositive ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"
+                            }`}
+                          >
+                            {isPositive ? `+${tx.amount}` : tx.amount} {typeInfo.unit}
+                          </span>
+                          {tx.balanceAfter !== undefined && (
+                            <span className="block text-[9px] text-muted-foreground font-mono">
+                              Saldo: {tx.balanceAfter}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Painel de Edição Rápida para o Administrador */}
           {isEditing && (
