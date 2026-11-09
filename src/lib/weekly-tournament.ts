@@ -924,7 +924,10 @@ function loadTournamentStore(now = new Date()): WeeklyTournamentStore {
 
   // Mescla dinamicamente jogadores registrados no catálogo PlayFab unificado com pontuação ativa
   try {
-    const players = getAllRegisteredPlayers();
+    const reg = loadRegistry();
+    const players = Object.values(reg)
+      .map((a) => a?.profile)
+      .filter((p): p is PlayerProfile => Boolean(p));
     for (const p of players) {
       const pId = p.id || p.nickNormalized;
       if (!pId || pId.startsWith("admin-system")) continue;
