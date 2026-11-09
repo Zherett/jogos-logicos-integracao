@@ -244,6 +244,9 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
   const [readersModalMsg, setReadersModalMsg] = useState<SystemInboxMessage | null>(null);
   const [readersTab, setReadersTab] = useState<"read" | "unread">("read");
 
+  // Estado para o modal de pré-visualização fiel da mensagem enviada
+  const [previewMessage, setPreviewMessage] = useState<SystemInboxMessage | null>(null);
+
   // Estado para confirmação de cancelamento de envio
   const [cancelingMsg, setCancelingMsg] = useState<SystemInboxMessage | null>(null);
   const [isCanceling, setIsCanceling] = useState(false);
@@ -256,6 +259,127 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
       return historySortOrder === "desc" ? timeB - timeA : timeA - timeB;
     });
   }, [sentHistory, historySortOrder]);
+
+  // Renderiza corpo da mensagem no preview com suporte completo a tags [gif], [img], [nick], [gameX], [eventX]
+  const renderPreviewBody = (msg: SystemInboxMessage) => {
+    const targetNick =
+      msg.recipientId && msg.recipientId !== "ALL"
+        ? (studentsList.find(
+            (s) =>
+              s.id === msg.recipientId ||
+              s.nick?.toLowerCase() === msg.recipientId.toLowerCase() ||
+              s.nickNormalized === msg.recipientId
+          )?.nick || msg.recipientId)
+        : "Aluno";
+
+    const parts = msg.body.split(/(\[(?:gif|img)\d*\])/gi);
+
+    return (
+      <div className="whitespace-pre-wrap text-sm text-foreground leading-relaxed space-y-3">
+        {parts.map((part, index) => {
+          const match = /^\[(gif|img)(\d*)\]$/i.exec(part.trim());
+          if (match) {
+            const prefix = match[1].toLowerCase();
+            const tagNum = match[2];
+            const tagKey = tagNum ? `${prefix}${tagNum}`.toLowerCase() : prefix;
+            const url =
+              prefix === "gif"
+                ? msg.gifLinks?.[tagKey] ||
+                  (tagKey === "gif" ? msg.gifLinks?.["gif1"] || Object.values(msg.gifLinks || {})[0] : undefined)
+                : msg.imageLinks?.[tagKey] ||
+                  (tagKey === "img" ? msg.imageLinks?.["img1"] || Object.values(msg.imageLinks || {})[0] : undefined);
+
+            if (url) {
+              return (
+                <div
+                  key={index}
+                  className="my-3 overflow-hidden rounded-2xl border border-slate-200 dark:border-border bg-slate-100 dark:bg-muted/40 shadow-xs flex justify-center max-w-md mx-auto"
+                >
+                  <img
+                    src={url}
+                    alt={prefix === "gif" ? "Animação GIF" : "Imagem da Mensagem"}
+                    className="max-h-64 sm:max-h-80 w-auto rounded-xl object-contain"
+                    loading="lazy"
+                    onError={(e) => {
+                      (e.target as HTMLElement).style.display = "none";
+                    }}
+                  />
+                </div>
+              );
+            }
+            return (
+              <span key={index} className="text-xs text-muted-foreground italic">
+                [{prefix.toUpperCase()}: Mídia não encontrada]
+              </span>
+            );
+          }
+
+          // Renderiza tags inline no texto
+          const subParts = part.split(/(\[(?:nick|aluno|game\d*|event\d*)\])/gi);
+          return (
+            <span key={index}>
+              {subParts.map((sub, sIdx) => {
+                const lower = sub.toLowerCase();
+                if (lower === "[nick]" || lower === "[aluno]") {
+                  return (
+                    <strong
+                      key={sIdx}
+                      className="font-black text-primary bg-primary/10 px-1.5 py-0.5 rounded tracking-wide shadow-2xs inline-block"
+                    >
+                      @{targetNick}
+                    </strong>
+                  );
+                }
+                const gameMatch = /^\[(game\d*)\]$/i.exec(lower);
+                if (gameMatch) {
+                  const tagKey = gameMatch[1];
+                  const gId =
+                    msg.mentionedGames?.[tagKey] ||
+                    (tagKey === "game"
+                      ? msg.mentionedGameId || Object.values(msg.mentionedGames || {})[0]
+                      : msg.mentionedGameId || Object.values(msg.mentionedGames || {})[0]);
+                  const normalizedGId = gId ? (gId.toLowerCase().replace(/[_-]/g, "") as GameId) : undefined;
+                  const gameName = gId ? GAME_NAMES[gId as GameId] || (normalizedGId ? GAME_NAMES[normalizedGId] : undefined) || gId : "Jogo de Lógica";
+                  return (
+                    <strong
+                      key={sIdx}
+                      className="font-black text-amber-600 dark:text-amber-400 bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 rounded-lg tracking-wide shadow-2xs inline-block mx-0.5 align-middle"
+                    >
+                      🎮 {gameName}
+                    </strong>
+                  );
+                }
+                const eventMatch = /^\[(event\d*)\]$/i.exec(lower);
+                if (eventMatch) {
+                  const tagKey = eventMatch[1];
+                  const evData =
+                    msg.mentionedEvents?.[tagKey] ||
+                    (tagKey === "event"
+                      ? (msg.mentionedEventTitle
+                          ? { eventId: msg.mentionedEventId || "", eventTitle: msg.mentionedEventTitle }
+                          : Object.values(msg.mentionedEvents || {})[0])
+                      : (msg.mentionedEventTitle
+                          ? { eventId: msg.mentionedEventId || "", eventTitle: msg.mentionedEventTitle }
+                          : Object.values(msg.mentionedEvents || {})[0]));
+                  const eventTitle = evData?.eventTitle || "Evento Especial";
+                  return (
+                    <strong
+                      key={sIdx}
+                      className="inline-flex items-center gap-1 rounded-xl border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 text-xs font-black text-amber-600 dark:text-amber-400 tracking-wide shadow-2xs inline-block mx-0.5 align-middle"
+                    >
+                      <Sparkles className="h-3 w-3 shrink-0" />
+                      <span>{eventTitle}</span>
+                    </strong>
+                  );
+                }
+                return <span key={sIdx}>{sub}</span>;
+              })}
+            </span>
+          );
+        })}
+      </div>
+    );
+  };
 
   // Carrega lista de medalhas disponíveis de forma segura
   const availableMedals = useMemo(() => {
@@ -2007,10 +2131,14 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                       key={msg.id}
                       className="flex flex-col gap-2 rounded-2xl border bg-secondary/25 p-3.5 text-xs transition-colors hover:bg-secondary/40"
                     >
-                      <div className="flex items-start justify-between gap-2">
+                      <div
+                        className="flex items-start justify-between gap-2 cursor-pointer group"
+                        onClick={() => setPreviewMessage(msg)}
+                        title="Clique para visualizar o conteúdo completo desta mensagem"
+                      >
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
-                            <span className="font-display font-bold text-foreground truncate text-sm">
+                            <span className="font-display font-bold text-foreground group-hover:text-primary transition-colors truncate text-sm">
                               {msg.title}
                             </span>
                             {msg.reward && (
@@ -2050,7 +2178,17 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                           </span>
                         </div>
 
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Button
+                            type="button"
+                            variant="default"
+                            size="sm"
+                            onClick={() => setPreviewMessage(msg)}
+                            className="h-7 rounded-xl text-[11px] font-bold gap-1 cursor-pointer bg-primary hover:bg-primary/90 text-primary-foreground shadow-xs"
+                            title="Visualizar exatamente como esta mensagem aparece para o aluno"
+                          >
+                            <Eye className="h-3 w-3" /> Ver Mensagem
+                          </Button>
                           <Button
                             type="button"
                             variant="outline"
@@ -2975,18 +3113,30 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                               </div>
                             </div>
 
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              onClick={() => {
-                                setReadersModalMsg(currentCycleMsg);
-                                setReadersTab("read");
-                              }}
-                              className="h-7 rounded-xl text-[11px] font-bold gap-1 cursor-pointer shrink-0"
-                            >
-                              <Users className="h-3 w-3" /> Ver Leituras do Ciclo
-                            </Button>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              <Button
+                                type="button"
+                                variant="default"
+                                size="sm"
+                                onClick={() => setPreviewMessage(currentCycleMsg)}
+                                className="h-7 rounded-xl text-[11px] font-bold gap-1 cursor-pointer bg-primary hover:bg-primary/90 text-primary-foreground shadow-xs shrink-0"
+                                title="Visualizar a mensagem disparada no ciclo atual"
+                              >
+                                <Eye className="h-3 w-3" /> Ver Mensagem
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  setReadersModalMsg(currentCycleMsg);
+                                  setReadersTab("read");
+                                }}
+                                className="h-7 rounded-xl text-[11px] font-bold gap-1 cursor-pointer shrink-0"
+                              >
+                                <Users className="h-3 w-3" /> Ver Leituras do Ciclo
+                              </Button>
+                            </div>
                           </div>
                         ) : (
                           <p className="text-[10px] text-muted-foreground italic">
@@ -3254,6 +3404,194 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                       <Trash2 className="h-3.5 w-3.5" /> Confirmar e Cancelar Envio
                     </>
                   )}
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* MODAL DE PRÉ-VISUALIZAÇÃO DA MENSAGEM ENVIADA (VISÃO DO ALUNO) */}
+      <Dialog open={Boolean(previewMessage)} onOpenChange={() => setPreviewMessage(null)}>
+        <DialogContent className="w-[95vw] max-w-2xl max-h-[90vh] overflow-y-auto rounded-3xl p-5 sm:p-6">
+          {previewMessage && (
+            <div className="space-y-4">
+              <DialogHeader className="space-y-1.5 pb-3 border-b">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="grid h-8 w-8 place-items-center rounded-xl bg-primary/15 text-primary">
+                      <Eye className="h-4 w-4" />
+                    </span>
+                    <div>
+                      <DialogTitle className="font-display text-base sm:text-lg font-black text-foreground">
+                        Pré-visualização da Mensagem Enviada
+                      </DialogTitle>
+                      <p className="text-[11px] text-muted-foreground">
+                        Exatamente como esta mensagem é renderizada na caixa de correio do aluno
+                      </p>
+                    </div>
+                  </div>
+
+                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-2.5 py-0.5 text-[10px] font-black text-emerald-600 dark:text-emerald-400">
+                    <CheckCircle2 className="h-3 w-3" /> Transmitida com Sucesso
+                  </span>
+                </div>
+              </DialogHeader>
+
+              {/* Informações de Envio e Destinatário */}
+              <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-secondary/40 border px-3.5 py-2 text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-muted-foreground">Público:</span>
+                  <span className="font-extrabold text-foreground">
+                    {previewMessage.recipientId === "ALL"
+                      ? previewMessage.recipientFilter?.school
+                        ? `Escola: ${previewMessage.recipientFilter.school}`
+                        : previewMessage.recipientFilter?.stage
+                          ? `Etapa: ${previewMessage.recipientFilter.stage}`
+                          : "Todos os Alunos da Rede"
+                      : `Aluno: ${previewMessage.recipientId}`}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 text-muted-foreground font-mono text-[11px]">
+                  <span>Enviada em {new Date(previewMessage.createdAt).toLocaleString("pt-BR")}</span>
+                  <span>•</span>
+                  <span>ID: #{previewMessage.id.split("_").pop() || previewMessage.id.slice(-6)}</span>
+                </div>
+              </div>
+
+              {/* SIMULAÇÃO EXATA DO CORREIO DO ALUNO */}
+              <div className="space-y-4 rounded-3xl border border-slate-200 dark:border-border/80 bg-slate-50/70 dark:bg-card/60 p-4 sm:p-5 shadow-inner">
+                {/* Cabeçalho da Mensagem */}
+                <div className="rounded-2xl border border-slate-200 dark:border-border bg-white dark:bg-secondary/40 p-4 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 border border-primary/30 px-2.5 py-0.5 text-xs font-extrabold text-primary">
+                      {previewMessage.senderName || "Administração SEMED"}
+                    </span>
+                    <span className="text-xs text-muted-foreground font-medium flex items-center gap-1">
+                      <Clock className="h-3.5 w-3.5" />
+                      {new Date(previewMessage.createdAt).toLocaleDateString("pt-BR", {
+                        day: "2-digit",
+                        month: "long",
+                        year: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </span>
+                  </div>
+
+                  <h2 className="font-display text-xl sm:text-2xl font-black text-slate-900 dark:text-foreground">
+                    {previewMessage.title}
+                  </h2>
+                </div>
+
+                {/* Corpo do Texto, Mídias e Tags */}
+                <div className="rounded-2xl border border-slate-200 dark:border-border bg-white dark:bg-card p-5 shadow-xs text-slate-800 dark:text-foreground">
+                  {renderPreviewBody(previewMessage)}
+                </div>
+
+                {/* Recompensa Anexa (se houver) */}
+                {previewMessage.reward && (
+                  <div className="rounded-2xl border-2 border-amber-500/40 bg-gradient-to-br from-amber-500/15 via-amber-500/5 to-transparent p-4 sm:p-5 space-y-3.5 shadow-md">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="grid h-10 w-10 place-items-center rounded-2xl bg-amber-500/20 text-xl">
+                          🎁
+                        </span>
+                        <div>
+                          <h3 className="font-display text-sm sm:text-base font-black text-foreground">
+                            {previewMessage.reward.isSecret
+                              ? "Presente Misterioso do ADM"
+                              : "Recompensa Especial Anexa"}
+                          </h3>
+                          <p className="text-xs text-muted-foreground">
+                            {previewMessage.reward.isSecret
+                              ? "O aluno verá o efeito de revelação misteriosa ao abrir"
+                              : "Disponível para coletar na conta do aluno"}
+                          </p>
+                        </div>
+                      </div>
+
+                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 border border-amber-500/30 px-2.5 py-0.5 text-[10px] font-black text-amber-600 dark:text-amber-400">
+                        Prêmio Atribuído
+                      </span>
+                    </div>
+
+                    <div className="rounded-xl border bg-background/90 p-3.5 flex flex-col sm:flex-row items-center justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        {previewMessage.reward.type === "points" && (
+                          <div className="grid h-11 w-11 place-items-center rounded-xl bg-amber-500/20 text-2xl font-black shrink-0">
+                            🪙
+                          </div>
+                        )}
+                        {previewMessage.reward.type === "medal" && (
+                          <div className="grid h-11 w-11 place-items-center rounded-xl bg-primary/20 text-2xl shrink-0">
+                            🏅
+                          </div>
+                        )}
+
+                        <div>
+                          <div className="font-display text-sm sm:text-base font-black text-foreground">
+                            {previewMessage.reward.type === "points" && (
+                              <span>+{previewMessage.reward.pointsAmount} Pontos Conquistados</span>
+                            )}
+                            {previewMessage.reward.type === "medal" && (() => {
+                              const itemData = previewMessage.reward?.itemData as any;
+                              const tourMedal = itemData?.tournamentMedal;
+                              if (tourMedal?.label) {
+                                return <span>{tourMedal.label}</span>;
+                              }
+                              const def = availableMedals.find((m) => m.id === previewMessage.reward?.medalId);
+                              return <span>Medalha: {def ? def.title : previewMessage.reward.medalId}</span>;
+                            })()}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {previewMessage.reward.type === "points"
+                              ? "Pontos creditados na carteira e Hall da Fama"
+                              : (previewMessage.reward?.itemData as any)?.tournamentMedal
+                                ? `+${(previewMessage.reward?.itemData as any).tournamentMedal.bonusXpAwarded ?? 0} XP Extra e Medalha de Pódio Oficial`
+                                : "Adicionada à galeria de medalhas do aluno"}
+                          </div>
+                        </div>
+                      </div>
+
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled
+                        className="w-full sm:w-auto rounded-xl font-display font-black bg-amber-500/80 text-zinc-950 opacity-90 cursor-default shadow-xs"
+                      >
+                        <Gift className="h-4 w-4 mr-1.5" /> Botão do Aluno: Resgatar Recompensa
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Rodapé de Ações do Administrador */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const target = previewMessage;
+                    setPreviewMessage(null);
+                    setReadersModalMsg(target);
+                    setReadersTab("read");
+                  }}
+                  className="rounded-xl text-xs font-bold gap-1.5 cursor-pointer"
+                >
+                  <Users className="h-3.5 w-3.5 text-primary" /> Ver Quem Já Abriu / Não Abriu
+                </Button>
+
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setPreviewMessage(null)}
+                  className="rounded-xl text-xs font-bold cursor-pointer"
+                >
+                  Fechar Visualização
                 </Button>
               </div>
             </div>
