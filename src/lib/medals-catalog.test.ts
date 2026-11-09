@@ -1687,4 +1687,64 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
     });
     assert.ok(awardedPlays.some((m) => m.id === "secret_50_matches_10_games"), "Deve conceder Veterano Universal com 50 partidas em 10 jogos");
   });
+
+  it("sincroniza e reconcilia medalhas Ouro+ de alunos no correio do ADM e exclui contas de administradores", async () => {
+    const { syncAdminMedalNotificationsFromPlayFab, saveRegistry } = await import("./playfab.ts");
+    const { loadAdminConfig, saveAdminConfig } = await import("./game-codes.ts");
+
+    // Prepara cenário: uma conta de ADM (JOSINEY) e uma conta de aluno real (MARIA)
+    const mockRegistry: any = {
+      josiney: {
+        profile: {
+          id: "adm_josiney",
+          nick: "JOSINEY",
+          nickNormalized: "josiney",
+          full_name: "JOSINEY - ADMINISTRAÇÃO SEMED",
+          school: "ADMINISTRAÇÃO SEMED",
+          isAdmin: true,
+          unlockedMedals: [
+            { medalId: "game_minado_flawless", unlockedAt: "2026-11-09T08:30:23Z" },
+          ],
+        },
+        stats: [],
+        unlocked: [],
+      },
+      maria_silva: {
+        profile: {
+          id: "student_maria",
+          nick: "MariaS",
+          nickNormalized: "marias",
+          full_name: "Maria Silva",
+          school: "Ursulina Souza",
+          isAdmin: false,
+          matchesPlayed: 1,
+          unlockedMedals: [
+            { medalId: "game_minado_flawless", unlockedAt: "2026-11-09T09:15:00Z" }, // Raridade Ouro
+            { medalId: "first_game_played", unlockedAt: "2026-11-09T09:00:00Z" }, // Bronze (não deve ir pra caixa ouro+)
+          ],
+        },
+        stats: [
+          { game_id: "minado", mode: "padrao", plays: 1, wins: 1, flawless_wins: 1, best_score: 50, best_level: 1 },
+        ],
+        unlocked: [],
+      },
+    };
+
+    saveRegistry(mockRegistry);
+
+    // Limpa configurações de notificações anteriores
+    const cfg = loadAdminConfig();
+    cfg.adminMedalNotifications = [];
+    saveAdminConfig(cfg);
+
+    const notifs = await syncAdminMedalNotificationsFromPlayFab();
+
+    // Deve listar a medalha de Maria Silva
+    assert.ok(notifs.some((n) => n.studentNick === "MariaS" && n.medalRarity === "ouro"));
+    // NÃO deve listar nenhuma notificação pertencente ao ADM Josiney
+    assert.ok(!notifs.some((n) => n.studentNick === "JOSINEY"));
+    assert.ok(!notifs.some((n) => (n.studentSchool || "").includes("ADMINISTRAÇÃO")));
+    // Não deve listar medalha de bronze
+    assert.ok(!notifs.some((n) => n.medalId === "first_game_played"));
+  });
 });

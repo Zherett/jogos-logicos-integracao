@@ -3788,65 +3788,139 @@ export async function pushAdminMedalNotificationToPlayFab(
 }
 
 /**
- * Consulta a nuvem PlayFab para baixar todas as notificações de medalhas Ouro+ conquistadas pelos alunos
+ * Consulta a nuvem PlayFab e o catálogo oficial de alunos para baixar e reconciliar
+ * todas as notificações de medalhas Ouro, Platina, Diamante, Herói e Secretas conquistadas pelos alunos.
  */
 export async function syncAdminMedalNotificationsFromPlayFab(
   sessionTicket?: string
 ): Promise<AdminMedalNotification[]> {
   const cfg = loadAdminConfig();
   const localNotifs = cfg.adminMedalNotifications ?? [];
-  if (!isPlayFabConfigured()) return localNotifs;
 
-  try {
-    const ticket = sessionTicket ?? (await getAdminPlayFabTicket()) ?? loadStoredSession()?.sessionTicket;
-    if (!ticket) return localNotifs;
-
-    const res = await callPlayFabClient<{ Data?: Record<string, { Value: string }> }>(
-      "GetSharedGroupData",
-      { SharedGroupId: ADMIN_NOTIFICATIONS_SHARED_GROUP_ID },
-      ticket,
-    );
-
-    if (res.data?.Data) {
-      const remoteList: AdminMedalNotification[] = [];
-      for (const [k, v] of Object.entries(res.data.Data)) {
-        if (!k.startsWith("notif_") || !v?.Value) continue;
-        try {
-          const parsed = JSON.parse(v.Value) as AdminMedalNotification;
-          if (parsed.id && parsed.medalTitle) {
-            remoteList.push(parsed);
-          }
-        } catch {
-          // ignore
-        }
-      }
-
-      const map = new Map<string, AdminMedalNotification>();
-      for (const n of localNotifs) {
-        map.set(n.id, n);
-      }
-      for (const n of remoteList) {
-        if (!map.has(n.id)) {
-          map.set(n.id, n);
-        } else {
-          const existing = map.get(n.id)!;
-          if (n.read) existing.read = true;
-        }
-      }
-
-      const merged = Array.from(map.values()).sort(
-        (a, b) => Date.parse(b.unlockedAt) - Date.parse(a.unlockedAt)
-      ).slice(0, 200);
-
-      cfg.adminMedalNotifications = merged;
-      saveAdminConfig(cfg);
-      return merged;
+  const map = new Map<string, AdminMedalNotification>();
+  for (const n of localNotifs) {
+    if (n && n.id) {
+      map.set(n.id, n);
     }
-  } catch (err) {
-    console.warn("Falha ao sincronizar notificações de medalhas do PlayFab:", err);
   }
 
-  return localNotifs;
+  // 1. Tenta baixar notificações salvas na nuvem PlayFab (SharedGroup)
+  if (isPlayFabConfigured()) {
+    try {
+      const ticket = sessionTicket ?? (await getAdminPlayFabTicket()) ?? loadStoredSession()?.sessionTicket;
+      if (ticket) {
+        const res = await callPlayFabClient<{ Data?: Record<string, { Value: string }> }>(
+          "GetSharedGroupData",
+          { SharedGroupId: ADMIN_NOTIFICATIONS_SHARED_GROUP_ID },
+          ticket,
+        );
+
+        if (res.data?.Data) {
+          for (const [k, v] of Object.entries(res.data.Data)) {
+            if (!k.startsWith("notif_") || !v?.Value) continue;
+            try {
+              const parsed = JSON.parse(v.Value) as AdminMedalNotification;
+              if (parsed.id && parsed.medalTitle) {
+                if (!map.has(parsed.id)) {
+                  map.set(parsed.id, parsed);
+                } else {
+                  const existing = map.get(parsed.id)!;
+                  if (parsed.read) existing.read = true;
+                }
+              }
+            } catch {
+              // ignore
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("Falha ao sincronizar notificações de medalhas do PlayFab:", err);
+    }
+  }
+
+  // 2. Reconciliação robusta com o catálogo de alunos (SEMED_STUDENT_ROSTER_V1):
+  // Garante que todas as medalhas Ouro, Platina, Diamante, Herói ou Secretas conquistadas
+  // por alunos reais sejam listadas na Caixa de Entrada do ADM, mesmo se o aluno tiver jogado offline
+  // ou sem permissão de escrita direta no SharedGroup.
+  try {
+    const allPlayers = getAllRegisteredPlayers(false);
+    const catalogMedals = getAllAvailableMedals(cfg.customMedals);
+    const goldPlusCatalog = new Map<string, MedalDefinition>();
+    for (const m of catalogMedals) {
+      if (
+        m.rarity === "ouro" ||
+        m.rarity === "platina" ||
+        m.rarity === "diamante" ||
+        m.rarity === "heroi" ||
+        m.rarity === "secreta" ||
+        (m as any).category === "secreta"
+      ) {
+        goldPlusCatalog.set(m.id, m);
+      }
+    }
+
+    for (const player of allPlayers) {
+      if (
+        isSpecialAdminAccount(player) ||
+        player.isAdmin ||
+        player.nick?.toUpperCase() === "JOSINEY" ||
+        player.school?.toUpperCase().includes("ADMINISTRAÇÃO")
+      ) {
+        continue;
+      }
+      if (!Array.isArray(player.unlockedMedals)) continue;
+
+      for (const um of player.unlockedMedals) {
+        if (!um?.medalId) continue;
+        const medalDef = goldPlusCatalog.get(um.medalId);
+        if (!medalDef) continue;
+
+        const notifId = `adm_notif_${nickSlug(player.nick || player.id)}_${medalDef.id}`;
+        const existing = map.get(notifId);
+
+        if (!existing) {
+          map.set(notifId, {
+            id: notifId,
+            studentId: player.id,
+            studentNick: player.nick,
+            studentFullName: player.full_name || player.nick,
+            studentSchool: player.school,
+            medalId: medalDef.id,
+            medalTitle: medalDef.title,
+            medalRarity: medalDef.rarity,
+            medalIcon: medalDef.iconName,
+            unlockedAt: um.unlockedAt || new Date().toISOString(),
+            read: false,
+          });
+        }
+      }
+    }
+  } catch (rosterErr) {
+    console.warn("Falha ao reconciliar medalhas de alunos para a caixa do ADM:", rosterErr);
+  }
+
+  // 3. Filtra rigorosamente contas de ADM para manter apenas alunos reais
+  const filtered = Array.from(map.values()).filter((n) => {
+    const nickUpper = (n.studentNick || "").toUpperCase();
+    const schoolUpper = (n.studentSchool || "").toUpperCase();
+    const fullUpper = (n.studentFullName || "").toUpperCase();
+    return (
+      nickUpper !== "JOSINEY" &&
+      nickUpper !== "QUEMUEL" &&
+      nickUpper !== "ADMIN" &&
+      !schoolUpper.includes("ADMINISTRAÇÃO") &&
+      !fullUpper.includes("ADMINISTRAÇÃO")
+    );
+  });
+
+  const merged = filtered.sort(
+    (a, b) => Date.parse(b.unlockedAt) - Date.parse(a.unlockedAt)
+  ).slice(0, 200);
+
+  cfg.adminMedalNotifications = merged;
+  saveAdminConfig(cfg);
+  return merged;
 }
 
 export interface InboxReadReceipt {
@@ -4744,53 +4818,68 @@ export async function playfabRecordMatch(args: {
     invalidatePioneersCache();
 
     // Send notifications to Admin Mailbox (apenas a partir do nível Ouro: ouro, platina, diamante, herói, secreta)
-    const adminNotifs = cfg.adminMedalNotifications ?? [];
-    const goldPlusMedals = newlyAwarded.filter(
-      (m) =>
-        m.rarity === "ouro" ||
-        m.rarity === "platina" ||
-        m.rarity === "diamante" ||
-        m.rarity === "heroi" ||
-        m.rarity === "secreta"
-    );
+    // Destinado estritamente a alunos reais - nunca registrar partidas de ADM
+    const isProfileAdmin =
+      Boolean(acc.profile.isAdmin) ||
+      isSpecialAdminAccount(acc.profile) ||
+      acc.profile.nick?.toUpperCase() === "JOSINEY" ||
+      acc.profile.school?.toUpperCase().includes("ADMINISTRAÇÃO");
 
-    for (const m of goldPlusMedals) {
-      const notifItem: AdminMedalNotification = {
-        id: `adm_notif_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-        studentId: acc.profile.id,
-        studentNick: acc.profile.nick,
-        studentFullName: acc.profile.full_name,
-        studentSchool: acc.profile.school,
-        medalId: m.id,
-        medalTitle: m.title,
-        medalRarity: m.rarity,
-        medalIcon: m.iconName,
-        unlockedAt: nowIso,
-        read: false,
-      };
-      adminNotifs.unshift(notifItem);
+    if (!isProfileAdmin) {
+      const adminNotifs = cfg.adminMedalNotifications ?? [];
+      const goldPlusMedals = newlyAwarded.filter(
+        (m) =>
+          m.rarity === "ouro" ||
+          m.rarity === "platina" ||
+          m.rarity === "diamante" ||
+          m.rarity === "heroi" ||
+          m.rarity === "secreta" ||
+          (m as any).category === "secreta"
+      );
 
-      createInboxMessage({
-        recipientId: "admin",
-        sender: "sistema",
-        category: "medalha_ouro",
-        title: `Nova Medalha ${m.rarity.toUpperCase()}: ${m.title}`,
-        body: `O aluno ${acc.profile.full_name} (${acc.profile.nick}) da ${acc.profile.school} conquistou a medalha ${m.title}!`,
-        metadata: {
+      for (const m of goldPlusMedals) {
+        const notifItem: AdminMedalNotification = {
+          id: `adm_notif_${nickSlug(acc.profile.nick || acc.profile.id)}_${m.id}`,
           studentId: acc.profile.id,
           studentNick: acc.profile.nick,
-          studentFullName: acc.profile.full_name,
+          studentFullName: acc.profile.full_name || acc.profile.nick,
           studentSchool: acc.profile.school,
           medalId: m.id,
           medalTitle: m.title,
           medalRarity: m.rarity,
-        },
-      });
+          medalIcon: m.iconName,
+          unlockedAt: nowIso,
+          read: false,
+        };
 
-      void pushAdminMedalNotificationToPlayFab(notifItem);
+        const existingIdx = adminNotifs.findIndex((x) => x.id === notifItem.id);
+        if (existingIdx >= 0) {
+          adminNotifs.splice(existingIdx, 1);
+        }
+        adminNotifs.unshift(notifItem);
+
+        createInboxMessage({
+          recipientId: "admin",
+          sender: "sistema",
+          category: "medalha_ouro",
+          title: `Nova Medalha ${m.rarity.toUpperCase()}: ${m.title}`,
+          body: `O aluno ${acc.profile.full_name} (${acc.profile.nick}) da ${acc.profile.school} conquistou a medalha ${m.title}!`,
+          metadata: {
+            studentId: acc.profile.id,
+            studentNick: acc.profile.nick,
+            studentFullName: acc.profile.full_name,
+            studentSchool: acc.profile.school,
+            medalId: m.id,
+            medalTitle: m.title,
+            medalRarity: m.rarity,
+          },
+        });
+
+        void pushAdminMedalNotificationToPlayFab(notifItem);
+      }
+      cfg.adminMedalNotifications = adminNotifs.slice(0, 200); // retain last 200 mailbox entries
+      saveAdminConfig(cfg);
     }
-    cfg.adminMedalNotifications = adminNotifs.slice(0, 200); // retain last 200 mailbox entries
-    saveAdminConfig(cfg);
 
     // Dispatch custom browser event for celebration popup
     if (typeof window !== "undefined") {
@@ -5629,20 +5718,27 @@ export async function grantPlayerMedalManually(
 
   invalidatePioneersCache();
 
+  const isProfileAdmin =
+    Boolean(acc.profile.isAdmin) ||
+    isSpecialAdminAccount(acc.profile) ||
+    acc.profile.nick?.toUpperCase() === "JOSINEY" ||
+    acc.profile.school?.toUpperCase().includes("ADMINISTRAÇÃO");
+
   const cfg = loadAdminConfig();
   if (
-    medal.rarity === "ouro" ||
-    medal.rarity === "platina" ||
-    medal.rarity === "diamante" ||
-    medal.rarity === "heroi" ||
-    medal.rarity === "secreta"
+    !isProfileAdmin &&
+    (medal.rarity === "ouro" ||
+      medal.rarity === "platina" ||
+      medal.rarity === "diamante" ||
+      medal.rarity === "heroi" ||
+      medal.rarity === "secreta")
   ) {
     const notifs = cfg.adminMedalNotifications ?? [];
     const notifItem: AdminMedalNotification = {
-      id: `adm_notif_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      id: `adm_notif_${nickSlug(acc.profile.nick || acc.profile.id)}_${medal.id}`,
       studentId: acc.profile.id,
       studentNick: acc.profile.nick,
-      studentFullName: acc.profile.full_name,
+      studentFullName: acc.profile.full_name || acc.profile.nick,
       studentSchool: acc.profile.school,
       medalId: medal.id,
       medalTitle: medal.title,
@@ -5651,6 +5747,10 @@ export async function grantPlayerMedalManually(
       unlockedAt: nowIso,
       read: true,
     };
+    const existingIdx = notifs.findIndex((x) => x.id === notifItem.id);
+    if (existingIdx >= 0) {
+      notifs.splice(existingIdx, 1);
+    }
     notifs.unshift(notifItem);
     cfg.adminMedalNotifications = notifs.slice(0, 200);
     saveAdminConfig(cfg);

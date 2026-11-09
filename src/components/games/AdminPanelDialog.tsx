@@ -227,6 +227,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
       });
       setAuditResult(res);
       await auth.refresh();
+      const refreshedNotifs = await syncAdminMedalNotificationsFromPlayFab();
+      setDraft((prev) => ({ ...prev, adminMedalNotifications: refreshedNotifs }));
       flashSaved(
         `Varredura concluída: ${res.medalsAwardedCount} medalha(s) retroatribuída(s) para ${res.updatedStudentsCount} aluno(s).`,
       );
@@ -496,11 +498,15 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
     setSyncingRoster(true);
     void syncPresenceFromPlayFab(true);
     void syncStudentRosterFromPlayFab()
-      .then(() => refreshRoster())
+      .then(async () => {
+        refreshRoster();
+        const notifs = await syncAdminMedalNotificationsFromPlayFab();
+        setDraft((prev) => ({ ...prev, adminMedalNotifications: notifs }));
+      })
+      .catch((err) => {
+        console.warn("Aviso ao sincronizar alunos e medalhas no painel ADM:", err);
+      })
       .finally(() => setSyncingRoster(false));
-    void syncAdminMedalNotificationsFromPlayFab().then((notifs) => {
-      setDraft((prev) => ({ ...prev, adminMedalNotifications: notifs }));
-    });
 
     void syncX1WithPlayFabCloud().then(() => {
       setX1History(loadX1MatchHistory());

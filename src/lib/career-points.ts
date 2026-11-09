@@ -370,7 +370,13 @@ export function sanitizeInflatedCareerPoints(profile: PlayerProfile): {
         mId === "tournament_top_2_silver" ||
         mId === "tournament_top_3_bronze" ||
         mId.startsWith("secret_top5_") ||
-        mId.startsWith("secret_top1_")
+        mId.startsWith("secret_top1_") ||
+        mId.startsWith("beta_tester_") ||
+        mId.startsWith("meta_collector_") ||
+        mId === "explorer_all_games" ||
+        (mId === "m_rpg_ametista" && profile.nickNormalized !== "zheret") ||
+        (mId === "m_rpg_carmesim" && profile.nickNormalized !== "zheret") ||
+        (mId.startsWith("streak_") && (profile.streakDays ?? 0) < 7)
       ) {
         return false;
       }
@@ -386,6 +392,13 @@ export function sanitizeInflatedCareerPoints(profile: PlayerProfile): {
       }
       return true;
     });
+
+    // Limita o count cumulativo ao número real de partidas jogadas
+    for (const m of profile.unlockedMedals) {
+      if (m && m.count && m.count > Math.max(1, totalMatches)) {
+        m.count = Math.max(1, totalMatches);
+      }
+    }
   }
 
   // Calcula os pontos legítimos comprovados pelo histórico real do aluno
@@ -448,19 +461,34 @@ export function sanitizeInflatedCareerPoints(profile: PlayerProfile): {
     rankedWinPoints +
     claimedInboxPoints;
 
+  // Teto proporcional inviolável de salvaguarda física baseado na atividade real do estudante
+  const maxPhysicalCeiling = Math.max(
+    150,
+    totalMatches * 60 + (curLevel - 1) * 60 + verifiedLoginDays * 35 + claimedInboxPoints + 120
+  );
+
+  const finalLegitimatePoints = Math.min(legitimatePoints, maxPhysicalCeiling);
+
   // Margem de segurança para bônus de eventos (2x) ou recordes de etapa (+50)
-  const maxReasonableThreshold = Math.max(
-    legitimatePoints + 150,
-    Math.round(legitimatePoints * 1.5),
+  const maxReasonableThreshold = Math.min(
+    maxPhysicalCeiling,
+    Math.max(
+      finalLegitimatePoints + 150,
+      Math.round(finalLegitimatePoints * 1.5),
+    )
   );
 
   const currentCareer = profile.careerPoints ?? 0;
   const currentBalance = profile.pointsBalance ?? 0;
 
-  if (currentCareer > maxReasonableThreshold || currentBalance > maxReasonableThreshold) {
+  if (
+    currentCareer > maxReasonableThreshold ||
+    currentBalance > maxReasonableThreshold ||
+    currentCareer > maxPhysicalCeiling
+  ) {
     const coinsSpent = Math.max(0, profile.coins ?? 0);
-    profile.careerPoints = legitimatePoints;
-    profile.pointsBalance = Math.max(0, legitimatePoints - coinsSpent);
+    profile.careerPoints = finalLegitimatePoints;
+    profile.pointsBalance = Math.max(0, finalLegitimatePoints - coinsSpent);
     return { profile, wasSanitized: true };
   }
 

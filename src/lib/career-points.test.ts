@@ -179,4 +179,35 @@ describe("Sistema de Pontuação e Moeda de Carreira (career-points)", () => {
     assert.equal(inflatedOfflineStudent.careerPoints, 25); // 1 dia de login inicial (25 pts)
     assert.equal(inflatedOfflineStudent.pointsBalance, 25);
   });
+
+  it("sanitiza aluno nível 2 com apenas 2 partidas e 1485 pontos (caso banana123)", () => {
+    const banana123 = createMockProfile({
+      nick: "banana123",
+      nickNormalized: "banana123",
+      full_name: "VITOR GABRIEL",
+      school: "Ursulina Souza",
+      level: 2,
+      wins: 3,
+      matchesPlayed: 2,
+      totalMatches: 2,
+      stats: [{ game_id: "logica", plays: 2, wins: 2, best_level: 1, best_score: 50 }],
+      unlockedMedals: [
+        { medalId: "beta_tester_ouro", count: 5 } as any,
+        { medalId: "m_rpg_ametista", count: 1 } as any,
+        { medalId: "streak_7_days", count: 1 } as any,
+      ],
+      careerPoints: 1485,
+      pointsBalance: 1485,
+    });
+
+    const { wasSanitized } = sanitizeInflatedCareerPoints(banana123);
+    assert.equal(wasSanitized, true);
+    // Pontuação deve ser reduzida para o teto físico legítimo (< 250 pts)
+    assert.ok(banana123.careerPoints! <= 250);
+    assert.ok(banana123.pointsBalance! <= 250);
+    // Medalhas incompatíveis com 2 partidas devem ser removidas
+    assert.ok(!banana123.unlockedMedals?.some((m) => m.medalId === "beta_tester_ouro"));
+    assert.ok(!banana123.unlockedMedals?.some((m) => m.medalId === "m_rpg_ametista"));
+    assert.ok(!banana123.unlockedMedals?.some((m) => m.medalId === "streak_7_days"));
+  });
 });
