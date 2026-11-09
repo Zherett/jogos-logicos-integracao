@@ -146,7 +146,8 @@ export function isValidSchool(school: string): school is SchoolName {
 }
 
 /** Turns a nick into an internal slug (3-20 alphanumeric/underscore chars), preserving underscores. */
-export function nickSlug(nick: string): string {
+export function nickSlug(nick?: string | null): string {
+  if (!nick || typeof nick !== "string") return "";
   return nick
     .trim()
     .toLowerCase()

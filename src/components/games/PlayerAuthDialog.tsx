@@ -5,11 +5,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { usePlayerAuth } from "@/lib/player-auth";
-import { isPlayFabConfigured, getPlayFabTitleId } from "@/lib/playfab";
+import { isPlayFabConfigured, getPlayFabTitleId, isAdminUnlockedSession } from "@/lib/playfab";
 import {
   ageFrom,
   formatFullNameUpper,
   getAvailableSchoolsForAge,
+  isAdminOrTestAccount,
   is5thGradeSchool,
   isEtapa3OrOlder,
   isOfficialSemedSchool,
@@ -27,6 +28,7 @@ interface Props {
 
 export function PlayerAuthDialog({ open, onOpenChange }: Props) {
   const auth = usePlayerAuth();
+  const isPrivileged = isAdminUnlockedSession() || isAdminOrTestAccount(auth.profile);
   const [tab, setTab] = useState<"entrar" | "criar">("entrar");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -585,7 +587,9 @@ export function PlayerAuthDialog({ open, onOpenChange }: Props) {
             }`}
           />
           {isPlayFabConfigured()
-            ? `Nuvem PlayFab Conectada (${getPlayFabTitleId()})`
+            ? isPrivileged
+              ? `Nuvem PlayFab Conectada (${getPlayFabTitleId()})`
+              : "Sincronização em Nuvem Ativa"
             : "Modo Local / Offline-First"}
         </div>
       </DialogContent>

@@ -1468,13 +1468,18 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
     onConfigSaved?.();
   }
 
-  const players = open && auth.isAdmin ? getAllRegisteredPlayers() : [];
-  const pendingTurmaCount = turmaRequests.filter((r) => r.status === "pendente").length;
-  const activeEventsCount =
-    specialEvents.filter((e) => isEventActive(e)).length +
-    recurringEvents.filter((e) => isRecurringEventActive(e)).length;
-  const unreadNotifsCount = draft.adminMedalNotifications?.filter((n) => !n.read).length ?? 0;
-  const unreadX1Count = x1History.filter((h) => !h.read).length;
+  const players = useMemo(() => {
+    return open && auth.isAdmin && tab === "sistema" ? getAllRegisteredPlayers() : [];
+  }, [open, auth.isAdmin, tab]);
+  const pendingTurmaCount = useMemo(() => turmaRequests.filter((r) => r.status === "pendente").length, [turmaRequests]);
+  const activeEventsCount = useMemo(
+    () =>
+      specialEvents.filter((e) => isEventActive(e)).length +
+      recurringEvents.filter((e) => isRecurringEventActive(e)).length,
+    [specialEvents, recurringEvents],
+  );
+  const unreadNotifsCount = useMemo(() => draft.adminMedalNotifications?.filter((n) => !n.read).length ?? 0, [draft.adminMedalNotifications]);
+  const unreadX1Count = useMemo(() => x1History.filter((h) => !h.read).length, [x1History]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1652,8 +1657,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved }: Props) {
               </div>
             </div>
 
-            {/* Stable Internal Scrollable Body */}
-            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+            {/* Stable Internal Scrollable Body with CSS containment for silky 60fps scrolling */}
+            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4 overscroll-contain [contain:paint]">
               {savedMsg && (
                 <div className="animate-pop-in rounded-2xl bg-success/15 px-4 py-2.5 text-center text-sm font-bold text-success">
                   {savedMsg}

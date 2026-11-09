@@ -151,7 +151,8 @@ export function getAllScoreLedger(filter?: ScoreLedgerFilter): ScoreLedgerEntry[
   const searchLower = filter?.search?.toLowerCase().trim();
 
   let results = all.filter((entry) => {
-    if (cleanPlayerId && nickSlug(entry.playerId) !== cleanPlayerId) {
+    if (!entry) return false;
+    if (cleanPlayerId && nickSlug(entry.playerId || "") !== cleanPlayerId) {
       return false;
     }
     if (filter?.type && entry.type !== filter.type) {
@@ -163,17 +164,17 @@ export function getAllScoreLedger(filter?: ScoreLedgerFilter): ScoreLedgerEntry[
     if (filter?.gameId && entry.metadata?.gameId !== filter.gameId) {
       return false;
     }
-    if (filter?.startDate && entry.timestamp < filter.startDate) {
+    if (filter?.startDate && (entry.timestamp || "") < filter.startDate) {
       return false;
     }
-    if (filter?.endDate && entry.timestamp > filter.endDate) {
+    if (filter?.endDate && (entry.timestamp || "") > filter.endDate) {
       return false;
     }
     if (searchLower) {
-      const matchNick = entry.playerNick.toLowerCase().includes(searchLower);
-      const matchReason = entry.reason.toLowerCase().includes(searchLower);
-      const matchMedal = entry.metadata?.medalTitle?.toLowerCase().includes(searchLower);
-      const matchGame = entry.metadata?.gameId?.toLowerCase().includes(searchLower);
+      const matchNick = (entry.playerNick || "").toLowerCase().includes(searchLower);
+      const matchReason = (entry.reason || "").toLowerCase().includes(searchLower);
+      const matchMedal = (entry.metadata?.medalTitle || "").toLowerCase().includes(searchLower);
+      const matchGame = (entry.metadata?.gameId || "").toLowerCase().includes(searchLower);
       if (!matchNick && !matchReason && !matchMedal && !matchGame) {
         return false;
       }
@@ -206,7 +207,7 @@ export function calculateStudentScoreBreakdown(playerId: string): {
   sourcesBreakdown: Record<ScoreTransactionSource, { xp: number; points: number; count: number }>;
 } {
   const cleanId = nickSlug(playerId);
-  const entries = loadAllLedgerEntries().filter((e) => nickSlug(e.playerId) === cleanId);
+  const entries = loadAllLedgerEntries().filter((e) => e && nickSlug(e.playerId || "") === cleanId);
 
   let totalXpFromMatches = 0;
   let totalXpFromMedals = 0;

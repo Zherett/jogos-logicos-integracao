@@ -260,6 +260,15 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
     });
   }, [sentHistory, historySortOrder]);
 
+  // Estatísticas de leitura cacheadas (evita recalcular leituras e I/O de disco a cada letra digitada)
+  const sentHistoryStats = useMemo(() => {
+    const map = new Map<string, ReturnType<typeof getMessageReaders>>();
+    for (const msg of sortedSentHistory) {
+      map.set(msg.id, getMessageReaders(msg, studentsList));
+    }
+    return map;
+  }, [sortedSentHistory, studentsList, readersRefreshCount]);
+
   // Renderiza corpo da mensagem no preview com suporte completo a tags [gif], [img], [nick], [gameX], [eventX]
   const renderPreviewBody = (msg: SystemInboxMessage) => {
     const targetNick =
@@ -2132,7 +2141,12 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                     formattedDate = "Recente";
                   }
 
-                  const stats = getMessageReaders(msg, studentsList);
+                  const stats = sentHistoryStats.get(msg.id) ?? {
+                    readCount: 0,
+                    totalTargeted: 0,
+                    readStudents: [],
+                    unreadStudents: [],
+                  };
                   const readPercent =
                     stats.totalTargeted > 0
                       ? Math.round((stats.readCount / stats.totalTargeted) * 100)

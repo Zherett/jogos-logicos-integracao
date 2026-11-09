@@ -191,6 +191,22 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
     }
   }, [editBirthdate, editSchool, isEditing]);
 
+  const ledgerEntries = useMemo(() => {
+    if (!profile) return [];
+    const pId = profile.id || profile.nickNormalized || profile.nick;
+    return getPlayerScoreLedger(pId, {
+      type: ledgerFilterType === "all" ? undefined : ledgerFilterType,
+      search: ledgerSearch,
+      limit: 60,
+    });
+  }, [profile, ledgerFilterType, ledgerSearch, ledgerVersion]);
+
+  const ledgerBreakdown = useMemo(() => {
+    if (!profile) return null;
+    const pId = profile.id || profile.nickNormalized || profile.nick;
+    return calculateStudentScoreBreakdown(pId);
+  }, [profile, ledgerVersion]);
+
   if (!profile) return null;
 
   const age = ageFrom(profile.birthdate);
@@ -212,22 +228,6 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
     maxAvailableGames: effProg.maxAvailableGames,
   });
   const isMe = auth.profile?.id === profile.id;
-
-  const ledgerEntries = useMemo(() => {
-    if (!profile) return [];
-    const pId = profile.id || profile.nickNormalized || profile.nick;
-    return getPlayerScoreLedger(pId, {
-      type: ledgerFilterType === "all" ? undefined : ledgerFilterType,
-      search: ledgerSearch,
-      limit: 60,
-    });
-  }, [profile, ledgerFilterType, ledgerSearch, ledgerVersion]);
-
-  const ledgerBreakdown = useMemo(() => {
-    if (!profile) return null;
-    const pId = profile.id || profile.nickNormalized || profile.nick;
-    return calculateStudentScoreBreakdown(pId);
-  }, [profile, ledgerVersion]);
 
   async function handleApplyAdminAdjustment() {
     if (!profile || !adjAmount || !adjReason.trim()) return;

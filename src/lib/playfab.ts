@@ -607,7 +607,7 @@ async function callPlayFabClient<T>(
 ): Promise<{ data: T | null; error: string | null; errorCode?: string }> {
   const titleId = getPlayFabTitleId();
   if (!titleId) {
-    return { data: null, error: "PlayFab TitleId não configurado." };
+    return { data: null, error: "Servidor da nuvem indisponível no momento." };
   }
   try {
     const headers: Record<string, string> = {
@@ -628,7 +628,7 @@ async function callPlayFabClient<T>(
     if (!response.ok || json.error) {
       return {
         data: null,
-        error: json.errorMessage || json.error || "Erro na comunicação com o PlayFab.",
+        error: json.errorMessage || json.error || "Não foi possível conectar ao servidor da plataforma.",
         errorCode: json.error,
       };
     }
@@ -636,7 +636,7 @@ async function callPlayFabClient<T>(
   } catch (err) {
     return {
       data: null,
-      error: err instanceof Error ? err.message : "Falha de rede ao conectar ao PlayFab.",
+      error: err instanceof Error ? err.message : "Falha de conexão com a rede. Verifique sua conexão com a internet.",
     };
   }
 }
@@ -1216,17 +1216,35 @@ export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdmin
 
   // As medalhas do Torneio Semanal são prêmios exclusivos concedidos no encerramento de ciclo (domingo às 23:59).
   // Remove qualquer medalha indevida emitida antes do término da semana corrente ou temporada ativa não encerrada:
+  const totalM = Math.max(
+    acc.profile.matchesPlayed ?? 0,
+    (acc.profile as any)?.totalMatches ?? 0,
+    Array.isArray(acc.stats) ? acc.stats.reduce((s, r) => s + (r.plays ?? 0), 0) : 0,
+  );
+
+  const isCorruptedNovice =
+    !isAdminAcc &&
+    acc.profile.matchesPlayed !== undefined &&
+    acc.profile.matchesPlayed > 0 &&
+    acc.profile.matchesPlayed <= 6 &&
+    (acc.profile.xp ?? 0) <= 300 &&
+    (acc.profile.level ?? 1) <= 2;
+
   if (Array.isArray(acc.profile.tournamentMedals)) {
-    acc.profile.tournamentMedals = acc.profile.tournamentMedals
-      .filter((m): m is any => Boolean(m && typeof m === "object"))
-      .map((m) => {
-        if (Array.isArray(m.historyWeeks)) {
-          m.historyWeeks = m.historyWeeks.filter((w: string) => w !== currentWeekKey && w !== currentSeasonKey);
-          m.count = Math.max(1, m.historyWeeks.length);
-        }
-        return m;
-      })
-      .filter((m) => Boolean(m && m.weekKey !== currentWeekKey && m.weekKey !== currentSeasonKey && !String(m.id || "").startsWith("projected_")));
+    if (isCorruptedNovice) {
+      acc.profile.tournamentMedals = [];
+    } else {
+      acc.profile.tournamentMedals = acc.profile.tournamentMedals
+        .filter((m): m is any => Boolean(m && typeof m === "object"))
+        .map((m) => {
+          if (Array.isArray(m.historyWeeks)) {
+            m.historyWeeks = m.historyWeeks.filter((w: string) => w !== currentWeekKey && w !== currentSeasonKey);
+            m.count = Math.max(1, m.historyWeeks.length);
+          }
+          return m;
+        })
+        .filter((m) => Boolean(m && m.weekKey !== currentWeekKey && m.weekKey !== currentSeasonKey && !String(m.id || "").startsWith("projected_")));
+    }
   }
 
   // Remove medalhas de pódio ranqueado e segredos de pódio emitidos indevidamente durante a temporada ativa:
@@ -1243,6 +1261,7 @@ export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdmin
         medalId.startsWith("secret_top5_weeks_") ||
         medalId.startsWith("secret_top1_consecutive_");
       if (isPodiumMedal && !isAdminAcc) {
+        if (isCorruptedNovice) return false;
         const hasPastSeasonMedal = Array.isArray(acc.profile.tournamentMedals) &&
           acc.profile.tournamentMedals.some((tm) => tm && tm.weekKey && tm.weekKey !== currentSeasonKey && tm.weekKey !== currentWeekKey);
         return hasPastSeasonMedal;
@@ -1530,6 +1549,16 @@ export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdmin
       const def = medalDefMap.get(mId);
       if (def?.condition.type === "total_medals_count") {
         return filtered.length >= (def.condition.threshold ?? 50);
+      }
+      if (mId.endsWith("_lvl_master") && !isAdminAcc) {
+        const gId = mId.replace("game_", "").replace("_lvl_master", "") as GameId;
+        const row = statsMap.get(gId);
+        if (!row || (row.best_level ?? 1) < 5) return false;
+      }
+      if (mId.endsWith("_flawless") && !isAdminAcc) {
+        const gId = mId.replace("game_", "").replace("_flawless", "") as GameId;
+        const row = statsMap.get(gId);
+        if (!row || (row.flawless_wins ?? 0) <= 0) return false;
       }
       return true;
     });
@@ -1933,7 +1962,10 @@ export async function playfabSignUp(data: SignUpData): Promise<{
       ) {
         return { account: null, error: "Esse apelido já está em uso por outro jogador. Por favor, escolha outro apelido." };
       }
-      return { account: null, error: `PlayFab: ${res.error}` };
+      const sanitizedError = res.error
+        ? String(res.error).replace(/PlayFab:?\s*/gi, "").trim()
+        : "Não foi possível concluir o registro na nuvem.";
+      return { account: null, error: sanitizedError || "Falha ao registrar ou sincronizar perfil." };
     }
 
     playfabId = res.data?.PlayFabId;
@@ -3401,16 +3433,28 @@ export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Prom
               udProf?.deleteScheduledPermanentAt,
             isAdmin: parsed.isAdmin ?? existing?.profile.isAdmin,
             seasonId: parsed.seasonId ?? existing?.profile.seasonId ?? 1,
-            careerPoints: Math.max(
-              parsed.careerPoints ?? 0,
-              existing?.profile.careerPoints ?? 0,
-              (udProf as any)?.careerPoints ?? 0,
-            ),
-            pointsBalance: Math.max(
-              parsed.pointsBalance ?? 0,
-              existing?.profile.pointsBalance ?? 0,
-              (udProf as any)?.pointsBalance ?? 0,
-            ),
+            careerPoints: (() => {
+              if (isCorruptedParsed || isCorruptedExisting || isCorruptedUd || (isStudent && existingMatches <= 10)) {
+                const cand = parsed.careerPoints ?? 220;
+                return cand > 350 && existingMatches <= 10 ? 220 : cand;
+              }
+              return Math.max(
+                parsed.careerPoints ?? 0,
+                existing?.profile.careerPoints ?? 0,
+                (udProf as any)?.careerPoints ?? 0,
+              );
+            })(),
+            pointsBalance: (() => {
+              if (isCorruptedParsed || isCorruptedExisting || isCorruptedUd || (isStudent && existingMatches <= 10)) {
+                const cand = parsed.pointsBalance ?? parsed.careerPoints ?? 220;
+                return cand > 350 && existingMatches <= 10 ? 220 : cand;
+              }
+              return Math.max(
+                parsed.pointsBalance ?? 0,
+                existing?.profile.pointsBalance ?? 0,
+                (udProf as any)?.pointsBalance ?? 0,
+              );
+            })(),
             coins: Math.max(
               parsed.coins ?? 0,
               existing?.profile.coins ?? 0,
@@ -5115,7 +5159,6 @@ export function getAllRegisteredPlayers(includeDeleted = false): PlayerProfile[]
   }
 
   list.sort((a, b) => b.xp - a.xp);
-  saveRegistry(reg);
   return list;
 }
 

@@ -353,6 +353,41 @@ export function sanitizeInflatedCareerPoints(profile: PlayerProfile): {
   if (maxPts >= 151) tierSet.add("mestre");
   profile.achievedTournamentTiers = Array.from(tierSet);
 
+  // Higieniza medalhas incompatíveis com o histórico real de partidas do aluno
+  const statsList = Array.isArray(profile.stats) ? profile.stats : [];
+  const totalMatches = Math.max(
+    profile.matchesPlayed ?? 0,
+    profile.totalMatches ?? 0,
+    statsList.reduce((acc, s) => acc + (s?.plays ?? 0), 0),
+  );
+
+  if (totalMatches <= 15 && Array.isArray(profile.unlockedMedals)) {
+    profile.unlockedMedals = profile.unlockedMedals.filter((m) => {
+      if (!m) return false;
+      const mId = m.medalId || (m as any).id || "";
+      if (
+        mId === "tournament_top_1_gold" ||
+        mId === "tournament_top_2_silver" ||
+        mId === "tournament_top_3_bronze" ||
+        mId.startsWith("secret_top5_") ||
+        mId.startsWith("secret_top1_")
+      ) {
+        return false;
+      }
+      if (mId.endsWith("_lvl_master")) {
+        const gameId = mId.replace("game_", "").replace("_lvl_master", "");
+        const stat = statsList.find((s) => s?.game_id === gameId);
+        if (!stat || (stat.best_level ?? 1) < 5) return false;
+      }
+      if (mId.endsWith("_flawless")) {
+        const gameId = mId.replace("game_", "").replace("_flawless", "");
+        const stat = statsList.find((s) => s?.game_id === gameId);
+        if (!stat || (stat.flawless_wins ?? 0) <= 0) return false;
+      }
+      return true;
+    });
+  }
+
   // Calcula os pontos legítimos comprovados pelo histórico real do aluno
   const baseRetro = calculateRetroactivePoints(profile);
 
@@ -363,12 +398,6 @@ export function sanitizeInflatedCareerPoints(profile: PlayerProfile): {
   }
 
   // Pontos de dias ativos (login diário +25 e 1º jogo do dia +10 por data ativa real)
-  const statsList = Array.isArray(profile.stats) ? profile.stats : [];
-  const totalMatches = Math.max(
-    profile.matchesPlayed ?? 0,
-    profile.totalMatches ?? 0,
-    statsList.reduce((acc, s) => acc + (s?.plays ?? 0), 0),
-  );
   const activeDatesCount = Math.max(
     Array.isArray(profile.activeDates) ? profile.activeDates.length : 0,
     profile.lastActiveDate ? 1 : 0,
@@ -445,6 +474,7 @@ export function sanitizeInflatedCareerPoints(profile: PlayerProfile): {
  */
 export function ensurePlayerCareerPointsInitialized(profile: PlayerProfile): PlayerProfile {
   if (!profile) return profile;
+  sanitizeInflatedCareerPoints(profile);
   const needsInit =
     profile.careerPoints === undefined ||
     profile.pointsBalance === undefined ||
