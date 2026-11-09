@@ -723,7 +723,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
       gameLevelRequirements: {
         ...(draft.gameLevelRequirements ?? {}),
         [id]: clamped,
-      },
+      } as Record<GameId, number>,
     };
     setDraft(updated);
     await auth.updateAdminConfig(updated);
@@ -732,7 +732,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
   }
 
   async function handleToggleX1Game(id: GameId) {
-    const cur = (draft.x1AvailableGames && draft.x1AvailableGames.length > 0)
+    const cur: GameId[] = (draft.x1AvailableGames && draft.x1AvailableGames.length > 0)
       ? draft.x1AvailableGames
       : ["rpg", "logica", "porcentagem", "minado"];
     const isSelected = cur.includes(id);
@@ -1034,6 +1034,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
     matchXpCap?: number;
     dailyXpCap?: number;
     rankedMultiplier?: number;
+    pointsMultiplier?: number;
     bonusType?: string;
     bonusValue?: number;
     linkedMedalIds?: string[];

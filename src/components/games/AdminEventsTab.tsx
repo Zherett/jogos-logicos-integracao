@@ -24,32 +24,103 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  SpecialEvent,
-  EventScope,
-  EventBonusType,
-  RecurringEvent,
-  formatEventTimeRemaining,
+  type SpecialEvent,
+  type RecurringEvent,
+  type EventBonusType,
+  type EventScope,
+  formatEventRemainingTime,
+  formatDateOnlyBR,
+  formatDateTimeBR,
+  isEventActive,
+  isRecurringEventActive,
+  DAYS_OF_WEEK,
+  getEventLinkedMedalIds,
+  formatEventScopeText,
   createSpecialEvent,
   loadSpecialEvents,
   saveSpecialEvents,
   createRecurringEvent,
   loadRecurringEvents,
   saveRecurringEvents,
-  isRecurringEventActive,
-  getEventLinkedMedalIds,
-  formatEventDateBR,
 } from "@/lib/custom-events";
 import {
-  Medal,
-  MedalDefinition,
-  MedalRarity,
-  EventRequirementType,
-  MEDAL_ICONS,
+  type MedalDefinition,
+  type MedalRarity,
+  type EventRequirementType,
+  type EventMedalRequirement,
   getAllAvailableMedals,
+  AVAILABLE_MEDAL_ICONS,
+  RARITY_INFO,
+  formatEventRequirementLabel,
 } from "@/lib/medals-catalog";
-import { GameId, ALL_GAME_IDS, GAME_NAMES, PlatformAdminConfig } from "@/lib/game-storage";
+import { MedalIcon } from "./MedalIcon";
+import { type PlatformAdminConfig } from "@/lib/game-codes";
+import { type GameId, ALL_GAME_IDS, GAME_NAMES } from "@/lib/game-storage";
 import { isPlayFabConfigured, getPlayFabTitleId } from "@/lib/playfab";
 import { usePlayerAuth } from "@/lib/player-auth";
+
+const EVENT_REQUIREMENT_OPTIONS: {
+  type: EventRequirementType;
+  label: string;
+  unit: string;
+  defaultVal: number;
+}[] = [
+  { type: "event_matches", label: "Partidas Jogadas no Evento", unit: "partida(s)", defaultVal: 5 },
+  { type: "event_xp", label: "XP Acumulado no Evento", unit: "XP", defaultVal: 300 },
+  { type: "event_score", label: "Pontuação Máxima em uma Partida", unit: "pontos", defaultVal: 50 },
+  { type: "event_level", label: "Nível Alcançado no Jogo", unit: "Nível", defaultVal: 3 },
+  { type: "event_flawless", label: "Vitória com Zero Erros (Partida Perfeita)", unit: "partida(s) com 0 erros", defaultVal: 1 },
+  { type: "event_x1_wins", label: "Gladiador do X1 (Vitórias no Versus Online)", unit: "vitória(s)", defaultVal: 3 },
+  { type: "event_combo", label: "Sequência de Acertos (Combo sem Erros)", unit: "acertos seguidos", defaultVal: 10 },
+  { type: "event_daily_cap", label: "Constância (Bater Limite Diário de XP)", unit: "dia(s)", defaultVal: 1 },
+  { type: "event_team_matches", label: "Espírito de Equipe (Modo Grupos)", unit: "partida(s)", defaultVal: 3 },
+  { type: "event_distinct_games", label: "Explorador Multijogos do Evento", unit: "jogos diferentes", defaultVal: 3 },
+];
+
+function renderActiveBonusesLabel(ev: {
+  xpMultiplier?: number;
+  matchXpCap?: number;
+  dailyXpCap?: number;
+  rankedMultiplier?: number;
+  pointsMultiplier?: number;
+  bonusType?: string;
+  bonusValue?: number;
+  linkedMedalIds?: string[];
+  linkedMedalId?: string | null;
+}): string {
+  const parts: string[] = [];
+  if (ev.xpMultiplier && ev.xpMultiplier > 1) {
+    parts.push(
+      ev.xpMultiplier === 2
+        ? "2x XP (Dobro)"
+        : `${ev.xpMultiplier}x XP (+${Math.round((ev.xpMultiplier - 1) * 100)}%)`,
+    );
+  }
+  if (ev.rankedMultiplier && ev.rankedMultiplier > 1) {
+    parts.push(`${ev.rankedMultiplier}x Pontos Ranqueados`);
+  }
+  if (ev.pointsMultiplier && ev.pointsMultiplier > 1) {
+    parts.push(`${ev.pointsMultiplier}x Pontos de Conquista`);
+  }
+  if (ev.matchXpCap && ev.matchXpCap > 20) {
+    parts.push(`Max ${ev.matchXpCap} XP/partida`);
+  }
+  if (ev.dailyXpCap && ev.dailyXpCap > 1000) {
+    parts.push(`+${ev.dailyXpCap - 1000} XP/dia (${ev.dailyXpCap} total)`);
+  } else if (ev.bonusType === "aumentar_limite_diario" && ev.bonusValue && ev.bonusValue > 1000) {
+    parts.push(`+${ev.bonusValue - 1000} XP/dia (${ev.bonusValue} total)`);
+  }
+  if (parts.length === 0) {
+    if (ev.bonusType === "dobro_xp") parts.push("2x XP (Dobro)");
+    else if (ev.bonusType === "xp_1_5x") parts.push("1.5x XP (+50%)");
+    else if ((ev.linkedMedalIds && ev.linkedMedalIds.length > 0) || ev.linkedMedalId) {
+      parts.push("Medalha de Evento");
+    } else {
+      parts.push("Bônus Ativo");
+    }
+  }
+  return parts.join(" • ");
+}
 
 function toDatetimeLocalString(date: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -1108,11 +1179,11 @@ export function AdminEventsTab({
                                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 text-[11px]">
                                   <div className="rounded-lg bg-card p-2 border">
                                     <span className="text-muted-foreground block text-[10px] font-semibold">Início:</span>
-                                    <b className="text-foreground">{formatDateTimeBR(pStart)}</b>
+                                    <b className="text-foreground">{formatDateTimeBR(pStart.toISOString())}</b>
                                   </div>
                                   <div className="rounded-lg bg-card p-2 border">
                                     <span className="text-muted-foreground block text-[10px] font-semibold">Término:</span>
-                                    <b className="text-primary">{formatDateTimeBR(pEnd)}</b>
+                                    <b className="text-primary">{formatDateTimeBR(pEnd.toISOString())}</b>
                                   </div>
                                   <div className="rounded-lg bg-card p-2 border">
                                     <span className="text-muted-foreground block text-[10px] font-semibold">Duração Calculada:</span>
