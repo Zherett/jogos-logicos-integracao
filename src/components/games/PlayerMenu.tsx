@@ -561,7 +561,12 @@ export function PlayerMenu({ onConfigChanged }: Props) {
                         points={Math.max(
                           profile.tournamentPoints ?? 0,
                           profile.bestTournamentPoints ?? 0,
-                          getTournamentStoreRecord(profile.id, profile.nick)?.tournamentPoints ?? 0,
+                          (() => {
+                            const rec =
+                              getTournamentStoreRecord(profile.id, profile.nick) ||
+                              (profile.nickNormalized ? getTournamentStoreRecord(profile.nickNormalized, profile.nickNormalized) : null);
+                            return Math.max(rec?.tournamentPoints ?? 0, rec?.bestScore ?? 0);
+                          })(),
                         )}
                         size="sm"
                         showLabel

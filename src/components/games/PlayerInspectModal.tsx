@@ -75,11 +75,14 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
 
   const effectiveTournamentPoints = useMemo(() => {
     if (!profile) return 0;
-    const tourRecord = getTournamentStoreRecord(profile.id, profile.nick);
+    const tourRecord =
+      getTournamentStoreRecord(profile.id, profile.nick) ||
+      (profile.nickNormalized ? getTournamentStoreRecord(profile.nickNormalized, profile.nickNormalized) : null);
     return Math.max(
       profile.tournamentPoints ?? 0,
       profile.bestTournamentPoints ?? 0,
       tourRecord?.tournamentPoints ?? 0,
+      tourRecord?.bestScore ?? 0,
     );
   }, [profile]);
 

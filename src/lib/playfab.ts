@@ -1151,8 +1151,10 @@ export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdmin
     acc.profile.rankedSeasonId = currentRankedSeason;
     // Preserva e sincroniza os pontos da ranqueada acumulados na temporada (definida por 14 dias ou término do ADM).
     // Sincroniza diretamente com o registro oficial do Torneio Semanal para manter 100% de paridade entre a lista do rank e o perfil.
-    const tourRec = getTournamentStoreRecord(acc.profile.id, acc.profile.nick);
-    const tourPoints = tourRec?.tournamentPoints ?? 0;
+    const tourRec =
+      getTournamentStoreRecord(acc.profile.id, acc.profile.nick) ||
+      (acc.profile.nickNormalized ? getTournamentStoreRecord(acc.profile.nickNormalized, acc.profile.nickNormalized) : null);
+    const tourPoints = Math.max(tourRec?.tournamentPoints ?? 0, tourRec?.bestScore ?? 0);
     const maxTournamentPts = Math.max(
       acc.profile.tournamentPoints ?? 0,
       acc.profile.bestTournamentPoints ?? 0,
@@ -2734,6 +2736,41 @@ export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Prom
       /* ignore userdata recovery errors */
     }
 
+    // 0c. Consulta o grupo oficial da temporada de ranqueada (TOURNAMENT_SEASON_X) para paridade imediata entre ranking e perfil
+    const tourStandingsBySlug = new Map<string, number>();
+    try {
+      const tourSeasonGroupId = `TOURNAMENT_SEASON_${cfg.rankedSeasonId ?? 1}`;
+      const tourRes = await callPlayFabClient<{ Data?: Record<string, { Value: string }> }>(
+        "GetSharedGroupData",
+        { SharedGroupId: tourSeasonGroupId },
+        ticket,
+      );
+      const standingsVal = tourRes.data?.Data?.Standings?.Value;
+      if (standingsVal) {
+        const parsedStandings = JSON.parse(standingsVal) as Record<
+          string,
+          { nick?: string; playerId?: string; tournamentPoints?: number; bestScore?: number }
+        >;
+        for (const [id, rec] of Object.entries(parsedStandings)) {
+          const pts = rec.tournamentPoints ?? rec.bestScore ?? 0;
+          if (pts > 0) {
+            if (rec.nick) {
+              const s = nickSlug(rec.nick);
+              tourStandingsBySlug.set(s, Math.max(tourStandingsBySlug.get(s) ?? 0, pts));
+            }
+            const cleanId = id.toLowerCase().trim();
+            tourStandingsBySlug.set(cleanId, Math.max(tourStandingsBySlug.get(cleanId) ?? 0, pts));
+            if (rec.playerId) {
+              const pId = rec.playerId.toLowerCase().trim();
+              tourStandingsBySlug.set(pId, Math.max(tourStandingsBySlug.get(pId) ?? 0, pts));
+            }
+          }
+        }
+      }
+    } catch {
+      /* ignore tournament shared group errors */
+    }
+
     // 1. If we received students from the cloud, merge them into local registry
     if (data && Object.keys(data).length > 0) {
       for (const item of Object.values(data)) {
@@ -2907,19 +2944,35 @@ export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Prom
               udProf?.dailyTournamentXp ?? 0,
             ),
             tournamentPoints: (() => {
-              const tourRec = getTournamentStoreRecord(slug, parsed.id);
-              const tourPts = tourRec?.tournamentPoints ?? 0;
-              return Math.max(
+              const cloudTourPts = Math.max(
+                tourStandingsBySlug.get(slug) ?? 0,
+                tourStandingsBySlug.get(parsed.id?.toLowerCase().trim() ?? "") ?? 0,
+                tourStandingsBySlug.get(parsed.nick?.toLowerCase().trim() ?? "") ?? 0,
+              );
+              const tourRec = getTournamentStoreRecord(parsed.id, slug);
+              const tourPts = Math.max(tourRec?.tournamentPoints ?? 0, tourRec?.bestScore ?? 0);
+              const finalPts = Math.max(
+                cloudTourPts,
                 parsed.tournamentPoints ?? 0,
                 existing?.profile.tournamentPoints ?? 0,
                 udProf?.tournamentPoints ?? 0,
                 tourPts,
               );
+              if (finalPts > (parsed.tournamentPoints ?? 0)) {
+                needsCloudSanitize.add(slug);
+              }
+              return finalPts;
             })(),
             bestTournamentPoints: (() => {
-              const tourRec = getTournamentStoreRecord(slug, parsed.id);
-              const tourPts = tourRec?.tournamentPoints ?? 0;
+              const cloudTourPts = Math.max(
+                tourStandingsBySlug.get(slug) ?? 0,
+                tourStandingsBySlug.get(parsed.id?.toLowerCase().trim() ?? "") ?? 0,
+                tourStandingsBySlug.get(parsed.nick?.toLowerCase().trim() ?? "") ?? 0,
+              );
+              const tourRec = getTournamentStoreRecord(parsed.id, slug);
+              const tourPts = Math.max(tourRec?.tournamentPoints ?? 0, tourRec?.bestScore ?? 0);
               const curPts = Math.max(
+                cloudTourPts,
                 parsed.tournamentPoints ?? 0,
                 existing?.profile.tournamentPoints ?? 0,
                 udProf?.tournamentPoints ?? 0,
@@ -2933,9 +2986,15 @@ export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Prom
               );
             })(),
             tournamentRankId: (() => {
-              const tourRec = getTournamentStoreRecord(slug, parsed.id);
-              const tourPts = tourRec?.tournamentPoints ?? 0;
+              const cloudTourPts = Math.max(
+                tourStandingsBySlug.get(slug) ?? 0,
+                tourStandingsBySlug.get(parsed.id?.toLowerCase().trim() ?? "") ?? 0,
+                tourStandingsBySlug.get(parsed.nick?.toLowerCase().trim() ?? "") ?? 0,
+              );
+              const tourRec = getTournamentStoreRecord(parsed.id, slug);
+              const tourPts = Math.max(tourRec?.tournamentPoints ?? 0, tourRec?.bestScore ?? 0);
               const curPts = Math.max(
+                cloudTourPts,
                 parsed.tournamentPoints ?? 0,
                 existing?.profile.tournamentPoints ?? 0,
                 udProf?.tournamentPoints ?? 0,

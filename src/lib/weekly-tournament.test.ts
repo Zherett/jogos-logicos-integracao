@@ -7,6 +7,7 @@ import {
   finalizeRankedSeasonAndAwardMedalsViaInbox,
   getTournamentSeasonGroupId,
   getTournamentRank,
+  getTournamentStoreRecord,
   getWeekInfo,
   recordWeeklyTournamentAttempt,
   resolveWeeklyTournamentGame,
@@ -670,5 +671,42 @@ describe("Torneio Semanal Ranqueado (Nível 3+) e Regras da Arena X1 (Nível 5+,
     assert.equal(alignedS2.profile.bestTournamentPoints, 0);
     assert.equal(alignedS2.profile.tournamentRankId, "bronze_1");
     assert.equal(alignedS2.profile.rankedSeasonId, 2);
+  });
+
+  it("getTournamentStoreRecord resolve a maior pontuação quando houver entradas com chaves diferentes (PlayFabId vs pf_slug)", () => {
+    if (typeof window !== "undefined") {
+      const mockStore: any = {
+        seasonId: 1,
+        weekKey: "2026-W45",
+        gameId: "tabuada_divertida",
+        records: {
+          "2F89A56BC78": {
+            playerId: "2F89A56BC78",
+            nick: "ana-banana",
+            tournamentPoints: 147,
+            highestRankId: "prata_2",
+          },
+          "pf_ana-banana": {
+            playerId: "pf_ana-banana",
+            nick: "ana-banana",
+            tournamentPoints: 9,
+            highestRankId: "bronze_1",
+          },
+        },
+      };
+      window.localStorage.setItem("desafios-weekly-tournament-v1", JSON.stringify(mockStore));
+
+      const byPfId = getTournamentStoreRecord("pf_ana-banana", "ana-banana");
+      assert.ok(byPfId);
+      assert.equal(byPfId.tournamentPoints, 147);
+
+      const byNick = getTournamentStoreRecord(null, "ana-banana");
+      assert.ok(byNick);
+      assert.equal(byNick.tournamentPoints, 147);
+
+      const bySessionId = getTournamentStoreRecord("2F89A56BC78", null);
+      assert.ok(bySessionId);
+      assert.equal(bySessionId.tournamentPoints, 147);
+    }
   });
 });

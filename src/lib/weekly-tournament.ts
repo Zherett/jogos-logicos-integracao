@@ -896,6 +896,32 @@ function loadTournamentStore(now = new Date()): WeeklyTournamentStore {
     }
   }
 
+  // Localizador de registros correspondentes por ID, nick ou apelido normalizado
+  const findMatchingRecords = (
+    records: Record<string, TournamentPlayerRecord>,
+    identifiers: (string | undefined | null)[],
+  ): { key: string; record: TournamentPlayerRecord }[] => {
+    const cleanList = identifiers
+      .filter((s): s is string => Boolean(s && s.trim()))
+      .map((s) => s.toLowerCase().trim());
+    if (cleanList.length === 0) return [];
+
+    const found: { key: string; record: TournamentPlayerRecord }[] = [];
+    for (const [key, rec] of Object.entries(records)) {
+      const kLower = key.toLowerCase().trim();
+      const rId = (rec.playerId || "").toLowerCase().trim();
+      const rNick = (rec.nick || "").toLowerCase().trim();
+      if (
+        cleanList.includes(kLower) ||
+        cleanList.includes(rId) ||
+        cleanList.includes(rNick)
+      ) {
+        found.push({ key, record: rec });
+      }
+    }
+    return found;
+  };
+
   // Mescla dinamicamente jogadores registrados no catálogo PlayFab unificado com pontuação ativa
   try {
     const players = getAllRegisteredPlayers();
@@ -906,15 +932,35 @@ function loadTournamentStore(now = new Date()): WeeklyTournamentStore {
         typeof p.tournamentPoints === "number" ? p.tournamentPoints : 0,
         typeof p.bestTournamentPoints === "number" ? p.bestTournamentPoints : 0,
       );
-      const existing = baseRecords[p.id] || baseRecords[p.nickNormalized];
-      if (pts > 0 || (p.dailyTournamentEntries ?? 0) > 0 || existing) {
+
+      const matched = findMatchingRecords(baseRecords, [
+        p.id,
+        p.nickNormalized,
+        p.nick,
+        p.playfabId,
+      ]);
+      const existingBestPts = matched.reduce(
+        (max, m) => Math.max(max, m.record.tournamentPoints ?? 0, m.record.bestScore ?? 0),
+        0,
+      );
+      const existingRecord = matched[0]?.record;
+
+      if (pts > 0 || (p.dailyTournamentEntries ?? 0) > 0 || matched.length > 0) {
         const pAge = p.birthdate ? ageFrom(p.birthdate, now) : 10;
         const pStage = p.birthdate
           ? stageFromBirthdate(p.birthdate, now, p.school).id
           : "etapa_1";
-        const bestPts = Math.max(pts, existing?.tournamentPoints ?? 0);
+        const bestPts = Math.max(pts, existingBestPts);
         const rank = getTournamentRank(bestPts).currentRank;
-        const recKey = p.id || p.nickNormalized;
+        const recKey = p.nickNormalized || p.id;
+
+        // Unificação determinística: limpa duplicatas com pontuações obsoletas para o mesmo aluno
+        for (const m of matched) {
+          if (m.key !== recKey) {
+            delete baseRecords[m.key];
+          }
+        }
+
         baseRecords[recKey] = {
           playerId: recKey,
           nick: p.nick,
@@ -924,17 +970,17 @@ function loadTournamentStore(now = new Date()): WeeklyTournamentStore {
           age: pAge,
           stage: pStage,
           level: p.level,
-          bestScore: Math.max(existing?.bestScore ?? 0, bestPts),
-          totalEntries: Math.max(existing?.totalEntries ?? 0, p.dailyTournamentEntries ?? 1),
+          bestScore: Math.max(existingRecord?.bestScore ?? 0, bestPts),
+          totalEntries: Math.max(existingRecord?.totalEntries ?? 0, p.dailyTournamentEntries ?? 1),
           tournamentPoints: bestPts,
-          dailyWinsCount: existing?.dailyWinsCount ?? 0,
-          dailyMatchesCount: existing?.dailyMatchesCount ?? p.dailyTournamentEntries ?? 0,
-          dailyDateKey: existing?.dailyDateKey ?? p.dailyXpDate,
-          dailyBonusAwarded: existing?.dailyBonusAwarded ?? false,
+          dailyWinsCount: existingRecord?.dailyWinsCount ?? 0,
+          dailyMatchesCount: existingRecord?.dailyMatchesCount ?? p.dailyTournamentEntries ?? 0,
+          dailyDateKey: existingRecord?.dailyDateKey ?? p.dailyXpDate,
+          dailyBonusAwarded: existingRecord?.dailyBonusAwarded ?? false,
           highestRankId: rank.id,
-          activeTop5Since: existing?.activeTop5Since ?? null,
-          accumulatedTop5Ms: existing?.accumulatedTop5Ms ?? 0,
-          updatedAt: existing?.updatedAt ?? now.getTime(),
+          activeTop5Since: existingRecord?.activeTop5Since ?? null,
+          accumulatedTop5Ms: existingRecord?.accumulatedTop5Ms ?? 0,
+          updatedAt: existingRecord?.updatedAt ?? now.getTime(),
         };
       }
     }
@@ -953,6 +999,7 @@ function loadTournamentStore(now = new Date()): WeeklyTournamentStore {
 
 /**
  * Recupera o registro da ranqueada de um jogador diretamente do armazenamento do Torneio Semanal.
+ * Realiza varredura inteligente por ID, apelido ou apelido normalizado, garantindo sempre a maior pontuação.
  */
 export function getTournamentStoreRecord(
   playerId?: string | null,
@@ -963,17 +1010,33 @@ export function getTournamentStoreRecord(
   const cleanId = (playerId ?? "").toLowerCase().trim();
   const cleanNick = (nick ?? "").toLowerCase().trim();
 
+  // Coleta todas as correspondências para este aluno
+  const matches: TournamentPlayerRecord[] = [];
+  for (const [key, rec] of Object.entries(store.records)) {
+    const kLower = key.toLowerCase().trim();
+    const rId = (rec.playerId || "").toLowerCase().trim();
+    const rNick = (rec.nick || "").toLowerCase().trim();
+    if (
+      (cleanId && (kLower === cleanId || rId === cleanId || rNick === cleanId)) ||
+      (cleanNick && (kLower === cleanNick || rNick === cleanNick || rId === cleanNick))
+    ) {
+      matches.push(rec);
+    }
+  }
+
+  if (matches.length > 0) {
+    // Retorna sempre a entrada com a maior pontuação ranqueada
+    matches.sort(
+      (a, b) =>
+        (b.tournamentPoints ?? b.bestScore ?? 0) -
+        (a.tournamentPoints ?? a.bestScore ?? 0),
+    );
+    return matches[0];
+  }
+
   if (cleanId && store.records[cleanId]) return store.records[cleanId];
   if (cleanNick && store.records[cleanNick]) return store.records[cleanNick];
 
-  for (const rec of Object.values(store.records)) {
-    if (
-      (cleanId && (rec.playerId.toLowerCase() === cleanId || rec.nick.toLowerCase() === cleanId)) ||
-      (cleanNick && (rec.nick.toLowerCase() === cleanNick || rec.playerId.toLowerCase() === cleanNick))
-    ) {
-      return rec;
-    }
-  }
   return null;
 }
 
@@ -1080,14 +1143,24 @@ export async function syncWeeklyTournamentWithPlayFab(): Promise<void> {
     }
 
     for (const [id, r] of Object.entries(remoteRecords)) {
-      const local = store.records[id];
-      if (
-        !local ||
-        (r.tournamentPoints ?? 0) > (local.tournamentPoints ?? 0) ||
-        r.bestScore > local.bestScore ||
-        r.updatedAt > local.updatedAt
-      ) {
-        store.records[id] = r;
+      const existingKey = Object.keys(store.records).find(
+        (k) =>
+          k.toLowerCase() === id.toLowerCase() ||
+          store.records[k].playerId?.toLowerCase() === id.toLowerCase() ||
+          (r.nick && store.records[k].nick?.toLowerCase() === r.nick.toLowerCase()),
+      );
+      const targetKey = existingKey ?? id;
+      const local = store.records[targetKey];
+      const remotePts = r.tournamentPoints ?? r.bestScore ?? 0;
+      const localPts = local ? (local.tournamentPoints ?? local.bestScore ?? 0) : 0;
+
+      if (!local || remotePts >= localPts || r.updatedAt > local.updatedAt) {
+        store.records[targetKey] = {
+          ...(local ?? {}),
+          ...r,
+          tournamentPoints: Math.max(remotePts, localPts),
+          bestScore: Math.max(r.bestScore ?? 0, local?.bestScore ?? 0, remotePts, localPts),
+        };
         changed = true;
       }
     }
@@ -1099,6 +1172,8 @@ export async function syncWeeklyTournamentWithPlayFab(): Promise<void> {
     // 3. Atualiza o catálogo local de alunos no registro para sincronizar tournamentPoints e rankId
     const reg = loadRegistry();
     let regUpdated = false;
+    const rosterUpdatesForCloud: Record<string, string> = {};
+
     for (const [id, r] of Object.entries(store.records)) {
       const matchKey = Object.keys(reg).find(
         (k) =>
@@ -1116,6 +1191,14 @@ export async function syncWeeklyTournamentWithPlayFab(): Promise<void> {
           acc.profile.tournamentRankId = getTournamentRank(rPts).currentRank.id;
           acc.updatedAt = new Date().toISOString();
           regUpdated = true;
+
+          if (acc.profile.nickNormalized) {
+            rosterUpdatesForCloud[`stu_${acc.profile.nickNormalized}`] = JSON.stringify({
+              ...acc.profile,
+              stats: acc.stats,
+              updatedAt: acc.updatedAt,
+            });
+          }
         }
       }
     }
@@ -1137,6 +1220,28 @@ export async function syncWeeklyTournamentWithPlayFab(): Promise<void> {
         Permission: "Public",
       }),
     });
+
+    // Se temos credencial de ADM e houve atualização no catálogo de alunos, atualiza também o SEMED_STUDENT_ROSTER_V1
+    const adminTicket = await getAdminPlayFabTicket();
+    if (adminTicket && Object.keys(rosterUpdatesForCloud).length > 0) {
+      try {
+        await fetch(`https://${titleId}.playfabapi.com/Client/UpdateSharedGroupData`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Authorization": adminTicket,
+          },
+          body: JSON.stringify({
+            TitleId: titleId,
+            SharedGroupId: "SEMED_STUDENT_ROSTER_V1",
+            Data: rosterUpdatesForCloud,
+            Permission: "Public",
+          }),
+        });
+      } catch {
+        /* ignore roster sync error */
+      }
+    }
 
     // 5. Notifica todas as abas e componentes da tela em tempo real
     if (typeof window !== "undefined") {
