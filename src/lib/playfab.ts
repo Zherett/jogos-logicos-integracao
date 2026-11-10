@@ -6536,4 +6536,240 @@ export async function runRetroactiveMedalsAudit(
   };
 }
 
+export interface StudentsIntegrityAuditResult {
+  auditedStudentsCount: number;
+  updatedStudentsCount: number;
+  matchesCorrectedCount: number;
+  winsCorrectedCount: number;
+  tournamentResetCount: number;
+  medalsRevokedCount: number;
+  details: Array<{
+    id: string;
+    nick: string;
+    fullName: string;
+    school: string;
+    corrections: string[];
+  }>;
+}
+
+/**
+ * Executa uma auditoria preventiva e corretiva profunda em 100% dos alunos cadastrados.
+ * - Adota a tabela de jogos (`stats`) como única fonte da verdade para partidas e vitórias.
+ * - Elimina contadores fantasmas e recalcula os requisitos de nível em `syncLevelStageProgress`.
+ * - Reseta pontos e ranking do Torneio Semanal para alunos com Nível < 3 ou 0 partidas ranqueadas.
+ * - Revoga medalhas de torneio indevidas ou com ciclo não finalizado.
+ * - Sincroniza em lote com o PlayFab SharedGroup (`ROSTER_SHARED_GROUP_ID`).
+ */
+export async function runGlobalStudentsIntegrityAudit(
+  options?: { skipCloudSync?: boolean },
+): Promise<StudentsIntegrityAuditResult> {
+  const skipCloudSync = options?.skipCloudSync ?? false;
+  const reg = loadRegistry();
+  const keys = Object.keys(reg);
+  const total = keys.length;
+  let updatedStudentsCount = 0;
+  let matchesCorrectedCount = 0;
+  let winsCorrectedCount = 0;
+  let tournamentResetCount = 0;
+  let medalsRevokedCount = 0;
+  const details: StudentsIntegrityAuditResult["details"] = [];
+  const cloudRosterUpdates: Record<string, string> = {};
+  const nowIso = new Date().toISOString();
+
+  for (const key of keys) {
+    const acc = reg[key];
+    if (!acc || !acc.profile || acc.profile.isAdmin || isSpecialAdminAccount(acc.profile)) {
+      continue;
+    }
+
+    const p = { ...acc.profile };
+    const effectiveStats: GameStatRow[] =
+      Array.isArray(acc.stats) && acc.stats.length > 0
+        ? [...acc.stats]
+        : Array.isArray(p.stats)
+          ? [...p.stats]
+          : [];
+
+    const statsMap = aggregateStatsByGame(effectiveStats);
+    const aggregatedRows = Array.from(statsMap.values()).filter((s) => (s.plays ?? 0) > 0);
+    const realPlaysSum = Math.max(
+      aggregatedRows.reduce((sum, s) => sum + Math.max(0, s.plays ?? 0), 0),
+      effectiveStats.reduce((sum, s) => sum + Math.max(0, s?.plays ?? 0), 0),
+    );
+    const realWinsSum = Math.max(
+      aggregatedRows.reduce((sum, s) => sum + Math.max(0, s.wins ?? 0), 0),
+      effectiveStats.reduce((sum, s) => sum + Math.max(0, s?.wins ?? 0), 0),
+    );
+    const distinctGamesCount = Math.max(
+      aggregatedRows.length,
+      new Set(effectiveStats.filter((s) => (s?.plays ?? 0) > 0).map((s) => s.game_id)).size,
+    );
+
+    const studentCorrections: string[] = [];
+
+    // 1. Alinhamento de partidas e vitórias com base no histórico real comprovado
+    if (aggregatedRows.length > 0) {
+      if ((p.matchesPlayed ?? 0) !== realPlaysSum) {
+        studentCorrections.push(`Partidas corrigidas: ${p.matchesPlayed ?? 0} -> ${realPlaysSum}`);
+        p.matchesPlayed = realPlaysSum;
+        matchesCorrectedCount++;
+      }
+      if ((p.wins ?? 0) !== realWinsSum) {
+        studentCorrections.push(`Vitórias corrigidas: ${p.wins ?? 0} -> ${realWinsSum}`);
+        p.wins = realWinsSum;
+        winsCorrectedCount++;
+      }
+      if ((p.distinctGamesPlayed ?? 0) !== distinctGamesCount) {
+        p.distinctGamesPlayed = distinctGamesCount;
+      }
+    }
+
+    // 2. Trava de Torneio Ranqueado para Alunos Nível < 3 ou sem jogos ranqueados
+    const tourPlays = effectiveStats
+      .filter((s) => s.mode === "torneio_semanal")
+      .reduce((sum, s) => sum + (s.plays ?? 0), 0);
+    const isLevelEligibleForTournament = (p.level ?? 1) >= 3;
+
+    if (!isLevelEligibleForTournament || tourPlays === 0) {
+      if (
+        (p.tournamentPoints ?? 0) > 0 ||
+        (p.bestTournamentPoints ?? 0) > 0 ||
+        (p.tournamentRankId && p.tournamentRankId !== "bronze_1")
+      ) {
+        p.tournamentPoints = 0;
+        p.bestTournamentPoints = 0;
+        p.tournamentRankId = "bronze_1";
+        studentCorrections.push(
+          "Pontuação e ranking do Torneio Semanal resetados (Bronze I / 0 pts) por critério de elegibilidade",
+        );
+        tournamentResetCount++;
+      }
+    }
+
+    // 3. Revogação de medalhas de torneio indevidas
+    if (Array.isArray(p.unlockedMedals)) {
+      const beforeMedalLen = p.unlockedMedals.length;
+      p.unlockedMedals = p.unlockedMedals.filter((m) => {
+        if (!m) return false;
+        // Aluno Nível < 3 com medalha de maestria de torneio
+        if (
+          !isLevelEligibleForTournament &&
+          (m.medalId === "tour_master_bronze" ||
+            m.medalId === "tour_master_prata" ||
+            m.medalId === "tour_master_ouro")
+        ) {
+          studentCorrections.push(`Medalha de Torneio removida (${m.medalId}): nível incompatível`);
+          return false;
+        }
+        // Medalhas de pódio semanal atribuídas antes do término do torneio
+        if (
+          m.medalId === "tournament_top_1_gold" ||
+          m.medalId === "tournament_top_2_silver" ||
+          m.medalId === "tournament_top_3_bronze"
+        ) {
+          studentCorrections.push(`Medalha de pódio semanal (${m.medalId}) revogada (ciclo não finalizado)`);
+          return false;
+        }
+        return true;
+      });
+      if (p.unlockedMedals.length !== beforeMedalLen) {
+        medalsRevokedCount += beforeMedalLen - p.unlockedMedals.length;
+      }
+    }
+
+    // 4. Reavaliação e sincronização do estágio de nível (syncLevelStageProgress)
+    const syncedStage = syncLevelStageProgress({
+      xp: p.xp ?? 0,
+      lifetimeMatches: p.matchesPlayed ?? realPlaysSum,
+      lifetimeWins: p.wins ?? realWinsSum,
+      lifetimeDistinctGames: p.distinctGamesPlayed ?? distinctGamesCount,
+      playedGameIds: aggregatedRows.map((r) => r.game_id),
+      currentLevel: p.level,
+      existingStage: p.levelStageProgress ?? null,
+    });
+
+    if (p.level !== syncedStage.level) {
+      studentCorrections.push(
+        `Nível reavaliado: Nível ${p.level ?? 1} -> Nível ${syncedStage.level}`,
+      );
+      p.level = syncedStage.level;
+    }
+    if (JSON.stringify(p.levelStageProgress) !== JSON.stringify(syncedStage.stageProgress)) {
+      studentCorrections.push("Requisitos do nível atual recalculados com base nas partidas reais");
+      p.levelStageProgress = syncedStage.stageProgress;
+    }
+
+    if (studentCorrections.length > 0) {
+      updatedStudentsCount++;
+      p.updatedAt = nowIso;
+      const updatedAcc: StoredAccount = {
+        ...acc,
+        profile: p,
+        stats: effectiveStats,
+      };
+      reg[key] = updatedAcc;
+
+      details.push({
+        id: p.id,
+        nick: p.nick,
+        fullName: p.full_name || p.nick,
+        school: p.school,
+        corrections: studentCorrections,
+      });
+
+      cloudRosterUpdates[getStudentRosterCloudKey(p)] = JSON.stringify({
+        ...p,
+        stats: effectiveStats,
+        updatedAt: nowIso,
+      });
+
+      if (!skipCloudSync) {
+        try {
+          await pushProfileToPlayFab(updatedAcc);
+        } catch (err) {
+          console.warn(`[IntegrityAudit] Erro ao sincronizar ${p.nick}:`, err);
+        }
+      }
+    }
+  }
+
+  if (updatedStudentsCount > 0) {
+    saveRegistry(reg);
+  }
+
+  // Envia as atualizações em lote para a nuvem PlayFab se houver alterações
+  if (!skipCloudSync && isPlayFabConfigured() && Object.keys(cloudRosterUpdates).length > 0) {
+    try {
+      const ticket = (await getAdminPlayFabTicket()) ?? loadStoredSession()?.sessionTicket;
+      if (ticket) {
+        const entries = Object.entries(cloudRosterUpdates);
+        for (let i = 0; i < entries.length; i += 10) {
+          const chunk = Object.fromEntries(entries.slice(i, i + 10));
+          await callPlayFabClient(
+            "UpdateSharedGroupData",
+            {
+              SharedGroupId: ROSTER_SHARED_GROUP_ID,
+              Data: chunk,
+              Permission: "Public",
+            },
+            ticket,
+          );
+        }
+      }
+    } catch (err) {
+      console.warn("[IntegrityAudit] Falha ao enviar atualizações em lote para o SharedGroup:", err);
+    }
+  }
+
+  return {
+    auditedStudentsCount: total,
+    updatedStudentsCount,
+    matchesCorrectedCount,
+    winsCorrectedCount,
+    tournamentResetCount,
+    medalsRevokedCount,
+    details,
+  };
+}
+
 export { ALL_GAME_IDS };

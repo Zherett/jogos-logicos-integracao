@@ -45,8 +45,16 @@ import {
   addTombstone,
   isTombstoned,
   ensurePlayerSeasonAligned,
+  runGlobalStudentsIntegrityAudit,
+  loadRegistry,
+  saveRegistry,
   type StoredAccount,
 } from "./playfab.ts";
+import {
+  getEffectivePlayerProgression,
+  calculateMedalProgress,
+  getAllAvailableMedals,
+} from "./medals-catalog.ts";
 
 describe("Perfil do Jogador, Escolas, Trava de Níveis (1..10) e Limite Diário de XP", () => {
   it("possui as opções de instituição com Nenhuma (padrão) no início, as 6 escolas oficiais da SEMED Coari (incluindo Raimundo Bezerra e Agenor Smith) e Outro por último", () => {
@@ -1027,5 +1035,87 @@ describe("Perfil do Jogador, Escolas, Trava de Níveis (1..10) e Limite Diário 
       school: "Raimundo Bezerra",
     };
     assert.equal(existingStudent.school, "Raimundo Bezerra");
+  });
+
+  it("garante que aluno com histórico corrompido (caso banana123: 2 jogos reais, 6 matchesPlayed, 5/5 no estágio) é estabilizado para 2/5 e bloqueado de torneio", async () => {
+    // 1. Simula o perfil do aluno banana123 com as anomalias
+    const reg = loadRegistry();
+    const fakeBanana = {
+      profile: {
+        id: "stu_banana123",
+        nick: "banana123",
+        nickNormalized: "banana123",
+        full_name: "VITOR GABRIEL",
+        school: "Ursulina Souza",
+        xp: 295,
+        level: 2,
+        matchesPlayed: 6, // anomalia: tem 6 salvo
+        wins: 3, // anomalia: tem 3 salvo
+        tournamentPoints: 60, // anomalia: aluno nível 2 com pontos de torneio
+        bestTournamentPoints: 60,
+        tournamentRankId: "prata_2",
+        levelStageProgress: {
+          forLevel: 2,
+          matches: 5, // anomalia: estágio mostrava 5/5 concluído
+          wins: 2,
+          distinctGames: ["robogrid", "completar"],
+        },
+        unlockedMedals: [
+          { medalId: "ouro_robogrid", unlockedAt: "2026-11-09T00:00:00Z", count: 1, rarity: "ouro" },
+          { medalId: "tour_master_bronze", unlockedAt: "2026-11-09T00:00:00Z", count: 1, rarity: "bronze" }, // anomalia
+          { medalId: "tournament_top_1_gold", unlockedAt: "2026-11-10T11:36:35Z", count: 1, rarity: "ouro" }, // anomalia semana 46
+        ],
+      },
+      stats: [
+        { game_id: "robogrid", plays: 1, wins: 1, best_score: 170, last_played: "2026-11-09T00:00:00Z" },
+        { game_id: "completar", plays: 1, wins: 1, best_score: 70, last_played: "2026-11-09T00:00:00Z" },
+      ],
+    } as any;
+
+    reg["banana123"] = fakeBanana;
+    saveRegistry(reg);
+
+    // 2. Executa a Auditoria Global de Integridade dos Alunos
+    const auditRes = await runGlobalStudentsIntegrityAudit({ skipCloudSync: true });
+    assert.ok(auditRes.auditedStudentsCount >= 1);
+    assert.ok(auditRes.updatedStudentsCount >= 1);
+    assert.ok(auditRes.matchesCorrectedCount >= 1);
+    assert.ok(auditRes.tournamentResetCount >= 1);
+    assert.ok(auditRes.medalsRevokedCount >= 1);
+
+    // 3. Verifica o perfil saneado de banana123
+    const refreshedReg = loadRegistry();
+    const cleaned = refreshedReg["banana123"]?.profile;
+    assert.ok(cleaned);
+    assert.equal(cleaned.matchesPlayed, 2, "Partidas devem ser estritamente 2 (1 RoboGrid + 1 Completando)");
+    assert.equal(cleaned.wins, 2, "Vitórias devem ser estritamente 2");
+    assert.equal(cleaned.tournamentPoints, 0, "Pontos de torneio devem ser zerados para aluno nível 2");
+    assert.equal(cleaned.bestTournamentPoints, 0);
+    assert.equal(cleaned.tournamentRankId, "bronze_1");
+
+    // 4. Verifica se medalhas indevidas foram expurgadas
+    const medalIds = (cleaned.unlockedMedals ?? []).map((m: any) => m.medalId);
+    assert.ok(!medalIds.includes("tour_master_bronze"), "Dominador do Bronze deve ter sido revogado");
+    assert.ok(!medalIds.includes("tournament_top_1_gold"), "Medalha de pódio antes do fim do ciclo deve ser revogada");
+
+    // 5. Verifica se os requisitos de nível 3 mostram 2/5 em progresso (e não concluído!)
+    assert.equal(cleaned.level, 2);
+    assert.equal(cleaned.levelStageProgress?.matches, 2, "Progresso do requisito deve mostrar 2 partidas, não 5");
+
+    // 6. Verifica a progressão efetiva via getEffectivePlayerProgression
+    const effectiveProg = getEffectivePlayerProgression(cleaned, fakeBanana.stats);
+    assert.equal(effectiveProg.matchesPlayed, 2);
+    assert.equal(effectiveProg.wins, 2);
+    assert.equal(effectiveProg.stageProgress.matches, 2);
+
+    // 7. Verifica se a medalha 'Dominador do Bronze' exibe 0% de progresso
+    const allMedals = getAllAvailableMedals();
+    const bronzeMasteryMedal = allMedals.find((m) => m.id === "tour_master_bronze")!;
+    const medalProg = calculateMedalProgress(bronzeMasteryMedal, cleaned, fakeBanana.stats);
+    assert.equal(medalProg.percent, 0, "Progresso em Dominador do Bronze deve ser 0% para aluno nível 2");
+
+    // Limpa o mock
+    delete reg["banana123"];
+    saveRegistry(reg);
   });
 });

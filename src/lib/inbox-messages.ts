@@ -18,7 +18,7 @@ import {
 import { GAME_NAMES, type GameId } from "./game-storage.ts";
 import { recordScoreLedgerEntry } from "./score-history-ledger.ts";
 
-export type InboxRewardType = "points" | "medal" | "future_item";
+export type InboxRewardType = "points" | "xp" | "medal" | "future_item";
 
 export interface InboxReward {
   id: string;
@@ -1258,6 +1258,47 @@ export function claimInboxReward(
   // 1. Conceder Pontos se houver
   if (reward.type === "points" && reward.pointsAmount && reward.pointsAmount > 0) {
     awardCareerPoints(profile, reward.pointsAmount, `Recompensa Correio: ${msg.title}`);
+    try {
+      recordScoreLedgerEntry({
+        playerId: profile.id,
+        playerNick: profile.nick,
+        type: "career_points",
+        source: "correio",
+        amount: reward.pointsAmount!,
+        balanceAfter: profile.careerPoints,
+        reason: `Recompensa Postal: ${reward.pointsAmount} Pontos`,
+        metadata: { messageId },
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // 1.1 Conceder XP direto se houver
+  if (reward.type === "xp" && reward.pointsAmount && reward.pointsAmount > 0) {
+    const xpBonus = reward.pointsAmount;
+    profile.xp = (profile.xp ?? 0) + xpBonus;
+    profile.seasonXp = (profile.seasonXp ?? 0) + xpBonus;
+    profile.level = calculatePlayerLevel({
+      xp: profile.xp,
+      matchesPlayed: profile.matchesPlayed ?? 0,
+      wins: profile.wins ?? 0,
+      distinctGames: profile.distinctGamesPlayed ?? 0,
+    });
+    try {
+      recordScoreLedgerEntry({
+        playerId: profile.id,
+        playerNick: profile.nick,
+        type: "xp",
+        source: "correio",
+        amount: xpBonus,
+        balanceAfter: profile.xp,
+        reason: `Recompensa Postal: +${xpBonus} XP (${msg.title})`,
+        metadata: { messageId },
+      });
+    } catch {
+      /* ignore */
+    }
   }
 
   // 2. Conceder Medalha se houver
@@ -1317,18 +1358,7 @@ export function claimInboxReward(
     }
 
     try {
-      if (reward.type === "points" && (reward.pointsAmount ?? 0) > 0) {
-        recordScoreLedgerEntry({
-          playerId: profile.id,
-          playerNick: profile.nick,
-          type: "career_points",
-          source: "correio",
-          amount: reward.pointsAmount!,
-          balanceAfter: profile.careerPoints,
-          reason: `Recompensa Postal: ${reward.pointsAmount} Pontos`,
-          metadata: { messageId },
-        });
-      } else if (reward.type === "medal" && reward.medalId) {
+      if (reward.medalId) {
         recordScoreLedgerEntry({
           playerId: profile.id,
           playerNick: profile.nick,

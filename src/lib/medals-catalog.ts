@@ -1604,30 +1604,31 @@ export function getEffectivePlayerProgression(
     }
   }
 
-  const inferredWinsFromXp =
-    xp >= 354 && distinctGames >= 2 ? 2 : xp >= 100 && distinctGames >= 1 ? 1 : 0;
+  // Se o aluno possui estatísticas detalhadas de jogos com partidas, a soma real de stats é a fonte da verdade absoluta!
+  const hasDetailedStats = aggregatedRows.length > 0;
 
-  const wins = Math.max(
-    0,
-    profile?.wins ?? 0,
-    statsWinsSum,
-    minWinsFromMedalsOrBadges,
-    inferredWinsFromXp,
-  );
+  const wins = hasDetailedStats
+    ? Math.min(statsPlaysSum, Math.max(statsWinsSum, minWinsFromMedalsOrBadges))
+    : Math.max(
+        0,
+        profile?.wins ?? 0,
+        statsWinsSum,
+        minWinsFromMedalsOrBadges,
+        xp >= 354 && distinctGames >= 2 ? 2 : xp >= 100 && distinctGames >= 1 ? 1 : 0,
+      );
 
-  const inferredMatchesFromXp =
-    xp >= 354 && wins >= 2 ? 5 : xp >= 100 && wins >= 1 ? 2 : xp > 0 ? 1 : 0;
-
-  const matchesPlayed = Math.max(
-    0,
-    profile?.matchesPlayed ?? 0,
-    profile?.totalMatches ?? 0,
-    (profile as any)?.totalPlays ?? 0,
-    statsPlaysSum,
-    wins,
-    distinctGames,
-    inferredMatchesFromXp,
-  );
+  const matchesPlayed = hasDetailedStats
+    ? statsPlaysSum
+    : Math.max(
+        0,
+        profile?.matchesPlayed ?? 0,
+        profile?.totalMatches ?? 0,
+        (profile as any)?.totalPlays ?? 0,
+        statsPlaysSum,
+        wins,
+        distinctGames,
+        xp >= 354 && wins >= 2 ? 5 : xp >= 100 && wins >= 1 ? 2 : xp > 0 ? 1 : 0,
+      );
 
   const syncedStage = syncLevelStageProgress({
     xp,
@@ -2259,6 +2260,19 @@ export function calculateMedalProgress(
     }
     case "tournament_rank_mastery": {
       const threshold = cond.threshold ?? 61;
+      const isLevelEligible = (profile.level ?? 1) >= 3;
+      const tourPlays = Array.isArray((profile as any)?.stats)
+        ? (profile as any).stats.filter((s: any) => s?.mode === "torneio_semanal").reduce((sum: number, s: any) => sum + (s?.plays ?? 0), 0)
+        : 0;
+
+      // Trava de segurança: alunos abaixo do nível 3 ou sem partidas ranqueadas não têm progresso nesta medalha
+      if (!isLevelEligible || tourPlays === 0) {
+        return {
+          percent: 0,
+          progressText: `0 / ${threshold} pts no Torneio Semanal (exige Nível 3+)`,
+        };
+      }
+
       const pts = Math.max(
         (profile as any)?.tournamentPoints ?? 0,
         (profile as any)?.bestTournamentPoints ?? 0,

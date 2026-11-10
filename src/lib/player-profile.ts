@@ -1113,10 +1113,23 @@ export function syncLevelStageProgress(args: {
       : nextReq.minDistinctGames;
 
     const isSameStage = args.existingStage.forLevel === baseLevel;
-    const stageMatches = isSameStage ? Math.max(0, Math.floor(args.existingStage.matches ?? 0)) : 0;
-    const stageWins = isSameStage ? Math.max(0, Math.floor(args.existingStage.wins ?? 0)) : 0;
-    const rawMatches = Math.max(stageMatches, Math.max(0, Math.floor(args.lifetimeMatches ?? 0)));
-    const rawWins = Math.max(stageWins, Math.max(0, Math.floor(args.lifetimeWins ?? 0)));
+    const safeLifetimeMatches = Math.max(0, Math.floor(args.lifetimeMatches ?? 0));
+    const safeLifetimeWins = Math.max(0, Math.floor(args.lifetimeWins ?? 0));
+
+    // O progresso da etapa nunca pode exceder o total histórico real de partidas/vitórias
+    const stageMatches = isSameStage
+      ? (safeLifetimeMatches > 0
+          ? Math.min(safeLifetimeMatches, Math.max(0, Math.floor(args.existingStage.matches ?? 0)))
+          : Math.max(0, Math.floor(args.existingStage.matches ?? 0)))
+      : 0;
+    const stageWins = isSameStage
+      ? (safeLifetimeWins > 0
+          ? Math.min(safeLifetimeWins, Math.max(0, Math.floor(args.existingStage.wins ?? 0)))
+          : Math.max(0, Math.floor(args.existingStage.wins ?? 0)))
+      : 0;
+
+    const rawMatches = Math.max(stageMatches, safeLifetimeMatches);
+    const rawWins = Math.min(rawMatches, Math.max(stageWins, safeLifetimeWins));
 
     const existingDistinct =
       isSameStage && Array.isArray(args.existingStage.distinctGames)

@@ -96,6 +96,8 @@ import {
   playfabRejectTurmaRequest,
   runRetroactiveMedalsAudit,
   type MedalsAuditResult,
+  runGlobalStudentsIntegrityAudit,
+  type StudentsIntegrityAuditResult,
   type PlayerProfile,
 } from "@/lib/playfab";
 import { getCachedMedalPioneers, formatPioneerLabel } from "@/lib/medal-pioneers";
@@ -428,6 +430,9 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
   const [selectedStudentForGrant, setSelectedStudentForGrant] = useState<string>("");
   const [inspectStudentId, setInspectStudentId] = useState<string | null>(null);
   const [syncingRoster, setSyncingRoster] = useState(false);
+  const [auditingStudents, setAuditingStudents] = useState(false);
+  const [studentsAuditModalResult, setStudentsAuditModalResult] =
+    useState<StudentsIntegrityAuditResult | null>(null);
 
   // Consolidação de partidas jogadas por jogo para a Lista de Jogos do ADM
   const gameStatsSummary = useMemo(() => {
@@ -614,6 +619,38 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
       flashSaved(`${players.length} alunos sincronizados com a nuvem!`);
     } finally {
       setSyncingRoster(false);
+    }
+  }
+
+  async function handleRunStudentsAudit() {
+    setAuditingStudents(true);
+    try {
+      await syncPresenceFromPlayFab(true);
+      await syncStudentRosterFromPlayFab();
+
+      const res = await runGlobalStudentsIntegrityAudit();
+
+      const refreshed = await syncStudentRosterFromPlayFab();
+      setRegisteredStudents(refreshed);
+      setPresenceTick((t) => t + 1);
+
+      setStudentsAuditModalResult(res);
+      const parts: string[] = [];
+      if (res.matchesCorrectedCount > 0) parts.push(`${res.matchesCorrectedCount} partidas alinhadas`);
+      if (res.winsCorrectedCount > 0) parts.push(`${res.winsCorrectedCount} vitórias corrigidas`);
+      if (res.tournamentResetCount > 0) parts.push(`${res.tournamentResetCount} torneios resetados`);
+      if (res.medalsRevokedCount > 0) parts.push(`${res.medalsRevokedCount} medalhas indevidas revogadas`);
+
+      const summary =
+        parts.length > 0
+          ? `🛡️ Auditoria global concluída: ${parts.join(", ")} em ${res.updatedStudentsCount} aluno(s)!`
+          : `🛡️ Auditoria global concluída: nenhum resíduo ou anomalia detectado nos ${res.auditedStudentsCount} alunos.`;
+
+      flashSaved(summary);
+    } catch (err: any) {
+      flashSaved(`❌ Erro na auditoria preventiva: ${err?.message || "Falha desconhecida"}`);
+    } finally {
+      setAuditingStudents(false);
     }
   }
 
@@ -2823,20 +2860,35 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                     </p>
                   </div>
 
-                  {/* Alternador das 2 Sub-abas e Botão de Sincronizar Nuvem */}
+                  {/* Alternador das 2 Sub-abas, Botão de Auditoria e Botão de Sincronizar Nuvem */}
                   <div className="flex flex-wrap items-center gap-2">
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
                       onClick={handleRefreshRoster}
-                      disabled={syncingRoster}
+                      disabled={syncingRoster || auditingStudents}
                       className="rounded-xl font-bold gap-1.5 text-xs h-9"
                     >
                       <RefreshCw
                         className={`h-3.5 w-3.5 ${syncingRoster ? "animate-spin text-primary" : "text-muted-foreground"}`}
                       />
                       {syncingRoster ? "Sincronizando..." : "Sincronizar Nuvem"}
+                    </Button>
+
+                    <Button
+                      type="button"
+                      variant="default"
+                      size="sm"
+                      onClick={handleRunStudentsAudit}
+                      disabled={auditingStudents || syncingRoster}
+                      className="rounded-xl font-bold gap-1.5 text-xs h-9 bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm"
+                      title="Realiza varredura em 100% dos alunos, recalcula requisitos de nível, expurga partidas fantasmas e resíduos de torneio"
+                    >
+                      <ShieldCheck
+                        className={`h-3.5 w-3.5 ${auditingStudents ? "animate-spin" : ""}`}
+                      />
+                      {auditingStudents ? "Auditando Alunos..." : "Auditar & Corrigir Histórico de Alunos"}
                     </Button>
 
                     <div className="flex items-center gap-1 rounded-xl bg-background border p-1">
@@ -2870,6 +2922,93 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                     </div>
                   </div>
                 </div>
+
+                {/* RELATÓRIO EXPANSÍVEL DA AUDITORIA GLOBAL DOS ALUNOS */}
+                {studentsAuditModalResult && (
+                  <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <ShieldCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                        <span className="font-display text-xs font-bold text-foreground">
+                          Relatório da Auditoria Preventiva dos Alunos
+                        </span>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setStudentsAuditModalResult(null)}
+                        className="h-6 px-2 text-[11px] font-bold text-muted-foreground hover:text-foreground"
+                      >
+                        Fechar Relatório ✕
+                      </Button>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2 text-[11px]">
+                      <span className="rounded-full bg-background border px-2 py-0.5 font-bold text-foreground">
+                        👥 {studentsAuditModalResult.auditedStudentsCount} alunos verificados
+                      </span>
+                      <span className="rounded-full bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 px-2 py-0.5 font-bold">
+                        ✅ {studentsAuditModalResult.updatedStudentsCount} perfis corrigidos
+                      </span>
+                      {studentsAuditModalResult.matchesCorrectedCount > 0 && (
+                        <span className="rounded-full bg-blue-500/20 text-blue-700 dark:text-blue-300 px-2 py-0.5 font-bold">
+                          🎮 {studentsAuditModalResult.matchesCorrectedCount} partidas alinhadas
+                        </span>
+                      )}
+                      {studentsAuditModalResult.winsCorrectedCount > 0 && (
+                        <span className="rounded-full bg-amber-500/20 text-amber-700 dark:text-amber-300 px-2 py-0.5 font-bold">
+                          🏆 {studentsAuditModalResult.winsCorrectedCount} vitórias ajustadas
+                        </span>
+                      )}
+                      {studentsAuditModalResult.tournamentResetCount > 0 && (
+                        <span className="rounded-full bg-purple-500/20 text-purple-700 dark:text-purple-300 px-2 py-0.5 font-bold">
+                          🛡️ {studentsAuditModalResult.tournamentResetCount} torneios resetados (&lt; Nível 3)
+                        </span>
+                      )}
+                      {studentsAuditModalResult.medalsRevokedCount > 0 && (
+                        <span className="rounded-full bg-rose-500/20 text-rose-700 dark:text-rose-300 px-2 py-0.5 font-bold">
+                          🎖️ {studentsAuditModalResult.medalsRevokedCount} medalhas indevidas revogadas
+                        </span>
+                      )}
+                    </div>
+
+                    {studentsAuditModalResult.details.length > 0 ? (
+                      <div className="mt-2 max-h-48 overflow-y-auto space-y-1.5 pr-1">
+                        {studentsAuditModalResult.details.map((st) => (
+                          <div
+                            key={st.id}
+                            className="rounded-xl border bg-background/80 p-2 text-xs flex flex-col gap-1"
+                          >
+                            <div className="flex items-center justify-between font-bold">
+                              <span>
+                                {st.fullName} ({st.nick}) • <span className="text-muted-foreground">{st.school}</span>
+                              </span>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setInspectStudentId(st.id)}
+                                className="h-6 px-1.5 text-[10px] font-bold text-primary"
+                              >
+                                Inspecionar Aluno →
+                              </Button>
+                            </div>
+                            <ul className="list-disc list-inside text-[11px] text-muted-foreground space-y-0.5">
+                              {st.corrections.map((c, i) => (
+                                <li key={i}>{c}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground pt-1">
+                        Todos os perfis estão em conformidade com o histórico real. Nenhuma inconsistência encontrada.
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {/* SUB-ABA 1: VISÃO POR ESCOLAS & TURMAS */}
                 {turmaSubTab === "visao" && (
