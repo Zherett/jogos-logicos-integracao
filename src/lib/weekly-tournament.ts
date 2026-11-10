@@ -607,10 +607,21 @@ export function evaluateTournamentStandings(
   allStandings: TournamentStandingRow[];
   updatedRecords: Record<string, TournamentPlayerRecord>;
 } {
+  const reg = typeof window !== "undefined" ? loadRegistry() : {};
   const list = Object.values(recordsMap)
     .filter((rec) => {
+      if (!rec || !rec.playerId) return false;
       const pId = rec.playerId.toLowerCase();
-      return pId !== "admin-system" && !pId.startsWith("admin-system");
+      if (pId === "admin-system" || pId.startsWith("admin-system")) return false;
+      // Requisito oficial do Torneio Semanal Ranqueado: Nível 3+
+      const pNick = (rec.nick || "").toLowerCase();
+      const foundAcc =
+        reg[pId] ||
+        reg[pNick] ||
+        Object.values(reg).find((a) => a?.profile?.nick?.toLowerCase() === pNick);
+      const effLevel = rec.level ?? foundAcc?.profile?.level ?? 1;
+      if (effLevel < TOURNAMENT_MIN_LEVEL) return false;
+      return true;
     })
     .map((rec) => {
       const resolvedAge =
@@ -940,6 +951,15 @@ function loadTournamentStore(now = new Date()): WeeklyTournamentStore {
         p.nick,
         p.playfabId,
       ]);
+
+      // Alunos abaixo do Nível 3 (requisito do Torneio) não podem ter registro no Torneio Semanal
+      if ((p.level ?? 1) < TOURNAMENT_MIN_LEVEL) {
+        for (const m of matched) {
+          delete baseRecords[m.key];
+        }
+        continue;
+      }
+
       const existingBestPts = matched.reduce(
         (max, m) => Math.max(max, m.record.tournamentPoints ?? 0),
         0,
@@ -971,7 +991,7 @@ function loadTournamentStore(now = new Date()): WeeklyTournamentStore {
           age: pAge,
           stage: pStage,
           level: p.level,
-          bestScore: Math.max(existingRecord?.bestScore ?? 0, bestPts),
+          bestScore: Math.max(existingRecord?.bestScore ?? 0, (typeof p.tournamentPoints === "number" ? p.tournamentPoints : 0)),
           totalEntries: Math.max(existingRecord?.totalEntries ?? 0, p.dailyTournamentEntries ?? 1),
           tournamentPoints: bestPts,
           dailyWinsCount: existingRecord?.dailyWinsCount ?? 0,
@@ -983,6 +1003,13 @@ function loadTournamentStore(now = new Date()): WeeklyTournamentStore {
           accumulatedTop5Ms: existingRecord?.accumulatedTop5Ms ?? 0,
           updatedAt: existingRecord?.updatedAt ?? now.getTime(),
         };
+      }
+    }
+
+    // Expurgar qualquer registro remanescente de alunos abaixo do Nível 3
+    for (const [key, rec] of Object.entries(baseRecords)) {
+      if ((rec.level ?? 1) < TOURNAMENT_MIN_LEVEL) {
+        delete baseRecords[key];
       }
     }
   } catch {
@@ -1143,7 +1170,28 @@ export async function syncWeeklyTournamentWithPlayFab(): Promise<void> {
       }
     }
 
+    const reg = loadRegistry();
+
     for (const [id, r] of Object.entries(remoteRecords)) {
+      const matchKey = Object.keys(reg).find(
+        (k) =>
+          k.toLowerCase() === id.toLowerCase() ||
+          reg[k].profile.id?.toLowerCase() === id.toLowerCase() ||
+          reg[k].profile.nick?.toLowerCase() === r.nick?.toLowerCase() ||
+          reg[k].profile.nickNormalized?.toLowerCase() === r.nick?.toLowerCase(),
+      );
+      const acc = matchKey ? reg[matchKey] : undefined;
+      const effLevel = r.level ?? acc?.profile?.level ?? 1;
+
+      // Alunos abaixo do Nível 3 são descartados e purgados do store
+      if (effLevel < TOURNAMENT_MIN_LEVEL) {
+        if (store.records[id]) {
+          delete store.records[id];
+          changed = true;
+        }
+        continue;
+      }
+
       const existingKey = Object.keys(store.records).find(
         (k) =>
           k.toLowerCase() === id.toLowerCase() ||
@@ -1166,12 +1214,28 @@ export async function syncWeeklyTournamentWithPlayFab(): Promise<void> {
       }
     }
 
+    // Purga qualquer registro residual em store.records de alunos com level < TOURNAMENT_MIN_LEVEL
+    for (const [id, r] of Object.entries(store.records)) {
+      const matchKey = Object.keys(reg).find(
+        (k) =>
+          k.toLowerCase() === id.toLowerCase() ||
+          reg[k].profile.id?.toLowerCase() === id.toLowerCase() ||
+          reg[k].profile.nick?.toLowerCase() === r.nick?.toLowerCase() ||
+          reg[k].profile.nickNormalized?.toLowerCase() === r.nick?.toLowerCase(),
+      );
+      const acc = matchKey ? reg[matchKey] : undefined;
+      const effLevel = r.level ?? acc?.profile?.level ?? 1;
+      if (effLevel < TOURNAMENT_MIN_LEVEL) {
+        delete store.records[id];
+        changed = true;
+      }
+    }
+
     const evaluated = evaluateTournamentStandings(store.records);
     store.records = evaluated.updatedRecords;
     saveTournamentStore(store);
 
     // 3. Atualiza o catálogo local de alunos no registro para sincronizar tournamentPoints e rankId
-    const reg = loadRegistry();
     let regUpdated = false;
     const rosterUpdatesForCloud: Record<string, string> = {};
 
