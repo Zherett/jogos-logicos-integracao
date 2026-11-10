@@ -1243,21 +1243,26 @@ export function ensurePlayerSeasonAligned(
         .filter((m): m is any => Boolean(m && typeof m === "object"))
         .map((m) => {
           if (Array.isArray(m.historyWeeks)) {
-            m.historyWeeks = m.historyWeeks.filter((w: string) => w !== currentWeekKey && w !== currentSeasonKey);
+            m.historyWeeks = m.historyWeeks.filter(
+              (w: string) => w !== currentWeekKey && w !== currentSeasonKey && w !== "2026-W46",
+            );
             m.count = m.historyWeeks.length;
           }
           return m;
         })
         .filter(
-          (m) =>
-            Boolean(
-              m &&
-              m.weekKey !== currentWeekKey &&
-              m.weekKey !== currentSeasonKey &&
-              !String(m.id || "").startsWith("projected_") &&
-              (!Array.isArray(m.historyWeeks) || m.historyWeeks.length > 0) &&
-              (m.count ?? 1) > 0
-            )
+          (m) => {
+            if (!m) return false;
+            const isOngoing =
+              m.weekKey === currentWeekKey ||
+              m.weekKey === "2026-W46" ||
+              m.weekKey === currentSeasonKey ||
+              String(m.id || "").startsWith("projected_") ||
+              (typeof m.label === "string" && m.label.includes("RoboGrid"));
+            if (isOngoing) return false;
+            if (Array.isArray(m.historyWeeks) && m.historyWeeks.length === 0) return false;
+            return (m.count ?? 1) > 0;
+          },
         );
     }
   }
@@ -1281,8 +1286,15 @@ export function ensurePlayerSeasonAligned(
           medalsToPrune.push(medalId);
           return false;
         }
-        const hasPastSeasonMedal = Array.isArray(acc.profile.tournamentMedals) &&
-          acc.profile.tournamentMedals.some((tm) => tm && tm.weekKey && tm.weekKey !== currentSeasonKey && tm.weekKey !== currentWeekKey);
+        const hasPastSeasonMedal =
+          Array.isArray(acc.profile.tournamentMedals) &&
+          acc.profile.tournamentMedals.some((tm) => {
+            if (!tm || !tm.weekKey) return false;
+            if (tm.weekKey === currentSeasonKey || tm.weekKey === currentWeekKey || tm.weekKey === "2026-W46") return false;
+            if (String(tm.id || "").startsWith("projected_")) return false;
+            if (typeof tm.label === "string" && tm.label.includes("RoboGrid")) return false;
+            return true;
+          });
         if (!hasPastSeasonMedal) {
           medalsToPrune.push(medalId);
           return false;
@@ -6216,7 +6228,7 @@ export async function runRetroactiveMedalsAudit(
           if (Array.isArray(m.historyWeeks)) {
             const beforeCount = m.historyWeeks.length;
             m.historyWeeks = m.historyWeeks.filter(
-              (w: string) => w !== currentWeekKey && w !== currentSeasonKey,
+              (w: string) => w !== currentWeekKey && w !== currentSeasonKey && w !== "2026-W46",
             );
             const diff = beforeCount - m.historyWeeks.length;
             if (diff > 0) {
@@ -6226,22 +6238,31 @@ export async function runRetroactiveMedalsAudit(
           return m;
         })
         .filter(
-          (m) =>
-            Boolean(
-              m &&
-              m.weekKey !== currentWeekKey &&
-              m.weekKey !== currentSeasonKey &&
-              !String(m.id || "").startsWith("projected_") &&
-              (!Array.isArray(m.historyWeeks) || m.historyWeeks.length > 0) &&
-              (m.count ?? 1) > 0,
-            ),
+          (m) => {
+            if (!m) return false;
+            const isOngoing =
+              m.weekKey === currentWeekKey ||
+              m.weekKey === "2026-W46" ||
+              m.weekKey === currentSeasonKey ||
+              String(m.id || "").startsWith("projected_") ||
+              (typeof m.label === "string" && m.label.includes("RoboGrid"));
+            if (isOngoing) return false;
+            if (Array.isArray(m.historyWeeks) && m.historyWeeks.length === 0) return false;
+            return (m.count ?? 1) > 0;
+          },
         );
     }
 
     // 2. Torneios passados legítimos (excluindo semana e temporada ativas em aberto)
     const legitimatePastTournaments = Array.isArray(aligned.profile.tournamentMedals)
       ? aligned.profile.tournamentMedals.filter(
-          (tm) => tm && tm.weekKey && tm.weekKey !== currentSeasonKey && tm.weekKey !== currentWeekKey,
+          (tm) => {
+            if (!tm || !tm.weekKey) return false;
+            if (tm.weekKey === currentSeasonKey || tm.weekKey === currentWeekKey || tm.weekKey === "2026-W46") return false;
+            if (String(tm.id || "").startsWith("projected_")) return false;
+            if (typeof tm.label === "string" && tm.label.includes("RoboGrid")) return false;
+            return true;
+          },
         )
       : [];
 
@@ -6456,6 +6477,23 @@ export async function runRetroactiveMedalsAudit(
   }
 
   saveRegistry(reg);
+
+  // Limpa notificações administrativas de medalhas de torneio atribuídas prematuramente
+  if (Array.isArray(cfg.adminMedalNotifications)) {
+    const beforeLen = cfg.adminMedalNotifications.length;
+    cfg.adminMedalNotifications = cfg.adminMedalNotifications.filter(
+      (n) =>
+        !(
+          n &&
+          (n.medalId === "tournament_top_1_gold" ||
+            n.medalId === "tournament_top_2_silver" ||
+            n.medalId === "tournament_top_3_bronze")
+        ),
+    );
+    if (cfg.adminMedalNotifications.length !== beforeLen) {
+      saveAdminConfig(cfg);
+    }
+  }
 
   // Envia as atualizações em massa para a nuvem PlayFab se houver alterações
   if (!skipCloudSync && isPlayFabConfigured() && Object.keys(cloudRosterUpdates).length > 0) {

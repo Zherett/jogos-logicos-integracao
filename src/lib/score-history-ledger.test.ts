@@ -127,4 +127,45 @@ describe("Sistema de Histórico e Auditoria de Pontuação (Score Ledger)", () =
     assert.ok(TRANSACTION_TYPE_LABELS.xp.label);
     assert.ok(TRANSACTION_TYPE_LABELS.career_points.label);
   });
+
+  it("reconstitui sinteticamente o extrato de auditoria a partir do perfil quando o histórico local estiver vazio", () => {
+    const mockProfile: any = {
+      id: "aluno_reconstrucao_01",
+      nick: "raifriane.maçã",
+      full_name: "RAIFRIANE GOMES FELIPE",
+      school: "Raimundo Bezerra",
+      xp: 365,
+      careerPoints: 220,
+      level: 3,
+      stats: [
+        { game_id: "robogrid", plays: 5, wins: 4, flawless_wins: 2, best_score: 95 },
+        { game_id: "minado", plays: 3, wins: 2, flawless_wins: 1, best_score: 80 },
+      ],
+      unlockedMedals: [
+        { medalId: "m_first_match", unlockedAt: "2026-11-09T10:00:00.000Z" },
+        { medalId: "m_plays_10", unlockedAt: "2026-11-09T11:00:00.000Z" },
+      ],
+    };
+
+    // Consulta extrato sem registros locais gravados: deve acionar a reconstrução sintética
+    const entries = getPlayerScoreLedger(mockProfile.id, undefined, mockProfile);
+    assert.ok(entries.length > 0, "Deve gerar entradas de auditoria reconstruídas");
+
+    const totalPtsInLedger = entries
+      .filter((e) => e.type === "career_points")
+      .reduce((sum, e) => sum + e.amount, 0);
+    const totalXpInLedger = entries
+      .filter((e) => e.type === "xp")
+      .reduce((sum, e) => sum + e.amount, 0);
+
+    assert.equal(totalPtsInLedger, 220, "Total de pontos no extrato deve bater exatamente com os 220 pontos do perfil");
+    assert.equal(totalXpInLedger, 365, "Total de XP no extrato deve bater exatamente com os 365 XP do perfil");
+
+    // Breakdown consolidado
+    const breakdown = calculateStudentScoreBreakdown(mockProfile.id, mockProfile);
+    assert.equal(breakdown.totalCareerPoints, 220);
+    assert.ok(breakdown.totalXpFromMatches > 0);
+    assert.ok(breakdown.totalXpFromMedals > 0);
+    assert.ok(breakdown.transactionsCount > 0);
+  });
 });

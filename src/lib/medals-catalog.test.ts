@@ -1839,4 +1839,70 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
       `XP deve ter sido estornado (< 600), obtido: ${saved.profile.xp}`,
     );
   });
+
+  it("revoga e impede reatribuição de medalha de pódio semanal se o torneio ativo (W46 / RoboGrid) ainda não encerrou", async () => {
+    const alunoAtivoW46: any = {
+      profile: {
+        id: "aluno_w46_premature",
+        nick: "LORD",
+        nickNormalized: "lord",
+        full_name: "QUEMUEL DA SILVA MONTEIRO",
+        school: "Nenhuma",
+        birthdate: "2010-05-15",
+        xp: 400,
+        seasonXp: 400,
+        careerPoints: 300,
+        pointsBalance: 200,
+        level: 3,
+        unlockedMedals: [
+          { medalId: "tournament_top_1_gold", unlockedAt: "2026-11-10T11:36:35.000Z" },
+        ],
+        tournamentMedals: [
+          {
+            id: "medal_season_1_stage_3_r1",
+            weekKey: "2026-W46",
+            gameId: "robogrid",
+            rank: 1,
+            tier: "ouro",
+            label: "🥇 Top 1 3ª Etapa (RoboGrid)",
+            heldMinutes: 120,
+            bonusXpAwarded: 0,
+            earnedAt: "2026-11-10T11:36:35.000Z",
+          },
+        ],
+      },
+      passwordHash: "hash",
+      unlocked: ["robogrid"],
+      stats: [
+        {
+          game_id: "robogrid",
+          mode: "torneio_semanal",
+          plays: 5,
+          wins: 4,
+          best_score: 90,
+          best_level: 2,
+          last_wrong: 0,
+        },
+      ],
+      updatedAt: "2026-11-10T11:36:35.000Z",
+    };
+
+    saveRegistry({ [alunoAtivoW46.profile.nickNormalized]: alunoAtivoW46 });
+
+    const auditRes = await runRetroactiveMedalsAudit({ skipCloudSync: true });
+    assert.ok(auditRes.medalsRevokedCount >= 1, "Deve revogar a medalha prematura");
+
+    const regAfter = loadRegistry();
+    const saved = regAfter[alunoAtivoW46.profile.nickNormalized];
+    assert.equal(
+      saved.profile.unlockedMedals?.some((m: any) => m.medalId === "tournament_top_1_gold"),
+      false,
+      "tournament_top_1_gold NÃO pode permanecer para a semana ativa W46 em andamento",
+    );
+    assert.equal(
+      saved.profile.tournamentMedals?.length ?? 0,
+      0,
+      "tournamentMedals prematuro da W46 deve ser purgado",
+    );
+  });
 });

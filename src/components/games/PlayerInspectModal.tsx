@@ -195,17 +195,21 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
   const ledgerEntries = useMemo(() => {
     if (!profile) return [];
     const pId = profile.id || profile.nickNormalized || profile.nick;
-    return getPlayerScoreLedger(pId, {
-      type: ledgerFilterType === "all" ? undefined : ledgerFilterType,
-      search: ledgerSearch,
-      limit: 60,
-    });
+    return getPlayerScoreLedger(
+      pId,
+      {
+        type: ledgerFilterType === "all" ? undefined : ledgerFilterType,
+        search: ledgerSearch,
+        limit: 60,
+      },
+      profile,
+    );
   }, [profile, ledgerFilterType, ledgerSearch, ledgerVersion]);
 
   const ledgerBreakdown = useMemo(() => {
     if (!profile) return null;
     const pId = profile.id || profile.nickNormalized || profile.nick;
-    return calculateStudentScoreBreakdown(pId);
+    return calculateStudentScoreBreakdown(pId, profile);
   }, [profile, ledgerVersion]);
 
   if (!profile) return null;

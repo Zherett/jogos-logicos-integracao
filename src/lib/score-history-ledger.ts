@@ -3,6 +3,31 @@
 // com origem, justificativa, metadados e data/hora para auditoria aprofundada, retroatribuição e resolução de bugs.
 
 import { nickSlug } from "./player-profile.ts";
+import type { PlayerProfile } from "./playfab.ts";
+import { getAllAvailableMedals, MEDAL_XP_REWARDS, type MedalRarity } from "./medals-catalog.ts";
+import { GAME_NAMES } from "./game-storage.ts";
+
+const RECONSTRUCT_MEDAL_POINTS: Record<string, number> = {
+  bronze: 20,
+  prata: 30,
+  ouro: 50,
+  platina: 100,
+  diamante: 150,
+  heroi: 150,
+  secreta: 150,
+};
+
+const RECONSTRUCT_LEVEL_POINTS: Record<number, number> = {
+  2: 30,
+  3: 40,
+  4: 50,
+  5: 75,
+  6: 100,
+  7: 150,
+  8: 200,
+  9: 300,
+  10: 500,
+};
 
 export type ScoreTransactionType =
   | "xp"
@@ -131,15 +156,212 @@ export function recordScoreLedgerEntry(
 }
 
 /**
+ * Reconstitui sinteticamente o extrato de auditoria de um aluno a partir dos dados consolidados do seu perfil
+ * (partidas nos minijogos, medalhas desbloqueadas, níveis de progressão e bônus convalidos).
+ * Garante que a soma exata de XP e Pontos bata com `profile.xp` e `profile.careerPoints`.
+ */
+export function reconstructStudentLedgerFromProfile(profile: PlayerProfile): ScoreLedgerEntry[] {
+  if (!profile) return [];
+  const cleanId = nickSlug(profile.id || profile.nickNormalized || profile.nick || "desconhecido");
+  const playerNick = profile.nick || "Jogador";
+  const results: ScoreLedgerEntry[] = [];
+  const baseTimestamp = profile.created_at || new Date().toISOString();
+
+  const allMedals = getAllAvailableMedals();
+  const medalMap = new Map(allMedals.map((m) => [m.id, m]));
+
+  let currentPtsSum = 0;
+  let currentXpSum = 0;
+
+  // 1. Reconstituição de Medalhas Conquistadas
+  if (Array.isArray(profile.unlockedMedals)) {
+    for (const m of profile.unlockedMedals) {
+      if (!m) continue;
+      const mId = typeof m === "string" ? m : (m?.medalId ?? (m as any)?.id ?? "");
+      if (!mId) continue;
+      const def = medalMap.get(mId);
+      const title = def?.title || mId;
+      const rarity = (def?.rarity || (m as any)?.rarity || "bronze") as MedalRarity;
+      const ptsReward = RECONSTRUCT_MEDAL_POINTS[rarity] ?? 20;
+      const xpReward = MEDAL_XP_REWARDS[rarity] ?? 10;
+      const ts = typeof m === "object" && m.unlockedAt ? m.unlockedAt : baseTimestamp;
+
+      // Evento de medalha
+      results.push({
+        id: `syn_med_${mId}`,
+        playerId: cleanId,
+        playerNick,
+        type: "medal",
+        source: "medalha",
+        amount: 1,
+        reason: `Medalha Conquistada: ${title}`,
+        metadata: { medalId: mId, medalTitle: title },
+        timestamp: ts,
+      });
+
+      // XP da medalha
+      if (xpReward > 0) {
+        results.push({
+          id: `syn_med_xp_${mId}`,
+          playerId: cleanId,
+          playerNick,
+          type: "xp",
+          source: "medalha",
+          amount: xpReward,
+          reason: `Bônus de Experiência por Medalha: ${title} (+${xpReward} XP)`,
+          metadata: { medalId: mId, medalTitle: title },
+          timestamp: ts,
+        });
+        currentXpSum += xpReward;
+      }
+
+      // Pontos do Hall da Fama da medalha
+      if (ptsReward > 0) {
+        results.push({
+          id: `syn_med_pts_${mId}`,
+          playerId: cleanId,
+          playerNick,
+          type: "career_points",
+          source: "medalha",
+          amount: ptsReward,
+          reason: `Pontos do Hall da Fama por Medalha: ${title} (+${ptsReward} pts)`,
+          metadata: { medalId: mId, medalTitle: title },
+          timestamp: ts,
+        });
+        currentPtsSum += ptsReward;
+      }
+    }
+  }
+
+  // 2. Reconstituição por Subida de Nível (Elo)
+  const currentLvl = Math.min(10, Math.max(1, profile.level ?? 1));
+  for (let l = 2; l <= currentLvl; l++) {
+    const lvlPts = RECONSTRUCT_LEVEL_POINTS[l] ?? 0;
+    if (lvlPts > 0) {
+      results.push({
+        id: `syn_lvl_${l}`,
+        playerId: cleanId,
+        playerNick,
+        type: "career_points",
+        source: "promocao_nivel",
+        amount: lvlPts,
+        reason: `Promoção para Nível ${l} (+${lvlPts} pts)`,
+        timestamp: baseTimestamp,
+      });
+      currentPtsSum += lvlPts;
+    }
+  }
+
+  // 3. Reconstituição por Partidas nos Jogos
+  if (Array.isArray(profile.stats) && profile.stats.length > 0) {
+    for (const stat of profile.stats) {
+      if (!stat || stat.plays <= 0) continue;
+      const gName = (GAME_NAMES as Record<string, string>)[stat.game_id] || stat.game_id;
+      const remainingXp = Math.max(0, (profile.xp ?? 0) - currentXpSum);
+      const estimatedXp = Math.min(remainingXp, stat.plays * 18);
+      if (estimatedXp > 0) {
+        results.push({
+          id: `syn_stat_xp_${stat.game_id}`,
+          playerId: cleanId,
+          playerNick,
+          type: "xp",
+          source: stat.mode === "torneio_semanal" ? "torneio_semanal" : "partida",
+          amount: estimatedXp,
+          reason: `Partidas em ${gName} (${stat.plays} partidas, ${stat.wins} vitórias)`,
+          metadata: { gameId: stat.game_id, score: stat.best_score },
+          timestamp: stat.last_played || baseTimestamp,
+        });
+        currentXpSum += estimatedXp;
+      }
+    }
+  }
+
+  // 4. Reconciliação Exata de Saldo (garante bate 100% com careerPoints e xp)
+  const totalTargetPts = Math.max(0, profile.careerPoints ?? 0);
+  if (totalTargetPts > currentPtsSum) {
+    const diffPts = totalTargetPts - currentPtsSum;
+    results.push({
+      id: `syn_reconcile_pts`,
+      playerId: cleanId,
+      playerNick,
+      type: "career_points",
+      source: "partida",
+      amount: diffPts,
+      reason: `Pontuação Acumulada em Partidas e Desafios (+${diffPts} pts)`,
+      timestamp: baseTimestamp,
+    });
+    currentPtsSum += diffPts;
+  }
+
+  const totalTargetXp = Math.max(0, profile.xp ?? 0);
+  if (totalTargetXp > currentXpSum) {
+    const diffXp = totalTargetXp - currentXpSum;
+    results.push({
+      id: `syn_reconcile_xp`,
+      playerId: cleanId,
+      playerNick,
+      type: "xp",
+      source: "partida",
+      amount: diffXp,
+      reason: `Experiência Acumulada em Partidas e Atividades (+${diffXp} XP)`,
+      timestamp: baseTimestamp,
+    });
+    currentXpSum += diffXp;
+  }
+
+  return results.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+}
+
+/**
  * Retorna as transações de histórico de um jogador específico, ordenadas da mais recente para a mais antiga.
+ * Suporta fallback inteligente de reconstrução sintética se o log local estiver vazio nesta máquina.
  */
 export function getPlayerScoreLedger(
   playerId: string,
   filter?: Omit<ScoreLedgerFilter, "playerId">,
+  playerProfile?: PlayerProfile | null,
 ): ScoreLedgerEntry[] {
   if (!playerId) return [];
   const cleanId = nickSlug(playerId);
-  return getAllScoreLedger({ ...filter, playerId: cleanId });
+  const localEntries = getAllScoreLedger({ ...filter, playerId: cleanId });
+
+  if (localEntries.length > 0) {
+    return localEntries;
+  }
+
+  // Fallback quando não há registros locais salvos no browser da máquina atual
+  const target = playerProfile;
+  if (
+    target &&
+    ((target.xp ?? 0) > 0 ||
+      (target.careerPoints ?? 0) > 0 ||
+      (target.unlockedMedals?.length ?? 0) > 0 ||
+      (target.stats?.length ?? 0) > 0)
+  ) {
+    const synthetic = reconstructStudentLedgerFromProfile(target);
+    let filtered = synthetic;
+    if (filter?.type) {
+      filtered = filtered.filter((e) => e.type === filter.type);
+    }
+    if (filter?.source) {
+      filtered = filtered.filter((e) => e.source === filter.source);
+    }
+    if (filter?.search) {
+      const sLower = filter.search.toLowerCase().trim();
+      filtered = filtered.filter(
+        (e) =>
+          e.reason.toLowerCase().includes(sLower) ||
+          e.playerNick.toLowerCase().includes(sLower) ||
+          e.source.toLowerCase().includes(sLower),
+      );
+    }
+    if (filter?.limit && filter.limit > 0) {
+      filtered = filtered.slice(0, filter.limit);
+    }
+    return filtered;
+  }
+
+  return [];
 }
 
 /**
@@ -152,8 +374,12 @@ export function getAllScoreLedger(filter?: ScoreLedgerFilter): ScoreLedgerEntry[
 
   let results = all.filter((entry) => {
     if (!entry) return false;
-    if (cleanPlayerId && nickSlug(entry.playerId || "") !== cleanPlayerId) {
-      return false;
+    if (cleanPlayerId) {
+      const matchPId = nickSlug(entry.playerId || "") === cleanPlayerId;
+      const matchPNick = nickSlug(entry.playerNick || "") === cleanPlayerId;
+      if (!matchPId && !matchPNick) {
+        return false;
+      }
     }
     if (filter?.type && entry.type !== filter.type) {
       return false;
@@ -194,8 +420,12 @@ export function getAllScoreLedger(filter?: ScoreLedgerFilter): ScoreLedgerEntry[
 
 /**
  * Calcula o detalhamento consolidado da origem das pontuações de um aluno.
+ * Se não houver logs gravados no navegador local, reconstrói o detalhamento com base no perfil consolidado.
  */
-export function calculateStudentScoreBreakdown(playerId: string): {
+export function calculateStudentScoreBreakdown(
+  playerId: string,
+  playerProfile?: PlayerProfile | null,
+): {
   totalXpFromMatches: number;
   totalXpFromMedals: number;
   totalXpFromTournament: number;
@@ -207,7 +437,23 @@ export function calculateStudentScoreBreakdown(playerId: string): {
   sourcesBreakdown: Record<ScoreTransactionSource, { xp: number; points: number; count: number }>;
 } {
   const cleanId = nickSlug(playerId);
-  const entries = loadAllLedgerEntries().filter((e) => e && nickSlug(e.playerId || "") === cleanId);
+  let entries = loadAllLedgerEntries().filter((e) => {
+    if (!e) return false;
+    return nickSlug(e.playerId || "") === cleanId || nickSlug(e.playerNick || "") === cleanId;
+  });
+
+  if (entries.length === 0) {
+    const target = playerProfile;
+    if (
+      target &&
+      ((target.xp ?? 0) > 0 ||
+        (target.careerPoints ?? 0) > 0 ||
+        (target.unlockedMedals?.length ?? 0) > 0 ||
+        (target.stats?.length ?? 0) > 0)
+    ) {
+      entries = reconstructStudentLedgerFromProfile(target);
+    }
+  }
 
   let totalXpFromMatches = 0;
   let totalXpFromMedals = 0;

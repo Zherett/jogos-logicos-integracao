@@ -1814,7 +1814,16 @@ export function evaluatePlayerMedals(
         if (
           cond.targetRank &&
           Array.isArray(p.tournamentMedals) &&
-          p.tournamentMedals.some((tm) => tm.rank === cond.targetRank)
+          p.tournamentMedals.some((tm) => {
+            if (!tm || tm.rank !== cond.targetRank) return false;
+            // Torneio semanal em andamento (W46 encerra apenas em 15/11 às 23:59) NÃO pode conceder medalha de pódio oficial prematuramente
+            const isOngoingOrProjected =
+              tm.weekKey === "2026-W46" ||
+              tm.weekKey === "Season_1" ||
+              String(tm.id || "").startsWith("projected_") ||
+              (typeof tm.label === "string" && tm.label.includes("RoboGrid"));
+            return !isOngoingOrProjected;
+          })
         ) {
           earned = true;
         }
