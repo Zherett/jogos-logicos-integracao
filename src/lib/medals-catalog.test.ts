@@ -1747,4 +1747,96 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
     // Não deve listar medalha de bronze
     assert.ok(!notifs.some((n) => n.medalId === "first_game_played"));
   });
+
+  it("as medalhas do período Beta possuem descrição oficial válida até o dia 15 de Novembro", () => {
+    const all = getAllAvailableMedals();
+    const betaIds = [
+      "beta_tester_bronze",
+      "beta_tester_prata",
+      "beta_tester_ouro",
+      "beta_tester_platina",
+      "beta_tester_heroi",
+    ];
+
+    for (const bId of betaIds) {
+      const def = all.find((m) => m.id === bId);
+      assert.ok(def, `Medalha ${bId} deve existir no catálogo`);
+      assert.ok(
+        def.description.includes("15 de Novembro"),
+        `Descrição da medalha ${bId} deve mencionar 15 de Novembro, obtido: "${def.description}"`,
+      );
+    }
+  });
+
+  it("varredura retroativa revoga medalha do torneio semanal atribuída indevidamente e estorna pontuação e XP", async () => {
+    // Aluno que recebeu prematuramente Campeão Semanal (Ouro) durante o torneio ativo aberto
+    const alunoComMedalhaIndevida = {
+      profile: {
+        id: "aluno_revogacao_test",
+        nick: "AlunoIndevido",
+        nickNormalized: "alunoindevido",
+        full_name: "ALUNO INDEVIDO TESTE",
+        school: "Maria de Nazaré",
+        grade: "5º ano",
+        birthdate: "2015-05-10",
+        xp: 600,
+        seasonXp: 600,
+        level: 3,
+        wins: 5,
+        matchesPlayed: 10,
+        distinctGamesPlayed: 2,
+        pointsBalance: 200,
+        careerPoints: 500,
+        badges: [],
+        seasonId: 1,
+        // Medalha de pódio semanal atribuída antes do fechamento
+        unlockedMedals: [
+          { medalId: "tournament_top_1_gold", unlockedAt: "2026-11-05T00:00:00.000Z" },
+        ],
+        tournamentMedals: [],
+      },
+      passwordHash: "hash",
+      unlocked: ["logica"],
+      stats: [
+        {
+          game_id: "logica",
+          mode: "padrao",
+          plays: 10,
+          wins: 5,
+          best_score: 50,
+          best_level: 2,
+          last_wrong: 0,
+        },
+      ],
+      updatedAt: "2026-11-05T00:00:00.000Z",
+    };
+
+    saveRegistry({ [alunoComMedalhaIndevida.profile.nickNormalized]: alunoComMedalhaIndevida as any });
+
+    const auditRes = await runRetroactiveMedalsAudit({ skipCloudSync: true });
+    assert.ok(auditRes.medalsRevokedCount >= 1, "Deve ter revogado ao menos 1 medalha indevida");
+    assert.ok(auditRes.pointsDeductedTotal >= 50, "Deve ter estornado os pontos da medalha");
+
+    // Verifica que a medalha foi removida e os pontos e XP foram estornados
+    const regAfter = loadRegistry();
+    const saved = regAfter[alunoComMedalhaIndevida.profile.nickNormalized];
+    assert.ok(saved, "Conta deve existir no registro após varredura");
+    assert.equal(
+      saved.profile.unlockedMedals?.some((m: any) => m.medalId === "tournament_top_1_gold"),
+      false,
+      "A medalha tournament_top_1_gold indevida deve ter sido removida",
+    );
+    assert.ok(
+      (saved.profile.careerPoints ?? 0) < 500,
+      `CareerPoints deve ter sido estornado (< 500), obtido: ${saved.profile.careerPoints}`,
+    );
+    assert.ok(
+      (saved.profile.pointsBalance ?? 0) < 200,
+      `PointsBalance deve ter sido estornado (< 200), obtido: ${saved.profile.pointsBalance}`,
+    );
+    assert.ok(
+      (saved.profile.xp ?? 0) < 600,
+      `XP deve ter sido estornado (< 600), obtido: ${saved.profile.xp}`,
+    );
+  });
 });

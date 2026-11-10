@@ -13,6 +13,7 @@ import {
   isAdminOrTestAccount,
   is5thGradeSchool,
   isEtapa3OrOlder,
+  isOlderThanEtapa1,
   isOfficialSemedSchool,
   passwordFromBirthdate,
   RAIMUNDO_GRADES,
@@ -65,7 +66,7 @@ export function PlayerAuthDialog({ open, onOpenChange }: Props) {
   const generatedSignupPassword = birthdate ? passwordFromBirthdate(birthdate) : "";
   const calculatedAge = birthdate ? ageFrom(birthdate) : null;
   const isOver15 = birthdate ? isEtapa3OrOlder(birthdate) : (calculatedAge !== null ? calculatedAge >= 17 : false);
-  const isOver11 = calculatedAge !== null ? calculatedAge > 11 : false;
+  const isOlderEtapa1 = birthdate ? isOlderThanEtapa1(birthdate) : (calculatedAge !== null ? calculatedAge > 12 : false);
   const availableSchools = getAvailableSchoolsForAge(birthdate);
   const isNoSchoolOrCommunity = school === "Nenhuma" || school === "Outro" || isOver15;
 
@@ -132,11 +133,11 @@ export function PlayerAuthDialog({ open, onOpenChange }: Props) {
     // Tab === "criar"
     const submitAge = birthdate ? ageFrom(birthdate) : 0;
     const isPlayerOver15 = isEtapa3OrOlder(birthdate);
-    const isPlayerOver11 = submitAge > 11;
+    const isPlayerOlderThanEtapa1 = isOlderThanEtapa1(birthdate);
     let resolvedSchool = school;
     if (isPlayerOver15 && isOfficialSemedSchool(school)) {
       resolvedSchool = "Nenhuma";
-    } else if (isPlayerOver11 && is5thGradeSchool(school)) {
+    } else if (isPlayerOlderThanEtapa1 && is5thGradeSchool(school)) {
       resolvedSchool = "Nenhuma";
     }
     const isNoSchool = resolvedSchool === "Nenhuma" || resolvedSchool === "Outro" || isPlayerOver15;
@@ -439,9 +440,9 @@ export function PlayerAuthDialog({ open, onOpenChange }: Props) {
                       <div className="rounded-xl border border-accent/40 bg-accent/10 p-2.5 text-xs text-accent-foreground font-medium">
                         ℹ️ Pela sua data de nascimento (nascidos antes de 2010 • 3ª Etapa), você participa na categoria <b>Comunidade / Outro</b>. As escolas municipais da SEMED (5º ao 9º ano) são restritas para alunos do Ensino Fundamental.
                       </div>
-                    ) : isOver11 ? (
+                    ) : isOlderEtapa1 ? (
                       <div className="rounded-xl border border-primary/30 bg-primary/10 p-2.5 text-xs text-primary font-medium">
-                        ℹ️ Alunos da <b>2ª Etapa (6º ao 9º ano • nascidos até dez/2010)</b> não podem selecionar escolas de 5º ano. Para os anos finais, selecione uma escola da 2ª Etapa (<b>Raimundo Bezerra</b> ou <b>Agenor Smith</b>) ou a categoria <b>Outro</b>.
+                        ℹ️ Alunos da <b>2ª Etapa (6º ao 9º ano • nascidos antes de 2014)</b> não podem selecionar escolas de 5º ano. Para os anos finais, selecione uma escola da 2ª Etapa (<b>Raimundo Bezerra</b> ou <b>Agenor Smith</b>) ou a categoria <b>Outro</b>.
                       </div>
                     ) : null}
 

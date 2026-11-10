@@ -229,9 +229,18 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
       await auth.refresh();
       const refreshedNotifs = await syncAdminMedalNotificationsFromPlayFab();
       setDraft((prev) => ({ ...prev, adminMedalNotifications: refreshedNotifs }));
-      flashSaved(
-        `Varredura concluída: ${res.medalsAwardedCount} medalha(s) retroatribuída(s) para ${res.updatedStudentsCount} aluno(s).`,
-      );
+      const parts: string[] = [];
+      if (res.medalsAwardedCount > 0) {
+        parts.push(`+${res.medalsAwardedCount} medalha(s) retroatribuída(s)`);
+      }
+      if (res.medalsRevokedCount > 0) {
+        parts.push(`-${res.medalsRevokedCount} indevida(s) revogada(s) (-${res.pointsDeductedTotal} pts)`);
+      }
+      const msg =
+        parts.length > 0
+          ? `Varredura concluída: ${parts.join(" e ")} em ${res.updatedStudentsCount} aluno(s).`
+          : `Varredura concluída: nenhum ajuste necessário nos ${res.auditedStudentsCount} alunos auditados.`;
+      flashSaved(msg);
     } catch (err: any) {
       console.error("Erro na varredura de medalhas:", err);
       flashSaved("Erro ao processar varredura de medalhas.");
@@ -3885,42 +3894,67 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                         <div className="text-xs font-bold text-foreground flex items-center gap-1.5">
                           <CheckCircle2 className="h-4 w-4 text-emerald-500" /> Relatório da Última Varredura
                         </div>
-                        <div className="flex gap-2 text-[11px]">
+                        <div className="flex flex-wrap gap-2 text-[11px]">
                           <span className="bg-secondary px-2 py-0.5 rounded-md text-foreground font-semibold">
                             {auditResult.auditedStudentsCount} alunos auditados
                           </span>
                           <span className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 px-2 py-0.5 rounded-md font-semibold">
-                            {auditResult.updatedStudentsCount} com medalhas atribuídas
+                            {auditResult.updatedStudentsCount} com ajustes
                           </span>
-                          <span className="bg-primary/10 text-primary px-2 py-0.5 rounded-md font-bold">
-                            +{auditResult.medalsAwardedCount} medalhas retroatribuídas
-                          </span>
+                          {auditResult.medalsAwardedCount > 0 && (
+                            <span className="bg-primary/10 text-primary px-2 py-0.5 rounded-md font-bold">
+                              +{auditResult.medalsAwardedCount} retroatribuídas
+                            </span>
+                          )}
+                          {auditResult.medalsRevokedCount > 0 && (
+                            <span className="bg-destructive/10 text-destructive px-2 py-0.5 rounded-md font-bold">
+                              -{auditResult.medalsRevokedCount} indevidas revogadas (-{auditResult.pointsDeductedTotal} pts)
+                            </span>
+                          )}
                         </div>
                       </div>
 
                       {auditResult.details.length === 0 ? (
                         <p className="text-xs text-muted-foreground italic py-1">
-                          Todos os alunos já estavam com 100% de suas medalhas e pontos em dia! Nenhuma pendência encontrada.
+                          Todos os alunos já estavam com 100% de suas medalhas e pontos em dia! Nenhuma pendência ou medalha indevida encontrada.
                         </p>
                       ) : (
-                        <div className="max-h-48 overflow-y-auto space-y-2 pr-1">
+                        <div className="max-h-56 overflow-y-auto space-y-2 pr-1">
                           {auditResult.details.map((st) => (
-                            <div key={st.studentId} className="rounded-lg border bg-background/80 p-2 text-xs space-y-1">
+                            <div key={st.studentId} className="rounded-lg border bg-background/80 p-2.5 text-xs space-y-1.5">
                               <div className="flex items-center justify-between">
                                 <span className="font-bold text-foreground">
                                   {st.nick} <span className="font-normal text-muted-foreground">({st.fullName} • {st.school})</span>
                                 </span>
-                                <span className="text-[10px] font-bold text-primary">
-                                  +{st.medalsAwarded.length} medalha(s)
-                                </span>
+                                <div className="flex gap-1.5">
+                                  {st.medalsAwarded.length > 0 && (
+                                    <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded">
+                                      +{st.medalsAwarded.length} concedida(s)
+                                    </span>
+                                  )}
+                                  {Boolean(st.medalsRevoked && st.medalsRevoked.length > 0) && (
+                                    <span className="text-[10px] font-bold text-destructive bg-destructive/10 px-1.5 py-0.5 rounded">
+                                      -{st.medalsRevoked!.length} revogada(s)
+                                    </span>
+                                  )}
+                                </div>
                               </div>
                               <div className="flex flex-wrap gap-1.5 pt-0.5">
                                 {st.medalsAwarded.map((m) => (
                                   <span
                                     key={m.id}
-                                    className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-md bg-secondary text-foreground border"
+                                    className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/20"
                                   >
-                                    🏅 {m.title}
+                                    🏅 +{m.title}
+                                  </span>
+                                ))}
+                                {st.medalsRevoked?.map((m) => (
+                                  <span
+                                    key={m.id}
+                                    title={m.reason}
+                                    className="inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-md bg-destructive/10 text-destructive border border-destructive/20"
+                                  >
+                                    🗑️ -{m.title}
                                   </span>
                                 ))}
                               </div>

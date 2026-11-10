@@ -103,6 +103,38 @@ export function awardCareerPoints(
 }
 
 /**
+ * Estorna Pontos de Carreira e saldo concedidos indevidamente (por exemplo, por medalhas atribuídas prematuramente).
+ */
+export function revokeCareerPoints(
+  profile: PlayerProfile,
+  pointsToRevoke: number,
+  reason?: string,
+): { profile: PlayerProfile; pointsRevoked: number } {
+  if (!profile || pointsToRevoke <= 0) return { profile, pointsRevoked: 0 };
+  const currentBalance = profile.pointsBalance ?? 0;
+  const currentCareer = profile.careerPoints ?? 0;
+
+  profile.pointsBalance = Math.max(0, currentBalance - pointsToRevoke);
+  profile.careerPoints = Math.max(0, currentCareer - pointsToRevoke);
+
+  try {
+    recordScoreLedgerEntry({
+      playerId: profile.id || profile.nick,
+      playerNick: profile.nick || "Jogador",
+      type: "career_points",
+      source: "correcao_administrativa",
+      amount: -pointsToRevoke,
+      balanceAfter: profile.careerPoints,
+      reason: reason || "Estorno Administrativo: Medalha Atribuída Indevidamente",
+    });
+  } catch {
+    /* ignore */
+  }
+
+  return { profile, pointsRevoked: pointsToRevoke };
+}
+
+/**
  * Deduz pontos do saldo gastável do jogador (para compras futuras de itens/moeda).
  * O total histórico (careerPoints) NUNCA é reduzido, garantindo que compras
  * não rebaixem o aluno no ranking geral do Hall da Fama.
@@ -327,7 +359,10 @@ export function calculateRetroactivePoints(profile: PlayerProfile): number {
  * e se detectar inflação de pontos gerada pelo loop de sincronização anterior,
  * corrige `careerPoints`, `pointsBalance` e restaura as travas de nível/data.
  */
-export function sanitizeInflatedCareerPoints(profile: PlayerProfile): {
+export function sanitizeInflatedCareerPoints(
+  profile: PlayerProfile,
+  options?: { skipMedalPrune?: boolean },
+): {
   profile: PlayerProfile;
   wasSanitized: boolean;
 } {
@@ -361,7 +396,7 @@ export function sanitizeInflatedCareerPoints(profile: PlayerProfile): {
     statsList.reduce((acc, s) => acc + (s?.plays ?? 0), 0),
   );
 
-  if (totalMatches <= 15 && Array.isArray(profile.unlockedMedals)) {
+  if (!options?.skipMedalPrune && totalMatches <= 15 && Array.isArray(profile.unlockedMedals)) {
     profile.unlockedMedals = profile.unlockedMedals.filter((m) => {
       if (!m) return false;
       const mId = m.medalId || (m as any).id || "";
@@ -500,9 +535,12 @@ export function sanitizeInflatedCareerPoints(profile: PlayerProfile): {
  * aplicando reconciliação retroativa justa caso estejam zerados/indefinidos,
  * e corrige pontuações infladas por loops de sincronização.
  */
-export function ensurePlayerCareerPointsInitialized(profile: PlayerProfile): PlayerProfile {
+export function ensurePlayerCareerPointsInitialized(
+  profile: PlayerProfile,
+  options?: { skipMedalPrune?: boolean },
+): PlayerProfile {
   if (!profile) return profile;
-  sanitizeInflatedCareerPoints(profile);
+  sanitizeInflatedCareerPoints(profile, options);
   const needsInit =
     profile.careerPoints === undefined ||
     profile.pointsBalance === undefined ||
@@ -524,7 +562,7 @@ export function ensurePlayerCareerPointsInitialized(profile: PlayerProfile): Pla
     profile.achievedLevelsPoints = Array.from(new Set([...(profile.achievedLevelsPoints ?? []), ...lvlList]));
   }
 
-  sanitizeInflatedCareerPoints(profile);
+  sanitizeInflatedCareerPoints(profile, options);
 
   return profile;
 }

@@ -55,6 +55,7 @@ import {
   getAvailableSchoolsForAge,
   is5thGradeSchool,
   isEtapa3OrOlder,
+  isOlderThanEtapa1,
   isOfficialSemedSchool,
   levelProgress,
   MAX_LEVEL,
@@ -750,8 +751,7 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                         setEditSchool("Nenhuma");
                         setEditTurma("");
                       } else if (newDate) {
-                        const a = ageFrom(newDate);
-                        if (a > 11 && is5thGradeSchool(editSchool)) {
+                        if (isOlderThanEtapa1(newDate) && is5thGradeSchool(editSchool)) {
                           setEditSchool("Nenhuma");
                           setEditTurma("");
                         }

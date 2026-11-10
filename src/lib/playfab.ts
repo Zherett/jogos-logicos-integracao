@@ -43,6 +43,7 @@ import {
   passwordFromBirthdate,
   playfabUsernameFromNick,
   isPioneerExcludedAccount,
+  isOlderThanEtapa1,
   schoolNeedsGrade,
   SCHOOLS,
   schoolSlug,
@@ -101,6 +102,7 @@ import {
 import {
   autoConvertAllPointsToCoins,
   awardCareerPoints,
+  revokeCareerPoints,
   checkAndApplyDailyLoginPoints,
   checkAndApplyFirstGameOfDayPoints,
   checkLevelPromotionPoints,
@@ -1119,7 +1121,11 @@ function getCurrentWeekKey(now = new Date()): string {
 
 const aligningPlayerKeys = new Set<string>();
 
-export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdminConfig): StoredAccount {
+export function ensurePlayerSeasonAligned(
+  acc: StoredAccount,
+  cfg: PlatformAdminConfig,
+  options?: { skipPodiumCleanse?: boolean; skipMedalPrune?: boolean },
+): StoredAccount {
   if (!acc || !acc.profile) return acc;
   const pKey = (acc.profile.nickNormalized || acc.profile.id || "").toLowerCase().trim();
   if (pKey && aligningPlayerKeys.has(pKey)) {
@@ -1127,7 +1133,6 @@ export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdmin
   }
   if (pKey) aligningPlayerKeys.add(pKey);
   try {
-
   // Captura as medalhas que o aluno já possuía antes de qualquer filtragem/alinhamento
   // para impedir concessão duplicada de XP ou Pontos de Carreira na mesma função
   const preExistingMedalIds = new Set<string>(
@@ -1239,16 +1244,27 @@ export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdmin
         .map((m) => {
           if (Array.isArray(m.historyWeeks)) {
             m.historyWeeks = m.historyWeeks.filter((w: string) => w !== currentWeekKey && w !== currentSeasonKey);
-            m.count = Math.max(1, m.historyWeeks.length);
+            m.count = m.historyWeeks.length;
           }
           return m;
         })
-        .filter((m) => Boolean(m && m.weekKey !== currentWeekKey && m.weekKey !== currentSeasonKey && !String(m.id || "").startsWith("projected_")));
+        .filter(
+          (m) =>
+            Boolean(
+              m &&
+              m.weekKey !== currentWeekKey &&
+              m.weekKey !== currentSeasonKey &&
+              !String(m.id || "").startsWith("projected_") &&
+              (!Array.isArray(m.historyWeeks) || m.historyWeeks.length > 0) &&
+              (m.count ?? 1) > 0
+            )
+        );
     }
   }
 
   // Remove medalhas de pódio ranqueado e segredos de pódio emitidos indevidamente durante a temporada ativa:
-  if (Array.isArray(acc.profile.unlockedMedals)) {
+  if (!options?.skipPodiumCleanse && Array.isArray(acc.profile.unlockedMedals)) {
+    const medalsToPrune: string[] = [];
     acc.profile.unlockedMedals = acc.profile.unlockedMedals.filter((m: any) => {
       if (!m) return false;
       const rawId = typeof m === "string" ? m : (m?.medalId ?? m?.id ?? "");
@@ -1261,13 +1277,30 @@ export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdmin
         medalId.startsWith("secret_top5_weeks_") ||
         medalId.startsWith("secret_top1_consecutive_");
       if (isPodiumMedal && !isAdminAcc) {
-        if (isCorruptedNovice) return false;
+        if (isCorruptedNovice) {
+          medalsToPrune.push(medalId);
+          return false;
+        }
         const hasPastSeasonMedal = Array.isArray(acc.profile.tournamentMedals) &&
           acc.profile.tournamentMedals.some((tm) => tm && tm.weekKey && tm.weekKey !== currentSeasonKey && tm.weekKey !== currentWeekKey);
-        return hasPastSeasonMedal;
+        if (!hasPastSeasonMedal) {
+          medalsToPrune.push(medalId);
+          return false;
+        }
+        return true;
       }
       return true;
     });
+
+    for (const pId of medalsToPrune) {
+      const def = getAllAvailableMedals(cfg?.customMedals).find((d) => d.id === pId);
+      const rarity = def?.rarity ?? (pId.includes("gold") ? "ouro" : pId.includes("silver") ? "prata" : "bronze");
+      const pts = MEDAL_POINTS_REWARDS[rarity] ?? 20;
+      const xp = MEDAL_XP_REWARDS[rarity] ?? 10;
+      revokeCareerPoints(acc.profile, pts, `Sincronização: Estorno de medalha prematura (${def?.title ?? pId})`);
+      acc.profile.xp = Math.max(0, (acc.profile.xp ?? 0) - xp);
+      acc.profile.seasonXp = Math.max(0, (acc.profile.seasonXp ?? 0) - xp);
+    }
   }
 
   // Retroverificação e Limpeza do X1:
@@ -1415,7 +1448,13 @@ export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdmin
   acc.profile.streakDays = getPlayerStreakDays(acc.profile);
 
   // Reconcile all unlocked medals so any improperly awarded medal returns to its proper progress
-  if (acc.profile.unlockedMedals && acc.profile.unlockedMedals.length > 0 && !isAdminAcc) {
+  if (
+    !options?.skipPodiumCleanse &&
+    !options?.skipMedalPrune &&
+    acc.profile.unlockedMedals &&
+    acc.profile.unlockedMedals.length > 0 &&
+    !isAdminAcc
+  ) {
     let filtered = acc.profile.unlockedMedals.filter((m: any) => {
       if (!m) return false;
       const rawId = typeof m === "string" ? m : (m?.medalId ?? m?.id ?? "");
@@ -1617,7 +1656,7 @@ export function ensurePlayerSeasonAligned(acc: StoredAccount, cfg: PlatformAdmin
   }
 
   // Inicializa e sanitiza pontos de carreira após reconciliar stats, nível e medalhas
-  ensurePlayerCareerPointsInitialized(acc.profile);
+  ensurePlayerCareerPointsInitialized(acc.profile, { skipMedalPrune: options?.skipMedalPrune });
 
   // Sanitization: Players in Etapa 3 (15+ years old) cannot belong to elementary SEMED schools or classes.
   // If institution is "Nenhuma" or "Outro", grade and turma are always null.
@@ -2002,11 +2041,11 @@ export async function playfabSignUp(data: SignUpData): Promise<{
 
   const age = ageFrom(data.birthdate);
   const isOver15 = isEtapa3OrOlder(data.birthdate);
-  const isOver11 = age > 11;
+  const isOlderEtapa1 = isOlderThanEtapa1(data.birthdate);
   let resolvedSchool = data.school;
   if (isOver15 && isOfficialSemedSchool(data.school)) {
     resolvedSchool = "Nenhuma";
-  } else if (isOver11 && is5thGradeSchool(data.school)) {
+  } else if (isOlderEtapa1 && is5thGradeSchool(data.school)) {
     resolvedSchool = "Nenhuma";
   }
   const isNoSchool = resolvedSchool === "Nenhuma" || resolvedSchool === "Outro" || isOver15;
@@ -5900,7 +5939,7 @@ export async function playfabCompleteInitialSchoolSetup(args: {
   const p = acc.profile;
   const currentAge = ageFrom(p.birthdate);
   const isOver15 = isEtapa3OrOlder(p.birthdate);
-  const isOver11 = currentAge > 11;
+  const isOlderEtapa1 = isOlderThanEtapa1(p.birthdate);
 
   if (isOver15) {
     return {
@@ -5915,10 +5954,10 @@ export async function playfabCompleteInitialSchoolSetup(args: {
 
   // 1. School (only if not yet selected)
   if (!schoolAlreadyLocked && args.school && args.school !== "Nenhuma") {
-    if (isOver11 && is5thGradeSchool(args.school)) {
+    if (isOlderEtapa1 && is5thGradeSchool(args.school)) {
       return {
         profile: p,
-        error: "Alunos acima de 11 anos não podem selecionar escolas de 5º ano.",
+        error: "Alunos nascidos antes de janeiro de 2014 não podem selecionar escolas de 5º ano.",
       };
     }
     p.school = args.school;
@@ -6059,12 +6098,15 @@ export interface MedalsAuditResult {
   auditedStudentsCount: number;
   updatedStudentsCount: number;
   medalsAwardedCount: number;
+  medalsRevokedCount: number;
+  pointsDeductedTotal: number;
   details: Array<{
     studentId: string;
     nick: string;
     fullName: string;
     school: string;
     medalsAwarded: Array<{ id: string; title: string; rarity: string }>;
+    medalsRevoked?: Array<{ id: string; title: string; rarity: string; reason?: string }>;
   }>;
 }
 
@@ -6123,8 +6165,14 @@ export async function runRetroactiveMedalsAudit(
 
   let updatedStudentsCount = 0;
   let medalsAwardedCount = 0;
+  let medalsRevokedCount = 0;
+  let pointsDeductedTotal = 0;
   const details: MedalsAuditResult["details"] = [];
   const cloudRosterUpdates: Record<string, string> = {};
+
+  const currentWeekKey = getCurrentWeekKey();
+  const currentSeasonId = cfg.rankedSeasonId ?? 1;
+  const currentSeasonKey = `Season_${currentSeasonId}`;
 
   for (let i = 0; i < total; i++) {
     const key = keys[i];
@@ -6146,11 +6194,163 @@ export async function runRetroactiveMedalsAudit(
           .filter(Boolean),
       );
 
-    const aligned = ensurePlayerSeasonAligned(acc, cfg);
+    const aligned = ensurePlayerSeasonAligned(acc, cfg, {
+      skipPodiumCleanse: true,
+      skipMedalPrune: true,
+    });
     const isAdminAcc = aligned.profile.isAdmin || isSpecialAdminAccount(aligned.profile);
     if (isAdminAcc) {
       reg[key] = aligned;
       continue;
+    }
+
+    const revokedForStudent: Array<{ id: string; title: string; rarity: string; reason?: string }> = [];
+    let studentRevokedPoints = 0;
+    let studentRevokedXp = 0;
+
+    // 1. Limpeza de tournamentMedals prematuras do torneio aberto
+    if (Array.isArray(aligned.profile.tournamentMedals)) {
+      aligned.profile.tournamentMedals = aligned.profile.tournamentMedals
+        .filter((m): m is any => Boolean(m && typeof m === "object"))
+        .map((m) => {
+          if (Array.isArray(m.historyWeeks)) {
+            const beforeCount = m.historyWeeks.length;
+            m.historyWeeks = m.historyWeeks.filter(
+              (w: string) => w !== currentWeekKey && w !== currentSeasonKey,
+            );
+            const diff = beforeCount - m.historyWeeks.length;
+            if (diff > 0) {
+              m.count = Math.max(0, (m.count ?? beforeCount) - diff);
+            }
+          }
+          return m;
+        })
+        .filter(
+          (m) =>
+            Boolean(
+              m &&
+              m.weekKey !== currentWeekKey &&
+              m.weekKey !== currentSeasonKey &&
+              !String(m.id || "").startsWith("projected_") &&
+              (!Array.isArray(m.historyWeeks) || m.historyWeeks.length > 0) &&
+              (m.count ?? 1) > 0,
+            ),
+        );
+    }
+
+    // 2. Torneios passados legítimos (excluindo semana e temporada ativas em aberto)
+    const legitimatePastTournaments = Array.isArray(aligned.profile.tournamentMedals)
+      ? aligned.profile.tournamentMedals.filter(
+          (tm) => tm && tm.weekKey && tm.weekKey !== currentSeasonKey && tm.weekKey !== currentWeekKey,
+        )
+      : [];
+
+    // 3. Verificação e revogação de medalhas indevidas em unlockedMedals
+    const existingUnlocked = Array.isArray(aligned.profile.unlockedMedals)
+      ? [...aligned.profile.unlockedMedals]
+      : [];
+
+    const keptUnlocked: typeof existingUnlocked = [];
+
+    for (const m of existingUnlocked) {
+      if (!m) continue;
+      const mId = typeof m === "string" ? m : (m?.medalId ?? (m as any)?.id ?? "");
+      if (!mId) continue;
+
+      let isIndevida = false;
+      let reason = "";
+
+      if (mId === "tournament_top_1_gold") {
+        const hasGold = legitimatePastTournaments.some((tm) => tm.rank === 1);
+        if (!hasGold) {
+          isIndevida = true;
+          reason = "Pódio do Torneio Semanal atribuído antes do encerramento (Ouro)";
+        }
+      } else if (mId === "tournament_top_2_silver") {
+        const hasSilver = legitimatePastTournaments.some((tm) => tm.rank === 2);
+        if (!hasSilver) {
+          isIndevida = true;
+          reason = "Pódio do Torneio Semanal atribuído antes do encerramento (Prata)";
+        }
+      } else if (mId === "tournament_top_3_bronze") {
+        const hasBronze = legitimatePastTournaments.some((tm) => tm.rank === 3);
+        if (!hasBronze) {
+          isIndevida = true;
+          reason = "Pódio do Torneio Semanal atribuído antes do encerramento (Bronze)";
+        }
+      } else if (mId.startsWith("secret_top5_weeks_")) {
+        const requiredWeeks = mId === "secret_top5_weeks_4" ? 4 : 2;
+        const totalWeeks = getTop5TotalWeeks({
+          ...aligned.profile,
+          tournamentMedals: legitimatePastTournaments,
+        } as any);
+        if (totalWeeks < requiredWeeks) {
+          isIndevida = true;
+          reason = `Segredo de Top 5 Semanal indevido (${totalWeeks}/${requiredWeeks} semanas concluídas)`;
+        }
+      } else if (mId.startsWith("secret_top1_consecutive_")) {
+        const requiredWeeks = mId === "secret_top1_consecutive_3" ? 3 : 2;
+        const count = getTop1ConsecutiveWeeks({
+          ...aligned.profile,
+          tournamentMedals: legitimatePastTournaments,
+        } as any);
+        if (count < requiredWeeks) {
+          isIndevida = true;
+          reason = `Segredo de Top 1 Semanal consecutivo indevido (${count}/${requiredWeeks} semanas)`;
+        }
+      } else if (mId.startsWith("tour_rank_")) {
+        const def = allMedals.find((d) => d.id === mId);
+        if (def && def.condition.type === "tournament_rank_mastery") {
+          const req = def.condition.threshold ?? 61;
+          const actualPts = Math.max(
+            aligned.profile.tournamentPoints ?? 0,
+            aligned.profile.bestTournamentPoints ?? 0,
+          );
+          if (actualPts < req) {
+            isIndevida = true;
+            reason = `Maestria de Torneio indevida (${actualPts}/${req} pts)`;
+          }
+        }
+      }
+
+      if (isIndevida) {
+        const def = allMedals.find((d) => d.id === mId);
+        const rarity = def?.rarity ?? "bronze";
+        const pts = MEDAL_POINTS_REWARDS[rarity] ?? 20;
+        const xp = MEDAL_XP_REWARDS[rarity] ?? 10;
+
+        studentRevokedPoints += pts;
+        studentRevokedXp += xp;
+
+        revokeCareerPoints(aligned.profile, pts, `Estorno por Varredura: ${def?.title ?? mId}`);
+        aligned.profile.xp = Math.max(0, (aligned.profile.xp ?? 0) - xp);
+        aligned.profile.seasonXp = Math.max(0, (aligned.profile.seasonXp ?? 0) - xp);
+
+        revokedForStudent.push({
+          id: mId,
+          title: def?.title ?? mId,
+          rarity,
+          reason,
+        });
+      } else {
+        keptUnlocked.push(m);
+      }
+    }
+
+    aligned.profile.unlockedMedals = keptUnlocked;
+
+    if (studentRevokedXp > 0) {
+      const syncedAfterRevoke = syncLevelStageProgress({
+        xp: aligned.profile.xp,
+        lifetimeMatches: aligned.profile.matchesPlayed,
+        lifetimeWins: aligned.profile.wins,
+        lifetimeDistinctGames: aligned.profile.distinctGamesPlayed ?? 1,
+        currentLevel: aligned.profile.level,
+        existingStage: aligned.profile.levelStageProgress,
+        maxAvailableGames: ALL_GAME_IDS.length,
+      });
+      aligned.profile.level = syncedAfterRevoke.level;
+      aligned.profile.levelStageProgress = syncedAfterRevoke.stageProgress;
     }
 
     const earned = evaluatePlayerMedals(
@@ -6193,20 +6393,18 @@ export async function runRetroactiveMedalsAudit(
       return Boolean(mId && !initialUnlockedSet.has(mId));
     });
 
-    if (freshlyGrantedMedals.length > 0) {
-      const nowIso = new Date().toISOString();
-      const awardedForStudent: Array<{ id: string; title: string; rarity: string }> = [];
+    const awardedForStudent: Array<{ id: string; title: string; rarity: string }> = [];
+    for (const m of freshlyGrantedMedals) {
+      const mId = typeof m === "string" ? m : (m?.medalId ?? m?.id ?? "");
+      const def = allMedals.find((d) => d.id === mId);
+      awardedForStudent.push({
+        id: mId,
+        title: def?.title ?? mId,
+        rarity: def?.rarity ?? "bronze",
+      });
+    }
 
-      for (const m of freshlyGrantedMedals) {
-        const mId = typeof m === "string" ? m : (m?.medalId ?? m?.id ?? "");
-        const def = allMedals.find((d) => d.id === mId);
-        awardedForStudent.push({
-          id: mId,
-          title: def?.title ?? mId,
-          rarity: def?.rarity ?? "bronze",
-        });
-      }
-
+    if (freshlyGrantedMedals.length > 0 || studentRevokedXp > 0) {
       const syncedProg = syncLevelStageProgress({
         xp: aligned.profile.xp,
         lifetimeMatches: aligned.profile.matchesPlayed,
@@ -6218,17 +6416,25 @@ export async function runRetroactiveMedalsAudit(
       });
       aligned.profile.level = syncedProg.level;
       aligned.profile.levelStageProgress = syncedProg.stageProgress;
-      aligned.updatedAt = nowIso;
+    }
 
+    const hasChanges = freshlyGrantedMedals.length > 0 || revokedForStudent.length > 0;
+    if (hasChanges) {
+      const nowIso = new Date().toISOString();
+      aligned.updatedAt = nowIso;
       reg[key] = aligned;
       updatedStudentsCount++;
       medalsAwardedCount += freshlyGrantedMedals.length;
+      medalsRevokedCount += revokedForStudent.length;
+      pointsDeductedTotal += studentRevokedPoints;
+
       details.push({
         studentId: aligned.profile.id,
         nick: aligned.profile.nick,
         fullName: aligned.profile.full_name || aligned.profile.nick,
         school: aligned.profile.school,
         medalsAwarded: awardedForStudent,
+        medalsRevoked: revokedForStudent,
       });
 
       cloudRosterUpdates[getStudentRosterCloudKey(aligned.profile)] = JSON.stringify({
@@ -6279,6 +6485,8 @@ export async function runRetroactiveMedalsAudit(
     auditedStudentsCount: total,
     updatedStudentsCount,
     medalsAwardedCount,
+    medalsRevokedCount,
+    pointsDeductedTotal,
     details,
   };
 }

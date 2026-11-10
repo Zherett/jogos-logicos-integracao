@@ -682,12 +682,12 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
     },
   );
 
-  // 12. Medalhas Especiais Beta Tester (Válidas de 01 a 07 de Novembro)
+  // 12. Medalhas Especiais Beta Tester (Válidas de 01 a 15 de Novembro)
   medals.push(
     {
       id: "beta_tester_bronze",
       title: "Beta Tester Bronze",
-      description: "Crie sua conta e complete pelo menos 1 partida finalizada durante o período Beta (01 a 07 de Novembro).",
+      description: "Crie sua conta e complete pelo menos 1 partida finalizada durante o período Beta (01 a 15 de Novembro).",
       rarity: "bronze",
       category: "evento",
       iconName: "Sparkles",
@@ -696,7 +696,7 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
     {
       id: "beta_tester_prata",
       title: "Beta Tester Prata",
-      description: "Jogue e finalize pelo menos 2 partidas de 4 jogos diferentes durante o período Beta (01 a 07 de Novembro).",
+      description: "Jogue e finalize pelo menos 2 partidas de 4 jogos diferentes durante o período Beta (01 a 15 de Novembro).",
       rarity: "prata",
       category: "evento",
       iconName: "Sparkles",
@@ -705,7 +705,7 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
     {
       id: "beta_tester_ouro",
       title: "Beta Tester Ouro",
-      description: "Jogue e finalize pelo menos 2 partidas de 6 jogos diferentes durante o período Beta (01 a 07 de Novembro).",
+      description: "Jogue e finalize pelo menos 2 partidas de 6 jogos diferentes durante o período Beta (01 a 15 de Novembro).",
       rarity: "ouro",
       category: "evento",
       iconName: "Sparkles",
