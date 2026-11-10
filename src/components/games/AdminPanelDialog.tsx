@@ -42,6 +42,7 @@ import {
   Beaker,
   CheckCircle2,
   Search,
+  Ticket,
 } from "lucide-react";
 import {
   computeSeasonDates,
@@ -159,6 +160,7 @@ import {
 import { TournamentRankBadge } from "./TournamentRankBadge";
 import { AdminInboxTab } from "./AdminInboxTab";
 import { AdminEventsTab } from "./AdminEventsTab";
+import { AdminPromoCodesTab } from "./AdminPromoCodesTab";
 import {
   AGE_STAGES,
   getTournamentRank,
@@ -174,7 +176,19 @@ interface Props {
   fullPageMode?: boolean;
 }
 
-type AdminTab = "jogos" | "arena_x1" | "torneio" | "eventos" | "avisos" | "correio" | "medalhas" | "turmas" | "resets" | "sistema" | "lixeira";
+type AdminTab =
+  | "jogos"
+  | "arena_x1"
+  | "torneio"
+  | "eventos"
+  | "avisos"
+  | "correio"
+  | "medalhas"
+  | "turmas"
+  | "resets"
+  | "sistema"
+  | "lixeira"
+  | "codigos";
 
 function randomGameCode(prefix: string): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -1254,6 +1268,17 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                   }`}
                 >
                   <Mail className="h-4 w-4 text-amber-500" /> Correio
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTab("codigos");
+                  }}
+                  className={`flex items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-bold transition-colors ${
+                    tab === "codigos" ? "bg-card text-fuchsia-600 dark:text-fuchsia-400 shadow-sm" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  <Ticket className="h-4 w-4 text-fuchsia-500" /> Códigos Promo
                 </button>
                 <button
                   type="button"
@@ -5049,6 +5074,9 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                 )}
               </div>
             )}
+
+            {/* TAB CÓDIGOS PROMOCIONAIS: GERADOR E GESTÃO DE LOTES COM PADRÕES DE MÁSCARA */}
+            {tab === "codigos" && <AdminPromoCodesTab />}
             </div>
           </div>
         );

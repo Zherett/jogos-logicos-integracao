@@ -602,7 +602,7 @@ interface PlayFabResponse<T> {
   errorMessage?: string;
 }
 
-async function callPlayFabClient<T>(
+export async function callPlayFabClient<T>(
   endpoint: string,
   body: Record<string, unknown>,
   sessionTicket?: string,

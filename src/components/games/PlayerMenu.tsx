@@ -24,7 +24,10 @@ import {
   RotateCw,
   Mail,
   Swords,
+  Ticket,
 } from "lucide-react";
+import { PromoCodeRedeemDialog } from "./PromoCodeRedeemDialog";
+import { canAccessPromoCodeRedeem } from "@/lib/promo-codes";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { PlayerAuthDialog } from "./PlayerAuthDialog";
@@ -118,6 +121,7 @@ export function PlayerMenu({ onConfigChanged }: Props) {
   const [profileOpen, setProfileOpen] = useState(false);
   const [rankingOpen, setRankingOpen] = useState(false);
   const [inboxOpen, setInboxOpen] = useState(false);
+  const [promoCodeOpen, setPromoCodeOpen] = useState(false);
   const [inboxCounts, setInboxCounts] = useState({ unreadCount: 0, unclaimedRewardsCount: 0, totalAlerts: 0 });
 
   // Accordion collapsible states & 3D Card Flip state
@@ -410,6 +414,23 @@ export function PlayerMenu({ onConfigChanged }: Props) {
           </button>
         )}
 
+        {/* Resgate de Códigos Promocionais (Modo Closed Beta: Exclusivo Zheret & Lord) */}
+        {profile && canAccessPromoCodeRedeem(profile) && (
+          <button
+            type="button"
+            onClick={() => setPromoCodeOpen(true)}
+            className="relative flex h-11 items-center gap-1.5 rounded-2xl border border-fuchsia-500/40 bg-fuchsia-500/10 px-3 text-fuchsia-600 dark:text-fuchsia-400 shadow-sm transition-all hover:bg-fuchsia-500/20 active:scale-95"
+            aria-label="Resgatar Código Promocional"
+            title="Resgatar Código Promocional (Acesso Beta: Zheret & Lord)"
+          >
+            <Ticket className="h-5 w-5 text-fuchsia-500" />
+            <span className="hidden font-display text-xs font-bold uppercase sm:inline">Código</span>
+            <span className="rounded-full bg-fuchsia-500/20 text-fuchsia-700 dark:text-fuchsia-300 px-1 py-0.2 text-[8px] font-black uppercase">
+              Beta
+            </span>
+          </button>
+        )}
+
         {/* Admin Panel Button — Only visible when Admin is already logged in */}
         {auth.isAdmin && (
           <Link
@@ -458,6 +479,13 @@ export function PlayerMenu({ onConfigChanged }: Props) {
       <PlayerInboxModal
         open={inboxOpen}
         onOpenChange={setInboxOpen}
+      />
+      <PromoCodeRedeemDialog
+        open={promoCodeOpen}
+        onOpenChange={setPromoCodeOpen}
+        onRewardClaimed={() => {
+          auth.refresh();
+        }}
       />
 
       {/* Modal de Perfil do Jogador — Espaçoso, Estável e com Altura Fixa */}

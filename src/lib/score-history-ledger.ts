@@ -49,6 +49,7 @@ export type ScoreTransactionSource =
   | "recorde"
   | "evento"
   | "correio"
+  | "codigo_promocional"
   | "conversao_moedas"
   | "ajuste_adm"
   | "sanitizacao";
@@ -521,6 +522,7 @@ export function calculateStudentScoreBreakdown(
     recorde: { xp: 0, points: 0, count: 0 },
     evento: { xp: 0, points: 0, count: 0 },
     correio: { xp: 0, points: 0, count: 0 },
+    codigo_promocional: { xp: 0, points: 0, count: 0 },
     conversao_moedas: { xp: 0, points: 0, count: 0 },
     ajuste_adm: { xp: 0, points: 0, count: 0 },
     sanitizacao: { xp: 0, points: 0, count: 0 },
@@ -574,6 +576,7 @@ export const TRANSACTION_SOURCE_LABELS: Record<ScoreTransactionSource, { label: 
   recorde: { label: "Novo Recorde (+15)", icon: "Star", badgeColor: "bg-cyan-500/10 text-cyan-600 border-cyan-500/30" },
   evento: { label: "Bônus de Evento", icon: "Zap", badgeColor: "bg-indigo-500/10 text-indigo-600 border-indigo-500/30" },
   correio: { label: "Recompensa Postal", icon: "Mail", badgeColor: "bg-pink-500/10 text-pink-600 border-pink-500/30" },
+  codigo_promocional: { label: "Código Promocional", icon: "KeyRound", badgeColor: "bg-fuchsia-500/10 text-fuchsia-600 border-fuchsia-500/30" },
   conversao_moedas: { label: "Conversão em Moedas", icon: "Coins", badgeColor: "bg-amber-500/10 text-amber-600 border-amber-500/30" },
   ajuste_adm: { label: "Ajuste pelo ADM", icon: "Shield", badgeColor: "bg-slate-500/10 text-slate-600 border-slate-500/30" },
   sanitizacao: { label: "Correção de Sistema", icon: "CheckCircle", badgeColor: "bg-teal-500/10 text-teal-600 border-teal-500/30" },
