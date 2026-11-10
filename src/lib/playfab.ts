@@ -1179,6 +1179,17 @@ export function ensurePlayerSeasonAligned(
   const currentRankedSeason = cfg.rankedSeasonId ?? 1;
   const playerRankedSeason = acc.profile.rankedSeasonId ?? 1;
 
+  const currentSeasonId = cfg.rankedSeasonId ?? 1;
+  const currentSeasonKey = `Season_${currentSeasonId}`;
+  const isAdminAcc = isSpecialAdminAccount(acc.profile);
+
+  const isCorruptedNovice =
+    !isAdminAcc &&
+    acc.profile.matchesPlayed !== undefined &&
+    acc.profile.matchesPlayed <= 6 &&
+    (acc.profile.xp ?? 0) <= 300 &&
+    (acc.profile.level ?? 1) <= 2;
+
   // Se a temporada de ranqueada avançou no ADM, zera os pontos do jogador para a nova temporada
   if (playerRankedSeason < currentRankedSeason) {
     acc.profile.tournamentPoints = 0;
@@ -1187,20 +1198,28 @@ export function ensurePlayerSeasonAligned(
     acc.profile.rankedSeasonId = currentRankedSeason;
   } else {
     acc.profile.rankedSeasonId = currentRankedSeason;
-    // Preserva e sincroniza os pontos da ranqueada acumulados na temporada (definida por 14 dias ou término do ADM).
-    // Sincroniza diretamente com o registro oficial do Torneio Semanal para manter 100% de paridade entre a lista do rank e o perfil.
+
     const tourRec =
       getTournamentStoreRecord(acc.profile.id, acc.profile.nick) ||
       (acc.profile.playfabId ? getTournamentStoreRecord(acc.profile.playfabId, acc.profile.nick) : null) ||
       (acc.profile.nickNormalized ? getTournamentStoreRecord(acc.profile.nickNormalized, acc.profile.nickNormalized) : null);
-    const tourPoints = Math.max(tourRec?.tournamentPoints ?? 0, tourRec?.bestScore ?? 0);
+
+    // Desacoplamento estrito: usa apenas tournamentPoints legítimos (nunca bestScore de jogo)
+    const tourPoints = tourRec?.tournamentPoints ?? 0;
     const maxTournamentPts = Math.max(
       acc.profile.tournamentPoints ?? 0,
       acc.profile.bestTournamentPoints ?? 0,
       tourPoints,
     );
 
-    if (maxTournamentPts > 0) {
+    if (isCorruptedNovice) {
+      // Aluno iniciante corrompido (ex: caso banana123 com <= 3 vitórias e 295 XP): não pode ter patente alta herdada por resíduo de bestScore
+      const noviceCap = Math.max(0, (acc.profile.matchesPlayed ?? 0) * 10);
+      const clampedNovice = Math.min(maxTournamentPts, noviceCap);
+      acc.profile.tournamentPoints = clampedNovice;
+      acc.profile.bestTournamentPoints = clampedNovice;
+      acc.profile.tournamentRankId = getTournamentRank(clampedNovice).currentRank.id;
+    } else if (maxTournamentPts > 0) {
       acc.profile.tournamentPoints = maxTournamentPts;
       acc.profile.bestTournamentPoints = Math.max(acc.profile.bestTournamentPoints ?? 0, maxTournamentPts);
       acc.profile.tournamentRankId = getTournamentRank(maxTournamentPts).currentRank.id;
@@ -1215,10 +1234,6 @@ export function ensurePlayerSeasonAligned(
   }
   acc.profile.tournamentWeekKey = currentWeekKey;
 
-  const currentSeasonId = cfg.rankedSeasonId ?? 1;
-  const currentSeasonKey = `Season_${currentSeasonId}`;
-  const isAdminAcc = isSpecialAdminAccount(acc.profile);
-
   // As medalhas do Torneio Semanal são prêmios exclusivos concedidos no encerramento de ciclo (domingo às 23:59).
   // Remove qualquer medalha indevida emitida antes do término da semana corrente ou temporada ativa não encerrada:
   const totalM = Math.max(
@@ -1226,14 +1241,6 @@ export function ensurePlayerSeasonAligned(
     (acc.profile as any)?.totalMatches ?? 0,
     Array.isArray(acc.stats) ? acc.stats.reduce((s, r) => s + (r.plays ?? 0), 0) : 0,
   );
-
-  const isCorruptedNovice =
-    !isAdminAcc &&
-    acc.profile.matchesPlayed !== undefined &&
-    acc.profile.matchesPlayed > 0 &&
-    acc.profile.matchesPlayed <= 6 &&
-    (acc.profile.xp ?? 0) <= 300 &&
-    (acc.profile.level ?? 1) <= 2;
 
   if (Array.isArray(acc.profile.tournamentMedals)) {
     if (isCorruptedNovice) {

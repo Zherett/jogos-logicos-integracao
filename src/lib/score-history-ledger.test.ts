@@ -5,6 +5,7 @@ import {
   getPlayerScoreLedger,
   getAllScoreLedger,
   calculateStudentScoreBreakdown,
+  sanitizeScoreLedgerEntries,
   TRANSACTION_SOURCE_LABELS,
   TRANSACTION_TYPE_LABELS,
 } from "./score-history-ledger.ts";
@@ -167,5 +168,25 @@ describe("Sistema de Histórico e Auditoria de Pontuação (Score Ledger)", () =
     assert.ok(breakdown.totalXpFromMatches > 0);
     assert.ok(breakdown.totalXpFromMedals > 0);
     assert.ok(breakdown.transactionsCount > 0);
+  });
+
+  it("higieniza transações fantasmas de medalha geradas em loop no extrato (caso banana123 com 61 registros repetidos)", () => {
+    const corruptEntries: any[] = [];
+    // Simula 61 registros idênticos de Campeão Semanal gerados a cada 1 segundo no dia 09/11
+    for (let i = 0; i < 61; i++) {
+      corruptEntries.push({
+        id: `tx_ghost_${i}`,
+        playerId: "banana123",
+        playerNick: "banana123",
+        type: "career_points",
+        source: "medalha",
+        amount: 50,
+        reason: "Medalha: Campeão Semanal (Ouro)",
+        timestamp: `2026-11-09T16:14:${String(i).padStart(2, "0")}.000Z`,
+      });
+    }
+
+    const cleaned = sanitizeScoreLedgerEntries(corruptEntries);
+    assert.equal(cleaned.length, 1, "Deve purgar todas as 60 duplicatas fantasmas e reter apenas 1 registro");
   });
 });

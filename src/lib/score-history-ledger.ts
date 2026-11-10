@@ -93,6 +93,45 @@ const MAX_TOTAL_ENTRIES = 3000;
 
 let inMemoryLedger: ScoreLedgerEntry[] = [];
 
+/**
+ * Higieniza o ledger de auditoria removendo transações duplicadas geradas por loops anômalos
+ * (por exemplo, múltiplas concessões da mesma medalha a cada 1 segundo para o mesmo aluno).
+ */
+export function sanitizeScoreLedgerEntries(entries: ScoreLedgerEntry[]): ScoreLedgerEntry[] {
+  if (!Array.isArray(entries)) return [];
+  const seenMedalKeys = new Set<string>();
+  const cleaned: ScoreLedgerEntry[] = [];
+
+  for (const entry of entries) {
+    if (!entry) continue;
+    // Identifica registros de medalha repetidos em loop
+    const isMedalEntry =
+      entry.source === "medalha" ||
+      entry.type === "medal" ||
+      (typeof entry.reason === "string" && entry.reason.includes("Medalha"));
+
+    if (isMedalEntry) {
+      const pId = nickSlug(entry.playerId || entry.playerNick || "");
+      const medalKey =
+        entry.metadata?.medalId ||
+        (entry.reason?.includes("Campeão Semanal")
+          ? "tournament_top_1_gold"
+          : entry.reason?.replace(/[^a-zA-Z0-9_]/g, "_") || "unknown");
+      const key = `${pId}_${medalKey}_${entry.type}`;
+
+      if (seenMedalKeys.has(key)) {
+        // Ignora duplicata fantasma em loop
+        continue;
+      }
+      seenMedalKeys.add(key);
+    }
+
+    cleaned.push(entry);
+  }
+
+  return cleaned;
+}
+
 function loadAllLedgerEntries(): ScoreLedgerEntry[] {
   if (typeof window === "undefined") return inMemoryLedger;
   try {
@@ -100,8 +139,12 @@ function loadAllLedgerEntries(): ScoreLedgerEntry[] {
     if (!raw) return inMemoryLedger;
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) {
-      inMemoryLedger = parsed;
-      return parsed;
+      const sanitized = sanitizeScoreLedgerEntries(parsed);
+      if (sanitized.length !== parsed.length) {
+        saveAllLedgerEntries(sanitized);
+      }
+      inMemoryLedger = sanitized;
+      return sanitized;
     }
     return inMemoryLedger;
   } catch {

@@ -90,15 +90,28 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
 
   const effectiveTournamentPoints = useMemo(() => {
     if (!profile) return 0;
+    // O Torneio Semanal Ranqueado é restrito a alunos de Nível 3 ou superior
+    if ((profile.level ?? 1) < 3) return 0;
+
     const tourRecord =
       getTournamentStoreRecord(profile.id, profile.nick) ||
       (profile.nickNormalized ? getTournamentStoreRecord(profile.nickNormalized, profile.nickNormalized) : null);
-    return Math.max(
+
+    // Validação física de coerência: se não houve nenhuma entrada ou partida disputada no torneio, pontos = 0
+    const tourMatches =
+      (tourRecord?.totalEntries ?? 0) +
+      (profile.stats?.filter((s) => s.mode === "torneio_semanal").reduce((sum, s) => sum + s.plays, 0) ?? 0);
+    if (tourMatches === 0) return 0;
+
+    // Desacoplamento estrito: NUNCA usa bestScore (pontuação bruta de jogo) como pontos de ranqueada
+    const rawPoints = Math.max(
       profile.tournamentPoints ?? 0,
       profile.bestTournamentPoints ?? 0,
       tourRecord?.tournamentPoints ?? 0,
-      tourRecord?.bestScore ?? 0,
     );
+    // Teto físico razoável (15 pts por partida + 25 pts bônus diário)
+    const physicalCap = Math.max(30, tourMatches * 15 + 25);
+    return Math.min(rawPoints, physicalCap);
   }, [profile]);
 
   // Estados de edição pelo Administrador

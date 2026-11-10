@@ -941,7 +941,7 @@ function loadTournamentStore(now = new Date()): WeeklyTournamentStore {
         p.playfabId,
       ]);
       const existingBestPts = matched.reduce(
-        (max, m) => Math.max(max, m.record.tournamentPoints ?? 0, m.record.bestScore ?? 0),
+        (max, m) => Math.max(max, m.record.tournamentPoints ?? 0),
         0,
       );
       const existingRecord = matched[0]?.record;
@@ -1029,8 +1029,8 @@ export function getTournamentStoreRecord(
     // Retorna sempre a entrada com a maior pontuação ranqueada
     matches.sort(
       (a, b) =>
-        (b.tournamentPoints ?? b.bestScore ?? 0) -
-        (a.tournamentPoints ?? a.bestScore ?? 0),
+        (b.tournamentPoints ?? 0) - (a.tournamentPoints ?? 0) ||
+        (b.bestScore ?? 0) - (a.bestScore ?? 0),
     );
     return matches[0];
   }
@@ -1152,15 +1152,15 @@ export async function syncWeeklyTournamentWithPlayFab(): Promise<void> {
       );
       const targetKey = existingKey ?? id;
       const local = store.records[targetKey];
-      const remotePts = r.tournamentPoints ?? r.bestScore ?? 0;
-      const localPts = local ? (local.tournamentPoints ?? local.bestScore ?? 0) : 0;
+      const remotePts = r.tournamentPoints ?? 0;
+      const localPts = local ? (local.tournamentPoints ?? 0) : 0;
 
       if (!local || remotePts >= localPts || r.updatedAt > local.updatedAt) {
         store.records[targetKey] = {
           ...(local ?? {}),
           ...r,
           tournamentPoints: Math.max(remotePts, localPts),
-          bestScore: Math.max(r.bestScore ?? 0, local?.bestScore ?? 0, remotePts, localPts),
+          bestScore: Math.max(r.bestScore ?? 0, local?.bestScore ?? 0),
         };
         changed = true;
       }
@@ -1185,7 +1185,7 @@ export async function syncWeeklyTournamentWithPlayFab(): Promise<void> {
       );
       if (matchKey) {
         const acc = reg[matchKey];
-        const rPts = r.tournamentPoints ?? r.bestScore ?? 0;
+        const rPts = r.tournamentPoints ?? 0;
         if (rPts > (acc.profile.tournamentPoints ?? 0)) {
           acc.profile.tournamentPoints = rPts;
           acc.profile.bestTournamentPoints = Math.max(acc.profile.bestTournamentPoints ?? 0, rPts);
