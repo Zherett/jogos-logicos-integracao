@@ -388,6 +388,28 @@ export function getPlayerActivityDetails(
   };
 }
 
+let cachedPresenceRaw: string | null = null;
+let cachedPresenceStore: PresenceStore | null = null;
+
+function loadPresenceStoreReadOnly(): PresenceStore {
+  if (typeof window === "undefined") {
+    return { players: {}, updatedAt: 0 };
+  }
+  try {
+    const raw = localStorage.getItem(PRESENCE_STORAGE_KEY);
+    if (!raw) return { players: {}, updatedAt: 0 };
+    if (raw === cachedPresenceRaw && cachedPresenceStore) {
+      return cachedPresenceStore;
+    }
+    const parsed = JSON.parse(raw) as PresenceStore;
+    cachedPresenceRaw = raw;
+    cachedPresenceStore = parsed;
+    return parsed;
+  } catch {
+    return { players: {}, updatedAt: 0 };
+  }
+}
+
 /**
  * Carrega a base local de presenca
  */
@@ -411,7 +433,10 @@ export function savePresenceStore(store: PresenceStore): void {
   if (typeof window === "undefined") return;
   try {
     store.updatedAt = Date.now();
-    localStorage.setItem(PRESENCE_STORAGE_KEY, JSON.stringify(store));
+    const serialized = JSON.stringify(store);
+    cachedPresenceRaw = serialized;
+    cachedPresenceStore = store;
+    localStorage.setItem(PRESENCE_STORAGE_KEY, serialized);
     window.dispatchEvent(new CustomEvent(PRESENCE_UPDATED_EVENT));
   } catch {
     // ignore
@@ -687,32 +712,41 @@ export async function syncPresenceFromPlayFab(force = false): Promise<void> {
           const pId = remote.playerId || `pf_${slug}`;
 
           if (remote.disconnected || !remote.lastSeenAt || remote.lastSeenAt <= 0) {
+            const existingOff = store.players[pId];
             const preservedActiveAt =
               remote.lastActiveAt && remote.lastActiveAt > 0
                 ? remote.lastActiveAt
                 : remote.lastSeenAt && remote.lastSeenAt > 0
                   ? remote.lastSeenAt
-                  : (store.players[pId]?.lastActiveAt || 0);
+                  : (existingOff?.lastActiveAt || 0);
 
-            const offRec: PlayerPresenceRecord = {
-              playerId: pId,
-              playfabId: remote.playfabId,
-              nick: remote.nick,
-              nickNormalized: slug,
-              lastSeenAt: 0,
-              lastActiveAt: preservedActiveAt,
-              idleMs: 0,
-              disconnected: true,
-            };
-            store.players[pId] = offRec;
-            if (slug) {
-              store.players[slug] = offRec;
-              store.players[`pf_${slug}`] = offRec;
+            const offUnchanged =
+              existingOff &&
+              existingOff.disconnected === true &&
+              existingOff.lastSeenAt === 0 &&
+              existingOff.lastActiveAt === preservedActiveAt;
+
+            if (!offUnchanged) {
+              const offRec: PlayerPresenceRecord = {
+                playerId: pId,
+                playfabId: remote.playfabId,
+                nick: remote.nick,
+                nickNormalized: slug,
+                lastSeenAt: 0,
+                lastActiveAt: preservedActiveAt,
+                idleMs: 0,
+                disconnected: true,
+              };
+              store.players[pId] = offRec;
+              if (slug) {
+                store.players[slug] = offRec;
+                store.players[`pf_${slug}`] = offRec;
+              }
+              if (remote.playfabId) {
+                store.players[remote.playfabId] = offRec;
+              }
+              changed = true;
             }
-            if (remote.playfabId) {
-              store.players[remote.playfabId] = offRec;
-            }
-            changed = true;
             continue;
           }
 
@@ -743,6 +777,24 @@ export async function syncPresenceFromPlayFab(force = false): Promise<void> {
             if (cur && cur.lastSeenAt >= normalizedSeenAt) {
               continue;
             }
+          }
+
+          const existingRec = store.players[pId] || (slug ? store.players[slug] : undefined);
+          const sameActivity =
+            existingRec?.activity?.type === remote.activity?.type &&
+            existingRec?.activity?.gameId === remote.activity?.gameId &&
+            existingRec?.activity?.mode === remote.activity?.mode &&
+            existingRec?.activity?.level === remote.activity?.level;
+          const activeUnchanged =
+            existingRec &&
+            !existingRec.disconnected &&
+            Math.abs((existingRec.lastSeenAt || 0) - normalizedSeenAt) < 1500 &&
+            Math.abs((existingRec.lastActiveAt || 0) - normalizedActiveAt) < 1500 &&
+            existingRec.idleMs === remoteIdleMs &&
+            sameActivity;
+
+          if (activeUnchanged) {
+            continue;
           }
 
           const normalizedRec: PlayerPresenceRecord = {
@@ -782,6 +834,14 @@ export async function syncPresenceFromPlayFab(force = false): Promise<void> {
   return inFlightPresenceSync;
 }
 
+let cachedX1PresenceRaw: string | null = null;
+let cachedX1PresenceStore: {
+  players?: Record<
+    string,
+    { playerId?: string; lastSeenAt?: number; lastActiveAt?: number; nick?: string }
+  >;
+} | null = null;
+
 /**
  * Obtem os dados de presenca de um jogador, checando o storage local por ID, PlayFabId ou Nick,
  * e tambem a loja do lobby X1 (que sincroniza com o PlayFab na nuvem).
@@ -811,7 +871,7 @@ export function getPlayerPresenceData(
   }
 
   // 1. Verificar presence store por chaves diretas e por varredura de alias
-  const store = loadPresenceStore();
+  const store = loadPresenceStoreReadOnly();
   let rec: PlayerPresenceRecord | undefined;
 
   for (const k of candidateKeys) {
@@ -842,13 +902,13 @@ export function getPlayerPresenceData(
     try {
       const x1Raw = localStorage.getItem("desafios-x1-lobby-state-v1");
       if (x1Raw) {
-        const x1Store = JSON.parse(x1Raw) as {
-          players?: Record<
-            string,
-            { playerId?: string; lastSeenAt?: number; lastActiveAt?: number; nick?: string }
-          >;
-        };
-        for (const [k, x1Player] of Object.entries(x1Store.players ?? {})) {
+        let x1Store = cachedX1PresenceRaw === x1Raw ? cachedX1PresenceStore : null;
+        if (!x1Store) {
+          x1Store = JSON.parse(x1Raw);
+          cachedX1PresenceRaw = x1Raw;
+          cachedX1PresenceStore = x1Store;
+        }
+        for (const [k, x1Player] of Object.entries(x1Store?.players ?? {})) {
           if (!x1Player || typeof x1Player.lastSeenAt !== "number") continue;
           const x1Slug = x1Player.nick ? nickSlug(x1Player.nick) : "";
           const matches =
@@ -980,6 +1040,50 @@ export function computePresenceSummary(
   };
 }
 
+const presenceSubscribers = new Set<() => void>();
+let globalPresenceCleanup: (() => void) | null = null;
+
+function subscribeGlobalPresence(cb: () => void): () => void {
+  presenceSubscribers.add(cb);
+
+  if (presenceSubscribers.size === 1 && typeof window !== "undefined") {
+    const notifyAll = () => {
+      for (const listener of presenceSubscribers) {
+        listener();
+      }
+    };
+
+    const timer = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+        return;
+      }
+      void syncPresenceFromPlayFab();
+      notifyAll();
+    }, 10000);
+
+    window.addEventListener(PRESENCE_UPDATED_EVENT, notifyAll);
+    window.addEventListener(ACTIVITY_CHANGED_EVENT, notifyAll);
+    window.addEventListener("desafios:x1-lobby-updated", notifyAll);
+    window.addEventListener("storage", notifyAll);
+
+    globalPresenceCleanup = () => {
+      window.removeEventListener(PRESENCE_UPDATED_EVENT, notifyAll);
+      window.removeEventListener(ACTIVITY_CHANGED_EVENT, notifyAll);
+      window.removeEventListener("desafios:x1-lobby-updated", notifyAll);
+      window.removeEventListener("storage", notifyAll);
+      clearInterval(timer);
+      globalPresenceCleanup = null;
+    };
+  }
+
+  return () => {
+    presenceSubscribers.delete(cb);
+    if (presenceSubscribers.size === 0 && globalPresenceCleanup) {
+      globalPresenceCleanup();
+    }
+  };
+}
+
 /**
  * Hook para obter a presenca reativa de um jogador com atualizacao automatica
  */
@@ -1012,30 +1116,11 @@ export function usePlayerPresence(
 
     const refresh = () => {
       setData(getPlayerPresenceData(playerId, hints));
+      setTick((t) => (t + 1) % 1_000_000);
     };
 
     refresh();
-
-    // Reagir a eventos de presenca e lobby X1
-    window.addEventListener(PRESENCE_UPDATED_EVENT, refresh);
-    window.addEventListener(ACTIVITY_CHANGED_EVENT, refresh);
-    window.addEventListener("desafios:x1-lobby-updated", refresh);
-    window.addEventListener("storage", refresh);
-
-    // Timer para recomputar limiares de tempo (5 min / 10 min) e sincronizar da nuvem
-    const timer = setInterval(() => {
-      setTick((t) => t + 1);
-      void syncPresenceFromPlayFab();
-      refresh();
-    }, 10000);
-
-    return () => {
-      window.removeEventListener(PRESENCE_UPDATED_EVENT, refresh);
-      window.removeEventListener(ACTIVITY_CHANGED_EVENT, refresh);
-      window.removeEventListener("desafios:x1-lobby-updated", refresh);
-      window.removeEventListener("storage", refresh);
-      clearInterval(timer);
-    };
+    return subscribeGlobalPresence(refresh);
   }, [playerId, hints?.playfabId, hints?.nick, hints?.nickNormalized]);
 
   const status = computePresenceStatus(data);
@@ -1059,6 +1144,7 @@ export function usePresenceTracker(player?: {
     // Mesmo sem jogador logado (ou enquanto o ADM observa), sincroniza presenças da nuvem periodicamente
     void syncPresenceFromPlayFab(true);
     const cloudPollId = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       void syncPresenceFromPlayFab();
     }, 10000);
 
@@ -1167,7 +1253,10 @@ export function usePresenceTracker(player?: {
     window.addEventListener(ACTIVITY_CHANGED_EVENT, onActivityChange);
 
     pulse(false);
-    const intervalId = setInterval(() => pulse(false), 12000);
+    const intervalId = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      pulse(false);
+    }, 12000);
 
     return () => {
       window.removeEventListener("pointerdown", onUserInteraction);

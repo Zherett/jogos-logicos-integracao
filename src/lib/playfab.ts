@@ -2787,10 +2787,25 @@ async function pushProfileToPlayFab(account: StoredAccount, sessionTicket?: stri
   }
 }
 
+let inFlightRosterSyncPromise: Promise<PlayerProfile[]> | null = null;
+let lastRosterSyncCompletedAt = 0;
+const ROSTER_SYNC_TTL_MS = 30_000;
+
 /**
  * Downloads and merges all registered students across all schools/devices from PlayFab.
  */
-export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Promise<PlayerProfile[]> {
+export async function syncStudentRosterFromPlayFab(
+  sessionTicket?: string,
+  force = false,
+): Promise<PlayerProfile[]> {
+  if (!force && inFlightRosterSyncPromise) {
+    return inFlightRosterSyncPromise;
+  }
+  if (!force && Date.now() - lastRosterSyncCompletedAt < ROSTER_SYNC_TTL_MS) {
+    return getAllRegisteredPlayers();
+  }
+
+  const run = async (): Promise<PlayerProfile[]> => {
   const cfg = checkAndApplyScheduledReset();
   const ticket = (await getAdminPlayFabTicket()) ?? sessionTicket ?? loadStoredSession()?.sessionTicket;
   if (!ticket || !isPlayFabConfigured()) {
@@ -3771,11 +3786,18 @@ export async function syncStudentRosterFromPlayFab(sessionTicket?: string): Prom
     if (updated) {
       saveRegistry(reg);
     }
+    lastRosterSyncCompletedAt = Date.now();
   } catch {
     /* ignore network issues */
   }
 
   return getAllRegisteredPlayers();
+  };
+
+  inFlightRosterSyncPromise = run().finally(() => {
+    inFlightRosterSyncPromise = null;
+  });
+  return inFlightRosterSyncPromise;
 }
 
 /**

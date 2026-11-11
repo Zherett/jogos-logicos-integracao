@@ -307,6 +307,7 @@ export function recordX1MatchFinished(room: X1Room): void {
 
   history.unshift(entry);
   saveX1MatchHistory(history.slice(0, 100));
+  localLobbyDirty = true;
 }
 
 export function markAllX1MatchesRead(): void {
@@ -319,6 +320,7 @@ export function markAllX1MatchesRead(): void {
   const history = loadX1MatchHistory();
   const updated = history.map((h) => ({ ...h, read: true }));
   saveX1MatchHistory(updated);
+  localLobbyDirty = true;
   lastLobbyCloudSyncAt = 0;
   void syncX1WithPlayFabCloud();
 }
@@ -330,6 +332,7 @@ export function clearX1MatchHistory(): void {
     readUpToAt: now,
   });
   saveX1MatchHistory([]);
+  localLobbyDirty = true;
   lastLobbyCloudSyncAt = 0;
   void syncX1WithPlayFabCloud();
 }
@@ -1262,7 +1265,10 @@ function loadStore(): X1LobbyStore {
   }
 }
 
-function saveStore(store: X1LobbyStore) {
+let localLobbyDirty = false;
+
+function saveStore(store: X1LobbyStore, markDirty = true) {
+  if (markDirty) localLobbyDirty = true;
   store.updatedAt = Date.now();
   memoryStoreFallback = store;
   if (typeof window === "undefined") return;
@@ -1406,7 +1412,7 @@ async function runSyncX1WithPlayFabCloud(activeRoomCode?: string | null): Promis
     }
 
     if (roomChanged) {
-      saveStore(storeAfterRoom);
+      saveStore(storeAfterRoom, false);
     }
 
     if (shouldPushMergedBack && roomToPush) {
@@ -1604,28 +1610,31 @@ async function runSyncX1WithPlayFabCloud(activeRoomCode?: string | null): Promis
   }
 
   if (changed) {
-    saveStore(store);
+    saveStore(store, false);
   }
 
-  // Push merged snapshot (usando o store mais recente para nunca sobrescrever ações concorrentes)
-  const latestStore = loadStore();
-  const latestMeta = loadX1HistoryMeta();
-  const latestHistory = loadX1MatchHistory().slice(0, 40);
-  await callPlayFabSharedGroup("UpdateSharedGroupData", {
-    SharedGroupId: LOBBY_SHARED_GROUP_ID,
-    Data: {
-      LobbySnapshot: JSON.stringify({
-        players: latestStore.players,
-        rooms: latestStore.rooms,
-        deletedRooms: latestStore.deletedRooms,
-        invites: latestStore.invites,
-        matchHistory: latestHistory,
-        historyClearedAt: latestMeta.clearedAt,
-        historyReadUpToAt: latestMeta.readUpToAt,
-      }),
-    },
-    Permission: "Public",
-  });
+  // Push merged snapshot apenas quando houver mutação local pendente (evita re-upload inútil quando apenas lendo, ex.: painel ADM)
+  if (localLobbyDirty) {
+    localLobbyDirty = false;
+    const latestStore = loadStore();
+    const latestMeta = loadX1HistoryMeta();
+    const latestHistory = loadX1MatchHistory().slice(0, 40);
+    await callPlayFabSharedGroup("UpdateSharedGroupData", {
+      SharedGroupId: LOBBY_SHARED_GROUP_ID,
+      Data: {
+        LobbySnapshot: JSON.stringify({
+          players: latestStore.players,
+          rooms: latestStore.rooms,
+          deletedRooms: latestStore.deletedRooms,
+          invites: latestStore.invites,
+          matchHistory: latestHistory,
+          historyClearedAt: latestMeta.clearedAt,
+          historyReadUpToAt: latestMeta.readUpToAt,
+        }),
+      },
+      Permission: "Public",
+    });
+  }
 }
 
 export async function syncX1WithPlayFabCloud(activeRoomCode?: string | null): Promise<void> {

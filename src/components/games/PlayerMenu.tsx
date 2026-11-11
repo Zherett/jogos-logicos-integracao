@@ -255,8 +255,9 @@ export function PlayerMenu({ onConfigChanged }: Props) {
       }
     }
 
-    // Função de sincronização com o PlayFab Cloud a cada 20 segundos
+    // Função de sincronização com o PlayFab Cloud a cada 20 segundos (apenas quando a aba está visível)
     const syncInboxCloud = async () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       try {
         await syncAdminConfigFromPlayFab();
         const counts = updateCounts();

@@ -515,6 +515,69 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
     );
   }, [draft.customMedals, activeLinkedMedalIds]);
 
+  // Sincronização inicial na nuvem apenas ao abrir o painel (evita disparar centenas de requisições ao salvar configs)
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    setSyncingRoster(true);
+    void syncPresenceFromPlayFab(true);
+    void syncStudentRosterFromPlayFab()
+      .then(async () => {
+        if (!active) return;
+        refreshRoster();
+        const notifs = await syncAdminMedalNotificationsFromPlayFab();
+        if (!active) return;
+        setDraft((prev) => ({ ...prev, adminMedalNotifications: notifs }));
+      })
+      .catch((err) => {
+        console.warn("Aviso ao sincronizar alunos e medalhas no painel ADM:", err);
+      })
+      .finally(() => {
+        if (active) setSyncingRoster(false);
+      });
+
+    void syncX1WithPlayFabCloud().then(() => {
+      if (active) setX1History(loadX1MatchHistory());
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [open]);
+
+  // Polling de presença e histórico X1 isolado (só re-renderiza o painel em abas que consomem presença/X1)
+  useEffect(() => {
+    if (!open) return;
+    const isPresenceTab = tab === "turmas" || tab === "sistema";
+    const isX1Tab = tab === "arena_x1" || tab === "turmas";
+
+    const onPresenceChange = () => {
+      if (isPresenceTab) setPresenceTick((t) => t + 1);
+    };
+    const onX1HistoryUpdated = () => {
+      setX1History(loadX1MatchHistory());
+    };
+    window.addEventListener(PRESENCE_UPDATED_EVENT, onPresenceChange);
+    window.addEventListener("desafios:x1-history-updated", onX1HistoryUpdated);
+
+    const presencePoll = window.setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      void syncPresenceFromPlayFab();
+      if (isX1Tab) {
+        void syncX1WithPlayFabCloud();
+      }
+      if (isPresenceTab) {
+        setPresenceTick((t) => t + 1);
+      }
+    }, 10000);
+
+    return () => {
+      window.removeEventListener(PRESENCE_UPDATED_EVENT, onPresenceChange);
+      window.removeEventListener("desafios:x1-history-updated", onX1HistoryUpdated);
+      window.clearInterval(presencePoll);
+    };
+  }, [open, tab]);
+
   useEffect(() => {
     if (!open) return;
     setDraft(auth.adminConfig);
@@ -523,38 +586,6 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
     setX1History(loadX1MatchHistory());
     setTurmaRequests(loadTurmaRequests());
     refreshRoster();
-
-    // Automatically sync cloud student roster, presence and medal notifications from PlayFab when opening ADM
-    setSyncingRoster(true);
-    void syncPresenceFromPlayFab(true);
-    void syncStudentRosterFromPlayFab()
-      .then(async () => {
-        refreshRoster();
-        const notifs = await syncAdminMedalNotificationsFromPlayFab();
-        setDraft((prev) => ({ ...prev, adminMedalNotifications: notifs }));
-      })
-      .catch((err) => {
-        console.warn("Aviso ao sincronizar alunos e medalhas no painel ADM:", err);
-      })
-      .finally(() => setSyncingRoster(false));
-
-    void syncX1WithPlayFabCloud().then(() => {
-      setX1History(loadX1MatchHistory());
-    });
-
-    const onPresenceChange = () => {
-      setPresenceTick((t) => t + 1);
-    };
-    const onX1HistoryUpdated = () => {
-      setX1History(loadX1MatchHistory());
-    };
-    window.addEventListener(PRESENCE_UPDATED_EVENT, onPresenceChange);
-    window.addEventListener("desafios:x1-history-updated", onX1HistoryUpdated);
-    const presencePoll = window.setInterval(() => {
-      void syncPresenceFromPlayFab();
-      void syncX1WithPlayFabCloud();
-      setPresenceTick((t) => t + 1);
-    }, 8000);
 
     setScheduleClearXp(auth.adminConfig.scheduledResetClearXp);
     setAutoRenewSeason(auth.adminConfig.autoRenewSeason !== false);
@@ -618,18 +649,13 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
     setConfirmActivityResetNow(false);
     setConfirmRankedResetNow(false);
     setSavedMsg(null);
-    return () => {
-      window.removeEventListener(PRESENCE_UPDATED_EVENT, onPresenceChange);
-      window.removeEventListener("desafios:x1-history-updated", onX1HistoryUpdated);
-      window.clearInterval(presencePoll);
-    };
   }, [open, auth.adminConfig]);
 
   async function handleRefreshRoster() {
     setSyncingRoster(true);
     try {
       await syncPresenceFromPlayFab(true);
-      const players = await syncStudentRosterFromPlayFab();
+      const players = await syncStudentRosterFromPlayFab(undefined, true);
       setRegisteredStudents(players);
       setPresenceTick((t) => t + 1);
       flashSaved(`${players.length} alunos sincronizados com a nuvem!`);
@@ -642,11 +668,11 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
     setAuditingStudents(true);
     try {
       await syncPresenceFromPlayFab(true);
-      await syncStudentRosterFromPlayFab();
+      await syncStudentRosterFromPlayFab(undefined, true);
 
       const res = await runGlobalStudentsIntegrityAudit();
 
-      const refreshed = await syncStudentRosterFromPlayFab();
+      const refreshed = await syncStudentRosterFromPlayFab(undefined, true);
       setRegisteredStudents(refreshed);
       setPresenceTick((t) => t + 1);
 
@@ -1247,7 +1273,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                 >
                   <Zap className="h-4 w-4 text-amber-500" /> Eventos
                   {activeEventsCount > 0 && (
-                    <span className="h-2 w-2 rounded-full bg-amber-500 animate-ping" />
+                    <span className="h-2 w-2 rounded-full bg-amber-500" />
                   )}
                 </button>
                 <button
@@ -1291,7 +1317,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                 >
                   <Award className="h-4 w-4 text-accent" /> Medalhas
                   {unreadNotifsCount > 0 && (
-                    <span className="h-2 w-2 rounded-full bg-accent animate-ping" />
+                    <span className="h-2 w-2 rounded-full bg-accent" />
                   )}
                 </button>
                 <button
@@ -5107,7 +5133,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
     return (
       <div className="min-h-screen bg-background text-foreground flex flex-col font-sans">
         {/* Header Superior Fixo com Breadcrumb e Ações */}
-        <header className="sticky top-0 z-40 border-b bg-card/95 backdrop-blur-md px-4 sm:px-8 py-3.5 flex flex-wrap items-center justify-between gap-3 shadow-xs">
+        <header className="sticky top-0 z-40 border-b bg-card px-4 sm:px-8 py-3.5 flex flex-wrap items-center justify-between gap-3 shadow-xs">
           <div className="flex items-center gap-3">
             <Link
               to="/"

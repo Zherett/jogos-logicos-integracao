@@ -237,6 +237,7 @@ function Index() {
     if (!auth.profile) return;
     const p = auth.profile;
     const pulse = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       heartbeatOnlinePlayer({
         playerId: p.id,
         nick: p.nick,
@@ -251,7 +252,7 @@ function Index() {
       void syncX1WithPlayFabCloud(activeX1Room?.code ?? null);
     };
     pulse();
-    const id = window.setInterval(pulse, 5000);
+    const id = window.setInterval(pulse, activeX1Room?.code ? 5000 : 10000);
     return () => window.clearInterval(id);
   }, [auth.profile, activeX1Room?.code]);
 
@@ -266,6 +267,7 @@ function Index() {
       (auth.adminConfig.x1Enabled === false || Boolean(auth.adminConfig.x1ArenaClosed));
 
     const checkInvites = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       if (isArenaClosed || activeX1Room) {
         if (incomingInvite) setIncomingInvite(null);
         return;
@@ -282,7 +284,7 @@ function Index() {
 
     checkInvites();
     const unsub = subscribeX1Updates(checkInvites);
-    const pollId = window.setInterval(checkInvites, 3000);
+    const pollId = window.setInterval(checkInvites, 5000);
 
     const handleReject = (e: Event) => {
       const detail = (e as CustomEvent).detail as
