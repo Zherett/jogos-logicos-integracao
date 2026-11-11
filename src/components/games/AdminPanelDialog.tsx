@@ -154,7 +154,9 @@ import { PresenceDot } from "./PresenceDot";
 import { PlayerActivityBadge } from "./PlayerActivityBadge";
 import {
   computePresenceSummary,
+  getPlayerPresenceStatus,
   PRESENCE_UPDATED_EVENT,
+  sortStudentsByPresenceAndLevel,
   syncPresenceFromPlayFab,
 } from "@/lib/presence";
 import { TournamentRankBadge } from "./TournamentRankBadge";
@@ -3153,7 +3155,38 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                         );
                       }
 
-                      const presenceSummary = computePresenceSummary(filtered);
+                      const now = Date.now();
+                      const presenceSummary = computePresenceSummary(filtered, now);
+                      const sortedFiltered = sortStudentsByPresenceAndLevel(
+                        filtered.map((st) => {
+                          const stEff = getEffectivePlayerProgression(
+                            st,
+                            st.stats ?? [],
+                            auth.adminConfig.enabledGames,
+                          );
+                          const stProg = levelProgress({
+                            xp: stEff.xp,
+                            matchesPlayed: stEff.matchesPlayed,
+                            wins: stEff.wins,
+                            distinctGames: stEff.distinctGames,
+                            currentLevel: stEff.level,
+                            stageProgress: stEff.stageProgress,
+                            maxAvailableGames: stEff.maxAvailableGames,
+                          });
+                          return {
+                            st,
+                            stProg,
+                            presenceStatus: getPlayerPresenceStatus(st, now),
+                          };
+                        }),
+                        (item) => ({
+                          presenceStatus: item.presenceStatus,
+                          level: item.stProg.level,
+                          xp: item.st.xp,
+                          nick: item.st.nick,
+                          full_name: item.st.full_name,
+                        }),
+                      );
 
                       return (
                         <div className="space-y-2">
@@ -3161,6 +3194,9 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                             <div className="text-xs font-bold text-muted-foreground">
                               Exibindo {filtered.length} aluno(s) de {selectedAdminSchool === "TODAS" ? "Todas as Escolas" : selectedAdminSchool}
                               {selectedAdminTurma !== "TODAS" ? ` • Turma ${selectedAdminTurma}` : ""}:
+                              <span className="ml-1.5 text-[10px] font-semibold text-primary/80">
+                                (Online no topo • Por nível)
+                              </span>
                             </div>
 
                             {/* Indicadores de Presenca Online / Inativo / Offline para o ADM */}
@@ -3181,21 +3217,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                           </div>
 
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-80 overflow-y-auto pr-1">
-                            {filtered.map((st) => {
-                              const stEff = getEffectivePlayerProgression(
-                                st,
-                                st.stats ?? [],
-                                auth.adminConfig.enabledGames,
-                              );
-                              const stProg = levelProgress({
-                                xp: stEff.xp,
-                                matchesPlayed: stEff.matchesPlayed,
-                                wins: stEff.wins,
-                                distinctGames: stEff.distinctGames,
-                                currentLevel: stEff.level,
-                                stageProgress: stEff.stageProgress,
-                                maxAvailableGames: stEff.maxAvailableGames,
-                              });
+                            {sortedFiltered.map(({ st, stProg }) => {
 
                               return (
                                 <div

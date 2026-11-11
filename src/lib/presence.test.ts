@@ -10,6 +10,9 @@ import {
   setPlayerCurrentActivity,
   getPlayerCurrentActivity,
   recordPlayerHeartbeat,
+  compareStudentsByPresenceAndLevel,
+  sortStudentsByPresenceAndLevel,
+  PRESENCE_SORT_PRIORITY,
   PRESENCE_ONLINE_MAX_AGE_MS,
   PRESENCE_IDLE_MAX_AGE_MS,
   PRESENCE_DISCONNECT_MAX_AGE_MS,
@@ -244,6 +247,59 @@ describe("Player Presence System (computePresenceStatus)", () => {
       assert.ok(rec);
       assert.equal(rec?.activity?.gameId, "rpg");
       assert.equal(rec?.activity?.level, 1);
+    });
+  });
+
+  describe("Student List Sorting (Online Priority + Level)", () => {
+    it("prioritizes online > idle > offline and sorts by level descending within each status", () => {
+      assert.equal(PRESENCE_SORT_PRIORITY.online, 0);
+      assert.equal(PRESENCE_SORT_PRIORITY.idle, 1);
+      assert.equal(PRESENCE_SORT_PRIORITY.offline, 2);
+
+      const students = [
+        { id: "off_high", nick: "Carlos", presenceStatus: "offline" as const, level: 10, xp: 9000 },
+        { id: "idle_mid", nick: "Bruna", presenceStatus: "idle" as const, level: 5, xp: 2000 },
+        { id: "on_low", nick: "Ana", presenceStatus: "online" as const, level: 1, xp: 10 },
+        { id: "on_high", nick: "Diego", presenceStatus: "online" as const, level: 7, xp: 4000 },
+        { id: "off_low", nick: "Eduardo", presenceStatus: "offline" as const, level: 2, xp: 300 },
+        { id: "idle_high", nick: "Fernanda", presenceStatus: "idle" as const, level: 8, xp: 5200 },
+      ];
+
+      const originalOrder = students.map((s) => s.id);
+      const sorted = sortStudentsByPresenceAndLevel(students, (s) => s);
+
+      assert.deepEqual(
+        sorted.map((s) => s.id),
+        ["on_high", "on_low", "idle_high", "idle_mid", "off_high", "off_low"]
+      );
+      // Garante que o array original não foi mutado
+      assert.deepEqual(
+        students.map((s) => s.id),
+        originalOrder
+      );
+    });
+
+    it("prioritizes level over raw XP when missions lock a student at a lower level, and uses XP and nick as tiebreakers", () => {
+      const students = [
+        { id: "locked_xp", nick: "Zeca", presenceStatus: "online" as const, level: 3, xp: 2500 },
+        { id: "unlocked_lvl", nick: "Bia", presenceStatus: "online" as const, level: 5, xp: 1800 },
+        { id: "same_lvl_less_xp", nick: "Caio", presenceStatus: "online" as const, level: 5, xp: 1200 },
+        { id: "same_lvl_tie_b", nick: "Lucas", presenceStatus: "offline" as const, level: 4, xp: 800 },
+        { id: "same_lvl_tie_a", nick: "Alice", presenceStatus: "offline" as const, level: 4, xp: 800 },
+      ];
+
+      const sorted = sortStudentsByPresenceAndLevel(students, (s) => s);
+
+      assert.deepEqual(
+        sorted.map((s) => s.id),
+        ["unlocked_lvl", "same_lvl_less_xp", "locked_xp", "same_lvl_tie_a", "same_lvl_tie_b"]
+      );
+      assert.ok(
+        compareStudentsByPresenceAndLevel(
+          { presenceStatus: "online", level: 1, xp: 0, nick: "A" },
+          { presenceStatus: "offline", level: 10, xp: 9999, nick: "B" }
+        ) < 0
+      );
     });
   });
 });

@@ -884,6 +884,77 @@ export type PresenceTargetInput =
     };
 
 /**
+ * Ordem de prioridade de presenca para listagens (online no topo, depois inativo, depois offline)
+ */
+export const PRESENCE_SORT_PRIORITY: Record<PresenceStatus, number> = {
+  online: 0,
+  idle: 1,
+  offline: 2,
+};
+
+export interface StudentPresenceLevelComparable {
+  presenceStatus: PresenceStatus;
+  level: number;
+  xp?: number;
+  nick?: string;
+  full_name?: string;
+}
+
+/**
+ * Compara dois alunos priorizando primeiro o status online (online > idle > offline),
+ * seguido por nível decrescente, XP decrescente e ordem alfabética por nick/nome.
+ */
+export function compareStudentsByPresenceAndLevel(
+  a: StudentPresenceLevelComparable,
+  b: StudentPresenceLevelComparable,
+): number {
+  const priorityDiff =
+    (PRESENCE_SORT_PRIORITY[a.presenceStatus] ?? 2) -
+    (PRESENCE_SORT_PRIORITY[b.presenceStatus] ?? 2);
+  if (priorityDiff !== 0) return priorityDiff;
+
+  const levelDiff = (b.level ?? 0) - (a.level ?? 0);
+  if (levelDiff !== 0) return levelDiff;
+
+  const xpDiff = (b.xp ?? 0) - (a.xp ?? 0);
+  if (xpDiff !== 0) return xpDiff;
+
+  const nameA = (a.nick || a.full_name || "").trim();
+  const nameB = (b.nick || b.full_name || "").trim();
+  return nameA.localeCompare(nameB, "pt-BR", { sensitivity: "base" });
+}
+
+/**
+ * Retorna uma nova lista ordenada com alunos online no topo e, dentro de cada status, por maior nível.
+ */
+export function sortStudentsByPresenceAndLevel<T>(
+  items: readonly T[],
+  toComparable: (item: T) => StudentPresenceLevelComparable,
+): T[] {
+  return [...items].sort((a, b) =>
+    compareStudentsByPresenceAndLevel(toComparable(a), toComparable(b)),
+  );
+}
+
+/**
+ * Obtem o status de presenca computado para um alvo (ID ou perfil resumido de aluno)
+ */
+export function getPlayerPresenceStatus(
+  item: PresenceTargetInput,
+  now = Date.now(),
+): PresenceStatus {
+  const data =
+    typeof item === "string"
+      ? getPlayerPresenceData(item)
+      : getPlayerPresenceData(item.id, {
+          playfabId: item.playfabId,
+          nick: item.nick,
+          nickNormalized: item.nickNormalized,
+        });
+  return computePresenceStatus(data, now);
+}
+
+/**
  * Calcula o sumario de presenca para uma lista de IDs ou perfis de jogadores
  */
 export function computePresenceSummary(
@@ -895,15 +966,7 @@ export function computePresenceSummary(
   let offline = 0;
 
   for (const item of targets) {
-    const data =
-      typeof item === "string"
-        ? getPlayerPresenceData(item)
-        : getPlayerPresenceData(item.id, {
-            playfabId: item.playfabId,
-            nick: item.nick,
-            nickNormalized: item.nickNormalized,
-          });
-    const status = computePresenceStatus(data, now);
+    const status = getPlayerPresenceStatus(item, now);
     if (status === "online") online++;
     else if (status === "idle") idle++;
     else offline++;
