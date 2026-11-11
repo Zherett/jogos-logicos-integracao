@@ -67,6 +67,14 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
   const recentTextsRef = useRef<string[]>([]);
   const recentAnsRef = useRef<boolean[]>([]);
   const blueShareRef = useRef(INITIAL_BLUE_SHARE);
+  const displayedBlueRef = useRef(INITIAL_BLUE_SHARE);
+  const stunnedUntilRef = useRef(0);
+  const unlockedMedalRef = useRef<MedalDefinition | null>(null);
+  const blueBarRef = useRef<HTMLDivElement | null>(null);
+  const redBarRef = useRef<HTMLDivElement | null>(null);
+  const clashSparkRef = useRef<HTMLDivElement | null>(null);
+  const blueGlowRef = useRef<HTMLDivElement | null>(null);
+  const redGlowRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef(1);
   const bossRef = useRef<RobotBossDef>(boss);
   const specialSpawnedRef = useRef(false);
@@ -75,13 +83,47 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
   const correctRef = useRef(0);
   const wrongRef = useRef(0);
 
-  blueShareRef.current = blueShare;
+  stunnedUntilRef.current = stunnedUntil;
+  unlockedMedalRef.current = unlockedSpecialMedal;
   stageRef.current = stage;
   bossRef.current = boss;
   livesRef.current = playerLives;
   scoreRef.current = score;
   correctRef.current = correctCount;
   wrongRef.current = wrongCount;
+
+  /**
+   * Atualiza diretamente no DOM a largura das barras, o divisor de faíscas e o brilho
+   * em 60 FPS sem transição CSS concorrente; re-renderiza o estado React apenas quando
+   * o percentual inteiro exibido muda.
+   */
+  const applyVisualShare = useCallback((rawBlue: number) => {
+    const clampedBlue = Math.max(0, Math.min(100, rawBlue));
+    const clampedRed = Math.max(0, 100 - clampedBlue);
+    blueShareRef.current = clampedBlue;
+
+    if (blueBarRef.current) {
+      blueBarRef.current.style.width = `${clampedBlue}%`;
+    }
+    if (redBarRef.current) {
+      redBarRef.current.style.width = `${clampedRed}%`;
+    }
+    if (clashSparkRef.current) {
+      clashSparkRef.current.style.left = `${Math.max(2, Math.min(98, clampedBlue))}%`;
+    }
+    if (blueGlowRef.current) {
+      blueGlowRef.current.style.width = `${clampedBlue}%`;
+    }
+    if (redGlowRef.current) {
+      redGlowRef.current.style.width = `${clampedRed}%`;
+    }
+
+    const rounded = Math.round(clampedBlue);
+    if (rounded !== displayedBlueRef.current) {
+      displayedBlueRef.current = rounded;
+      setBlueShare(rounded);
+    }
+  }, []);
 
   const nextQuestion = useCallback((targetStage: number) => {
     const q = generateClashQuestion(
@@ -120,12 +162,13 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
     setStage(1);
     setEnemyHp(firstBoss.maxHp);
     setPlayerLives(MAX_PLAYER_LIVES);
-    setBlueShare(INITIAL_BLUE_SHARE);
+    applyVisualShare(INITIAL_BLUE_SHARE);
     setScore(0);
     setStreak(0);
     setBestStreak(0);
     setCorrectCount(0);
     setWrongCount(0);
+    stunnedUntilRef.current = 0;
     setStunnedUntil(0);
     setIsStunned(false);
     setClashBanner(null);
@@ -141,7 +184,7 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
     let frameId = 0;
 
     const loop = (now: number) => {
-      if (unlockedSpecialMedal) {
+      if (unlockedMedalRef.current) {
         lastTime = now;
         frameId = requestAnimationFrame(loop);
         return;
@@ -150,7 +193,8 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
       const dt = Math.min(0.1, (now - lastTime) / 1000);
       lastTime = now;
 
-      setIsStunned(now < stunnedUntil);
+      const currentlyStunned = now < stunnedUntilRef.current;
+      setIsStunned((prev) => (prev !== currentlyStunned ? currentlyStunned : prev));
 
       const currentBoss = bossRef.current;
       const tickRes = applyClashTick(blueShareRef.current, dt, currentBoss);
@@ -166,17 +210,16 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
         setStreak(0);
 
         if (nextLives <= 0) {
-          setBlueShare(0);
+          applyVisualShare(0);
           finishMatch("gameover", scoreRef.current, stageRef.current);
           return;
         }
 
         setClashBanner("⚠️ SOBRECARGA INIMIGA! Você perdeu 1 escudo!");
         window.setTimeout(() => setClashBanner(null), 1800);
-        setBlueShare(INITIAL_BLUE_SHARE);
-        blueShareRef.current = INITIAL_BLUE_SHARE;
+        applyVisualShare(INITIAL_BLUE_SHARE);
       } else {
-        setBlueShare(tickRes.blueShare);
+        applyVisualShare(tickRes.blueShare);
       }
 
       frameId = requestAnimationFrame(loop);
@@ -184,18 +227,18 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
 
     frameId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(frameId);
-  }, [phase, stunnedUntil, finishMatch]);
+  }, [phase, finishMatch, applyVisualShare]);
 
   const handleAnswer = useCallback(
     (chosen: boolean) => {
       if (phase !== "playing") return;
-      if (performance.now() < stunnedUntil) return;
+      if (performance.now() < stunnedUntilRef.current) return;
 
       const currentBoss = bossRef.current;
       const outcome = evaluateClashAnswer({
         question,
         chosenAnswer: chosen,
-        currentBlueShare: blueShare,
+        currentBlueShare: blueShareRef.current,
         currentEnemyHp: enemyHp,
         boss: currentBoss,
       });
@@ -212,6 +255,7 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
 
         // Stun for 0.9s to prevent button mashing
         const until = performance.now() + 900;
+        stunnedUntilRef.current = until;
         setStunnedUntil(until);
         setIsStunned(true);
 
@@ -219,15 +263,15 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
           const nextLives = playerLives - 1;
           setPlayerLives(nextLives);
           if (nextLives <= 0) {
-            setBlueShare(0);
+            applyVisualShare(0);
             finishMatch("gameover", Math.max(0, score + outcome.scoreDelta), stage);
             return;
           }
           setClashBanner("⚠️ ERRO CRÍTICO! O raio inimigo atingiu seu robô (-1 escudo)!");
           window.setTimeout(() => setClashBanner(null), 1800);
-          setBlueShare(INITIAL_BLUE_SHARE);
+          applyVisualShare(INITIAL_BLUE_SHARE);
         } else {
-          setBlueShare(outcome.nextBlueShare);
+          applyVisualShare(outcome.nextBlueShare);
         }
 
         nextQuestion(stage);
@@ -282,7 +326,7 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
         if (stage >= ROBOT_BOSSES.length) {
           // Derrotou todos os 5 robôs da partida!
           setEnemyHp(0);
-          setBlueShare(100);
+          applyVisualShare(100);
           finishMatch("victory", stageClearScore, stage);
           return;
         }
@@ -300,7 +344,7 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
         bossRef.current = nextBoss;
         setStage(nextStage);
         setEnemyHp(nextBoss.maxHp);
-        setBlueShare(INITIAL_BLUE_SHARE);
+        applyVisualShare(INITIAL_BLUE_SHARE);
 
         if (isSpecial) {
           if (nextBoss.specialType === "carmesim") {
@@ -324,21 +368,20 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
 
       setScore(nextScore);
       setEnemyHp(outcome.nextEnemyHp);
-      setBlueShare(outcome.nextBlueShare);
+      applyVisualShare(outcome.nextBlueShare);
       nextQuestion(stage);
     },
     [
       phase,
-      stunnedUntil,
       stage,
       question,
-      blueShare,
       enemyHp,
       playerLives,
       score,
       streak,
       finishMatch,
       nextQuestion,
+      applyVisualShare,
     ],
   );
 
@@ -359,7 +402,8 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
     return () => window.removeEventListener("keydown", onKey);
   }, [phase, handleAnswer]);
 
-  const redShare = Math.max(0, 100 - blueShare);
+  const displayBlue = Math.max(0, Math.min(100, Math.round(blueShare)));
+  const displayRed = Math.max(0, 100 - displayBlue);
 
   return (
     <div className="space-y-5">
@@ -448,14 +492,16 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
 
           {/* CENTRO: ROBÔ COLORIDO (ESQUERDA) + BARRA DE PODER COM FAÍSCAS + ROBÔ VERMELHO (DIREITA) */}
           <div className="relative rounded-3xl border-2 bg-slate-950 px-3 py-6 sm:px-6 sm:py-8 text-white shadow-inner overflow-hidden">
-            {/* Ambient background glow */}
+            {/* Ambient background glow (atualizado diretamente em 60 FPS sem transition concorrente) */}
             <div
-              className="pointer-events-none absolute inset-y-0 left-0 bg-sky-500/15 blur-2xl transition-all duration-150"
-              style={{ width: `${blueShare}%` }}
+              ref={blueGlowRef}
+              className="pointer-events-none absolute inset-y-0 left-0 bg-sky-500/15 blur-2xl"
+              style={{ width: `${blueShareRef.current}%` }}
             />
             <div
-              className="pointer-events-none absolute inset-y-0 right-0 bg-red-600/20 blur-2xl transition-all duration-150"
-              style={{ width: `${redShare}%` }}
+              ref={redGlowRef}
+              className="pointer-events-none absolute inset-y-0 right-0 bg-red-600/20 blur-2xl"
+              style={{ width: `${Math.max(0, 100 - blueShareRef.current)}%` }}
             />
 
             <div className="relative z-10 flex items-center justify-between gap-2 sm:gap-4">
@@ -470,13 +516,13 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
                         : ""
                   }`}
                 >
-                  <PlayerGeoRobot hit={playerHitFlash} superCharging={blueShare >= 75} />
+                  <PlayerGeoRobot hit={playerHitFlash} superCharging={displayBlue >= 75} />
                 </div>
                 <span className="mt-1.5 font-display text-[11px] sm:text-xs font-extrabold text-sky-400">
                   ROBÔ PRISMA
                 </span>
                 <span className="font-mono text-[10px] font-bold text-sky-300/80">
-                  {Math.round(blueShare)}% AZUL
+                  {displayBlue}% AZUL
                 </span>
               </div>
 
@@ -484,101 +530,58 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
               <div className="flex-1 space-y-2">
                 <div className="flex items-center justify-between text-[11px] font-extrabold uppercase tracking-wider">
                   <span className="text-sky-400 flex items-center gap-1">
-                    <Zap className="h-3.5 w-3.5" /> Poder Azul ({Math.round(blueShare)}%)
+                    <Zap className="h-3.5 w-3.5" /> Poder Azul ({displayBlue}%)
                   </span>
                   <span className="hidden sm:inline text-amber-300">
                     Encha 100% = Super Golpe (-{SUPER_HIT_DAMAGE} Vida)!
                   </span>
                   <span className="text-red-400 flex items-center gap-1">
-                    Poder Vermelho ({Math.round(redShare)}%) <Flame className="h-3.5 w-3.5" />
+                    Poder Vermelho ({displayRed}%) <Flame className="h-3.5 w-3.5" />
                   </span>
                 </div>
 
-                {/* A Barra de Energia com Brilho Pulsante e Alternância de Cor */}
-                <div className="relative h-11 sm:h-13 w-full rounded-2xl border-2 border-white/20 bg-slate-950 shadow-[0_0_30px_rgba(0,0,0,0.9)] overflow-hidden">
-                  {/* Lado Azul (Jogador - Esquerda) com alternância contínua de tons de azul e brilho neon */}
-                  <div
-                    className="absolute inset-y-0 left-0 rounded-l-xl transition-all duration-300 ease-out overflow-hidden"
-                    style={{
-                      width: `${blueShare}%`,
-                      boxShadow: "0 0 25px rgba(56,189,248,0.85), inset 0 0 15px rgba(255,255,255,0.4)",
-                      background: "linear-gradient(90deg, #1e3a8a, #2563eb, #0284c7, #38bdf8, #67e8f9)",
-                      backgroundSize: "200% 100%",
-                      animation: "blueEnergyPulse 2.2s ease-in-out infinite alternate",
-                    }}
-                  />
+                {/* A Barra de Energia controlada em 60 FPS via ref direta (sem transition-all concorrente) */}
+                <div className="relative h-11 sm:h-13 w-full">
+                  <div className="relative h-full w-full rounded-2xl border-2 border-white/20 bg-slate-950 shadow-[0_0_30px_rgba(0,0,0,0.9)] overflow-hidden">
+                    {/* Lado Azul (Jogador - Esquerda) */}
+                    <div
+                      ref={blueBarRef}
+                      className="absolute inset-y-0 left-0 rounded-l-xl overflow-hidden will-change-[width]"
+                      style={{
+                        width: `${blueShareRef.current}%`,
+                        boxShadow: "0 0 25px rgba(56,189,248,0.85), inset 0 0 15px rgba(255,255,255,0.4)",
+                        background: "linear-gradient(90deg, #1e3a8a, #2563eb, #0284c7, #38bdf8, #67e8f9)",
+                        backgroundSize: "200% 100%",
+                        animation: "blueEnergyPulse 2.2s ease-in-out infinite alternate",
+                      }}
+                    />
 
-                  {/* Lado Vermelho (Inimigo - Direita) com alternância contínua de tons de vermelho e brilho neon */}
+                    {/* Lado Vermelho (Inimigo - Direita) */}
+                    <div
+                      ref={redBarRef}
+                      className="absolute inset-y-0 right-0 rounded-r-xl overflow-hidden will-change-[width]"
+                      style={{
+                        width: `${Math.max(0, 100 - blueShareRef.current)}%`,
+                        boxShadow: "0 0 25px rgba(239,68,68,0.85), inset 0 0 15px rgba(255,255,255,0.4)",
+                        background: "linear-gradient(270deg, #7f1d1d, #b91c1c, #dc2626, #ef4444, #f97316)",
+                        backgroundSize: "200% 100%",
+                        animation: "redEnergyPulse 2.2s ease-in-out infinite alternate",
+                      }}
+                    />
+                  </div>
+
+                  {/* Faísca / Ponto de Choque Central acompanhando o percentual exato */}
                   <div
-                    className="absolute inset-y-0 right-0 rounded-r-xl transition-all duration-300 ease-out overflow-hidden"
-                    style={{
-                      width: `${redShare}%`,
-                      boxShadow: "0 0 25px rgba(239,68,68,0.85), inset 0 0 15px rgba(255,255,255,0.4)",
-                      background: "linear-gradient(270deg, #7f1d1d, #b91c1c, #dc2626, #ef4444, #f97316)",
-                      backgroundSize: "200% 100%",
-                      animation: "redEnergyPulse 2.2s ease-in-out infinite alternate",
-                    }}
-                  />
+                    ref={clashSparkRef}
+                    className="pointer-events-none absolute top-1/2 -translate-x-1/2 -translate-y-1/2 z-20 will-change-[left]"
+                    style={{ left: `${Math.max(2, Math.min(98, blueShareRef.current))}%` }}
+                  >
+                    <div className="relative flex items-center justify-center">
+                      <div className="h-14 w-3 rounded-full bg-white/95 blur-[1px] shadow-[0_0_18px_#fff,0_0_28px_#facc15]" />
+                      <Sparkles className="absolute h-6 w-6 text-yellow-200" />
+                    </div>
+                  </div>
                 </div>
-
-                {/* Injeção inline de keyframes para alternância vibrante de cor das barras */}
-                <style>{`
-                  @keyframes blueEnergyPulse {
-                    0% { background-position: 0% 50%; filter: brightness(1) saturate(1.1); }
-                    50% { background-position: 100% 50%; filter: brightness(1.25) saturate(1.4); }
-                    100% { background-position: 0% 50%; filter: brightness(1.05) saturate(1.2); }
-                  }
-                  @keyframes redEnergyPulse {
-                    0% { background-position: 0% 50%; filter: brightness(1) saturate(1.1); }
-                    50% { background-position: 100% 50%; filter: brightness(1.25) saturate(1.4); }
-                    100% { background-position: 0% 50%; filter: brightness(1.05) saturate(1.2); }
-                  }
-                  @keyframes spinReverse {
-                    from { transform: rotate(360deg); }
-                    to { transform: rotate(0deg); }
-                  }
-                  @keyframes robotIdleFloatBlue {
-                    0%, 100% { transform: translateY(0px) rotate(0deg); }
-                    50% { transform: translateY(-4px) rotate(0.8deg); }
-                  }
-                  @keyframes robotIdleFloatRed {
-                    0%, 100% { transform: translateY(0px) rotate(0deg); }
-                    50% { transform: translateY(-3.5px) rotate(-1deg); }
-                  }
-                  @keyframes prismEyeBlink {
-                    0%, 82%, 90%, 100% { transform: scaleY(1); opacity: 1; }
-                    86% { transform: scaleY(0.08); opacity: 0.2; }
-                  }
-                  @keyframes prismCoreGlow {
-                    0%, 100% { filter: drop-shadow(0 0 3px #10b981) brightness(1); }
-                    50% { filter: drop-shadow(0 0 10px #34d399) drop-shadow(0 0 16px #facc15) brightness(1.35); }
-                  }
-                  @keyframes prismAntennaGlow {
-                    0%, 100% { filter: drop-shadow(0 0 2px #38bdf8) brightness(1); }
-                    50% { filter: drop-shadow(0 0 8px #67e8f9) drop-shadow(0 0 14px #ffffff) brightness(1.4); }
-                  }
-                  @keyframes prismShoulderGlow {
-                    0%, 100% { filter: brightness(1); }
-                    50% { filter: drop-shadow(0 0 6px #f43f5e) brightness(1.3); }
-                  }
-                  @keyframes redEyeBlinkAngry {
-                    0%, 78%, 88%, 100% { transform: scaleY(1); opacity: 1; }
-                    83% { transform: scaleY(0.1); opacity: 0.25; }
-                  }
-                  @keyframes angryMouthGrimace {
-                    0%, 100% { transform: scale(1); }
-                    50% { transform: scale(1.08) translateY(-0.5px); }
-                  }
-                  @keyframes angryHornsTremble {
-                    0%, 100% { transform: rotate(0deg); }
-                    25% { transform: rotate(-1.5deg); }
-                    75% { transform: rotate(1.5deg); }
-                  }
-                  @keyframes redCorePulseAngry {
-                    0%, 100% { filter: drop-shadow(0 0 4px #ef4444) brightness(1); }
-                    50% { filter: drop-shadow(0 0 14px #dc2626) drop-shadow(0 0 22px #f97316) brightness(1.4); }
-                  }
-                `}</style>
 
                 <div className="flex items-center justify-between text-[11px] text-slate-300">
                   <span>← Se chegar a 0% você perde 1 escudo</span>

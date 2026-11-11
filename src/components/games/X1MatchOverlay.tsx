@@ -942,15 +942,15 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
 
           <div className="relative h-12 w-full rounded-2xl border-2 border-white/20 bg-slate-900 overflow-visible">
             <div
-              className="absolute inset-y-0 left-0 rounded-l-xl bg-gradient-to-r from-blue-600 via-sky-500 to-cyan-300 shadow-[0_0_20px_rgba(56,189,248,0.8)] transition-all duration-150"
+              className="absolute inset-y-0 left-0 rounded-l-xl bg-gradient-to-r from-blue-600 via-sky-500 to-cyan-300 shadow-[0_0_20px_rgba(56,189,248,0.8)] transition-[width] duration-150 ease-out"
               style={{ width: `${room.blueShare}%` }}
             />
             <div
-              className="absolute inset-y-0 right-0 rounded-r-xl bg-gradient-to-l from-red-800 via-red-600 to-orange-500 shadow-[0_0_20px_rgba(239,68,68,0.8)] transition-all duration-150"
+              className="absolute inset-y-0 right-0 rounded-r-xl bg-gradient-to-l from-red-800 via-red-600 to-orange-500 shadow-[0_0_20px_rgba(239,68,68,0.8)] transition-[width] duration-150 ease-out"
               style={{ width: `${redShare}%` }}
             />
             <div
-              className="pointer-events-none absolute top-1/2 -translate-x-1/2 -translate-y-1/2 z-20"
+              className="pointer-events-none absolute top-1/2 -translate-x-1/2 -translate-y-1/2 z-20 transition-[left] duration-150 ease-out"
               style={{ left: `${Math.max(4, Math.min(96, room.blueShare))}%` }}
             >
               <div className="relative flex items-center justify-center">

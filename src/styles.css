@@ -205,3 +205,60 @@
   transform: rotateY(180deg);
 }
 
+/* Batalha de Robôs (Power-Clash) Keyframes */
+@keyframes blueEnergyPulse {
+  0% { background-position: 0% 50%; filter: brightness(1) saturate(1.1); }
+  50% { background-position: 100% 50%; filter: brightness(1.25) saturate(1.4); }
+  100% { background-position: 0% 50%; filter: brightness(1.05) saturate(1.2); }
+}
+@keyframes redEnergyPulse {
+  0% { background-position: 0% 50%; filter: brightness(1) saturate(1.1); }
+  50% { background-position: 100% 50%; filter: brightness(1.25) saturate(1.4); }
+  100% { background-position: 0% 50%; filter: brightness(1.05) saturate(1.2); }
+}
+@keyframes spinReverse {
+  from { transform: rotate(360deg); }
+  to { transform: rotate(0deg); }
+}
+@keyframes robotIdleFloatBlue {
+  0%, 100% { transform: translateY(0px) rotate(0deg); }
+  50% { transform: translateY(-4px) rotate(0.8deg); }
+}
+@keyframes robotIdleFloatRed {
+  0%, 100% { transform: translateY(0px) rotate(0deg); }
+  50% { transform: translateY(-3.5px) rotate(-1deg); }
+}
+@keyframes prismEyeBlink {
+  0%, 82%, 90%, 100% { transform: scaleY(1); opacity: 1; }
+  86% { transform: scaleY(0.08); opacity: 0.2; }
+}
+@keyframes prismCoreGlow {
+  0%, 100% { filter: drop-shadow(0 0 3px #10b981) brightness(1); }
+  50% { filter: drop-shadow(0 0 10px #34d399) drop-shadow(0 0 16px #facc15) brightness(1.35); }
+}
+@keyframes prismAntennaGlow {
+  0%, 100% { filter: drop-shadow(0 0 2px #38bdf8) brightness(1); }
+  50% { filter: drop-shadow(0 0 8px #67e8f9) drop-shadow(0 0 14px #ffffff) brightness(1.4); }
+}
+@keyframes prismShoulderGlow {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: drop-shadow(0 0 6px #f43f5e) brightness(1.3); }
+}
+@keyframes redEyeBlinkAngry {
+  0%, 78%, 88%, 100% { transform: scaleY(1); opacity: 1; }
+  83% { transform: scaleY(0.1); opacity: 0.25; }
+}
+@keyframes angryMouthGrimace {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.08) translateY(-0.5px); }
+}
+@keyframes angryHornsTremble {
+  0%, 100% { transform: rotate(0deg); }
+  25% { transform: rotate(-1.5deg); }
+  75% { transform: rotate(1.5deg); }
+}
+@keyframes redCorePulseAngry {
+  0%, 100% { filter: drop-shadow(0 0 4px #ef4444) brightness(1); }
+  50% { filter: drop-shadow(0 0 14px #dc2626) drop-shadow(0 0 22px #f97316) brightness(1.4); }
+}
+
