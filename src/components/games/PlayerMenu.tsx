@@ -35,7 +35,12 @@ import { LeaderboardDialog } from "./LeaderboardDialog";
 import { PlayerMedalsInventory } from "./PlayerMedalsInventory";
 import { PlayerInboxModal } from "./PlayerInboxModal";
 import { TournamentRankBadge } from "./TournamentRankBadge";
-import { getTournamentStoreRecord } from "@/lib/weekly-tournament";
+import {
+  getTournamentStoreRecord,
+  getWeeklyTournamentSnapshot,
+  resolveCanonicalTournamentPoints,
+  syncWeeklyTournamentWithPlayFab,
+} from "@/lib/weekly-tournament";
 import { ThemeToggle } from "./ThemeToggle";
 import {
   aggregateStatsByGame,
@@ -184,7 +189,7 @@ export function PlayerMenu({ onConfigChanged }: Props) {
   const dailyPercent = Math.min(100, Math.round((dailyXp / Math.max(1, dailyCap)) * 100));
   const isDailyCapped = dailyXp >= dailyCap;
 
-  // Retrieve player's ranking position in their competing series (Medalhas tab by default)
+  // Retrieve player's official weekly tournament ranking position in their stage
   useEffect(() => {
     if (!profileOpen || !profile) return;
     setCardFlipped(false);
@@ -193,21 +198,27 @@ export function PlayerMenu({ onConfigChanged }: Props) {
     setInitialTurma(profile.turma || "");
     setInitialSetupMsg(null);
 
-    const category = resolveDefaultRankingCategory(profile);
-    fetchLeaderboard({ kind: "medals", stage: category }, 100)
-      .then((entries) => {
-        const found = entries.find(
-          (e) =>
-            e.playerId === profile.id ||
-            e.nick.toLowerCase() === profile.nick.toLowerCase(),
-        );
-        if (found) {
-          setPlayerRank(found.rank);
-        } else {
-          setPlayerRank(null);
-        }
+    let active = true;
+    const refreshRank = () => {
+      if (!active) return;
+      const snap = getWeeklyTournamentSnapshot(profile);
+      setPlayerRank(snap.myStanding?.rank ?? null);
+    };
+
+    refreshRank();
+    void syncWeeklyTournamentWithPlayFab()
+      .then(() => {
+        refreshRank();
       })
-      .catch(() => setPlayerRank(null));
+      .catch(() => {
+        /* ignore network errors */
+      });
+
+    window.addEventListener("desafios:weekly-tournament-updated", refreshRank);
+    return () => {
+      active = false;
+      window.removeEventListener("desafios:weekly-tournament-updated", refreshRank);
+    };
   }, [profileOpen, profile]);
 
   // Atualiza em tempo real a atividade do aluno quando ele visualiza ranking, perfil, medalhas ou caixa de entrada
@@ -580,16 +591,19 @@ export function PlayerMenu({ onConfigChanged }: Props) {
                     {/* Badges de Informações Compactas (Rank, Medalhas, Colocação) subindo e bem encaixadas */}
                     <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 pt-0.5">
                       <TournamentRankBadge
-                        points={Math.max(
-                          profile.tournamentPoints ?? 0,
-                          profile.bestTournamentPoints ?? 0,
-                          (() => {
-                            const rec =
-                              getTournamentStoreRecord(profile.id, profile.nick) ||
-                              (profile.nickNormalized ? getTournamentStoreRecord(profile.nickNormalized, profile.nickNormalized) : null);
-                            return Math.max(rec?.tournamentPoints ?? 0, rec?.bestScore ?? 0);
-                          })(),
-                        )}
+                        points={(() => {
+                          const rec =
+                            getTournamentStoreRecord(profile.id, profile.nick) ||
+                            (profile.playfabId ? getTournamentStoreRecord(profile.playfabId, profile.nick) : null) ||
+                            (profile.nickNormalized ? getTournamentStoreRecord(profile.nickNormalized, profile.nickNormalized) : null);
+                          return resolveCanonicalTournamentPoints({
+                            level: profile.level,
+                            isAdmin: profile.isAdmin,
+                            tournamentPoints: profile.tournamentPoints,
+                            bestTournamentPoints: profile.bestTournamentPoints,
+                            record: rec,
+                          });
+                        })()}
                         size="sm"
                         showLabel
                         showPoints

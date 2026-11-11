@@ -10,6 +10,7 @@ import {
   getTournamentStoreRecord,
   getWeekInfo,
   recordWeeklyTournamentAttempt,
+  resolveCanonicalTournamentPoints,
   resolveWeeklyTournamentGame,
   TOURNAMENT_DAILY_FREE_ENTRIES,
   TOURNAMENT_DAILY_PAID_ENTRIES_LIMIT,
@@ -708,5 +709,82 @@ describe("Torneio Semanal Ranqueado (Nível 3+) e Regras da Arena X1 (Nível 5+,
       assert.ok(bySessionId);
       assert.equal(bySessionId.tournamentPoints, 147);
     }
+  });
+
+  it("fonte única de verdade: resolveCanonicalTournamentPoints ignora bestScore, respeita nível mínimo e mantém paridade com o ranking", () => {
+    const now = Date.now();
+    // 1. Nunca contamina pontos ranqueados com bestScore bruto de partida
+    const pts = resolveCanonicalTournamentPoints({
+      level: 5,
+      tournamentPoints: 42,
+      bestTournamentPoints: 42,
+      record: { level: 5, tournamentPoints: 42 },
+    });
+    assert.equal(pts, 42);
+
+    // 2. Registro sem tournamentPoints explícito não promove bestScore
+    const records: Record<string, TournamentPlayerRecord> = {
+      alunoA: {
+        playerId: "alunoA",
+        nick: "AlunoA",
+        fullName: "ALUNO A",
+        school: "Raimundo Bezerra",
+        level: 6,
+        bestScore: 950, // pontuação bruta de jogo NÃO pode virar pontos ranqueados
+        totalEntries: 2,
+        activeTop5Since: null,
+        accumulatedTop5Ms: 0,
+        updatedAt: now,
+      },
+      alunoB: {
+        playerId: "alunoB",
+        nick: "AlunoB",
+        fullName: "ALUNO B",
+        school: "Raimundo Bezerra",
+        level: 6,
+        tournamentPoints: 85,
+        bestScore: 500,
+        totalEntries: 1, // mesmo com 1 entrada (evento com multiplicador ou ajuste), não sofre cap diferente
+        activeTop5Since: null,
+        accumulatedTop5Ms: 0,
+        updatedAt: now,
+      },
+    };
+    const evaluated = evaluateTournamentStandings(records, now, "TODAS");
+    const rowA = evaluated.allStandings.find((s) => s.playerId === "alunoA");
+    const rowB = evaluated.allStandings.find((s) => s.playerId === "alunoB");
+    assert.equal(rowA?.tournamentPoints, 0);
+    assert.equal(rowB?.tournamentPoints, 85);
+    assert.equal(
+      resolveCanonicalTournamentPoints({
+        level: 6,
+        tournamentPoints: 85,
+        bestTournamentPoints: 85,
+        record: records.alunoB,
+      }),
+      rowB?.tournamentPoints,
+    );
+
+    // 3. Nível abaixo de TOURNAMENT_MIN_LEVEL (3) sempre resulta em 0
+    assert.equal(
+      resolveCanonicalTournamentPoints({
+        level: 2,
+        tournamentPoints: 120,
+        bestTournamentPoints: 120,
+        record: { level: 2, tournamentPoints: 120 },
+      }),
+      0,
+    );
+
+    // 4. Dedução explícita (ex.: entrada paga) não é sobrescrita por bestTournamentPoints
+    assert.equal(
+      resolveCanonicalTournamentPoints({
+        level: 5,
+        tournamentPoints: 95,
+        bestTournamentPoints: 100,
+        record: { level: 5, tournamentPoints: 95 },
+      }),
+      95,
+    );
   });
 });

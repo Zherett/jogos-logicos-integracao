@@ -75,7 +75,11 @@ import { PlayerMedalsInventory } from "./PlayerMedalsInventory";
 import { PresenceDot } from "./PresenceDot";
 import { PlayerActivityBadge } from "./PlayerActivityBadge";
 import { TournamentRankBadge } from "./TournamentRankBadge";
-import { getTournamentStoreRecord, syncWeeklyTournamentWithPlayFab } from "@/lib/weekly-tournament";
+import {
+  getTournamentStoreRecord,
+  resolveCanonicalTournamentPoints,
+  syncWeeklyTournamentWithPlayFab,
+} from "@/lib/weekly-tournament";
 
 interface Props {
   playerId: string | null;
@@ -90,28 +94,18 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
 
   const effectiveTournamentPoints = useMemo(() => {
     if (!profile) return 0;
-    // O Torneio Semanal Ranqueado é restrito a alunos de Nível 3 ou superior
-    if ((profile.level ?? 1) < 3) return 0;
-
     const tourRecord =
       getTournamentStoreRecord(profile.id, profile.nick) ||
+      (profile.playfabId ? getTournamentStoreRecord(profile.playfabId, profile.nick) : null) ||
       (profile.nickNormalized ? getTournamentStoreRecord(profile.nickNormalized, profile.nickNormalized) : null);
 
-    // Validação física de coerência: se não houve nenhuma entrada ou partida disputada no torneio, pontos = 0
-    const tourMatches =
-      (tourRecord?.totalEntries ?? 0) +
-      (profile.stats?.filter((s) => s.mode === "torneio_semanal").reduce((sum, s) => sum + s.plays, 0) ?? 0);
-    if (tourMatches === 0) return 0;
-
-    // Desacoplamento estrito: NUNCA usa bestScore (pontuação bruta de jogo) como pontos de ranqueada
-    const rawPoints = Math.max(
-      profile.tournamentPoints ?? 0,
-      profile.bestTournamentPoints ?? 0,
-      tourRecord?.tournamentPoints ?? 0,
-    );
-    // Teto físico razoável (15 pts por partida + 25 pts bônus diário)
-    const physicalCap = Math.max(30, tourMatches * 15 + 25);
-    return Math.min(rawPoints, physicalCap);
+    return resolveCanonicalTournamentPoints({
+      level: profile.level,
+      isAdmin: profile.isAdmin,
+      tournamentPoints: profile.tournamentPoints,
+      bestTournamentPoints: profile.bestTournamentPoints,
+      record: tourRecord,
+    });
   }, [profile]);
 
   // Estados de edição pelo Administrador
@@ -165,7 +159,7 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
       }
       let cancelled = false;
       void Promise.all([
-        syncStudentRosterFromPlayFab(),
+        syncStudentRosterFromPlayFab(undefined, true),
         syncWeeklyTournamentWithPlayFab(),
       ]).then(() => {
         if (cancelled) return;

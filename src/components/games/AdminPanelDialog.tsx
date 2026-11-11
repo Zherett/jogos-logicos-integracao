@@ -2304,7 +2304,12 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                               const rDef = getTournamentRank(pts).currentRank;
 
                               return (
-                                <tr key={row.playerId} className="hover:bg-secondary/20 transition-colors">
+                                <tr
+                                  key={row.playerId}
+                                  onClick={() => setInspectStudentId(row.playerId)}
+                                  title="Clique para inspecionar o perfil completo deste aluno"
+                                  className="cursor-pointer hover:bg-secondary/30 transition-colors"
+                                >
                                   <td className="px-3 py-2.5 font-display font-black">
                                     <span
                                       className={`inline-grid h-7 w-7 place-items-center rounded-lg text-xs font-black ${

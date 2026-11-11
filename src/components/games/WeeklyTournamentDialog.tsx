@@ -34,6 +34,7 @@ import {
 } from "@/lib/weekly-tournament";
 import { stageFromBirthdate, type AgeStageId } from "@/lib/player-profile";
 import { TournamentRankBadge } from "./TournamentRankBadge";
+import { PlayerInspectModal } from "./PlayerInspectModal";
 
 interface Props {
   open: boolean;
@@ -99,6 +100,7 @@ export function WeeklyTournamentDialog({
   const [confirmPaidOpen, setConfirmPaidOpen] = useState(false);
   const [spendingEntry, setSpendingEntry] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
+  const [inspectPlayerId, setInspectPlayerId] = useState<string | null>(null);
 
   const myStageId = profile
     ? stageFromBirthdate(profile.birthdate, new Date(), profile.school).id
@@ -205,7 +207,7 @@ export function WeeklyTournamentDialog({
     );
   }
 
-  const currentPoints = profile.tournamentPoints ?? 0;
+  const currentPoints = snap.tournamentPoints;
   const rankInfo = getTournamentRank(currentPoints);
 
   return (
@@ -563,8 +565,10 @@ export function WeeklyTournamentDialog({
                     return (
                       <div
                         key={row.playerId}
-                        className={`flex items-center justify-between gap-3 rounded-2xl border p-3 transition-colors ${
-                          isMe ? "border-primary bg-primary/10 shadow-xs" : "bg-background"
+                        onClick={() => setInspectPlayerId(row.playerId)}
+                        title="Clique para inspecionar o perfil e patente deste aluno"
+                        className={`flex items-center justify-between gap-3 rounded-2xl border p-3 cursor-pointer transition-all hover:scale-[1.01] active:scale-[0.99] ${
+                          isMe ? "border-primary bg-primary/10 shadow-xs" : "bg-background hover:border-primary/50"
                         }`}
                       >
                         <div className="flex items-center gap-2.5 min-w-0">
@@ -701,6 +705,17 @@ export function WeeklyTournamentDialog({
           </div>
         </DialogContent>
       </Dialog>
+      <PlayerInspectModal
+        playerId={inspectPlayerId}
+        open={Boolean(inspectPlayerId)}
+        onOpenChange={(v) => {
+          if (!v) setInspectPlayerId(null);
+        }}
+        onStudentUpdated={() => {
+          setTick((t) => t + 1);
+          void auth.refresh();
+        }}
+      />
     </Dialog>
   );
 }

@@ -117,10 +117,13 @@ import {
 } from "./career-points.ts";
 import { removePlayerFromPresence } from "./presence.ts";
 import {
+  deductTournamentRecordPoints,
   removePlayerFromTournament,
+  resolveCanonicalTournamentPoints,
   getTournamentRank,
   getTournamentStoreRecord,
   finalizeRankedSeasonAndAwardMedalsViaInbox,
+  TOURNAMENT_DAILY_FREE_ENTRIES,
 } from "./weekly-tournament.ts";
 import {
   createInboxMessage,
@@ -1205,12 +1208,25 @@ export function ensurePlayerSeasonAligned(
       (acc.profile.nickNormalized ? getTournamentStoreRecord(acc.profile.nickNormalized, acc.profile.nickNormalized) : null);
 
     // Desacoplamento estrito: usa apenas tournamentPoints legítimos (nunca bestScore de jogo)
-    const tourPoints = tourRec?.tournamentPoints ?? 0;
-    const maxTournamentPts = Math.max(
-      acc.profile.tournamentPoints ?? 0,
-      acc.profile.bestTournamentPoints ?? 0,
-      tourPoints,
-    );
+    const tourPoints =
+      typeof tourRec?.tournamentPoints === "number" ? Math.max(0, tourRec.tournamentPoints) : 0;
+    const profPoints =
+      typeof acc.profile.tournamentPoints === "number" ? Math.max(0, acc.profile.tournamentPoints) : 0;
+    const paidSpentToday = (acc.profile.dailyTournamentEntries ?? 0) > TOURNAMENT_DAILY_FREE_ENTRIES;
+    const shouldRestoreFromBest =
+      !paidSpentToday &&
+      profPoints === 0 &&
+      tourPoints === 0 &&
+      (acc.profile.bestTournamentPoints ?? 0) > 0;
+    const maxTournamentPts = shouldRestoreFromBest
+      ? (acc.profile.bestTournamentPoints ?? 0)
+      : resolveCanonicalTournamentPoints({
+          level: acc.profile.level,
+          isAdmin: isAdminAcc,
+          tournamentPoints: acc.profile.tournamentPoints,
+          bestTournamentPoints: acc.profile.bestTournamentPoints,
+          record: tourRec,
+        });
 
     if (isCorruptedNovice) {
       // Aluno iniciante corrompido (ex: caso banana123 com <= 3 vitórias e 295 XP): não pode ter patente alta herdada por resíduo de bestScore
@@ -1224,12 +1240,8 @@ export function ensurePlayerSeasonAligned(
       acc.profile.bestTournamentPoints = Math.max(acc.profile.bestTournamentPoints ?? 0, maxTournamentPts);
       acc.profile.tournamentRankId = getTournamentRank(maxTournamentPts).currentRank.id;
     } else {
-      if (typeof acc.profile.tournamentPoints !== "number") {
-        acc.profile.tournamentPoints = 0;
-      }
-      if (!acc.profile.tournamentRankId) {
-        acc.profile.tournamentRankId = "bronze_1";
-      }
+      acc.profile.tournamentPoints = 0;
+      acc.profile.tournamentRankId = "bronze_1";
     }
   }
   acc.profile.tournamentWeekKey = currentWeekKey;
@@ -2987,10 +2999,10 @@ export async function syncStudentRosterFromPlayFab(
       if (standingsVal) {
         const parsedStandings = JSON.parse(standingsVal) as Record<
           string,
-          { nick?: string; playerId?: string; tournamentPoints?: number; bestScore?: number }
+          { nick?: string; playerId?: string; tournamentPoints?: number }
         >;
         for (const [id, rec] of Object.entries(parsedStandings)) {
-          const pts = rec.tournamentPoints ?? rec.bestScore ?? 0;
+          const pts = typeof rec.tournamentPoints === "number" ? Math.max(0, rec.tournamentPoints) : 0;
           if (pts > 0) {
             if (rec.nick) {
               const s = nickSlug(rec.nick);
@@ -3419,17 +3431,28 @@ export async function syncStudentRosterFromPlayFab(
                 tourStandingsBySlug.get(parsed.nick?.toLowerCase().trim() ?? "") ?? 0,
               );
               const tourRec = getTournamentStoreRecord(parsed.id, slug) || (parsed.playfabId ? getTournamentStoreRecord(parsed.playfabId, slug) : null);
-              const tourPts = Math.max(tourRec?.tournamentPoints ?? 0, tourRec?.bestScore ?? 0);
-              const finalPts = Math.max(
-                cloudTourPts,
-                parsed.tournamentPoints ?? 0,
-                parsed.bestTournamentPoints ?? 0,
-                existing?.profile.tournamentPoints ?? 0,
-                existing?.profile.bestTournamentPoints ?? 0,
-                udProf?.tournamentPoints ?? 0,
-                udProf?.bestTournamentPoints ?? 0,
-                tourPts,
+              const effLevel = Math.max(
+                Number(parsed.level ?? 0),
+                Number(existing?.profile.level ?? 0),
+                Number(udProf?.level ?? 0),
+                1,
               );
+              const maxProfileTourPts = Math.max(
+                parsed.tournamentPoints ?? 0,
+                existing?.profile.tournamentPoints ?? 0,
+                udProf?.tournamentPoints ?? 0,
+              );
+              const finalPts = resolveCanonicalTournamentPoints({
+                level: effLevel,
+                isAdmin: Boolean(parsed.isAdmin || existing?.profile.isAdmin || udProf?.isAdmin),
+                tournamentPoints: Math.max(cloudTourPts, maxProfileTourPts),
+                bestTournamentPoints: Math.max(
+                  parsed.bestTournamentPoints ?? 0,
+                  existing?.profile.bestTournamentPoints ?? 0,
+                  udProf?.bestTournamentPoints ?? 0,
+                ),
+                record: tourRec,
+              });
               if (finalPts > (parsed.tournamentPoints ?? 0)) {
                 needsCloudSanitize.add(slug);
               }
@@ -3443,16 +3466,12 @@ export async function syncStudentRosterFromPlayFab(
                 tourStandingsBySlug.get(parsed.nick?.toLowerCase().trim() ?? "") ?? 0,
               );
               const tourRec = getTournamentStoreRecord(parsed.id, slug) || (parsed.playfabId ? getTournamentStoreRecord(parsed.playfabId, slug) : null);
-              const tourPts = Math.max(tourRec?.tournamentPoints ?? 0, tourRec?.bestScore ?? 0);
               const curPts = Math.max(
                 cloudTourPts,
                 parsed.tournamentPoints ?? 0,
-                parsed.bestTournamentPoints ?? 0,
                 existing?.profile.tournamentPoints ?? 0,
-                existing?.profile.bestTournamentPoints ?? 0,
                 udProf?.tournamentPoints ?? 0,
-                udProf?.bestTournamentPoints ?? 0,
-                tourPts,
+                typeof tourRec?.tournamentPoints === "number" ? Math.max(0, tourRec.tournamentPoints) : 0,
               );
               return Math.max(
                 parsed.bestTournamentPoints ?? 0,
@@ -3469,20 +3488,29 @@ export async function syncStudentRosterFromPlayFab(
                 tourStandingsBySlug.get(parsed.nick?.toLowerCase().trim() ?? "") ?? 0,
               );
               const tourRec = getTournamentStoreRecord(parsed.id, slug) || (parsed.playfabId ? getTournamentStoreRecord(parsed.playfabId, slug) : null);
-              const tourPts = Math.max(tourRec?.tournamentPoints ?? 0, tourRec?.bestScore ?? 0);
-              const curPts = Math.max(
-                cloudTourPts,
-                parsed.tournamentPoints ?? 0,
-                parsed.bestTournamentPoints ?? 0,
-                existing?.profile.tournamentPoints ?? 0,
-                existing?.profile.bestTournamentPoints ?? 0,
-                udProf?.tournamentPoints ?? 0,
-                udProf?.bestTournamentPoints ?? 0,
-                tourPts,
+              const effLevel = Math.max(
+                Number(parsed.level ?? 0),
+                Number(existing?.profile.level ?? 0),
+                Number(udProf?.level ?? 0),
+                1,
               );
-              return curPts > 0
-                ? getTournamentRank(curPts).currentRank.id
-                : (parsed.tournamentRankId ?? existing?.profile.tournamentRankId ?? udProf?.tournamentRankId ?? "bronze_1");
+              const curPts = resolveCanonicalTournamentPoints({
+                level: effLevel,
+                isAdmin: Boolean(parsed.isAdmin || existing?.profile.isAdmin || udProf?.isAdmin),
+                tournamentPoints: Math.max(
+                  cloudTourPts,
+                  parsed.tournamentPoints ?? 0,
+                  existing?.profile.tournamentPoints ?? 0,
+                  udProf?.tournamentPoints ?? 0,
+                ),
+                bestTournamentPoints: Math.max(
+                  parsed.bestTournamentPoints ?? 0,
+                  existing?.profile.bestTournamentPoints ?? 0,
+                  udProf?.bestTournamentPoints ?? 0,
+                ),
+                record: tourRec,
+              });
+              return getTournamentRank(curPts).currentRank.id;
             })(),
             rankedSeasonId:
               parsed.rankedSeasonId ??
@@ -5921,9 +5949,11 @@ export async function deductPaidTournamentPoints(
 
   const newPoints = currentPoints - points;
   acc.profile.tournamentPoints = newPoints;
+  acc.profile.tournamentRankId = getTournamentRank(newPoints).currentRank.id;
   acc.profile.dailyTournamentEntries = (acc.profile.dailyTournamentEntries ?? 0) + 1;
   acc.updatedAt = new Date().toISOString();
   saveRegistry(reg);
+  deductTournamentRecordPoints(acc.profile.id, newPoints, acc.profile.nick);
 
   const session = loadStoredSession();
   if (session?.sessionTicket && isPlayFabConfigured() && acc.profile.id === session.playerId) {

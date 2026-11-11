@@ -608,22 +608,29 @@ export function evaluateTournamentStandings(
   updatedRecords: Record<string, TournamentPlayerRecord>;
 } {
   const reg = typeof window !== "undefined" ? loadRegistry() : {};
+  const findAccForRecord = (rec: TournamentPlayerRecord) => {
+    const pId = rec.playerId.toLowerCase();
+    const pNick = (rec.nick || "").toLowerCase();
+    return (
+      reg[pId] ||
+      reg[pNick] ||
+      Object.values(reg).find((a) => a?.profile?.nick?.toLowerCase() === pNick)
+    );
+  };
   const list = Object.values(recordsMap)
     .filter((rec) => {
       if (!rec || !rec.playerId) return false;
       const pId = rec.playerId.toLowerCase();
       if (pId === "admin-system" || pId.startsWith("admin-system")) return false;
       // Requisito oficial do Torneio Semanal Ranqueado: Nível 3+
-      const pNick = (rec.nick || "").toLowerCase();
-      const foundAcc =
-        reg[pId] ||
-        reg[pNick] ||
-        Object.values(reg).find((a) => a?.profile?.nick?.toLowerCase() === pNick);
+      const foundAcc = findAccForRecord(rec);
       const effLevel = rec.level ?? foundAcc?.profile?.level ?? 1;
       if (effLevel < TOURNAMENT_MIN_LEVEL) return false;
       return true;
     })
     .map((rec) => {
+      const foundAcc = findAccForRecord(rec);
+      const effLevel = rec.level ?? foundAcc?.profile?.level ?? 1;
       const resolvedAge =
         rec.age ?? (rec.birthdate ? ageFrom(rec.birthdate, new Date(nowMs)) : 10);
       const resolvedStage: AgeStageId =
@@ -631,10 +638,13 @@ export function evaluateTournamentStandings(
         (rec.birthdate ? stageFromBirthdate(rec.birthdate, new Date(nowMs), rec.school).id : "etapa_1");
       const stInfo = getAgeStageInfo(resolvedStage);
       const { holdMinutes, holdBonusPoints } = computeTop5HoldMetrics(rec, nowMs);
-      const tourPoints =
-        typeof rec.tournamentPoints === "number"
-          ? Math.max(0, rec.tournamentPoints)
-          : Math.max(0, rec.bestScore ?? 0);
+      const tourPoints = resolveCanonicalTournamentPoints({
+        level: effLevel,
+        isAdmin: Boolean(foundAcc?.profile?.isAdmin),
+        tournamentPoints: foundAcc?.profile?.tournamentPoints,
+        bestTournamentPoints: foundAcc?.profile?.bestTournamentPoints,
+        record: rec,
+      });
       const currentRank = getTournamentRank(tourPoints).currentRank;
       return {
         rec: {
@@ -1025,6 +1035,91 @@ function loadTournamentStore(now = new Date()): WeeklyTournamentStore {
   };
 }
 
+export interface CanonicalTournamentPointsInput {
+  level?: number;
+  isAdmin?: boolean;
+  tournamentPoints?: number | null;
+  bestTournamentPoints?: number | null;
+  record?: {
+    level?: number;
+    tournamentPoints?: number | null;
+  } | null;
+}
+
+/**
+ * Fonte única de verdade para a pontuação ranqueada exibida no ranking e nos perfis.
+ * - Nível abaixo do mínimo (3) para contas não-ADM sempre retorna 0 pontos.
+ * - Nunca utiliza `bestScore` (pontuação bruta de jogo) como pontuação ranqueada.
+ * - Usa o maior valor legítimo entre registro do torneio e perfil, sem restaurar `bestTournamentPoints`
+ *   quando já existe `tournamentPoints` numérico explícito.
+ */
+export function resolveCanonicalTournamentPoints(
+  input: CanonicalTournamentPointsInput,
+): number {
+  const rawLevel = input.level ?? input.record?.level;
+  if (!input.isAdmin && typeof rawLevel === "number" && rawLevel < TOURNAMENT_MIN_LEVEL) {
+    return 0;
+  }
+
+  const recPts =
+    typeof input.record?.tournamentPoints === "number"
+      ? Math.max(0, input.record.tournamentPoints)
+      : null;
+  const profPts =
+    typeof input.tournamentPoints === "number"
+      ? Math.max(0, input.tournamentPoints)
+      : null;
+
+  const currentPts = Math.max(recPts ?? 0, profPts ?? 0);
+  if (currentPts > 0) return currentPts;
+
+  if (recPts === null && profPts === null) {
+    return Math.max(0, input.bestTournamentPoints ?? 0);
+  }
+  return 0;
+}
+
+/**
+ * Atualiza a pontuação ranqueada no armazenamento local do torneio (ex: dedução de entrada paga)
+ * preservando a paridade entre perfil e lista de ranking.
+ */
+export function deductTournamentRecordPoints(
+  playerId: string,
+  newPoints: number,
+  nick?: string,
+): void {
+  if (typeof window === "undefined") return;
+  const clamped = Math.max(0, Math.floor(newPoints));
+  const nowMs = Date.now();
+  const store = loadTournamentStore(new Date(nowMs));
+  const cleanId = playerId.toLowerCase().trim();
+  const cleanNick = (nick ?? "").toLowerCase().trim();
+  let updated = false;
+
+  for (const [key, rec] of Object.entries(store.records)) {
+    const kLower = key.toLowerCase().trim();
+    const rId = (rec.playerId || "").toLowerCase().trim();
+    const rNick = (rec.nick || "").toLowerCase().trim();
+    if (
+      (cleanId && (kLower === cleanId || rId === cleanId || rNick === cleanId)) ||
+      (cleanNick && (kLower === cleanNick || rNick === cleanNick || rId === cleanNick))
+    ) {
+      rec.tournamentPoints = clamped;
+      rec.highestRankId = getTournamentRank(clamped).currentRank.id;
+      rec.updatedAt = nowMs;
+      updated = true;
+    }
+  }
+
+  if (updated) {
+    saveTournamentStore(store);
+    window.dispatchEvent(
+      new CustomEvent("desafios:weekly-tournament-updated", { detail: store }),
+    );
+    void syncWeeklyTournamentWithPlayFab();
+  }
+}
+
 /**
  * Recupera o registro da ranqueada de um jogador diretamente do armazenamento do Torneio Semanal.
  * Realiza varredura inteligente por ID, apelido ou apelido normalizado, garantindo sempre a maior pontuação.
@@ -1202,13 +1297,22 @@ export async function syncWeeklyTournamentWithPlayFab(): Promise<void> {
       const local = store.records[targetKey];
       const remotePts = r.tournamentPoints ?? 0;
       const localPts = local ? (local.tournamentPoints ?? 0) : 0;
+      const remoteNewer = (r.updatedAt ?? 0) > (local?.updatedAt ?? 0);
+      const localIsNewer = Boolean(local && (local.updatedAt ?? 0) > (r.updatedAt ?? 0));
 
-      if (!local || remotePts >= localPts || r.updatedAt > local.updatedAt) {
+      if (!local || (!localIsNewer && remotePts >= localPts) || remoteNewer) {
+        const mergedPts =
+          localIsNewer
+            ? localPts
+            : remoteNewer
+              ? remotePts
+              : Math.max(remotePts, localPts);
         store.records[targetKey] = {
           ...(local ?? {}),
           ...r,
-          tournamentPoints: Math.max(remotePts, localPts),
+          tournamentPoints: mergedPts,
           bestScore: Math.max(r.bestScore ?? 0, local?.bestScore ?? 0),
+          updatedAt: Math.max(r.updatedAt ?? 0, local?.updatedAt ?? 0),
         };
         changed = true;
       }
@@ -1362,10 +1466,20 @@ export function getWeeklyTournamentSnapshot(
       ) ?? null)
     : null;
 
-  const currentPoints = Math.max(
-    0,
-    myStanding?.tournamentPoints ?? profile?.tournamentPoints ?? 0,
-  );
+  const myRecord = profile
+    ? getTournamentStoreRecord(profile.id, profile.nick) ||
+      (profile.playfabId ? getTournamentStoreRecord(profile.playfabId, profile.nick) : null) ||
+      (profile.nickNormalized ? getTournamentStoreRecord(profile.nickNormalized, profile.nickNormalized) : null)
+    : null;
+  const currentPoints = profile
+    ? resolveCanonicalTournamentPoints({
+        level: profile.level,
+        isAdmin: profile.isAdmin,
+        tournamentPoints: profile.tournamentPoints,
+        bestTournamentPoints: profile.bestTournamentPoints,
+        record: myRecord ?? myStanding,
+      })
+    : 0;
   const rankInfo = getTournamentRank(currentPoints);
   const canAffordPaid = currentPoints >= TOURNAMENT_PAID_ENTRY_COST;
   const canStartMatch = Boolean(
