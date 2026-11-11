@@ -1174,13 +1174,21 @@ function saveTournamentStore(store: WeeklyTournamentStore) {
 }
 
 const ensuredTournamentGroups = new Set<string>();
+let checkedLegacyTournamentSeason1 = false;
 let inFlightTournamentSyncPromise: Promise<void> | null = null;
+let lastTournamentSyncCompletedAt = 0;
+const TOURNAMENT_SYNC_TTL_MS = 45_000;
 
-export async function syncWeeklyTournamentWithPlayFab(): Promise<void> {
-  if (inFlightTournamentSyncPromise) return inFlightTournamentSyncPromise;
-  inFlightTournamentSyncPromise = runSyncWeeklyTournamentWithPlayFab().finally(() => {
-    inFlightTournamentSyncPromise = null;
-  });
+export async function syncWeeklyTournamentWithPlayFab(force = false): Promise<void> {
+  if (!force && inFlightTournamentSyncPromise) return inFlightTournamentSyncPromise;
+  if (!force && Date.now() - lastTournamentSyncCompletedAt < TOURNAMENT_SYNC_TTL_MS) return;
+  inFlightTournamentSyncPromise = runSyncWeeklyTournamentWithPlayFab()
+    .then(() => {
+      lastTournamentSyncCompletedAt = Date.now();
+    })
+    .finally(() => {
+      inFlightTournamentSyncPromise = null;
+    });
   return inFlightTournamentSyncPromise;
 }
 
@@ -1189,9 +1197,9 @@ async function runSyncWeeklyTournamentWithPlayFab(): Promise<void> {
   const titleId = getPlayFabTitleId();
   if (!titleId) return;
 
-  // 1. Sincroniza o catálogo unificado de alunos (SEMED_STUDENT_ROSTER_V1) onde todos os perfis e pontuações já existem
+  // 1. Sincroniza em modo leve o catálogo unificado de alunos (SEMED_STUDENT_ROSTER_V1)
   try {
-    await syncStudentRosterFromPlayFab();
+    await syncStudentRosterFromPlayFab(undefined, false, { lightweight: true });
   } catch {
     /* ignore */
   }
@@ -1246,8 +1254,9 @@ async function runSyncWeeklyTournamentWithPlayFab(): Promise<void> {
       }
     }
 
-    // Se for Temporada 1 e o grupo oficial ainda não tiver todos os dados, migra da chave semanal legada
-    if (seasonId === 1) {
+    // Se for Temporada 1 e ainda não verificou o legado nesta sessão, migra da chave semanal legada se necessário
+    if (seasonId === 1 && !checkedLegacyTournamentSeason1) {
+      checkedLegacyTournamentSeason1 = true;
       try {
         const legacyGroupId = `TOURNAMENT_${store.weekKey.replace(/[^A-Z0-9_]/gi, "_")}`;
         const legacyRes = await fetch(`https://${titleId}.playfabapi.com/Client/GetSharedGroupData`, {

@@ -298,30 +298,47 @@ export function seedRecordsFromRegistry(): AllGameRecords {
   return store;
 }
 
+let ensuredGameRecordsGroup = false;
+let lastGameRecordsSyncAt = 0;
+let inFlightGameRecordsSync: Promise<AllGameRecords> | null = null;
+const GAME_RECORDS_SYNC_TTL_MS = 60_000;
+
 /**
  * Synchronizes stage game records with PlayFab SharedGroupData so all players share records in real-time.
  */
 export async function syncGameRecordsWithPlayFab(
   localStore?: AllGameRecords,
+  force = false,
 ): Promise<AllGameRecords> {
+  const store = localStore ?? loadGameRecords();
+  if (!force && !localStore && inFlightGameRecordsSync) {
+    return inFlightGameRecordsSync;
+  }
+  if (!force && !localStore && Date.now() - lastGameRecordsSyncAt < GAME_RECORDS_SYNC_TTL_MS) {
+    return store;
+  }
+
+  const run = async (): Promise<AllGameRecords> => {
   const session = loadStoredSession();
   const titleId = getPlayFabTitleId();
-  const store = localStore ?? loadGameRecords();
   const ticket = (await getAdminPlayFabTicket()) ?? session?.sessionTicket;
   if (!ticket || !titleId) return store;
 
   const groupId = "GameStageRecords_v1";
 
   try {
-    // 1. Ensure SharedGroup exists
-    await fetch(`https://${titleId}.playfabapi.com/Client/CreateSharedGroup`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Authorization": ticket,
-      },
-      body: JSON.stringify({ TitleId: titleId, SharedGroupId: groupId }),
-    });
+    // 1. Ensure SharedGroup exists (only once per session)
+    if (!ensuredGameRecordsGroup) {
+      await fetch(`https://${titleId}.playfabapi.com/Client/CreateSharedGroup`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Authorization": ticket,
+        },
+        body: JSON.stringify({ TitleId: titleId, SharedGroupId: groupId }),
+      });
+      ensuredGameRecordsGroup = true;
+    }
 
     // 2. Fetch remote records
     const getRes = await fetch(`https://${titleId}.playfabapi.com/Client/GetSharedGroupData`, {
@@ -338,14 +355,18 @@ export async function syncGameRecordsWithPlayFab(
     };
 
     let hasLocalChanges = false;
+    let hasRemoteChanges = false;
+    const remoteRaw = json.data?.Data?.Records?.Value;
 
-    if (json.data?.Data?.Records?.Value) {
-      const remote = JSON.parse(json.data.Data.Records.Value) as AllGameRecords;
+    if (remoteRaw) {
+      const remote = JSON.parse(remoteRaw) as AllGameRecords;
       for (const [key, remRec] of Object.entries(remote)) {
         const locRec = store[key];
         if (!locRec || remRec.score > locRec.score) {
           store[key] = remRec;
           hasLocalChanges = true;
+        } else if (locRec && locRec.score > remRec.score) {
+          hasRemoteChanges = true;
         } else if (remRec.score === locRec.score) {
           // Merge holders
           const mergedMap = new Map<string, RecordHolder>();
@@ -366,34 +387,54 @@ export async function syncGameRecordsWithPlayFab(
           if (sortedHolders.length !== locRec.holders.length) {
             locRec.holders = sortedHolders;
             hasLocalChanges = true;
+            hasRemoteChanges = true;
           }
         }
       }
+      for (const key of Object.keys(store)) {
+        if (!remote[key] && store[key].score > 0) {
+          hasRemoteChanges = true;
+        }
+      }
+    } else if (Object.keys(store).length > 0) {
+      hasRemoteChanges = true;
     }
 
     if (hasLocalChanges) {
       saveGameRecords(store);
     }
 
-    // 3. Push merged records back to SharedGroupData
-    await fetch(`https://${titleId}.playfabapi.com/Client/UpdateSharedGroupData`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Authorization": ticket,
-      },
-      body: JSON.stringify({
-        TitleId: titleId,
-        SharedGroupId: groupId,
-        Data: { Records: JSON.stringify(store) },
-        Permission: "Public",
-      }),
-    });
+    // 3. Push merged records back to SharedGroupData ONLY if local had newer/higher records
+    if (hasRemoteChanges) {
+      await fetch(`https://${titleId}.playfabapi.com/Client/UpdateSharedGroupData`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Authorization": ticket,
+        },
+        body: JSON.stringify({
+          TitleId: titleId,
+          SharedGroupId: groupId,
+          Data: { Records: JSON.stringify(store) },
+          Permission: "Public",
+        }),
+      });
+    }
+    lastGameRecordsSyncAt = Date.now();
   } catch {
     /* ignore offline/network errors */
   }
 
   return store;
+  };
+
+  if (!localStore) {
+    inFlightGameRecordsSync = run().finally(() => {
+      inFlightGameRecordsSync = null;
+    });
+    return inFlightGameRecordsSync;
+  }
+  return run();
 }
 
 /** Formats date in Brazilian format DD/MM/AAAA */

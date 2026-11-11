@@ -2841,15 +2841,20 @@ async function pushProfileToPlayFab(account: StoredAccount, sessionTicket?: stri
 
 let inFlightRosterSyncPromise: Promise<PlayerProfile[]> | null = null;
 let lastRosterSyncCompletedAt = 0;
-const ROSTER_SYNC_TTL_MS = 30_000;
+let ensuredRosterGroup = false;
+const ROSTER_SYNC_TTL_MS = 60_000;
 
 /**
  * Downloads and merges all registered students across all schools/devices from PlayFab.
+ * When `options.lightweight` is true, performs a fast read-only sync from SharedGroupData
+ * without bursting per-game GetLeaderboard / per-student GetUserData / UpdateSharedGroupData calls.
  */
 export async function syncStudentRosterFromPlayFab(
   sessionTicket?: string,
   force = false,
+  options?: { lightweight?: boolean },
 ): Promise<PlayerProfile[]> {
+  const isLightweight = Boolean(options?.lightweight);
   if (!force && inFlightRosterSyncPromise) {
     return inFlightRosterSyncPromise;
   }
@@ -2865,7 +2870,10 @@ export async function syncStudentRosterFromPlayFab(
   }
 
   try {
-    await callPlayFabClient("CreateSharedGroup", { SharedGroupId: ROSTER_SHARED_GROUP_ID }, ticket);
+    if (!ensuredRosterGroup) {
+      await callPlayFabClient("CreateSharedGroup", { SharedGroupId: ROSTER_SHARED_GROUP_ID }, ticket);
+      ensuredRosterGroup = true;
+    }
     const res = await callPlayFabClient<{ Data?: Record<string, { Value: string }> }>(
       "GetSharedGroupData",
       { SharedGroupId: ROSTER_SHARED_GROUP_ID },
@@ -2878,11 +2886,16 @@ export async function syncStudentRosterFromPlayFab(
     const needsCloudSanitize = new Set<string>();
     const keysToRemoveFromCloud: string[] = [];
 
-    // 0. Recover PlayFabIds, XP, and per-game best scores from PlayFab Leaderboards
+    // 0. Recover PlayFabIds, XP, and per-game best scores from PlayFab Leaderboards (skipped in lightweight mode)
     const playfabIdBySlug = new Map<string, string>();
     const leaderboardXpBySlug = new Map<string, number>();
     const leaderboardGameScoresBySlug = new Map<string, Map<GameId, number>>();
+    const userDataBySlug = new Map<
+      string,
+      { profile?: Partial<PlayerProfile>; stats?: GameStatRow[] }
+    >();
 
+    if (!isLightweight) {
     const enabledGameIds = ALL_GAME_IDS.filter((g) => cfg.enabledGames[g] !== false);
     type LbRow = { PlayFabId: string; DisplayName?: string; StatValue: number };
 
@@ -2981,10 +2994,6 @@ export async function syncStudentRosterFromPlayFab(
     }
 
     // 0b. Fetch individual Public UserData (PlayerProfile & GameStats) for students with known PlayFabId
-    const userDataBySlug = new Map<
-      string,
-      { profile?: Partial<PlayerProfile>; stats?: GameStatRow[] }
-    >();
     try {
       const slugsWithPfId = Array.from(playfabIdBySlug.entries());
       const userDataResults = await Promise.allSettled(
@@ -3025,6 +3034,7 @@ export async function syncStudentRosterFromPlayFab(
     } catch {
       /* ignore userdata recovery errors */
     }
+    } // end if (!isLightweight) for 0 & 0b
 
     // 0c. Consulta o grupo oficial da temporada de ranqueada (TOURNAMENT_SEASON_X) para paridade imediata entre ranking e perfil
     const tourStandingsBySlug = new Map<string, number>();
@@ -3760,8 +3770,9 @@ export async function syncStudentRosterFromPlayFab(
       }
     }
 
-    // 2. Push any local students that are not yet in the cloud roster (or whose medals/stats were reconciled)
+    // 2. Push any local students that are not yet in the cloud roster (skipped in lightweight read-only mode)
     const missingInCloud: Record<string, string> = {};
+    if (!isLightweight) {
     for (const [slug, rawAcc] of Object.entries(reg)) {
       if (isTombstoned(slug) || isTombstoned(rawAcc.profile.id)) {
         keysToRemoveFromCloud.push(`stu_${slug}`);
@@ -3823,8 +3834,9 @@ export async function syncStudentRosterFromPlayFab(
         });
       }
     }
+    }
 
-    if (Object.keys(missingInCloud).length > 0) {
+    if (!isLightweight && Object.keys(missingInCloud).length > 0) {
       await callPlayFabClient(
         "UpdateSharedGroupData",
         {
@@ -3836,7 +3848,7 @@ export async function syncStudentRosterFromPlayFab(
       );
     }
 
-    if (keysToRemoveFromCloud.length > 0) {
+    if (!isLightweight && keysToRemoveFromCloud.length > 0) {
       try {
         await callPlayFabClient(
           "UpdateSharedGroupData",
@@ -5138,113 +5150,51 @@ export type LeaderboardFilter =
   | { kind: "game"; gameId: GameId; stage?: RankingFilterCategory }
   | { kind: "school"; school: string; stage?: RankingFilterCategory };
 
-export async function fetchLeaderboard(
-  filter: LeaderboardFilter,
-  maxResults = 50,
-): Promise<LeaderboardEntry[]> {
-  const cfg = checkAndApplyScheduledReset();
-  const session = loadStoredSession();
-  const currentId = session?.playerId;
+const LEADERBOARD_SYNC_TTL_MS = 60_000;
 
-  // 1. Update best_score for already-played enabled games in the logged-in account (never inject unplayed games from shared browser storage)
-  if (currentId) {
-    const regBefore = loadRegistry();
-    const activeAcc = regBefore[currentId];
-    if (activeAcc) {
-      const browserStats = loadStats();
-      let changedLocalStats = false;
-      for (const gId of ALL_GAME_IDS) {
-        if (cfg.enabledGames[gId] === false) continue;
-        const localBest = browserStats[gId]?.bestScore ?? 0;
-        const localLevel = browserStats[gId]?.bestLevel ?? 1;
-        if (localBest > 0) {
-          const existingIdx = activeAcc.stats.findIndex((s) => s.game_id === gId);
-          if (existingIdx >= 0 && localBest > activeAcc.stats[existingIdx].best_score) {
-            activeAcc.stats[existingIdx].best_score = localBest;
-            activeAcc.stats[existingIdx].best_level = Math.max(
-              activeAcc.stats[existingIdx].best_level,
-              localLevel,
-            );
-            changedLocalStats = true;
-          }
-        }
-      }
-      if (changedLocalStats) {
-        regBefore[currentId] = activeAcc;
-        saveRegistry(regBefore);
+function syncLoggedInLocalStatsToRegistry(
+  cfg: PlatformAdminConfig,
+  currentId: string | undefined,
+): void {
+  if (!currentId) return;
+  const regBefore = loadRegistry();
+  const activeAcc = regBefore[currentId];
+  if (!activeAcc) return;
+  const browserStats = loadStats();
+  let changedLocalStats = false;
+  for (const gId of ALL_GAME_IDS) {
+    if (cfg.enabledGames[gId] === false) continue;
+    const localBest = browserStats[gId]?.bestScore ?? 0;
+    const localLevel = browserStats[gId]?.bestLevel ?? 1;
+    if (localBest > 0) {
+      const existingIdx = activeAcc.stats.findIndex((s) => s.game_id === gId);
+      if (existingIdx >= 0 && localBest > activeAcc.stats[existingIdx].best_score) {
+        activeAcc.stats[existingIdx].best_score = localBest;
+        activeAcc.stats[existingIdx].best_level = Math.max(
+          activeAcc.stats[existingIdx].best_level,
+          localLevel,
+        );
+        changedLocalStats = true;
       }
     }
   }
-
-  // 2. Sync shared student roster from PlayFab cloud (throttled to every 8s) so all devices' scores/medals appear
-  if (isPlayFabConfigured() && Date.now() - lastRosterLeaderboardSyncAt > 8_000) {
-    lastRosterLeaderboardSyncAt = Date.now();
-    await syncStudentRosterFromPlayFab(session?.sessionTicket);
+  if (changedLocalStats) {
+    regBefore[currentId] = activeAcc;
+    saveRegistry(regBefore);
   }
+}
 
+function buildLeaderboardFromLocal(
+  filter: LeaderboardFilter,
+  maxResults: number,
+  cfg: PlatformAdminConfig,
+  currentId: string | undefined,
+  playfabStatByPlayer: Map<string, number>,
+  persistHistory: boolean,
+): LeaderboardEntry[] {
   const reg = loadRegistry();
   const localAccounts = Object.values(reg).map((acc) => ensurePlayerSeasonAligned(acc, cfg));
-  saveRegistry(reg);
 
-  // Map PlayFab live statistic values (if available) to augment local/roster values
-  const playfabStatByPlayer = new Map<string, number>();
-
-  if (session?.sessionTicket && isPlayFabConfigured() && filter.kind !== "medals") {
-    const stageParam =
-      filter.stage === "etapa_1" || filter.stage === "5º ano"
-        ? "etapa_1"
-        : filter.stage === "etapa_2" ||
-            filter.stage === "6º ano" ||
-            filter.stage === "7º ano" ||
-            filter.stage === "8º ano" ||
-            filter.stage === "9º ano"
-          ? "etapa_2"
-          : filter.stage === "etapa_3"
-            ? "etapa_3"
-            : null;
-
-    let statName = stageParam
-      ? `XP_Season_S${cfg.seasonId}_${stageParam}`
-      : `XP_Season_S${cfg.seasonId}`;
-    if (filter.kind === "xp_total") statName = "XP_Total";
-    else if (filter.kind === "game") {
-      statName = stageParam
-        ? `Best_${filter.gameId}_S${cfg.seasonId}_${stageParam}`
-        : `Best_${filter.gameId}_S${cfg.seasonId}`;
-    } else if (filter.kind === "school") {
-      statName = `School_${schoolSlug(filter.school)}_XP`;
-    }
-
-    const { data } = await callPlayFabClient<{
-      Leaderboard?: {
-        PlayFabId: string;
-        DisplayName?: string;
-        StatValue: number;
-        Position: number;
-      }[];
-    }>(
-      "GetLeaderboard",
-      {
-        StatisticName: statName,
-        StartPosition: 0,
-        MaxResultsCount: maxResults,
-      },
-      session.sessionTicket,
-    );
-
-    if (data?.Leaderboard && data.Leaderboard.length > 0) {
-      for (const row of data.Leaderboard) {
-        if (row.PlayFabId) {
-          playfabStatByPlayer.set(row.PlayFabId, row.StatValue);
-        }
-        if (row.DisplayName) {
-          playfabStatByPlayer.set(row.DisplayName.toLowerCase(), row.StatValue);
-        }
-      }
-    }
-  }
-
-  // 3. Evaluate all registered students (cloud roster + local accounts + PlayFab stats)
   const rows: Omit<LeaderboardEntry, "rank">[] = [];
 
   for (const acc of localAccounts) {
@@ -5309,7 +5259,7 @@ export async function fetchLeaderboard(
     });
   }
 
-  // 4. Sort according to the selected leaderboard tab
+  // Sort according to the selected leaderboard tab
   rows.sort((a, b) => {
     if (b.value !== a.value) return b.value - a.value;
     if ((b.xpValue ?? 0) !== (a.xpValue ?? 0)) return (b.xpValue ?? 0) - (a.xpValue ?? 0);
@@ -5322,7 +5272,6 @@ export async function fetchLeaderboard(
     rank: i + 1,
   }));
 
-  // 5. Compute real rank movement arrows (up / down / same) and persist snapshot
   const normalizedStageKey =
     filter.stage === "etapa_1" || filter.stage === "5º ano"
       ? "etapa_1"
@@ -5341,10 +5290,117 @@ export async function fetchLeaderboard(
   const allHistory = loadLeaderboardRankHistory();
   const prevBoardHistory = allHistory[boardKey] ?? {};
   const { entriesWithTrend, nextHistory } = evaluateLeaderboardRankChanges(ranked, prevBoardHistory);
-  allHistory[boardKey] = nextHistory;
-  saveLeaderboardRankHistory(allHistory);
+  if (persistHistory) {
+    allHistory[boardKey] = nextHistory;
+    saveLeaderboardRankHistory(allHistory);
+  }
 
   return entriesWithTrend;
+}
+
+/**
+ * Computes leaderboard synchronously from local registry cache in 0ms for instant UI rendering.
+ */
+export function getLeaderboardSnapshotLocal(
+  filter: LeaderboardFilter,
+  maxResults = 50,
+): LeaderboardEntry[] {
+  const cfg = checkAndApplyScheduledReset();
+  const session = loadStoredSession();
+  const currentId = session?.playerId;
+  syncLoggedInLocalStatsToRegistry(cfg, currentId);
+  return buildLeaderboardFromLocal(filter, maxResults, cfg, currentId, new Map(), false);
+}
+
+export async function fetchLeaderboard(
+  filter: LeaderboardFilter,
+  maxResults = 50,
+  options?: { forceCloudSync?: boolean; skipCloudSync?: boolean },
+): Promise<LeaderboardEntry[]> {
+  const cfg = checkAndApplyScheduledReset();
+  const session = loadStoredSession();
+  const currentId = session?.playerId;
+
+  // 1. Update best_score for already-played enabled games in the logged-in account
+  syncLoggedInLocalStatsToRegistry(cfg, currentId);
+
+  // 2. Lightweight sync of shared student roster from PlayFab cloud (throttled to every 60s unless forced)
+  if (
+    !options?.skipCloudSync &&
+    isPlayFabConfigured() &&
+    (options?.forceCloudSync || Date.now() - lastRosterLeaderboardSyncAt > LEADERBOARD_SYNC_TTL_MS)
+  ) {
+    lastRosterLeaderboardSyncAt = Date.now();
+    await syncStudentRosterFromPlayFab(session?.sessionTicket, Boolean(options?.forceCloudSync), {
+      lightweight: true,
+    });
+  }
+
+  // Map PlayFab live statistic values only for tabs backed by PlayFab leaderboards
+  const playfabStatByPlayer = new Map<string, number>();
+
+  if (
+    !options?.skipCloudSync &&
+    session?.sessionTicket &&
+    isPlayFabConfigured() &&
+    filter.kind !== "medals" &&
+    filter.kind !== "points"
+  ) {
+    const stageParam =
+      filter.stage === "etapa_1" || filter.stage === "5º ano"
+        ? "etapa_1"
+        : filter.stage === "etapa_2" ||
+            filter.stage === "6º ano" ||
+            filter.stage === "7º ano" ||
+            filter.stage === "8º ano" ||
+            filter.stage === "9º ano"
+          ? "etapa_2"
+          : filter.stage === "etapa_3"
+            ? "etapa_3"
+            : null;
+
+    let statName = stageParam
+      ? `XP_Season_S${cfg.seasonId}_${stageParam}`
+      : `XP_Season_S${cfg.seasonId}`;
+    if (filter.kind === "xp_total") statName = "XP_Total";
+    else if (filter.kind === "game") {
+      statName = stageParam
+        ? `Best_${filter.gameId}_S${cfg.seasonId}_${stageParam}`
+        : `Best_${filter.gameId}_S${cfg.seasonId}`;
+    } else if (filter.kind === "school") {
+      statName = `School_${schoolSlug(filter.school)}_XP`;
+    }
+
+    const { data } = await callPlayFabClient<{
+      Leaderboard?: {
+        PlayFabId: string;
+        DisplayName?: string;
+        StatValue: number;
+        Position: number;
+      }[];
+    }>(
+      "GetLeaderboard",
+      {
+        StatisticName: statName,
+        StartPosition: 0,
+        MaxResultsCount: maxResults,
+      },
+      session.sessionTicket,
+    );
+
+    if (data?.Leaderboard && data.Leaderboard.length > 0) {
+      for (const row of data.Leaderboard) {
+        if (row.PlayFabId) {
+          playfabStatByPlayer.set(row.PlayFabId, row.StatValue);
+        }
+        if (row.DisplayName) {
+          playfabStatByPlayer.set(row.DisplayName.toLowerCase(), row.StatValue);
+        }
+      }
+    }
+  }
+
+  return buildLeaderboardFromLocal(filter, maxResults, cfg, currentId, playfabStatByPlayer, true);
 }
 
 /** Returns summary stats per school for the School Ranking tab & Admin overview. */

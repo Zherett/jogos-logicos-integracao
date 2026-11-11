@@ -42,9 +42,6 @@ const PlayerMedalsInventory = lazy(() =>
 const PlayerInboxModal = lazy(() =>
   import("./PlayerInboxModal").then((m) => ({ default: m.PlayerInboxModal })),
 );
-const LeaderboardDialog = lazy(() =>
-  import("./LeaderboardDialog").then((m) => ({ default: m.LeaderboardDialog })),
-);
 import { TournamentRankBadge } from "./TournamentRankBadge";
 import {
   getTournamentStoreRecord,
@@ -135,7 +132,6 @@ export function PlayerMenu({ onConfigChanged }: Props) {
   const sound = useSoundMuted();
   const [authOpen, setAuthOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
-  const [rankingOpen, setRankingOpen] = useState(false);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [promoCodeOpen, setPromoCodeOpen] = useState(false);
   const [inboxCounts, setInboxCounts] = useState({ unreadCount: 0, unclaimedRewardsCount: 0, totalAlerts: 0 });
@@ -232,12 +228,10 @@ export function PlayerMenu({ onConfigChanged }: Props) {
     };
   }, [profileOpen, profile]);
 
-  // Atualiza em tempo real a atividade do aluno quando ele visualiza ranking, perfil, medalhas ou caixa de entrada
+  // Atualiza em tempo real a atividade do aluno quando ele visualiza perfil, medalhas ou caixa de entrada
   useEffect(() => {
     if (inboxOpen) {
       setPlayerCurrentActivity({ type: "inbox" });
-    } else if (rankingOpen) {
-      setPlayerCurrentActivity({ type: "ranking" });
     } else if (profileOpen) {
       if (cardFlipped) {
         setPlayerCurrentActivity({ type: "medals" });
@@ -245,7 +239,7 @@ export function PlayerMenu({ onConfigChanged }: Props) {
         setPlayerCurrentActivity({ type: "profile" });
       }
     }
-  }, [inboxOpen, rankingOpen, profileOpen, cardFlipped]);
+  }, [inboxOpen, profileOpen, cardFlipped]);
   useEffect(() => {
     if (!profile) {
       setInboxCounts({ unreadCount: 0, unclaimedRewardsCount: 0, totalAlerts: 0 });
@@ -402,17 +396,16 @@ export function PlayerMenu({ onConfigChanged }: Props) {
           )}
         </button>
 
-        {/* Ranking Button */}
-        <button
-          type="button"
-          onClick={() => setRankingOpen(true)}
+        {/* Ranking Page Link */}
+        <Link
+          to="/ranking"
           className="flex h-11 items-center gap-1.5 rounded-2xl border bg-card px-3 text-foreground shadow-sm transition-all hover:bg-secondary active:scale-95"
           aria-label="Abrir Ranking"
-          title="Ranking da Temporada (Por Etapa e Geral)"
+          title="Ranking da Temporada (Por Etapa, Geral e Torneio)"
         >
           <Trophy className="h-5 w-5 text-amber-500" />
           <span className="hidden font-display text-xs font-bold uppercase sm:inline">Ranking</span>
-        </button>
+        </Link>
 
         {/* Caixa de Entrada e Correio do Aluno */}
         {profile && (
@@ -500,11 +493,6 @@ export function PlayerMenu({ onConfigChanged }: Props) {
       {authOpen && (
         <Suspense fallback={null}>
           <PlayerAuthDialog open={authOpen} onOpenChange={setAuthOpen} />
-        </Suspense>
-      )}
-      {rankingOpen && (
-        <Suspense fallback={null}>
-          <LeaderboardDialog open={rankingOpen} onOpenChange={setRankingOpen} />
         </Suspense>
       )}
       {inboxOpen && (

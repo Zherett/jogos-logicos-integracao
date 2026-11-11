@@ -1,90 +1,36 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
+import { Link } from "@tanstack/react-router";
 import {
   Trophy,
   Flame,
-  Clock,
   Lock,
   Play,
   Medal,
   Zap,
-  Sparkles,
   Calendar,
-  Layers,
-  ChevronRight,
-  Shield,
   Coins,
-  AlertCircle,
+  ArrowRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import type { GameId } from "@/lib/game-storage";
 import { usePlayerAuth } from "@/lib/player-auth";
 import {
-  AGE_STAGES,
   getTournamentRank,
   getWeeklyTournamentSnapshot,
   syncWeeklyTournamentWithPlayFab,
   spendPaidTournamentEntry,
-  TOURNAMENT_DAILY_FREE_ENTRIES,
-  TOURNAMENT_PAID_ENTRY_COST,
-  TOURNAMENT_DAILY_ENTRIES_LIMIT,
   TOURNAMENT_DAILY_EXTRA_XP_CAP,
   TOURNAMENT_MIN_LEVEL,
-  TOURNAMENT_XP_PER_ENTRY,
 } from "@/lib/weekly-tournament";
-import { stageFromBirthdate, type AgeStageId } from "@/lib/player-profile";
+import { stageFromBirthdate } from "@/lib/player-profile";
 import { TournamentRankBadge } from "./TournamentRankBadge";
-import { PlayerInspectModal } from "./PlayerInspectModal";
 
 interface Props {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   onStartRankedEntry: (gameId: GameId) => void;
   onRequireLogin: () => void;
-}
-
-function WeeklyTournamentTop5Skeleton() {
-  return (
-    <div className="space-y-2" aria-label="Carregando Top 5 da semana...">
-      {Array.from({ length: 5 }).map((_, idx) => (
-        <div
-          key={idx}
-          className="flex items-center justify-between gap-3 rounded-2xl border border-border/60 bg-background/60 p-3 animate-pulse"
-        >
-          <div className="flex items-center gap-2.5 min-w-0 flex-1">
-            <span
-              className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl text-xs font-black border shadow-xs ${
-                idx === 0
-                  ? "bg-yellow-400/20 text-yellow-600 border-yellow-500/30"
-                  : idx === 1
-                    ? "bg-slate-300/25 text-slate-500 border-slate-400/30"
-                    : idx === 2
-                      ? "bg-amber-700/20 text-amber-600 border-amber-800/30"
-                      : "bg-secondary/70 text-muted-foreground/60 border-border/50"
-              }`}
-            >
-              {idx + 1}º
-            </span>
-            <div className="h-6 w-14 rounded-lg bg-muted/60" />
-            <div className="min-w-0 flex-1 space-y-1.5">
-              <div className="flex items-center gap-2">
-                <div
-                  className="h-3.5 rounded-md bg-muted/80"
-                  style={{ width: `${60 + idx * 16}px` }}
-                />
-                <div className="h-3 w-12 rounded-md bg-muted/50" />
-              </div>
-              <div className="h-2.5 w-32 rounded-md bg-muted/40" />
-            </div>
-          </div>
-          <div className="flex flex-col items-end gap-1 shrink-0">
-            <div className="h-4 w-14 rounded-md bg-accent/20" />
-            <div className="h-2.5 w-10 rounded-md bg-muted/40" />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
 }
 
 export function WeeklyTournamentDialog({
@@ -96,51 +42,24 @@ export function WeeklyTournamentDialog({
   const auth = usePlayerAuth();
   const profile = auth.profile;
   const [, setTick] = useState(0);
-  const [activeTab, setActiveTab] = useState<"desafio" | "ranking">("desafio");
   const [confirmPaidOpen, setConfirmPaidOpen] = useState(false);
   const [spendingEntry, setSpendingEntry] = useState(false);
-  const [initialLoading, setInitialLoading] = useState(true);
-  const [inspectPlayerId, setInspectPlayerId] = useState<string | null>(null);
 
   const myStageId = profile
     ? stageFromBirthdate(profile.birthdate, new Date(), profile.school).id
     : "etapa_1";
-  const [selectedStage, setSelectedStage] = useState<AgeStageId | "TODAS">(myStageId);
-  const prevOpenRef = useRef(false);
-
-  useEffect(() => {
-    if (open && !prevOpenRef.current && profile) {
-      const sId = stageFromBirthdate(profile.birthdate, new Date(), profile.school).id;
-      // Normal students are locked to their own stage; ADM can switch
-      setSelectedStage(sId);
-      setActiveTab("desafio");
-    }
-    prevOpenRef.current = open;
-  }, [open, profile]);
 
   useEffect(() => {
     if (!open) return;
     let active = true;
-    setInitialLoading(true);
-    void syncWeeklyTournamentWithPlayFab()
-      .then(() => {
-        if (active) setTick((t) => t + 1);
-      })
-      .finally(() => {
-        if (active) setInitialLoading(false);
-      });
+    void syncWeeklyTournamentWithPlayFab().then(() => {
+      if (active) setTick((t) => t + 1);
+    });
     const handleUpdate = () => setTick((t) => t + 1);
     window.addEventListener("desafios:weekly-tournament-updated", handleUpdate);
-    const id = window.setInterval(() => {
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-      void syncWeeklyTournamentWithPlayFab().then(() => {
-        if (active) setTick((t) => t + 1);
-      });
-    }, 15000);
     return () => {
       active = false;
       window.removeEventListener("desafios:weekly-tournament-updated", handleUpdate);
-      window.clearInterval(id);
     };
   }, [open]);
 
@@ -174,9 +93,7 @@ export function WeeklyTournamentDialog({
     );
   }
 
-  // Non-admin students are strictly restricted to their stage
-  const effectiveStage = auth.isAdmin ? selectedStage : myStageId;
-  const snap = getWeeklyTournamentSnapshot(profile, effectiveStage);
+  const snap = getWeeklyTournamentSnapshot(profile, myStageId);
 
   if (!snap.canEnterLevel) {
     return (
@@ -222,35 +139,8 @@ export function WeeklyTournamentDialog({
           </DialogTitle>
         </DialogHeader>
 
-        {/* Abas Superiores: Desafio da Semana vs Ranking do Torneio */}
-        <div className="grid grid-cols-2 gap-1 rounded-2xl bg-secondary/80 p-1 border">
-          <button
-            type="button"
-            onClick={() => setActiveTab("desafio")}
-            className={`flex items-center justify-center gap-2 rounded-xl py-2.5 font-display text-xs sm:text-sm font-black transition-all ${
-              activeTab === "desafio"
-                ? "bg-card text-primary shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            <Play className="h-4 w-4 text-primary" /> Desafio da Semana
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab("ranking")}
-            className={`flex items-center justify-center gap-2 rounded-xl py-2.5 font-display text-xs sm:text-sm font-black transition-all ${
-              activeTab === "ranking"
-                ? "bg-card text-primary shadow-sm"
-                : "text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            <Medal className="h-4 w-4 text-accent" /> Ranking do Torneio
-          </button>
-        </div>
-
-        {/* Conteúdo da Aba: DESAFIO DA SEMANA */}
-        {activeTab === "desafio" && (
-          <div className="space-y-4">
+        {/* Conteúdo Direto: DESAFIO DA SEMANA (fluxo enxuto de entrada ranqueada) */}
+        <div className="space-y-4">
             {/* Medidores Discretos na parte Superior */}
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-secondary/40 border px-3 py-2 text-xs">
               <span className="inline-flex items-center gap-1 font-bold text-muted-foreground">
@@ -459,181 +349,21 @@ export function WeeklyTournamentDialog({
                 </div>
               </div>
             </div>
+
+            {/* Atalho direto para a página dedicada de Ranking (aba Ranqueado) */}
+            <Link
+              to="/ranking"
+              search={{ tab: "torneio" }}
+              onClick={() => onOpenChange(false)}
+              className="flex items-center justify-between gap-3 rounded-2xl border border-accent/40 bg-accent/10 px-4 py-3 text-xs font-extrabold text-foreground transition-all hover:bg-accent/20 active:scale-[0.99]"
+            >
+              <span className="flex items-center gap-2">
+                <Medal className="h-4 w-4 text-accent shrink-0" />
+                <span>Ver Ranking Completo e Top 5 do Torneio</span>
+              </span>
+              <ArrowRight className="h-4 w-4 text-accent shrink-0" />
+            </Link>
           </div>
-        )}
-
-        {/* Conteúdo da Aba: RANKING DO TORNEIO */}
-        {activeTab === "ranking" && (
-          <div className="space-y-4">
-            {/* Visualização de Etapas: Apenas ADM pode alternar; Aluno comum vê exclusivamente sua etapa */}
-            {auth.isAdmin ? (
-              <div className="space-y-2 rounded-2xl border bg-secondary/30 p-3">
-                <div className="flex items-center justify-between text-xs font-bold text-muted-foreground">
-                  <span className="flex items-center gap-1">
-                    <Shield className="h-3.5 w-3.5 text-primary" /> Visualização do Administrador (Todas as Etapas)
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setSelectedStage("TODAS")}
-                    className={`rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition-all ${
-                      selectedStage === "TODAS"
-                        ? "border-accent bg-accent text-accent-foreground"
-                        : "bg-background text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    🌐 Visão Geral
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-3 gap-1.5">
-                  {AGE_STAGES.map((st) => {
-                    const isSelected = selectedStage === st.id;
-                    return (
-                      <button
-                        key={st.id}
-                        type="button"
-                        onClick={() => setSelectedStage(st.id)}
-                        className={`rounded-xl border px-2.5 py-2 text-left transition-all ${
-                          isSelected
-                            ? "border-primary bg-primary text-primary-foreground shadow-xs"
-                            : "bg-background hover:bg-secondary/60"
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-1 font-display text-xs font-black">
-                          <span>
-                            {st.emoji} {st.shortLabel}
-                          </span>
-                        </div>
-                        <div
-                          className={`text-[10px] ${
-                            isSelected ? "text-primary-foreground/90" : "text-muted-foreground"
-                          }`}
-                        >
-                          {st.ageRangeLabel}
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            ) : (
-              <div className="rounded-2xl border bg-secondary/30 p-3 flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-xl">{snap.playerStage.emoji}</span>
-                  <div>
-                    <div className="font-display text-sm font-black text-foreground">
-                      Ranking da {snap.playerStage.label}
-                    </div>
-                    <div className="text-[11px] text-muted-foreground">
-                      Disputa oficial ranqueada entre alunos da sua faixa escolar ({snap.playerStage.shortLabel})
-                    </div>
-                  </div>
-                </div>
-                {snap.myStanding && (
-                  <div className="text-right shrink-0">
-                    <div className="text-[10px] font-bold uppercase text-muted-foreground">Sua Posição</div>
-                    <div className="font-display text-base font-black text-accent">
-                      #{snap.myStanding.rank} ({snap.myStanding.tournamentPoints ?? snap.myStanding.totalRankedPoints} pts)
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Lista do Top Ranking */}
-            <div className="rounded-2xl border bg-card p-4 space-y-3 min-h-[380px]">
-              <div className="flex items-center justify-between">
-                <span className="font-display text-sm font-extrabold flex items-center gap-1.5">
-                  <Medal className="h-4 w-4 text-accent" /> Top Jogadores da Semana
-                </span>
-                <span className="text-xs text-muted-foreground">
-                  Semana {snap.weekKey}
-                </span>
-              </div>
-
-              {initialLoading && snap.top5.length === 0 ? (
-                <WeeklyTournamentTop5Skeleton />
-              ) : snap.top5.length === 0 ? (
-                <div className="flex flex-col items-center justify-center rounded-xl bg-secondary/40 p-8 text-center text-xs text-muted-foreground space-y-1 min-h-[260px]">
-                  <p className="font-bold text-foreground">Ninguém pontuou no torneio desta semana ainda.</p>
-                  <p>Jogue sua 1ª entrada ranqueada para assumir o <b>1º lugar</b> da sua etapa!</p>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {snap.top5.map((row) => {
-                    const isMe = row.playerId === profile.id;
-                    const rowPoints = row.tournamentPoints ?? row.totalRankedPoints;
-                    const rowRankDef = getTournamentRank(rowPoints).currentRank;
-
-                    return (
-                      <div
-                        key={row.playerId}
-                        onClick={() => setInspectPlayerId(row.playerId)}
-                        title="Clique para inspecionar o perfil e patente deste aluno"
-                        className={`flex items-center justify-between gap-3 rounded-2xl border p-3 cursor-pointer transition-all hover:scale-[1.01] active:scale-[0.99] ${
-                          isMe ? "border-primary bg-primary/10 shadow-xs" : "bg-background hover:border-primary/50"
-                        }`}
-                      >
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          {/* Posição no Torneio */}
-                          <span
-                            className={`grid h-9 w-9 shrink-0 place-items-center rounded-xl font-display text-xs font-black border shadow-xs ${
-                              row.rank === 1
-                                ? "bg-yellow-400 text-yellow-950 border-yellow-500"
-                                : row.rank === 2
-                                  ? "bg-slate-300 text-slate-800 border-slate-400"
-                                  : row.rank === 3
-                                    ? "bg-amber-700 text-amber-50 border-amber-800"
-                                    : "bg-secondary text-foreground border-border"
-                            }`}
-                          >
-                            {row.rank <= 3 ? <Medal className="h-4 w-4" /> : `${row.rank}º`}
-                          </span>
-
-                          {/* Badge do Rank do Jogador */}
-                          <TournamentRankBadge rankId={rowRankDef.id} points={rowPoints} size="xs" />
-
-                          <div className="min-w-0 space-y-0.5">
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              <span className="font-display text-sm font-black truncate text-foreground">
-                                {row.nick}
-                              </span>
-                              {isMe && (
-                                <span className="rounded-md bg-primary px-1.5 py-0.2 text-[10px] font-bold text-primary-foreground">
-                                  VOCÊ
-                                </span>
-                              )}
-                              <span className={`text-[10px] font-bold ${rowRankDef.textColor}`}>
-                                {rowRankDef.name}
-                              </span>
-                            </div>
-                            <div className="text-[11px] text-muted-foreground truncate">
-                              {row.school} • Nv. {row.level} • {row.stageLabel}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="text-right shrink-0">
-                          <div className="font-display text-base font-black text-primary">
-                            {rowPoints} pts
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            {/* Informações sobre Medalhas */}
-            <div className="rounded-2xl border bg-secondary/30 p-3.5 text-xs text-muted-foreground flex items-start gap-2.5">
-              <Sparkles className="h-4 w-4 text-accent shrink-0 mt-0.5" />
-              <div>
-                <b className="text-foreground">Medalhas de Superação e Top 5:</b> Ao alcançar a divisão mais alta de cada liga (Bronze III, Prata III, Ouro III, Platina IV, Diamante V e Mestre) você recebe a medalha permanente de maestria. E terminar a semana no Top 5 acumula medalhas semanais no seu perfil!
-              </div>
-            </div>
-          </div>
-        )}
       </DialogContent>
 
       {/* Modal de Confirmação de Entrada Paga */}
@@ -708,17 +438,6 @@ export function WeeklyTournamentDialog({
           </div>
         </DialogContent>
       </Dialog>
-      <PlayerInspectModal
-        playerId={inspectPlayerId}
-        open={Boolean(inspectPlayerId)}
-        onOpenChange={(v) => {
-          if (!v) setInspectPlayerId(null);
-        }}
-        onStudentUpdated={() => {
-          setTick((t) => t + 1);
-          void auth.refresh();
-        }}
-      />
     </Dialog>
   );
 }
