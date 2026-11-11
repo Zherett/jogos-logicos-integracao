@@ -6,8 +6,11 @@ import { CodeGate } from "@/components/games/CodeGate";
 import { loadUnlocked } from "@/lib/game-codes";
 import { PlayerAuthProvider, usePlayerAuth } from "@/lib/player-auth";
 import { PlayerMenu } from "@/components/games/PlayerMenu";
-import { PlayerAuthDialog } from "@/components/games/PlayerAuthDialog";
 import { MedalUnlockNotification } from "@/components/games/MedalUnlockNotification";
+
+const PlayerAuthDialog = lazy(() =>
+  import("@/components/games/PlayerAuthDialog").then((m) => ({ default: m.PlayerAuthDialog })),
+);
 
 const X1MatchOverlay = lazy(() =>
   import("@/components/games/X1MatchOverlay").then((m) => ({ default: m.X1MatchOverlay })),
@@ -596,7 +599,11 @@ function Index() {
         </Suspense>
       )}
 
-      <PlayerAuthDialog open={authDialogOpen} onOpenChange={setAuthDialogOpen} />
+      {authDialogOpen && (
+        <Suspense fallback={null}>
+          <PlayerAuthDialog open={authDialogOpen} onOpenChange={setAuthDialogOpen} />
+        </Suspense>
+      )}
 
       <MedalUnlockNotification />
 

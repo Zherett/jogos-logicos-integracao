@@ -1,5 +1,61 @@
 import React from "react";
-import * as Icons from "lucide-react";
+import {
+  Award,
+  Bookmark,
+  Bot,
+  Brain,
+  CheckCircle,
+  CheckCircle2,
+  Clock,
+  Compass,
+  Crosshair,
+  Crown,
+  Flag,
+  Flame,
+  Gem,
+  Heart,
+  Hourglass,
+  Lightbulb,
+  Medal,
+  Puzzle,
+  Rocket,
+  Shield,
+  Sparkles,
+  Star,
+  Swords,
+  Target,
+  Trophy,
+  Zap,
+} from "lucide-react";
+
+const MEDAL_ICON_MAP: Record<string, React.ComponentType<{ className?: string }>> = {
+  Award,
+  Bookmark,
+  Bot,
+  Brain,
+  CheckCircle,
+  CheckCircle2,
+  Clock,
+  Compass,
+  Crosshair,
+  Crown,
+  Flag,
+  Flame,
+  Gem,
+  Heart,
+  Hourglass,
+  Lightbulb,
+  Medal,
+  Puzzle,
+  Rocket,
+  Shield,
+  Sparkles,
+  Star,
+  Swords,
+  Target,
+  Trophy,
+  Zap,
+};
 
 interface Props {
   name: string;
@@ -7,6 +63,6 @@ interface Props {
 }
 
 export function MedalIcon({ name, className = "h-5 w-5" }: Props) {
-  const IconComponent = (Icons as unknown as Record<string, React.ComponentType<{ className?: string }>>)[name] || Icons.Medal;
+  const IconComponent = MEDAL_ICON_MAP[name] || Medal;
   return <IconComponent className={className} />;
 }

@@ -26,14 +26,22 @@ import {
   Swords,
   Ticket,
 } from "lucide-react";
-import { PromoCodeRedeemDialog } from "./PromoCodeRedeemDialog";
 import { canAccessPromoCodeRedeem } from "@/lib/promo-codes";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { PlayerAuthDialog } from "./PlayerAuthDialog";
-import { PlayerMedalsInventory } from "./PlayerMedalsInventory";
-import { PlayerInboxModal } from "./PlayerInboxModal";
 
+const PromoCodeRedeemDialog = lazy(() =>
+  import("./PromoCodeRedeemDialog").then((m) => ({ default: m.PromoCodeRedeemDialog })),
+);
+const PlayerAuthDialog = lazy(() =>
+  import("./PlayerAuthDialog").then((m) => ({ default: m.PlayerAuthDialog })),
+);
+const PlayerMedalsInventory = lazy(() =>
+  import("./PlayerMedalsInventory").then((m) => ({ default: m.PlayerMedalsInventory })),
+);
+const PlayerInboxModal = lazy(() =>
+  import("./PlayerInboxModal").then((m) => ({ default: m.PlayerInboxModal })),
+);
 const LeaderboardDialog = lazy(() =>
   import("./LeaderboardDialog").then((m) => ({ default: m.LeaderboardDialog })),
 );
@@ -489,23 +497,32 @@ export function PlayerMenu({ onConfigChanged }: Props) {
         </button>
       </div>
 
-      <PlayerAuthDialog open={authOpen} onOpenChange={setAuthOpen} />
+      {authOpen && (
+        <Suspense fallback={null}>
+          <PlayerAuthDialog open={authOpen} onOpenChange={setAuthOpen} />
+        </Suspense>
+      )}
       {rankingOpen && (
         <Suspense fallback={null}>
           <LeaderboardDialog open={rankingOpen} onOpenChange={setRankingOpen} />
         </Suspense>
       )}
-      <PlayerInboxModal
-        open={inboxOpen}
-        onOpenChange={setInboxOpen}
-      />
-      <PromoCodeRedeemDialog
-        open={promoCodeOpen}
-        onOpenChange={setPromoCodeOpen}
-        onRewardClaimed={() => {
-          auth.refresh();
-        }}
-      />
+      {inboxOpen && (
+        <Suspense fallback={null}>
+          <PlayerInboxModal open={inboxOpen} onOpenChange={setInboxOpen} />
+        </Suspense>
+      )}
+      {promoCodeOpen && (
+        <Suspense fallback={null}>
+          <PromoCodeRedeemDialog
+            open={promoCodeOpen}
+            onOpenChange={setPromoCodeOpen}
+            onRewardClaimed={() => {
+              auth.refresh();
+            }}
+          />
+        </Suspense>
+      )}
 
       {/* Modal de Perfil do Jogador — Espaçoso, Estável e com Altura Fixa */}
       <Dialog open={profileOpen} onOpenChange={setProfileOpen}>
@@ -895,13 +912,23 @@ export function PlayerMenu({ onConfigChanged }: Props) {
 
                     {/* Catálogo de Medalhas com Rolagem Interna Suave */}
                     <div className="pt-1 max-h-[60vh] sm:max-h-[65vh] overflow-y-auto pr-1">
-                      <PlayerMedalsInventory
-                        unlockedMedals={profile.unlockedMedals}
-                        customMedals={auth.adminConfig.customMedals}
-                        profile={profile}
-                        stats={auth.stats}
-                        isOwner={true}
-                      />
+                      {cardFlipped && (
+                        <Suspense
+                          fallback={
+                            <div className="py-8 text-center text-xs font-semibold text-muted-foreground">
+                              Carregando medalhas...
+                            </div>
+                          }
+                        >
+                          <PlayerMedalsInventory
+                            unlockedMedals={profile.unlockedMedals}
+                            customMedals={auth.adminConfig.customMedals}
+                            profile={profile}
+                            stats={auth.stats}
+                            isOwner={true}
+                          />
+                        </Suspense>
+                      )}
                     </div>
 
                     {/* Rodapé do Verso */}
