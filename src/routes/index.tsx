@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { Menu } from "@/components/games/Menu";
 import { getGameRegistration } from "@/lib/game-registry";
 import { CodeGate } from "@/components/games/CodeGate";
@@ -7,10 +7,20 @@ import { loadUnlocked } from "@/lib/game-codes";
 import { PlayerAuthProvider, usePlayerAuth } from "@/lib/player-auth";
 import { PlayerMenu } from "@/components/games/PlayerMenu";
 import { PlayerAuthDialog } from "@/components/games/PlayerAuthDialog";
-import { X1ArenaDialog } from "@/components/games/X1ArenaDialog";
-import { X1MatchOverlay } from "@/components/games/X1MatchOverlay";
-import { WeeklyTournamentDialog } from "@/components/games/WeeklyTournamentDialog";
 import { MedalUnlockNotification } from "@/components/games/MedalUnlockNotification";
+
+const X1MatchOverlay = lazy(() =>
+  import("@/components/games/X1MatchOverlay").then((m) => ({ default: m.X1MatchOverlay })),
+);
+
+const X1ArenaDialog = lazy(() =>
+  import("@/components/games/X1ArenaDialog").then((m) => ({ default: m.X1ArenaDialog })),
+);
+const WeeklyTournamentDialog = lazy(() =>
+  import("@/components/games/WeeklyTournamentDialog").then((m) => ({
+    default: m.WeeklyTournamentDialog,
+  })),
+);
 import { GameRecordBanner } from "@/components/games/GameRecordBanner";
 import {
   recordGameStageScore,
@@ -284,7 +294,7 @@ function Index() {
 
     checkInvites();
     const unsub = subscribeX1Updates(checkInvites);
-    const pollId = window.setInterval(checkInvites, 5000);
+    const pollId = window.setInterval(checkInvites, 10000);
 
     const handleReject = (e: Event) => {
       const detail = (e as CustomEvent).detail as
@@ -510,14 +520,22 @@ function Index() {
 
       {/* Overlay Ao Vivo do Desafio X1 (1v1) */}
       {activeX1Room && (
-        <X1MatchOverlay
-          initialRoom={activeX1Room}
-          onExitX1={() => {
-            setActiveX1Room(null);
-            setView("menu");
-            refreshLocal();
-          }}
-        />
+        <Suspense
+          fallback={
+            <div className="fixed inset-0 z-50 grid place-items-center bg-background/80 p-10 text-center text-sm font-semibold text-muted-foreground">
+              Carregando arena X1...
+            </div>
+          }
+        >
+          <X1MatchOverlay
+            initialRoom={activeX1Room}
+            onExitX1={() => {
+              setActiveX1Room(null);
+              setView("menu");
+              refreshLocal();
+            }}
+          />
+        </Suspense>
       )}
 
       {/* Execução Dinâmica de Qualquer Jogo Registrado */}
@@ -527,40 +545,56 @@ function Index() {
         const GameComponent = reg.component;
         const personalBest = displayStats[view]?.bestScore ?? 0;
         return (
-          <GameComponent
-            onExit={handleExitGame}
-            onStatsChange={() => {
-              refreshLocal();
-              if (activeRankedGameId && view === activeRankedGameId) {
-                void finishRankedEntry(false);
-              }
-            }}
-            isRanked={Boolean(activeRankedGameId && view === activeRankedGameId)}
-          />
+          <Suspense
+            fallback={
+              <div className="p-10 text-center text-sm font-semibold text-muted-foreground">
+                Carregando jogo...
+              </div>
+            }
+          >
+            <GameComponent
+              onExit={handleExitGame}
+              onStatsChange={() => {
+                refreshLocal();
+                if (activeRankedGameId && view === activeRankedGameId) {
+                  void finishRankedEntry(false);
+                }
+              }}
+              isRanked={Boolean(activeRankedGameId && view === activeRankedGameId)}
+            />
+          </Suspense>
         );
       })()}
 
-      <X1ArenaDialog
-        open={x1Open}
-        onOpenChange={setX1Open}
-        onStartX1Match={(room) => {
-          setActiveRankedGameId(null);
-          setActiveX1Room(room);
-          setView(room.gameId);
-        }}
-        onRequireLogin={() => setAuthDialogOpen(true)}
-      />
+      {x1Open && (
+        <Suspense fallback={null}>
+          <X1ArenaDialog
+            open={x1Open}
+            onOpenChange={setX1Open}
+            onStartX1Match={(room) => {
+              setActiveRankedGameId(null);
+              setActiveX1Room(room);
+              setView(room.gameId);
+            }}
+            onRequireLogin={() => setAuthDialogOpen(true)}
+          />
+        </Suspense>
+      )}
 
-      <WeeklyTournamentDialog
-        open={tournamentOpen}
-        onOpenChange={setTournamentOpen}
-        onStartRankedEntry={(gameId) => {
-          setActiveX1Room(null);
-          setActiveRankedGameId(gameId);
-          setView(gameId);
-        }}
-        onRequireLogin={() => setAuthDialogOpen(true)}
-      />
+      {tournamentOpen && (
+        <Suspense fallback={null}>
+          <WeeklyTournamentDialog
+            open={tournamentOpen}
+            onOpenChange={setTournamentOpen}
+            onStartRankedEntry={(gameId) => {
+              setActiveX1Room(null);
+              setActiveRankedGameId(gameId);
+              setView(gameId);
+            }}
+            onRequireLogin={() => setAuthDialogOpen(true)}
+          />
+        </Suspense>
+      )}
 
       <PlayerAuthDialog open={authDialogOpen} onOpenChange={setAuthDialogOpen} />
 

@@ -64,7 +64,7 @@ export const AURA_CONFIGS: Record<AuraType, AuraDefinition> = {
     name: "Safira",
     badgeLabel: "2x Pontos • Safira",
     glowColor: "#2563eb",
-    borderClass: "border-blue-500 shadow-[0_0_20px_rgba(37,99,235,0.7)] animate-pulse",
+    borderClass: "border-blue-500 shadow-[0_0_20px_rgba(37,99,235,0.7)]",
     bgGlowClass: "from-blue-950/70 via-indigo-950/50 to-slate-900/90",
     textColor: "text-blue-300 font-extrabold",
     chance: 0.05, // 5%
@@ -79,7 +79,7 @@ export const AURA_CONFIGS: Record<AuraType, AuraDefinition> = {
     name: "Ametista",
     badgeLabel: "3x Pontos • Ametista",
     glowColor: "#9333ea",
-    borderClass: "border-purple-500 shadow-[0_0_22px_rgba(147,51,234,0.75)] animate-pulse",
+    borderClass: "border-purple-500 shadow-[0_0_22px_rgba(147,51,234,0.75)]",
     bgGlowClass: "from-purple-950/70 via-fuchsia-950/50 to-slate-900/90",
     textColor: "text-purple-300 font-extrabold",
     chance: 0.02, // 2%
@@ -94,7 +94,7 @@ export const AURA_CONFIGS: Record<AuraType, AuraDefinition> = {
     name: "Rubi",
     badgeLabel: "4x Pontos • Rubi",
     glowColor: "#ef4444",
-    borderClass: "border-red-500 shadow-[0_0_25px_rgba(239,68,68,0.85)] animate-pulse",
+    borderClass: "border-red-500 shadow-[0_0_25px_rgba(239,68,68,0.85)]",
     bgGlowClass: "from-red-950/70 via-rose-950/50 to-slate-900/90",
     textColor: "text-red-300 font-black",
     chance: 0.005, // 0.5%
@@ -109,7 +109,7 @@ export const AURA_CONFIGS: Record<AuraType, AuraDefinition> = {
     name: "Âmbar",
     badgeLabel: "★ 4x Pontos • Sem Penalidade",
     glowColor: "#f59e0b",
-    borderClass: "border-amber-400 shadow-[0_0_28px_rgba(245,158,11,0.9)] animate-pulse",
+    borderClass: "border-amber-400 shadow-[0_0_28px_rgba(245,158,11,0.9)]",
     bgGlowClass: "from-amber-950/70 via-yellow-950/50 to-slate-900/90",
     textColor: "text-amber-300 font-black",
     chance: 0.001, // 0.1%

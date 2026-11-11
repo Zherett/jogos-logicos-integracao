@@ -75,7 +75,7 @@ export function TournamentRankBadge({
     star: "rounded-2xl border-2 ring-2 ring-amber-400/40 shadow-sm",
     diamond: "rounded-2xl border-2 ring-2 ring-cyan-400/40 shadow-sm",
     hexagon: "rounded-2xl border-2 ring-2 ring-fuchsia-400/50 shadow-md",
-    crown: "rounded-2xl border-2 ring-2 ring-rose-500/60 shadow-lg animate-pulse",
+    crown: "rounded-2xl border-2 ring-2 ring-rose-500/60 shadow-lg",
   }[rank.shape];
 
   // Background gradients and metallic textures

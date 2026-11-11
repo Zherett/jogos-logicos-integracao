@@ -132,8 +132,11 @@ export function WeeklyTournamentDialog({
     const handleUpdate = () => setTick((t) => t + 1);
     window.addEventListener("desafios:weekly-tournament-updated", handleUpdate);
     const id = window.setInterval(() => {
-      void syncWeeklyTournamentWithPlayFab().then(() => setTick((t) => t + 1));
-    }, 5000);
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      void syncWeeklyTournamentWithPlayFab().then(() => {
+        if (active) setTick((t) => t + 1);
+      });
+    }, 15000);
     return () => {
       active = false;
       window.removeEventListener("desafios:weekly-tournament-updated", handleUpdate);

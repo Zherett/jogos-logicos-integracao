@@ -389,7 +389,7 @@ export const TOURNAMENT_RANKS: TournamentRankDefinition[] = [
     maxPoints: 99999,
     textColor: "text-rose-600 dark:text-rose-300",
     badgeBg: "bg-rose-100 dark:bg-rose-950",
-    borderColor: "border-rose-500 shadow-[0_0_20px_rgba(244,63,94,0.6)] animate-pulse",
+    borderColor: "border-rose-500 shadow-[0_0_20px_rgba(244,63,94,0.6)]",
     glowHex: "#f43f5e",
     iconName: "Crown",
     shape: "crown",
@@ -1173,7 +1173,18 @@ function saveTournamentStore(store: WeeklyTournamentStore) {
   }
 }
 
+const ensuredTournamentGroups = new Set<string>();
+let inFlightTournamentSyncPromise: Promise<void> | null = null;
+
 export async function syncWeeklyTournamentWithPlayFab(): Promise<void> {
+  if (inFlightTournamentSyncPromise) return inFlightTournamentSyncPromise;
+  inFlightTournamentSyncPromise = runSyncWeeklyTournamentWithPlayFab().finally(() => {
+    inFlightTournamentSyncPromise = null;
+  });
+  return inFlightTournamentSyncPromise;
+}
+
+async function runSyncWeeklyTournamentWithPlayFab(): Promise<void> {
   if (!isPlayFabConfigured()) return;
   const titleId = getPlayFabTitleId();
   if (!titleId) return;
@@ -1199,15 +1210,18 @@ export async function syncWeeklyTournamentWithPlayFab(): Promise<void> {
   const groupId = getTournamentSeasonGroupId(seasonId);
 
   try {
-    // 1. Assegura que o grupo compartilhado da temporada existe (ignora se já criado)
-    await fetch(`https://${titleId}.playfabapi.com/Client/CreateSharedGroup`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Authorization": ticket,
-      },
-      body: JSON.stringify({ TitleId: titleId, SharedGroupId: groupId }),
-    });
+    // 1. Assegura que o grupo compartilhado da temporada existe (apenas 1x por sessão)
+    if (!ensuredTournamentGroups.has(groupId)) {
+      await fetch(`https://${titleId}.playfabapi.com/Client/CreateSharedGroup`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Authorization": ticket,
+        },
+        body: JSON.stringify({ TitleId: titleId, SharedGroupId: groupId }),
+      });
+      ensuredTournamentGroups.add(groupId);
+    }
 
     // 2. Busca os competidores remotos no grupo oficial da temporada
     const getRes = await fetch(`https://${titleId}.playfabapi.com/Client/GetSharedGroupData`, {
@@ -1375,20 +1389,24 @@ export async function syncWeeklyTournamentWithPlayFab(): Promise<void> {
       saveRegistry(reg);
     }
 
-    // 4. Atualiza na nuvem com os dados mesclados
-    await fetch(`https://${titleId}.playfabapi.com/Client/UpdateSharedGroupData`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Authorization": ticket,
-      },
-      body: JSON.stringify({
-        TitleId: titleId,
-        SharedGroupId: groupId,
-        Data: { Standings: JSON.stringify(store.records) },
-        Permission: "Public",
-      }),
-    });
+    // 4. Atualiza na nuvem apenas quando os dados mesclados diferirem do snapshot remoto
+    const remoteStandingsRaw = json.data?.Data?.Standings?.Value ?? "";
+    const mergedStandingsRaw = JSON.stringify(store.records);
+    if (mergedStandingsRaw !== remoteStandingsRaw && Object.keys(store.records).length > 0) {
+      await fetch(`https://${titleId}.playfabapi.com/Client/UpdateSharedGroupData`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Authorization": ticket,
+        },
+        body: JSON.stringify({
+          TitleId: titleId,
+          SharedGroupId: groupId,
+          Data: { Standings: mergedStandingsRaw },
+          Permission: "Public",
+        }),
+      });
+    }
 
     // Se temos credencial de ADM e houve atualização no catálogo de alunos, atualiza também o SEMED_STUDENT_ROSTER_V1
     const adminTicket = await getAdminPlayFabTicket();

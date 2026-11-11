@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { lazy, Suspense, useState, useEffect, useMemo } from "react";
 import { Link } from "@tanstack/react-router";
 import {
   User,
@@ -31,9 +31,12 @@ import { canAccessPromoCodeRedeem } from "@/lib/promo-codes";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { PlayerAuthDialog } from "./PlayerAuthDialog";
-import { LeaderboardDialog } from "./LeaderboardDialog";
 import { PlayerMedalsInventory } from "./PlayerMedalsInventory";
 import { PlayerInboxModal } from "./PlayerInboxModal";
+
+const LeaderboardDialog = lazy(() =>
+  import("./LeaderboardDialog").then((m) => ({ default: m.LeaderboardDialog })),
+);
 import { TournamentRankBadge } from "./TournamentRankBadge";
 import {
   getTournamentStoreRecord,
@@ -487,7 +490,11 @@ export function PlayerMenu({ onConfigChanged }: Props) {
       </div>
 
       <PlayerAuthDialog open={authOpen} onOpenChange={setAuthOpen} />
-      <LeaderboardDialog open={rankingOpen} onOpenChange={setRankingOpen} />
+      {rankingOpen && (
+        <Suspense fallback={null}>
+          <LeaderboardDialog open={rankingOpen} onOpenChange={setRankingOpen} />
+        </Suspense>
+      )}
       <PlayerInboxModal
         open={inboxOpen}
         onOpenChange={setInboxOpen}

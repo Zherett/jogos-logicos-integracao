@@ -262,7 +262,7 @@ export const RARITY_INFO: Record<
   heroi: {
     label: "Herói",
     weight: 6,
-    neonBorderClass: "border-red-500 shadow-[0_0_24px_rgba(239,68,68,0.95)] animate-pulse",
+    neonBorderClass: "border-red-500 shadow-[0_0_24px_rgba(239,68,68,0.95)]",
     badgeBgClass:
       "bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-300 border-red-500 font-black shadow-xs",
     textColor: "text-red-600 dark:text-red-400",

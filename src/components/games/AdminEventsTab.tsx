@@ -694,7 +694,7 @@ export function AdminEventsTab({
                     >
                       <Calendar className="inline mr-1 h-3.5 w-3.5" /> 2. Eventos Recorrentes
                       {recurringEvents.filter((e) => isRecurringEventActive(e)).length > 0 && (
-                        <span className="ml-1.5 rounded-full bg-emerald-500 text-white px-1.5 py-0.2 text-[9px] font-black animate-pulse">
+                        <span className="ml-1.5 rounded-full bg-emerald-500 text-white px-1.5 py-0.2 text-[9px] font-black">
                           Ao Vivo
                         </span>
                       )}
@@ -706,7 +706,7 @@ export function AdminEventsTab({
                 {isPlayFabConfigured() ? (
                   <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-2.5 text-xs text-emerald-800 dark:text-emerald-300">
                     <div className="flex items-center gap-2">
-                      <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                      <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-500 shrink-0" />
                       <span className="font-bold">
                         Banco de Dados Ativo: Microsoft Azure PlayFab (Title ID: {getPlayFabTitleId()})
                       </span>

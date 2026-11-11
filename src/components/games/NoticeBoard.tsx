@@ -151,8 +151,8 @@ export const NoticeBoard: React.FC<NoticeBoardProps> = ({
         onTouchEnd={() => setIsPaused(false)}
       >
         {/* Fundo com brilho suave e sutil */}
-        <div className="pointer-events-none absolute -right-12 -top-12 h-44 w-44 rounded-full bg-primary/15 blur-2xl" />
-        <div className="pointer-events-none absolute -left-12 -bottom-12 h-44 w-44 rounded-full bg-amber-500/15 blur-2xl" />
+        <div className="pointer-events-none absolute -right-12 -top-12 h-44 w-44 rounded-full bg-primary/10" />
+        <div className="pointer-events-none absolute -left-12 -bottom-12 h-44 w-44 rounded-full bg-amber-500/10" />
 
         {/* Setas de Navegação Manual */}
         {count > 1 && (

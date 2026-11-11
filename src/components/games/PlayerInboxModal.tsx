@@ -360,7 +360,7 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                 <DialogTitle className="font-display text-xl font-black text-foreground flex items-center gap-2">
                   <span>Caixa de Entrada & Correio</span>
                   {unreadCount > 0 && (
-                    <span className="rounded-full bg-primary px-2 py-0.5 text-xs font-black text-primary-foreground animate-pulse">
+                    <span className="rounded-full bg-primary px-2 py-0.5 text-xs font-black text-primary-foreground">
                       {unreadCount} nova{unreadCount === 1 ? "" : "s"}
                     </span>
                   )}
@@ -468,7 +468,7 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                             <div className="flex items-center gap-2">
                               {isUnread ? (
                                 <span
-                                  className="inline-flex items-center justify-center min-w-5 h-5 px-1 rounded-full bg-red-600 text-white font-mono text-[10px] font-black shadow-sm ring-2 ring-red-400/40 animate-pulse shrink-0"
+                                  className="inline-flex items-center justify-center min-w-5 h-5 px-1 rounded-full bg-red-600 text-white font-mono text-[10px] font-black shadow-sm ring-2 ring-red-400/40 shrink-0"
                                   title="Nova mensagem não lida"
                                 >
                                   1
@@ -505,7 +505,7 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
 
                           {hasUnclaimedReward && (
                             <span
-                              className="shrink-0 grid h-8 w-8 place-items-center rounded-xl bg-amber-500/20 text-amber-500 border border-amber-500/40 shadow-sm animate-bounce text-sm"
+                              className="shrink-0 grid h-8 w-8 place-items-center rounded-xl bg-amber-500/20 text-amber-500 border border-amber-500/40 shadow-sm text-sm"
                               title="Contém presente para resgatar!"
                             >
                               🎁
@@ -630,7 +630,7 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                       ) : activeMessage.reward.isSecret ? (
                         /* Estado: Recompensa Secreta Pendente */
                         <div className="rounded-2xl border border-dashed border-amber-500/50 bg-background/80 p-5 text-center space-y-3">
-                          <div className="mx-auto grid h-14 w-14 place-items-center rounded-3xl bg-amber-500/20 text-3xl animate-pulse">
+                          <div className="mx-auto grid h-14 w-14 place-items-center rounded-3xl bg-amber-500/20 text-3xl ring-2 ring-amber-500/30">
                             ❓
                           </div>
                           <div className="space-y-1">

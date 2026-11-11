@@ -13,17 +13,32 @@ import {
   Rocket,
 } from "lucide-react";
 import { ALL_GAME_IDS, GAME_NAMES, type GameId } from "./game-storage.ts";
-import { LogicGame } from "@/components/games/LogicGame";
-import { CartesianGame } from "@/components/games/CartesianGame";
-import { RoboGridGame } from "@/components/games/RoboGridGame";
-import { VariableHuntGame } from "@/components/games/VariableHuntGame";
-import { ShapeColorGame } from "@/components/games/ShapeColorGame";
-import { ColorMemoryGame } from "@/components/games/ColorMemoryGame";
-import { MinefieldGame } from "@/components/games/MinefieldGame";
-import { PercentGame } from "@/components/games/PercentGame";
-import { CompleteLogicGame } from "@/components/games/CompleteLogicGame";
-import { RpgGame } from "@/components/games/RpgGame";
-import { SpaceQuestGame } from "@/components/games/SpaceQuestGame";
+
+const lazyGame = <K extends string>(
+  loader: () => Promise<Record<K, React.ComponentType<GameComponentProps>>>,
+  exportName: K,
+) => React.lazy(() => loader().then((mod) => ({ default: mod[exportName] })));
+
+const LogicGame = lazyGame(() => import("@/components/games/LogicGame"), "LogicGame");
+const CartesianGame = lazyGame(() => import("@/components/games/CartesianGame"), "CartesianGame");
+const RoboGridGame = lazyGame(() => import("@/components/games/RoboGridGame"), "RoboGridGame");
+const VariableHuntGame = lazyGame(
+  () => import("@/components/games/VariableHuntGame"),
+  "VariableHuntGame",
+);
+const ShapeColorGame = lazyGame(() => import("@/components/games/ShapeColorGame"), "ShapeColorGame");
+const ColorMemoryGame = lazyGame(
+  () => import("@/components/games/ColorMemoryGame"),
+  "ColorMemoryGame",
+);
+const MinefieldGame = lazyGame(() => import("@/components/games/MinefieldGame"), "MinefieldGame");
+const PercentGame = lazyGame(() => import("@/components/games/PercentGame"), "PercentGame");
+const CompleteLogicGame = lazyGame(
+  () => import("@/components/games/CompleteLogicGame"),
+  "CompleteLogicGame",
+);
+const RpgGame = lazyGame(() => import("@/components/games/RpgGame"), "RpgGame");
+const SpaceQuestGame = lazyGame(() => import("@/components/games/SpaceQuestGame"), "SpaceQuestGame");
 
 export interface GameComponentProps {
   onExit: () => void;

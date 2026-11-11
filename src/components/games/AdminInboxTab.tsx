@@ -525,8 +525,9 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
 
     void pollReaders(true);
     const pollId = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       void pollReaders(false);
-    }, 5000);
+    }, 10000);
 
     return () => {
       isSubscribed = false;
@@ -921,6 +922,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
 
     runAutoDispatch();
     const interval = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       runAutoDispatch();
       void syncInboxReadsFromPlayFab().catch(console.warn);
     }, 20000);

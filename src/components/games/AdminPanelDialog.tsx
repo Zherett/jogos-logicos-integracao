@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import {
   ShieldCheck,
@@ -149,7 +149,6 @@ import {
   type X1MatchLogEntry,
 } from "@/lib/x1-challenge";
 import { MedalIcon } from "./MedalIcon";
-import { PlayerInspectModal } from "./PlayerInspectModal";
 import { PresenceDot } from "./PresenceDot";
 import { PlayerActivityBadge } from "./PlayerActivityBadge";
 import {
@@ -160,9 +159,17 @@ import {
   syncPresenceFromPlayFab,
 } from "@/lib/presence";
 import { TournamentRankBadge } from "./TournamentRankBadge";
-import { AdminInboxTab } from "./AdminInboxTab";
-import { AdminEventsTab } from "./AdminEventsTab";
 import { AdminPromoCodesTab } from "./AdminPromoCodesTab";
+
+const PlayerInspectModal = lazy(() =>
+  import("./PlayerInspectModal").then((m) => ({ default: m.PlayerInspectModal })),
+);
+const AdminInboxTab = lazy(() =>
+  import("./AdminInboxTab").then((m) => ({ default: m.AdminInboxTab })),
+);
+const AdminEventsTab = lazy(() =>
+  import("./AdminEventsTab").then((m) => ({ default: m.AdminEventsTab })),
+);
 import {
   AGE_STAGES,
   getTournamentRank,
@@ -2374,16 +2381,18 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
 
             {/* TAB 3: EVENTOS ESPECIAIS & EVENTOS RECORRENTES (2 SUB-ABAS) */}
             {tab === "eventos" && (
-              <AdminEventsTab
-                draft={draft}
-                setDraft={setDraft}
-                specialEvents={specialEvents}
-                setSpecialEvents={setSpecialEvents}
-                recurringEvents={recurringEvents}
-                setRecurringEvents={setRecurringEvents}
-                flashSaved={flashSaved}
-                onConfigSaved={onConfigSaved}
-              />
+              <Suspense fallback={<div className="p-8 text-center text-xs text-muted-foreground">Carregando aba de Eventos...</div>}>
+                <AdminEventsTab
+                  draft={draft}
+                  setDraft={setDraft}
+                  specialEvents={specialEvents}
+                  setSpecialEvents={setSpecialEvents}
+                  recurringEvents={recurringEvents}
+                  setRecurringEvents={setRecurringEvents}
+                  flashSaved={flashSaved}
+                  onConfigSaved={onConfigSaved}
+                />
+              </Suspense>
             )}
             {/* TAB: QUADRO DE AVISOS & DESTAQUES */}
             {tab === "avisos" && (
@@ -2899,10 +2908,12 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
 
             {/* TAB: CORREIO & TRANSMISSÃO DE MENSAGENS */}
             {tab === "correio" && (
-              <AdminInboxTab
-                registeredStudents={registeredStudents}
-                onBroadcastSent={(msg) => flashSaved(msg)}
-              />
+              <Suspense fallback={<div className="p-8 text-center text-xs text-muted-foreground">Carregando Correio ADM...</div>}>
+                <AdminInboxTab
+                  registeredStudents={registeredStudents}
+                  onBroadcastSent={(msg) => flashSaved(msg)}
+                />
+              </Suspense>
             )}
 
             {/* TAB 4: GESTÃO DE TURMAS & ESCOLAS (2 SUB-ABAS) */}
@@ -5195,20 +5206,24 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
           </div>
         </main>
 
-        <PlayerInspectModal
-          playerId={inspectStudentId}
-          open={Boolean(inspectStudentId)}
-          onOpenChange={(v) => {
-            if (!v) {
-              setInspectStudentId(null);
-              refreshRoster();
-            }
-          }}
-          onStudentUpdated={() => {
-            refreshRoster();
-            void syncStudentRosterFromPlayFab().then(() => refreshRoster());
-          }}
-        />
+        {inspectStudentId && (
+          <Suspense fallback={null}>
+            <PlayerInspectModal
+              playerId={inspectStudentId}
+              open={Boolean(inspectStudentId)}
+              onOpenChange={(v) => {
+                if (!v) {
+                  setInspectStudentId(null);
+                  refreshRoster();
+                }
+              }}
+              onStudentUpdated={() => {
+                refreshRoster();
+                void syncStudentRosterFromPlayFab().then(() => refreshRoster());
+              }}
+            />
+          </Suspense>
+        )}
       </div>
     );
   }
@@ -5224,20 +5239,24 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
 
         {adminBody}
 
-        <PlayerInspectModal
-          playerId={inspectStudentId}
-          open={Boolean(inspectStudentId)}
-          onOpenChange={(v) => {
-            if (!v) {
-              setInspectStudentId(null);
-              refreshRoster();
-            }
-          }}
-          onStudentUpdated={() => {
-            refreshRoster();
-            void syncStudentRosterFromPlayFab().then(() => refreshRoster());
-          }}
-        />
+        {inspectStudentId && (
+          <Suspense fallback={null}>
+            <PlayerInspectModal
+              playerId={inspectStudentId}
+              open={Boolean(inspectStudentId)}
+              onOpenChange={(v) => {
+                if (!v) {
+                  setInspectStudentId(null);
+                  refreshRoster();
+                }
+              }}
+              onStudentUpdated={() => {
+                refreshRoster();
+                void syncStudentRosterFromPlayFab().then(() => refreshRoster());
+              }}
+            />
+          </Suspense>
+        )}
       </DialogContent>
     </Dialog>
   );

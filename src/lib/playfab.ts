@@ -530,17 +530,45 @@ export function purgeExpiredTrash(reg: Record<string, StoredAccount>): boolean {
 }
 
 let inMemoryRegistry: Record<string, StoredAccount> = {};
+let cachedRegistryRaw: string | null = null;
+let cachedRegistryClean: Record<string, StoredAccount> | null = null;
+let cachedTombstoneCount = -1;
+
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (e) => {
+    if (!e.key || e.key === REGISTRY_KEY || e.key === TOMBSTONES_STORAGE_KEY) {
+      cachedRegistryRaw = null;
+      cachedRegistryClean = null;
+      cachedTombstoneCount = -1;
+    }
+  });
+}
 
 export function loadRegistry(): Record<string, StoredAccount> {
   if (typeof window === "undefined") return inMemoryRegistry;
   try {
     const raw = window.localStorage.getItem(REGISTRY_KEY);
-    if (!raw) return {};
+    if (!raw) {
+      cachedRegistryRaw = null;
+      cachedRegistryClean = null;
+      cachedTombstoneCount = -1;
+      return {};
+    }
+    const tombCount = loadTombstones().size;
+    if (
+      raw === cachedRegistryRaw &&
+      cachedRegistryClean !== null &&
+      tombCount === cachedTombstoneCount
+    ) {
+      return structuredClone(cachedRegistryClean);
+    }
+
     const parsed = JSON.parse(raw) as Record<string, StoredAccount>;
     let tombstoneCleaned = false;
     for (const [key, acc] of Object.entries(parsed)) {
       if (!acc || !acc.profile || !acc.profile.id) {
         delete parsed[key];
+        tombstoneCleaned = true;
         continue;
       }
       if (
@@ -554,9 +582,16 @@ export function loadRegistry(): Record<string, StoredAccount> {
     }
     if (purgeExpiredTrash(parsed) || tombstoneCleaned) {
       saveRegistry(parsed);
+    } else {
+      cachedRegistryRaw = raw;
+      cachedRegistryClean = structuredClone(parsed);
+      cachedTombstoneCount = tombCount;
     }
     return parsed;
   } catch {
+    cachedRegistryRaw = null;
+    cachedRegistryClean = null;
+    cachedTombstoneCount = -1;
     return {};
   }
 }
@@ -567,9 +602,14 @@ export function saveRegistry(reg: Record<string, StoredAccount>) {
     return;
   }
   try {
-    window.localStorage.setItem(REGISTRY_KEY, JSON.stringify(reg));
+    const serialized = JSON.stringify(reg);
+    window.localStorage.setItem(REGISTRY_KEY, serialized);
+    cachedRegistryRaw = serialized;
+    cachedRegistryClean = structuredClone(reg);
+    cachedTombstoneCount = loadTombstones().size;
   } catch {
-    /* ignore */
+    cachedRegistryRaw = null;
+    cachedRegistryClean = null;
   }
 }
 
