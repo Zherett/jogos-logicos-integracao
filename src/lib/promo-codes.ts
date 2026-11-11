@@ -518,6 +518,24 @@ export function claimPromoCode(
 }
 
 /**
+ * Garante que o SharedGroup dos Códigos Promocionais exista na PlayFab.
+ */
+let sharedGroupEnsured = false;
+async function ensurePromoCodesSharedGroup(ticket: string): Promise<void> {
+  if (sharedGroupEnsured) return;
+  try {
+    await callPlayFabClient(
+      "CreateSharedGroup",
+      { SharedGroupId: PROMO_CODES_SHARED_GROUP_ID },
+      ticket,
+    );
+  } catch {
+    /* SharedGroup já existe (erro 1085 / SharedGroupAlreadyExists), prossegue normalmente */
+  }
+  sharedGroupEnsured = true;
+}
+
+/**
  * Sincroniza os códigos com a nuvem PlayFab (SharedGroup público).
  */
 export async function syncPromoCodesToPlayFab(): Promise<boolean> {
@@ -525,6 +543,8 @@ export async function syncPromoCodesToPlayFab(): Promise<boolean> {
   try {
     const ticket = (await getAdminPlayFabTicket()) ?? loadStoredSession()?.sessionTicket;
     if (!ticket) return false;
+
+    await ensurePromoCodesSharedGroup(ticket);
 
     const list = loadLocalPromoCodes();
     const payload = JSON.stringify(list);
@@ -567,14 +587,21 @@ export async function fetchPromoCodesFromPlayFab(): Promise<PromoCodeItem[]> {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        // Mescla códigos locais com a nuvem
+        // Mescla códigos da nuvem com eventuais alterações locais muito recentes
         const local = loadLocalPromoCodes();
+        const now = Date.now();
         const map = new Map<string, PromoCodeItem>();
         for (const item of parsed) map.set(item.cleanCode, item);
         for (const item of local) {
-          if (!map.has(item.cleanCode)) map.set(item.cleanCode, item);
-          else if (item.status === "claimed" && map.get(item.cleanCode)?.status !== "claimed") {
-            map.set(item.cleanCode, item); // Prioriza resgate local
+          const cloudItem = map.get(item.cleanCode);
+          if (!cloudItem) {
+            // Preserva item local apenas se foi criado nos últimos 15s (ainda subindo para nuvem)
+            const ageMs = now - new Date(item.createdAt).getTime();
+            if (ageMs >= 0 && ageMs < 15_000) {
+              map.set(item.cleanCode, item);
+            }
+          } else if (item.status === "claimed" && cloudItem.status !== "claimed") {
+            map.set(item.cleanCode, item); // Prioriza resgate local se ainda não subiu
           }
         }
         const merged = Array.from(map.values());
@@ -582,8 +609,19 @@ export async function fetchPromoCodesFromPlayFab(): Promise<PromoCodeItem[]> {
         return merged;
       }
     }
-  } catch {
-    /* ignore fetch error */
+
+    const localFallback = loadLocalPromoCodes();
+    if (localFallback.length > 0) {
+      await syncPromoCodesToPlayFab();
+    }
+    return localFallback;
+  } catch (err) {
+    const localFallback = loadLocalPromoCodes();
+    if (localFallback.length > 0) {
+      await syncPromoCodesToPlayFab();
+    } else {
+      console.warn("[PromoCodes] Falha ao baixar códigos da nuvem:", err);
+    }
+    return localFallback;
   }
-  return loadLocalPromoCodes();
 }

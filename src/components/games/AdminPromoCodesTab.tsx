@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   KeyRound,
   Plus,
@@ -51,12 +51,18 @@ export function AdminPromoCodesTab() {
   const [allowMultiplePerStudent, setAllowMultiplePerStudent] = useState<boolean>(false);
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
 
+  useEffect(() => {
+    void fetchPromoCodesFromPlayFab().then((refreshed) => {
+      setCodes([...refreshed]);
+    });
+  }, []);
+
   function flash(msg: string) {
     setFeedbackMsg(msg);
     setTimeout(() => setFeedbackMsg(null), 4000);
   }
 
-  function handleGenerate() {
+  async function handleGenerate() {
     if (batchCount <= 0 || batchCount > 200) {
       flash("A quantidade deve estar entre 1 e 200 códigos por lote.");
       return;
@@ -77,16 +83,20 @@ export function AdminPromoCodesTab() {
     });
 
     const updated = loadLocalPromoCodes();
-    setCodes(updated);
-    void syncPromoCodesToPlayFab();
-    flash(`✅ Lote com ${created.length} códigos gerado com sucesso!`);
+    setCodes([...updated]);
+    const synced = await syncPromoCodesToPlayFab();
+    flash(
+      synced
+        ? `✅ Lote com ${created.length} códigos gerado e salvo na nuvem PlayFab!`
+        : `✅ Lote com ${created.length} códigos gerado localmente (PlayFab offline).`,
+    );
   }
 
-  function handleDeleteCode(id: string) {
+  async function handleDeleteCode(id: string) {
     const res = deletePromoCode(id);
     const updated = loadLocalPromoCodes();
-    setCodes(updated);
-    void syncPromoCodesToPlayFab();
+    setCodes([...updated]);
+    await syncPromoCodesToPlayFab();
     flash(
       res.mode === "hard_deleted"
         ? "🗑️ Código ativo excluído permanentemente."
@@ -453,7 +463,11 @@ export function AdminPromoCodesTab() {
       </div>
 
       {/* MODAL DE RESGATE DIRETO PARA TESTE DO ADMINISTRADOR */}
-      <PromoCodeRedeemDialog open={testRedeemOpen} onOpenChange={setTestRedeemOpen} />
+      <PromoCodeRedeemDialog
+        open={testRedeemOpen}
+        onOpenChange={setTestRedeemOpen}
+        onRewardClaimed={() => setCodes([...loadLocalPromoCodes()])}
+      />
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
@@ -23,8 +23,11 @@ import {
   inspectPromoCode,
   claimPromoCode,
   normalizePromoCodeInput,
+  fetchPromoCodesFromPlayFab,
+  syncPromoCodesToPlayFab,
   type PromoCodeRewardPayload,
 } from "@/lib/promo-codes";
+import { savePlayerProfile } from "@/lib/playfab";
 import { usePlayerAuth } from "@/lib/player-auth";
 
 interface Props {
@@ -47,6 +50,13 @@ export function PromoCodeRedeemDialog({ open, onOpenChange, onRewardClaimed }: P
   const [confirmedCode, setConfirmedCode] = useState<string>("");
   const [scannerOpen, setScannerOpen] = useState(false);
 
+  // Sincroniza os códigos mais recentes da nuvem sempre que o modal abrir
+  useEffect(() => {
+    if (open) {
+      void fetchPromoCodesFromPlayFab();
+    }
+  }, [open]);
+
   function resetForm() {
     setStep("input");
     setCodeInput("");
@@ -62,11 +72,15 @@ export function PromoCodeRedeemDialog({ open, onOpenChange, onRewardClaimed }: P
     onOpenChange(v);
   }
 
-  // Etapa 1: Inspeciona a prévia do código
+  // Etapa 1: Inspeciona a prévia do código (sincronizando com a nuvem antes)
   async function handleInspect(e?: React.FormEvent) {
     if (e) e.preventDefault();
-    if (!profile) return;
     setErrorMsg(null);
+
+    if (!profile) {
+      setErrorMsg("Entre em uma conta de jogador (ex: Zheret ou Lord) para verificar e resgatar códigos.");
+      return;
+    }
 
     const clean = normalizePromoCodeInput(codeInput);
     if (!clean) {
@@ -76,6 +90,9 @@ export function PromoCodeRedeemDialog({ open, onOpenChange, onRewardClaimed }: P
 
     setLoading(true);
     try {
+      // Baixa códigos atualizados da nuvem PlayFab antes de validar
+      await fetchPromoCodesFromPlayFab();
+
       const res = inspectPromoCode(codeInput, profile.id);
       if (!res.valid) {
         setErrorMsg(res.errorMessage || "Código inválido ou expirado.");
@@ -91,19 +108,28 @@ export function PromoCodeRedeemDialog({ open, onOpenChange, onRewardClaimed }: P
 
   // Etapa 2: Confirmação e Resgate Atômico
   async function handleClaim() {
-    if (!profile) return;
+    if (!profile) {
+      setErrorMsg("Sessão de jogador não encontrada.");
+      return;
+    }
     setLoading(true);
     setErrorMsg(null);
 
     try {
-      const res = claimPromoCode(confirmedCode || codeInput, profile);
+      // Re-sincroniza com a nuvem imediatamente antes de consumir (trava anti-duplicidade cross-browser)
+      await fetchPromoCodesFromPlayFab();
+
+      const profileSnapshot = { ...profile };
+      const res = claimPromoCode(confirmedCode || codeInput, profileSnapshot);
       if (!res.success) {
         setErrorMsg(res.errorMessage || "Falha ao resgatar o código.");
         return;
       }
 
-      // Atualiza o estado da autenticação local
+      // Persiste XP, nível e pontos do aluno no PlayFab e sincroniza o código como resgatado na nuvem
       if (res.updatedProfile) {
+        await savePlayerProfile(res.updatedProfile);
+        await syncPromoCodesToPlayFab();
         await auth.refresh();
       }
       onRewardClaimed?.();
