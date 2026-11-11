@@ -415,16 +415,16 @@ export function PlayerMenu({ onConfigChanged }: Props) {
         )}
 
         {/* Resgate de Códigos Promocionais (Modo Closed Beta: Exclusivo Zheret & Lord) */}
-        {profile && canAccessPromoCodeRedeem(profile) && (
+        {((profile && canAccessPromoCodeRedeem(profile)) || auth.isAdmin) && (
           <button
             type="button"
             onClick={() => setPromoCodeOpen(true)}
-            className="relative flex h-11 items-center gap-1.5 rounded-2xl border border-fuchsia-500/40 bg-fuchsia-500/10 px-3 text-fuchsia-600 dark:text-fuchsia-400 shadow-sm transition-all hover:bg-fuchsia-500/20 active:scale-95"
+            className="relative flex h-11 items-center gap-1.5 rounded-2xl border-2 border-fuchsia-500/50 bg-fuchsia-500/15 px-3 text-fuchsia-600 dark:text-fuchsia-400 shadow-sm transition-all hover:bg-fuchsia-500/25 active:scale-95 cursor-pointer"
             aria-label="Resgatar Código Promocional"
             title="Resgatar Código Promocional (Acesso Beta: Zheret & Lord)"
           >
-            <Ticket className="h-5 w-5 text-fuchsia-500" />
-            <span className="hidden font-display text-xs font-bold uppercase sm:inline">Código</span>
+            <Ticket className="h-5 w-5 text-fuchsia-500 shrink-0" />
+            <span className="font-display text-xs font-bold uppercase">Código</span>
             <span className="rounded-full bg-fuchsia-500/20 text-fuchsia-700 dark:text-fuchsia-300 px-1 py-0.2 text-[8px] font-black uppercase">
               Beta
             </span>
@@ -810,6 +810,24 @@ export function PlayerMenu({ onConfigChanged }: Props) {
                         </div>
                       )}
                     </div>
+
+                    {/* Botão de Resgate de Código Promocional (Closed Beta: Zheret, Lord, ADM) */}
+                    {canAccessPromoCodeRedeem(profile) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setProfileOpen(false);
+                          setPromoCodeOpen(true);
+                        }}
+                        className="w-full flex items-center justify-center gap-2 rounded-2xl bg-fuchsia-500/15 hover:bg-fuchsia-500/25 border-2 border-fuchsia-500/40 py-3 px-4 font-display text-xs font-black text-fuchsia-600 dark:text-fuchsia-400 transition-all active:scale-95 shadow-xs cursor-pointer"
+                      >
+                        <Ticket className="h-4 w-4 text-fuchsia-500" />
+                        <span>Resgatar Código Promocional</span>
+                        <span className="rounded-full bg-fuchsia-500/20 px-2 py-0.5 text-[9px] uppercase tracking-wider font-black">
+                          Closed Beta
+                        </span>
+                      </button>
+                    )}
 
                     {/* Botão de Giro Prominente para o Verso (Medalhas) */}
                     <button

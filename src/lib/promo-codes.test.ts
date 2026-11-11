@@ -171,4 +171,69 @@ describe("Sistema de Códigos Promocionais e QR Codes (promo-codes)", () => {
     assert.equal(canAccessPromoCodeRedeem(testerZheret), true, "Zheret deve ter acesso liberado");
     assert.equal(canAccessPromoCodeRedeem(testerLord), true, "Lord deve ter acesso liberado");
   });
+
+  it("respeita a trava de lote: impede múltiplos resgates quando allowMultiplePerStudent for false", () => {
+    // Cria lote com allowMultiplePerStudent: false (padrão)
+    const batch = generatePromoCodesBatch({
+      count: 2,
+      pattern: "padrao_3",
+      rewards: { xp: 50, points: 20 },
+      batchName: "Gincana 1x por Aluno",
+      createdBy: "adm",
+      allowMultiplePerStudent: false,
+    });
+
+    const code1 = batch[0].code;
+    const code2 = batch[1].code;
+
+    const studentA = { id: "stu_aluno_a", nick: "AlunoA", xp: 0, careerPoints: 0 } as any;
+    const studentB = { id: "stu_aluno_b", nick: "AlunoB", xp: 0, careerPoints: 0 } as any;
+
+    // Aluno A resgata o primeiro código com sucesso
+    const claim1 = claimPromoCode(code1, studentA);
+    assert.equal(claim1.success, true);
+
+    // Aluno A tenta inspecionar e resgatar o segundo código DO MESMO LOTE -> Deve ser bloqueado!
+    const inspect2 = inspectPromoCode(code2, studentA.id);
+    assert.equal(inspect2.valid, false);
+    assert.equal(inspect2.status, "already_claimed");
+    assert.ok(inspect2.errorMessage?.includes("mesma leva"), "Deve informar que já resgatou código desta leva");
+
+    const claim2 = claimPromoCode(code2, studentA);
+    assert.equal(claim2.success, false);
+    assert.ok(claim2.errorMessage?.includes("mesma leva"));
+
+    // Aluno B (outro aluno) DEVE conseguir resgatar o segundo código normalmente
+    const claimB = claimPromoCode(code2, studentB);
+    assert.equal(claimB.success, true);
+  });
+
+  it("permite múltiplos resgates da mesma leva quando allowMultiplePerStudent for true", () => {
+    // Cria lote com allowMultiplePerStudent: true
+    const batch = generatePromoCodesBatch({
+      count: 2,
+      pattern: "padrao_5",
+      rewards: { xp: 10, points: 5 },
+      batchName: "Lote Múltiplo Liberado",
+      createdBy: "adm",
+      allowMultiplePerStudent: true,
+    });
+
+    const code1 = batch[0].code;
+    const code2 = batch[1].code;
+
+    const student = { id: "stu_zheret", nick: "Zheret", xp: 0, careerPoints: 0 } as any;
+
+    const claim1 = claimPromoCode(code1, student);
+    assert.equal(claim1.success, true);
+
+    // Como allowMultiplePerStudent é true, o mesmo aluno PODE resgatar o segundo código
+    const inspect2 = inspectPromoCode(code2, student.id);
+    assert.equal(inspect2.valid, true);
+
+    const claim2 = claimPromoCode(code2, student);
+    assert.equal(claim2.success, true);
+    assert.equal(student.xp, 20);
+    assert.equal(student.careerPoints, 10);
+  });
 });

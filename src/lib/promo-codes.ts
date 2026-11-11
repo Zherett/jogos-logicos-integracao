@@ -50,7 +50,9 @@ export interface PromoCodeItem {
   code: string; // formato visual em caixa alta com hífen
   cleanCode: string; // sem traços nem espaços, para busca rápida
   pattern: PromoCodePattern;
+  batchId?: string; // ID único do lote daquela leva
   batchName: string;
+  allowMultiplePerStudent?: boolean; // se true, aluno pode resgatar vários; se false, 1x por aluno
   status: "active" | "claimed";
   rewards: PromoCodeRewardPayload;
   createdAt: string;
@@ -100,9 +102,16 @@ export const PROMO_CODE_TESTER_ACCOUNTS = ["zheret", "lord"];
 
 /** Verifica se o perfil atual tem acesso liberado ao resgate de códigos */
 export function canAccessPromoCodeRedeem(profile?: Partial<PlayerProfile> | null): boolean {
-  if (!profile?.nick) return false;
-  const clean = nickSlug(profile.nick);
-  return PROMO_CODE_TESTER_ACCOUNTS.includes(clean);
+  if (!profile) return false;
+  if (profile.isAdmin) return true; // Administrador autenticado sempre pode testar
+  const rawNick = (profile.nick ?? "").toLowerCase().trim();
+  const slug = (profile.nickNormalized ?? nickSlug(profile.nick ?? "")).toLowerCase().trim();
+  const name = (profile.full_name ?? "").toLowerCase().trim();
+  const id = (profile.id ?? "").toLowerCase().trim();
+  const patterns = ["zheret", "lord", "josiney", "quemuel", "admin"];
+  return patterns.some(
+    (p) => slug === p || slug.includes(p) || rawNick.includes(p) || name.includes(p) || id.includes(p),
+  );
 }
 
 /** Gera um caractere aleatório de uma lista */
@@ -186,11 +195,14 @@ export function generatePromoCodesBatch(options: {
   rewards: PromoCodeRewardPayload;
   batchName: string;
   createdBy: string;
+  allowMultiplePerStudent?: boolean;
 }): PromoCodeItem[] {
   const currentList = loadLocalPromoCodes();
   const existingCleanCodes = new Set(currentList.map((c) => c.cleanCode));
   const newBatch: PromoCodeItem[] = [];
   const nowIso = new Date().toISOString();
+  const batchId = `batch_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+  const allowMultiple = options.allowMultiplePerStudent ?? false;
 
   let attempts = 0;
   const maxAttempts = options.count * 50;
@@ -207,7 +219,9 @@ export function generatePromoCodesBatch(options: {
         code: formatted,
         cleanCode: clean,
         pattern: options.pattern,
+        batchId,
         batchName: options.batchName || "Lote Padrão",
+        allowMultiplePerStudent: allowMultiple,
         status: "active",
         rewards: {
           xp: Math.max(0, options.rewards.xp ?? 0),
@@ -351,6 +365,25 @@ export function inspectPromoCode(rawInput: string, studentId: string): PromoCode
     };
   }
 
+  // Verifica se o lote restringe a 1 resgate por aluno
+  if (match.allowMultiplePerStudent === false && match.batchId) {
+    const cleanStudentId = nickSlug(studentId);
+    const alreadyClaimedFromBatch = list.some(
+      (c) =>
+        c.batchId === match.batchId &&
+        c.status === "claimed" &&
+        (nickSlug(c.claimedByStudentId || "") === cleanStudentId ||
+          nickSlug(c.claimedByNick || "") === cleanStudentId),
+    );
+    if (alreadyClaimedFromBatch) {
+      return {
+        valid: false,
+        status: "already_claimed",
+        errorMessage: `Você já resgatou uma recompensa desta mesma leva/lote (${match.batchName}). Limite de 1 resgate por aluno atingido.`,
+      };
+    }
+  }
+
   return {
     valid: true,
     status: "active",
@@ -391,6 +424,26 @@ export function claimPromoCode(
       code: rawInput,
       errorMessage: "Código inválido ou já resgatado.",
     };
+  }
+
+  // Verifica se o lote restringe a 1 resgate por aluno
+  if (target.allowMultiplePerStudent === false && target.batchId) {
+    const cleanStudentId = nickSlug(student.id);
+    const cleanNick = nickSlug(student.nick);
+    const alreadyClaimedFromBatch = list.some(
+      (c) =>
+        c.batchId === target.batchId &&
+        c.status === "claimed" &&
+        (nickSlug(c.claimedByStudentId || "") === cleanStudentId ||
+          nickSlug(c.claimedByNick || "") === cleanNick),
+    );
+    if (alreadyClaimedFromBatch) {
+      return {
+        success: false,
+        code: rawInput,
+        errorMessage: `Você já resgatou um código desta mesma leva/lote (${target.batchName}). Cada aluno só pode resgatar 1 vez.`,
+      };
+    }
   }
 
   // 1. Marca como resgatado de forma atômica

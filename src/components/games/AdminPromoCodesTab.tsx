@@ -13,10 +13,14 @@ import {
   Package,
   Search,
   Filter,
+  Layers,
+  ShieldCheck,
+  ExternalLink,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PromoCodeRedeemDialog } from "./PromoCodeRedeemDialog";
 import {
   generatePromoCodesBatch,
   loadLocalPromoCodes,
@@ -34,6 +38,7 @@ export function AdminPromoCodesTab() {
   const [searchFilter, setSearchFilter] = useState("");
   const [syncing, setSyncing] = useState(false);
   const [copiedBatch, setCopiedBatch] = useState(false);
+  const [testRedeemOpen, setTestRedeemOpen] = useState(false);
 
   // Form states for batch generation
   const [batchName, setBatchName] = useState("Gincana de Lógica 2026");
@@ -43,6 +48,7 @@ export function AdminPromoCodesTab() {
   const [rewardPoints, setRewardPoints] = useState<number>(25);
   const [chestName, setChestName] = useState<string>("");
   const [chestQuantity, setChestQuantity] = useState<number>(1);
+  const [allowMultiplePerStudent, setAllowMultiplePerStudent] = useState<boolean>(false);
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
 
   function flash(msg: string) {
@@ -60,6 +66,7 @@ export function AdminPromoCodesTab() {
       count: batchCount,
       pattern,
       batchName,
+      allowMultiplePerStudent,
       rewards: {
         xp: rewardXp,
         points: rewardPoints,
@@ -146,6 +153,18 @@ export function AdminPromoCodesTab() {
         </div>
 
         <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setTestRedeemOpen(true)}
+            className="rounded-xl text-xs font-bold gap-1.5 h-9 border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-400 hover:bg-fuchsia-500/20"
+            title="Abrir a tela de resgate de código diretamente para testar"
+          >
+            <Ticket className="h-3.5 w-3.5 text-fuchsia-500" />
+            Testar Resgate
+          </Button>
+
           <Button
             type="button"
             variant="outline"
@@ -244,14 +263,46 @@ export function AdminPromoCodesTab() {
           </div>
         </div>
 
-        <div className="flex justify-end pt-2">
-          <Button
-            type="button"
-            onClick={handleGenerate}
-            className="rounded-xl h-10 px-5 text-xs font-display font-extrabold gap-2 bg-fuchsia-600 hover:bg-fuchsia-700 text-white shadow-md cursor-pointer"
-          >
-            <Plus className="h-4 w-4" /> Gerar Lote de Códigos
-          </Button>
+        {/* REGULAMENTO DE RESGATE POR ALUNO (PODE MARCAR E DESMARCAR) */}
+        <div className="rounded-xl border border-border/80 bg-background/60 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-start gap-2.5">
+            <input
+              id="toggle-multiple-redeem"
+              type="checkbox"
+              checked={allowMultiplePerStudent}
+              onChange={(e) => setAllowMultiplePerStudent(e.target.checked)}
+              className="mt-0.5 h-4 w-4 rounded border-gray-300 text-fuchsia-600 focus:ring-fuchsia-500 cursor-pointer"
+            />
+            <label htmlFor="toggle-multiple-redeem" className="cursor-pointer select-none">
+              <div className="text-xs font-black text-foreground flex items-center gap-1.5">
+                Permitir múltiplos resgates desta mesma leva por aluno
+                {allowMultiplePerStudent ? (
+                  <span className="rounded-full bg-blue-500/15 border border-blue-500/30 text-blue-600 dark:text-blue-400 px-2 py-0.2 text-[9px] font-black uppercase">
+                    Múltiplos liberados
+                  </span>
+                ) : (
+                  <span className="rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-600 dark:text-amber-400 px-2 py-0.2 text-[9px] font-black uppercase">
+                    1x por aluno (Trava anti-acúmulo)
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                {allowMultiplePerStudent
+                  ? "Ativado: O mesmo aluno poderá resgatar 2 ou mais códigos deste mesmo lote (ideal para recargas/prêmios cumulativos)."
+                  : "Desativado (Padrão): Cada aluno só poderá resgatar no máximo 1 código gerado nesta leva (ideal para gincanas e premiações únicas)."}
+              </p>
+            </label>
+          </div>
+
+          <div className="shrink-0 flex justify-end">
+            <Button
+              type="button"
+              onClick={handleGenerate}
+              className="rounded-xl h-9 px-4 text-xs font-display font-extrabold gap-2 bg-fuchsia-600 hover:bg-fuchsia-700 text-white shadow-md cursor-pointer"
+            >
+              <Plus className="h-4 w-4" /> Gerar Lote de Códigos
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -333,7 +384,20 @@ export function AdminPromoCodesTab() {
                 {visibleCodes.slice(0, 100).map((item) => (
                   <tr key={item.id} className="hover:bg-muted/20">
                     <td className="px-3 py-2.5 font-mono font-black text-foreground">{item.code}</td>
-                    <td className="px-3 py-2.5 text-muted-foreground font-medium">{item.batchName}</td>
+                    <td className="px-3 py-2.5 text-muted-foreground font-medium">
+                      <div>{item.batchName}</div>
+                      <div className="mt-0.5">
+                        {item.allowMultiplePerStudent ? (
+                          <span className="rounded-md bg-blue-500/10 border border-blue-500/20 text-blue-600 dark:text-blue-400 px-1.5 py-0.2 text-[9px] font-bold">
+                            Múltiplos
+                          </span>
+                        ) : (
+                          <span className="rounded-md bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400 px-1.5 py-0.2 text-[9px] font-bold">
+                            1x por aluno
+                          </span>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-3 py-2.5 font-bold">
                       <span className="text-amber-500">+{item.rewards.xp} XP</span>
                       {item.rewards.points > 0 && <span className="text-yellow-500 ml-1.5">+{item.rewards.points} pts</span>}
@@ -387,6 +451,9 @@ export function AdminPromoCodesTab() {
           </div>
         )}
       </div>
+
+      {/* MODAL DE RESGATE DIRETO PARA TESTE DO ADMINISTRADOR */}
+      <PromoCodeRedeemDialog open={testRedeemOpen} onOpenChange={setTestRedeemOpen} />
     </div>
   );
 }
