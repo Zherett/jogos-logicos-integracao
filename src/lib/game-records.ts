@@ -8,6 +8,28 @@ import {
 } from "./playfab.ts";
 
 export const GAME_RECORDS_STORAGE_KEY = "desafios-game-records-v1";
+export const MAX_LEGIT_LOGIC_SCORE = 480;
+
+export function isRecordScoreAllowed(gameId: GameId, score: number): boolean {
+  if (gameId === "logica" && score > MAX_LEGIT_LOGIC_SCORE) {
+    return false;
+  }
+  return true;
+}
+
+export function sanitizeRecordsStore(store: AllGameRecords): boolean {
+  let changed = false;
+  for (const key of Object.keys(store)) {
+    const rec = store[key];
+    if (!rec) continue;
+    const gameId = rec.gameId ?? (key.split(":")[0] as GameId);
+    if (!isRecordScoreAllowed(gameId, rec.score)) {
+      delete store[key];
+      changed = true;
+    }
+  }
+  return changed;
+}
 
 export interface RecordHolder {
   playerId: string;
@@ -37,7 +59,11 @@ export function loadGameRecords(): AllGameRecords {
   try {
     const raw = window.localStorage.getItem(GAME_RECORDS_STORAGE_KEY);
     if (!raw) return {};
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw) as AllGameRecords;
+    if (sanitizeRecordsStore(parsed)) {
+      window.localStorage.setItem(GAME_RECORDS_STORAGE_KEY, JSON.stringify(parsed));
+    }
+    return parsed;
   } catch {
     return {};
   }
@@ -86,7 +112,7 @@ export function evaluateStageGameRecordUpdate(
     updatedAt: achievedAt,
   };
 
-  if (safeScore <= 0) {
+  if (safeScore <= 0 || !isRecordScoreAllowed(candidate.gameId, safeScore)) {
     return { updatedRecord: baseRecord, isNewRecord: false, isTiedRecord: false };
   }
 
@@ -271,7 +297,7 @@ export function seedRecordsFromRegistry(): AllGameRecords {
     const stage = stageFromBirthdate(p.birthdate, new Date(), p.school).id;
 
     for (const s of acc.stats) {
-      if (!s.game_id || (s.best_score ?? 0) <= 0) continue;
+      if (!s.game_id || (s.best_score ?? 0) <= 0 || !isRecordScoreAllowed(s.game_id, s.best_score)) continue;
       const key = getRecordKey(s.game_id, stage);
       const cur = store[key];
       const res = evaluateStageGameRecordUpdate(cur, {
@@ -354,12 +380,15 @@ export async function syncGameRecordsWithPlayFab(
       data?: { Data?: Record<string, { Value: string }> };
     };
 
-    let hasLocalChanges = false;
+    let hasLocalChanges = sanitizeRecordsStore(store);
     let hasRemoteChanges = false;
     const remoteRaw = json.data?.Data?.Records?.Value;
 
     if (remoteRaw) {
       const remote = JSON.parse(remoteRaw) as AllGameRecords;
+      if (sanitizeRecordsStore(remote)) {
+        hasRemoteChanges = true;
+      }
       for (const [key, remRec] of Object.entries(remote)) {
         const locRec = store[key];
         if (!locRec || remRec.score > locRec.score) {

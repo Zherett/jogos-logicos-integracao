@@ -176,6 +176,38 @@ describe("Sistema de Recordes de Pontuação por Jogo e por Etapa", () => {
     assert.equal(res.updatedRecord.holders[0].nick, "Campeao");
   });
 
+  it("rejeita e sanitiza recordes de Lógica Matemática acima de 480 pontos", () => {
+    const existing: StageGameRecord = {
+      gameId: "logica",
+      stage: "etapa_2",
+      score: 410,
+      holders: [{ playerId: "p1", nick: "Legitimo", achievedAt: 1_000_000 }],
+      updatedAt: 1_000_000,
+    };
+
+    const rejected = evaluateStageGameRecordUpdate(existing, {
+      gameId: "logica",
+      stage: "etapa_2",
+      playerId: "p2",
+      nick: "Anomalo",
+      score: 485,
+      achievedAt: 2_000_000,
+    });
+    assert.equal(rejected.isNewRecord, false);
+    assert.equal(rejected.updatedRecord.score, 410);
+
+    const accepted = evaluateStageGameRecordUpdate(existing, {
+      gameId: "logica",
+      stage: "etapa_2",
+      playerId: "p3",
+      nick: "Permitido",
+      score: 480,
+      achievedAt: 2_000_000,
+    });
+    assert.equal(accepted.isNewRecord, true);
+    assert.equal(accepted.updatedRecord.score, 480);
+  });
+
   it("formata a data brasileira de conquista de recorde", () => {
     const d = new Date("2026-11-04T12:00:00Z");
     const formatted = formatRecordDateBR(d.getTime());
