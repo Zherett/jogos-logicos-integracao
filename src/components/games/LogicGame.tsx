@@ -229,7 +229,7 @@ export function LogicGame({ onExit, onStatsChange, isRanked }: Props) {
   return (
     <div className="space-y-4">
       <GameTopBar title="Lógica Matemática" onExit={onExit} sessionActive={team.activeSession} onFinishSession={sessionEnd.request} />
-      <GameHud time={clock.time} score={score} level={level} streak={streak} />
+      <GameHud time={clock.time} score={score} wrong={wrong} level={level} streak={streak} />
       <TeamScoreBar key={runId} session={team} score={score} />
 
       <div className={`relative rounded-3xl border bg-card p-6 sm:p-10 shadow-lg overflow-hidden ${flashClass}`}>

@@ -467,8 +467,12 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
                 Fase {stage}/{ROBOT_BOSSES.length} •{" "}
                 <span className="text-destructive">{boss.name}</span>
               </div>
-              <div className="rounded-full bg-primary/15 px-3 py-1 text-xs font-extrabold text-primary flex items-center gap-1">
+              <div className="rounded-full bg-primary/15 px-3 py-1 text-xs font-extrabold text-primary flex items-center gap-1.5">
                 <Trophy className="h-3.5 w-3.5" /> {score} pts
+                <span className="h-3 w-px bg-primary/30" />
+                <span className={wrongCount > 0 ? "text-destructive" : "text-muted-foreground"}>
+                  {wrongCount} {wrongCount === 1 ? "erro" : "erros"}
+                </span>
               </div>
               {streak >= 2 && (
                 <div className="rounded-full bg-accent/15 px-3 py-1 text-xs font-extrabold text-accent">

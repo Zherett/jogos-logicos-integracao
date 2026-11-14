@@ -424,7 +424,7 @@ export function PercentGame({ onExit, onStatsChange, isRanked }: Props) {
   return (
     <div className="space-y-3">
       <GameTopBar title={TITLE} onExit={onExit} sessionActive={team.activeSession} onFinishSession={sessionEnd.request} />
-      <GameHud time={clock.time} score={score} level={level} streak={streak} />
+      <GameHud time={clock.time} score={score} wrong={wrong} level={level} streak={streak} />
       <TeamScoreBar key={runId} session={team} score={score} />
 
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border bg-card px-4 py-2 text-sm shadow-sm">

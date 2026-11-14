@@ -320,7 +320,22 @@ export function MinefieldGame({ onExit, onStatsChange, isRanked }: Props) {
 
       <div className="grid grid-cols-3 gap-2">
         <Stat icon={<Clock className="h-4 w-4" />} label="Tempo de partida" value={fmt(elapsed)} />
-        <Stat icon={<Star className="h-4 w-4" />} label="Pontos" value={String(score)} />
+        <div className="flex items-center gap-2 rounded-2xl border bg-card p-2 shadow-sm min-w-0">
+          <div className="grid h-8 w-8 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">
+            <Star className="h-4 w-4" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground leading-tight">Pontos</div>
+            <div className="font-display text-sm sm:text-base font-extrabold leading-tight">{score}</div>
+          </div>
+          <div className="h-7 w-px bg-border shrink-0" />
+          <div className="min-w-0 flex-1 text-center sm:text-left">
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground leading-tight">Erros</div>
+            <div className={`font-display text-sm sm:text-base font-extrabold leading-tight ${wrong > 0 ? "text-destructive" : "text-foreground"}`}>
+              {wrong}
+            </div>
+          </div>
+        </div>
         <Stat icon={<LayoutGrid className="h-4 w-4" />} label="Cartas restantes" value={String(remainingCards)} />
       </div>
 

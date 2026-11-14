@@ -1147,13 +1147,24 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
               <div className="relative z-20 flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-2xl border border-sky-500/30 bg-slate-950/85 backdrop-blur-md shadow-xl">
                 {/* Lado Esquerdo: Pontuação e Combo */}
                 <div className="flex items-center gap-3">
-                  <div className="flex flex-col">
-                    <span className="text-[10px] font-black uppercase tracking-wider text-sky-400">
-                      Pontos
-                    </span>
-                    <span className="font-display text-xl sm:text-2xl font-black text-white">
-                      {score}
-                    </span>
+                  <div className="flex items-center gap-3">
+                    <div className="flex flex-col">
+                      <span className="text-[10px] font-black uppercase tracking-wider text-sky-400">
+                        Pontos
+                      </span>
+                      <span className="font-display text-xl sm:text-2xl font-black text-white">
+                        {score}
+                      </span>
+                    </div>
+                    <div className="h-7 w-px bg-sky-500/30" />
+                    <div className="flex flex-col">
+                      <span className="text-[10px] font-black uppercase tracking-wider text-rose-400">
+                        Erros
+                      </span>
+                      <span className={`font-display text-xl sm:text-2xl font-black ${wrongCount > 0 ? "text-rose-400" : "text-white"}`}>
+                        {wrongCount}
+                      </span>
+                    </div>
                   </div>
 
                   {combo > 1 && (
