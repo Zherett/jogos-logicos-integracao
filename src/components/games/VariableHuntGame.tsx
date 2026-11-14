@@ -20,7 +20,13 @@ import { useRoundClock, formatTime } from "@/lib/use-countdown";
 import { GameTopBar } from "./GameTopBar";
 import { BonusTimeToggle } from "./BonusTimeToggle";
 import { useTeamSession } from "@/lib/use-team-session";
-import { generateVariableQuestion, type VarQuestion } from "@/lib/variable-questions";
+import {
+  generateVariableQuestion,
+  checkVariableSlots,
+  type VarQuestion,
+  type VarSlotRole,
+  type VarOpSymbol,
+} from "@/lib/variable-questions";
 import { updateBest, saveLastMatch, loadLastMatch, type LastMatch } from "@/lib/game-storage";
 import { TeamSetup } from "./TeamSetup";
 import { TeamScoreBar, TeamResults } from "./TeamScoreBar";
@@ -81,7 +87,7 @@ export function VariableHuntGame({ onExit, onStatsChange, isRanked }: Props) {
   const [lives, setLives] = useState(START_LIVES);
   const [question, setQuestion] = useState<VarQuestion | null>(null);
   const [boxState, setBoxState] = useState<"idle" | "hover" | "correct" | "wrong">("idle");
-  const [snapValue, setSnapValue] = useState<number | null>(null);
+  const [filledSlots, setFilledSlots] = useState<Partial<Record<VarSlotRole, number | VarOpSymbol>>>({});
   const [sparkles, setSparkles] = useState<{ id: number; dx: number; dy: number; color: string }[]>([]);
   const [showLevelUp, setShowLevelUp] = useState<number | null>(null);
   const [timeAtEnd, setTimeAtEnd] = useState(0);
@@ -125,10 +131,11 @@ export function VariableHuntGame({ onExit, onStatsChange, isRanked }: Props) {
     prevSigRef.current = `${q.left}${q.op}${q.right}=${q.result}`;
     setQuestion(q);
     setBoxState("idle");
-    setSnapValue(null);
+    setFilledSlots({});
   }
 
   function startGame() {
+    lockRef.current = false;
     setRunId((r) => r + 1);
     team.begin(teamConfig);
     setCorrect(0); setWrong(0);
@@ -168,15 +175,39 @@ export function VariableHuntGame({ onExit, onStatsChange, isRanked }: Props) {
     setTimeout(() => setSparkles([]), 900);
   }
 
-  function onDrop(value: number) {
+  function onClearSlot(slotRole: VarSlotRole) {
+    if (lockRef.current) return;
+    setFilledSlots((cur) => {
+      const next = { ...cur };
+      delete next[slotRole];
+      return next;
+    });
+  }
+
+  function onDropSlot(slotRole: VarSlotRole, value: number | VarOpSymbol) {
     if (!question || lockRef.current) return;
-    const ok = value === question.answer;
+    if (!question.slots.includes(slotRole)) return;
+    if (slotRole === "op" && typeof value === "number") return;
+    if (slotRole !== "op" && typeof value !== "number") return;
+
+    const nextFilled: Partial<Record<VarSlotRole, number | VarOpSymbol>> = {
+      ...filledSlots,
+      [slotRole]: value,
+    };
+
+    const allFilled = question.slots.every((s) => nextFilled[s] !== undefined);
+    if (!allFilled) {
+      setFilledSlots(nextFilled);
+      return;
+    }
+
+    const ok = checkVariableSlots(question, nextFilled);
     if (ok) {
       lockRef.current = true;
       playCorrect();
       spawnSparkles();
       setBoxState("correct");
-      setSnapValue(value);
+      setFilledSlots(nextFilled);
       setCorrect((c) => c + 1);
       if (bonusOn) clock.addBonus();
       const nextStreak = streak + 1;
@@ -204,13 +235,17 @@ export function VariableHuntGame({ onExit, onStatsChange, isRanked }: Props) {
     } else {
       playWrong();
       setBoxState("wrong");
+      setFilledSlots(nextFilled);
       setWrong((w) => w + 1);
       setStreak(0);
       const nextLives = lives - 1;
       setLives(nextLives);
-      setTimeout(() => setBoxState("idle"), 500);
+      setTimeout(() => {
+        setBoxState("idle");
+        setFilledSlots({});
+      }, 600);
       if (nextLives <= 0) {
-        setTimeout(() => endGame(clock.time), 550);
+        setTimeout(() => endGame(clock.time), 650);
       }
     }
   }
@@ -258,11 +293,11 @@ export function VariableHuntGame({ onExit, onStatsChange, isRanked }: Props) {
             ))}
           </div>
           <div className="mt-3 grid grid-cols-1 sm:grid-cols-5 gap-2 text-xs text-muted-foreground text-center">
-            <div>1: só soma</div>
-            <div>2: soma e subtração</div>
-            <div>3: multiplicação</div>
-            <div>4: divisão</div>
-            <div>5: misto</div>
+            <div>1: soma (1 espaço)</div>
+            <div>2: operação / 2 espaços</div>
+            <div>3: 2 números / alternado</div>
+            <div>4: divisão + misto</div>
+            <div>5: desafio completo</div>
           </div>
         </div>
       </StartScreen>
@@ -305,9 +340,10 @@ export function VariableHuntGame({ onExit, onStatsChange, isRanked }: Props) {
       <PlayArea
         question={question!}
         boxState={boxState}
-        snapValue={snapValue}
+        filledSlots={filledSlots}
         sparkles={sparkles}
-        onDrop={onDrop}
+        onDropSlot={onDropSlot}
+        onClearSlot={onClearSlot}
         showLevelUp={showLevelUp}
       />
     </div>
@@ -369,21 +405,22 @@ function ExtraStat({ icon, label, value }: { icon: React.ReactNode; label: strin
 /* ------------------------------ Drag & drop ------------------------------- */
 
 function PlayArea({
-  question, boxState, snapValue, sparkles, onDrop, showLevelUp,
+  question, boxState, filledSlots, sparkles, onDropSlot, onClearSlot, showLevelUp,
 }: {
   question: VarQuestion;
   boxState: "idle" | "hover" | "correct" | "wrong";
-  snapValue: number | null;
+  filledSlots: Partial<Record<VarSlotRole, number | VarOpSymbol>>;
   sparkles: { id: number; dx: number; dy: number; color: string }[];
-  onDrop: (value: number) => void;
+  onDropSlot: (slotRole: VarSlotRole, value: number | VarOpSymbol) => void;
+  onClearSlot: (slotRole: VarSlotRole) => void;
   showLevelUp: number | null;
 }) {
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 80, tolerance: 6 } }),
   );
-  const [activeValue, setActiveValue] = useState<number | null>(null);
-  const [overBox, setOverBox] = useState(false);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [overSlot, setOverSlot] = useState<string | null>(null);
 
   // Randomize ball colors + positions per question
   const decorated = useMemo(
@@ -398,22 +435,34 @@ function PlayArea({
   );
 
   function handleStart(e: DragStartEvent) {
-    setActiveValue(Number(e.active.id));
+    setActiveId(String(e.active.id));
   }
   function handleEnd(e: DragEndEvent) {
-    const value = Number(e.active.id);
-    if (e.over?.id === "var-box") onDrop(value);
-    setActiveValue(null);
-    setOverBox(false);
+    const idStr = String(e.active.id);
+    const overId = e.over?.id ? String(e.over.id) : null;
+    if (overId && overId.startsWith("slot-")) {
+      const role = overId.slice(5) as VarSlotRole;
+      if (idStr.startsWith("op:")) {
+        onDropSlot(role, idStr.slice(3) as VarOpSymbol);
+      } else if (idStr.startsWith("num:")) {
+        onDropSlot(role, Number(idStr.slice(4)));
+      }
+    }
+    setActiveId(null);
+    setOverSlot(null);
   }
+
+  const usedNumbers = new Set<number>(
+    Object.values(filledSlots).filter((v): v is number => typeof v === "number"),
+  );
 
   return (
     <DndContext
       sensors={sensors}
       onDragStart={handleStart}
       onDragEnd={handleEnd}
-      onDragOver={(e) => setOverBox(e.over?.id === "var-box")}
-      onDragCancel={() => { setActiveValue(null); setOverBox(false); }}
+      onDragOver={(e) => setOverSlot(e.over?.id ? String(e.over.id) : null)}
+      onDragCancel={() => { setActiveId(null); setOverSlot(null); }}
     >
       <div className="relative rounded-3xl border bg-card p-6 sm:p-10 shadow-lg overflow-hidden">
         {showLevelUp && (
@@ -427,48 +476,106 @@ function PlayArea({
 
         {/* Expression */}
         <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-5 font-display text-4xl sm:text-6xl font-extrabold">
-          <Token>{question.left === "?" ? (
-            <VarBox state={boxState} hover={overBox} snapValue={snapValue} sparkles={sparkles} />
-          ) : question.left}</Token>
-          <Token muted>{question.op}</Token>
-          <Token>{question.right === "?" ? (
-            <VarBox state={boxState} hover={overBox} snapValue={snapValue} sparkles={sparkles} />
-          ) : question.right}</Token>
+          <Token>
+            {question.left === "?" ? (
+              <VarBox
+                id="slot-left"
+                state={boxState}
+                hover={overSlot === "slot-left"}
+                snapValue={filledSlots.left ?? null}
+                sparkles={sparkles}
+                onClear={() => onClearSlot("left")}
+              />
+            ) : question.left}
+          </Token>
+          <Token muted>
+            {question.op === "?" ? (
+              <VarBox
+                id="slot-op"
+                state={boxState}
+                hover={overSlot === "slot-op"}
+                snapValue={filledSlots.op ?? null}
+                sparkles={sparkles}
+                onClear={() => onClearSlot("op")}
+              />
+            ) : question.op}
+          </Token>
+          <Token>
+            {question.right === "?" ? (
+              <VarBox
+                id="slot-right"
+                state={boxState}
+                hover={overSlot === "slot-right"}
+                snapValue={filledSlots.right ?? null}
+                sparkles={sparkles}
+                onClear={() => onClearSlot("right")}
+              />
+            ) : question.right}
+          </Token>
           <Token muted>=</Token>
-          <Token>{question.result}</Token>
+          <Token>
+            {question.result === "?" ? (
+              <VarBox
+                id="slot-result"
+                state={boxState}
+                hover={overSlot === "slot-result"}
+                snapValue={filledSlots.result ?? null}
+                sparkles={sparkles}
+                onClear={() => onClearSlot("result")}
+              />
+            ) : question.result}
+          </Token>
         </div>
 
         <p className="mt-6 text-center text-sm text-muted-foreground">
-          Arraste a bola com o valor correto até a caixa
+          {question.slots.length > 1
+            ? "Arraste as peças corretas para preencher todos os espaços (toque na caixa para limpar)"
+            : "Arraste a bola com o valor correto até a caixa"}
         </p>
       </div>
 
-      {/* Balls tray */}
-      <div className="relative rounded-3xl border bg-card p-4 sm:p-6 shadow-md min-h-[180px]">
-        <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-6">
-          {decorated.map((b) => (
-            <Ball
-              key={b.value}
-              value={b.value}
-              color={b.color}
-              rot={b.rot}
-              offY={b.offY}
-              hidden={snapValue === b.value}
-            />
-          ))}
-        </div>
+      {/* Balls & Operators tray */}
+      <div className="relative rounded-3xl border bg-card p-4 sm:p-6 shadow-md min-h-[180px] space-y-4">
+        {question.opOptions && question.opOptions.length > 0 && (
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            {question.opOptions.map((opSym) => (
+              <OpBall
+                key={opSym}
+                op={opSym}
+                hidden={filledSlots.op === opSym}
+              />
+            ))}
+          </div>
+        )}
+        {decorated.length > 0 && (
+          <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-6">
+            {decorated.map((b) => (
+              <Ball
+                key={b.value}
+                value={b.value}
+                color={b.color}
+                rot={b.rot}
+                offY={b.offY}
+                hidden={usedNumbers.has(b.value)}
+              />
+            ))}
+          </div>
+        )}
       </div>
 
       <DragOverlay dropAnimation={{ duration: 220, easing: "cubic-bezier(.2,.9,.3,1.3)" }}>
-        {activeValue !== null && (
+        {activeId !== null && activeId.startsWith("num:") && (
           <BallVisual
-            value={activeValue}
+            value={Number(activeId.slice(4))}
             color={
-              decorated.find((d) => d.value === activeValue)?.color
+              decorated.find((d) => d.value === Number(activeId.slice(4)))?.color
               ?? BALL_COLORS[0]
             }
             dragging
           />
+        )}
+        {activeId !== null && activeId.startsWith("op:") && (
+          <OpBallVisual op={activeId.slice(3)} dragging />
         )}
       </DragOverlay>
     </DndContext>
@@ -484,14 +591,16 @@ function Token({ children, muted }: { children: React.ReactNode; muted?: boolean
 }
 
 function VarBox({
-  state, hover, snapValue, sparkles,
+  id, state, hover, snapValue, sparkles, onClear,
 }: {
+  id: string;
   state: "idle" | "hover" | "correct" | "wrong";
   hover: boolean;
-  snapValue: number | null;
+  snapValue: number | string | null;
   sparkles: { id: number; dx: number; dy: number; color: string }[];
+  onClear?: () => void;
 }) {
-  const { isOver, setNodeRef } = useDroppable({ id: "var-box" });
+  const { isOver, setNodeRef } = useDroppable({ id });
   const active = isOver || hover;
 
   const base = "relative inline-grid place-items-center h-20 w-20 sm:h-28 sm:w-28 rounded-2xl border-4 border-dashed transition-all";
@@ -502,7 +611,12 @@ function VarBox({
     : "border-primary/50 bg-primary/5 text-primary/70";
 
   return (
-    <span ref={setNodeRef} className={`${base} ${tone}`}>
+    <span
+      ref={setNodeRef}
+      onClick={() => { if (snapValue !== null && onClear) onClear(); }}
+      className={`${base} ${tone} ${snapValue !== null ? "cursor-pointer" : ""}`}
+      title={snapValue !== null ? "Toque para limpar" : undefined}
+    >
       {snapValue !== null ? (
         <span className="font-extrabold">{snapValue}</span>
       ) : (
@@ -524,10 +638,41 @@ function VarBox({
   );
 }
 
+function OpBall({ op, hidden }: { op: VarOpSymbol; hidden: boolean }) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: `op:${op}` });
+  return (
+    <button
+      ref={setNodeRef}
+      {...listeners}
+      {...attributes}
+      className="focus:outline-none focus-visible:ring-4 focus-visible:ring-primary/40 rounded-2xl"
+      style={{
+        opacity: hidden || isDragging ? 0 : 1,
+        touchAction: "none",
+      }}
+      aria-label={`Operador ${op}`}
+    >
+      <OpBallVisual op={op} />
+    </button>
+  );
+}
+
+function OpBallVisual({ op, dragging }: { op: string; dragging?: boolean }) {
+  return (
+    <span
+      className={`grid place-items-center h-14 w-16 sm:h-16 sm:w-20 rounded-2xl bg-gradient-to-br from-slate-700 to-slate-900 border-2 border-primary/50 text-white font-display font-extrabold text-2xl sm:text-3xl shadow-lg select-none ${
+        dragging ? "scale-125 shadow-2xl ring-4 ring-primary/40" : "hover:scale-105 active:scale-95 transition-transform"
+      }`}
+    >
+      {op}
+    </span>
+  );
+}
+
 function Ball({ value, color, rot, offY, hidden }: {
   value: number; color: string; rot: number; offY: number; hidden: boolean;
 }) {
-  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: value });
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: `num:${value}` });
   return (
     <button
       ref={setNodeRef}

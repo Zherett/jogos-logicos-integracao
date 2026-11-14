@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { GameHud } from "./GameHud";
 import { ResultPanel } from "./ResultPanel";
 import { CartesianPlane } from "./CartesianPlane";
-import { StartScreen, OptionChip } from "./StartScreen";
+import { StartScreen } from "./StartScreen";
 import { Countdown } from "./Countdown";
 import { GameTopBar } from "./GameTopBar";
 import { BonusTimeToggle } from "./BonusTimeToggle";
@@ -29,38 +29,15 @@ interface Props {
   isRanked?: boolean;
 }
 
-type PlaneSize = 8 | 10 | 15;
-const SIZE_OPTIONS: PlaneSize[] = [8, 10, 15];
-// interpretation: NxN => eixos de -N a +N
-const sizeToRange = (n: PlaneSize) => n;
+const rangeForLevel = (lvl: number) => (lvl <= 1 ? 8 : lvl === 2 ? 10 : 15);
 
 export function CartesianGame({ onExit, onStatsChange, isRanked }: Props) {
   const [phase, setPhase] = useState<"setup" | "countdown" | "playing">("countdown");
-  const [planeSize, setPlaneSize] = useState<PlaneSize>(() => {
-    if (isRanked) return 15;
-    try {
-      const raw = localStorage.getItem("desafios_cartesiano_size");
-      if (raw) {
-        const parsed = Number(raw);
-        if (parsed === 8 || parsed === 10 || parsed === 15) return parsed as PlaneSize;
-      }
-    } catch {
-      /* ignore */
-    }
-    return 8;
-  });
-
-  useEffect(() => {
-    if (isRanked) {
-      setPlaneSize(15);
-    }
-  }, [isRanked]);
   const [lastMatch, setLastMatch] = useState<LastMatch | null>(null);
   const [teamConfig, setTeamConfig] = useState<TeamConfig>(NORMAL_CONFIG);
   const team = useTeamSession();
   const [bonusOn, setBonusOn] = useState(true);
   const [runId, setRunId] = useState(0);
-  const range = sizeToRange(planeSize);
 
   useEffect(() => {
     setLastMatch(loadLastMatch("cartesiano"));
@@ -107,9 +84,10 @@ export function CartesianGame({ onExit, onStatsChange, isRanked }: Props) {
   function startGame() {
     setRunId((r) => r + 1);
     team.begin(teamConfig);
+    lockRef.current = false;
     setCorrect(0); setWrong(0); setLevel(1); setStreak(0);
     setSelected(null); setFinished(false);
-    setQuestion(generateCartQuestion(1, range));
+    setQuestion(generateCartQuestion(1, rangeForLevel(1)));
     setPhase("playing");
     setRunning(true);
   }
@@ -129,7 +107,7 @@ export function CartesianGame({ onExit, onStatsChange, isRanked }: Props) {
 
   function nextQuestion(lvl: number) {
     setSelected(null);
-    setQuestion(generateCartQuestion(lvl, range));
+    setQuestion(generateCartQuestion(lvl, rangeForLevel(lvl)));
   }
 
   function answer(idx: number) {
@@ -186,27 +164,9 @@ export function CartesianGame({ onExit, onStatsChange, isRanked }: Props) {
         <div className="mb-4">
           <TeamSetup value={teamConfig} onChange={setTeamConfig} locked={team.activeSession} />
         </div>
-        <div>
-          <div className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3 text-center">
-            Tamanho do plano {isRanked && "• 🔒 Travado em 15x15 (Torneio Ranqueado)"}
-          </div>
-          <div className="grid grid-cols-3 gap-3">
-            {SIZE_OPTIONS.map((s) => (
-              <OptionChip
-                key={s}
-                active={planeSize === s}
-                onClick={() => {
-                  if (!isRanked) setPlaneSize(s);
-                }}
-              >
-                {s}x{s} {isRanked && s === 15 ? "🔒" : ""}
-              </OptionChip>
-            ))}
-          </div>
-          <p className="mt-3 text-center text-xs text-muted-foreground">
-            Eixos de −{sizeToRange(planeSize)} a +{sizeToRange(planeSize)}
-          </p>
-        </div>
+        <p className="text-center text-xs text-muted-foreground">
+          O tamanho do plano escala automaticamente conforme você avança de nível: 8×8 (Nível 1) → 10×10 (Nível 2) → 15×15 (Nível 3).
+        </p>
       </StartScreen>
     );
   }
@@ -258,7 +218,7 @@ export function CartesianGame({ onExit, onStatsChange, isRanked }: Props) {
           {question && (
             <CartesianPlane
               points={question.points}
-              range={range}
+              range={rangeForLevel(level)}
               highlightLabel={question.mode === "findPosition" ? question.targetLabel : null}
             />
           )}

@@ -82,7 +82,16 @@ export interface Mode3Question {
   pieces: Piece[];
 }
 
-export type Question = Mode1Question | Mode2Question | Mode3Question;
+export interface Mode4Question {
+  mode: 4;
+  leftColor: ColorName;
+  rightColor: ColorName;
+  pieces: Piece[];
+  leftTargetIds: string[];
+  rightTargetIds: string[];
+}
+
+export type Question = Mode1Question | Mode2Question | Mode3Question | Mode4Question;
 
 const COLORS = Object.keys(COLOR_HEX) as ColorName[];
 
@@ -158,19 +167,46 @@ function genMode3(qInLevel: number, pool: Shape[] = SHAPES): Mode3Question {
   return { mode: 3, slots, pieces: shuffle([...correctPieces, ...extras]) };
 }
 
+/* ---------- Mode 4: dual color separation (left: azul, right: amarelo) ---------- */
+function genMode4(qInLevel: number): Mode4Question {
+  const count = qInLevel <= 1 ? 8 : qInLevel <= 3 ? 12 : 16;
+  const leftColor: ColorName = "azul";
+  const rightColor: ColorName = "amarelo";
+  const others = COLORS.filter((c) => c !== leftColor && c !== rightColor);
+  const leftCount = Math.max(2, Math.min(4, 2 + ri(2)));
+  const rightCount = Math.max(2, Math.min(4, 2 + ri(2)));
+  const distractorCount = Math.max(2, count - leftCount - rightCount);
+
+  const pieces: Piece[] = [];
+  for (let i = 0; i < leftCount; i++) pieces.push(newPiece(undefined, leftColor));
+  for (let i = 0; i < rightCount; i++) pieces.push(newPiece(undefined, rightColor));
+  for (let i = 0; i < distractorCount; i++) pieces.push(newPiece(undefined, rand(others)));
+
+  const shuffled = shuffle(pieces);
+  return {
+    mode: 4,
+    leftColor,
+    rightColor,
+    pieces: shuffled,
+    leftTargetIds: shuffled.filter((p) => p.color === leftColor).map((p) => p.id),
+    rightTargetIds: shuffled.filter((p) => p.color === rightColor).map((p) => p.id),
+  };
+}
+
 /**
  * Level → mode mapping:
- *   1 → cores, 2 → formas, 3 → forma + tamanho,
- *   4+ → formas avançadas (pentágono, losango, hexágono, trapézio, triângulos)
+ *   1 → 1 cor, 2 → 2 cores simultâneas (azul e amarelo),
+ *   3 → formas, 4 → forma + tamanho,
+ *   5+ → formas avançadas (pentágono, losango, hexágono, trapézio, triângulos)
  */
-export function generateQuestion(level: number, qInLevel: number, prevMode?: 1 | 2 | 3): Question {
-  if (level >= 4) {
+export function generateQuestion(level: number, qInLevel: number, prevMode?: 1 | 2 | 3 | 4): Question {
+  if (level >= 5) {
     const pool = ADVANCED_SHAPES;
     const mode: 2 | 3 = prevMode === 2 ? 3 : prevMode === 3 ? 2 : (ri(2) + 2) as 2 | 3;
     return mode === 2 ? genMode2(qInLevel, pool) : genMode3(qInLevel, pool);
   }
-  const mode: 1 | 2 | 3 = level === 1 ? 1 : level === 2 ? 2 : 3;
-  if (mode === 1) return genMode1(qInLevel);
-  if (mode === 2) return genMode2(qInLevel);
+  if (level === 1) return genMode1(qInLevel);
+  if (level === 2) return genMode4(qInLevel);
+  if (level === 3) return genMode2(qInLevel);
   return genMode3(qInLevel);
 }

@@ -1,12 +1,9 @@
 // Content generator for "Campo Minado Lógico" (8x8 board of hidden cards)
 import { type Shape } from "./shapes-content.ts";
 
-/** Formas geométricas gerais (identificação básica sem sobreposição conceitual). */
+/** Formas geométricas (sem figuras simples como círculo, triângulo e quadrado). */
 export const GENERAL_SHAPES: { shape: Shape; label: string }[] = [
-  { shape: "square", label: "Quadrado" },
-  { shape: "circle", label: "Círculo" },
   { shape: "oval", label: "Oval" },
-  { shape: "triangle", label: "Triângulo" },
   { shape: "rectH", label: "Retângulo" },
   { shape: "diamond", label: "Losango" },
   { shape: "pentagon", label: "Pentágono" },
@@ -36,10 +33,10 @@ export const POINTS_WRONG = 3;
 export const ANSWER_SECONDS = 20;
 export const ANSWER_TIME_OPTIONS = [20] as const;
 
-export type CardKind = "tf" | "mystery" | "shape" | "bonus";
+export type CardKind = "tf" | "mystery" | "shape" | "pizza-choice" | "pizza-build" | "bonus";
 
 export interface QuestionCard {
-  kind: "tf" | "mystery" | "shape";
+  kind: "tf" | "mystery" | "shape" | "pizza-choice" | "pizza-build";
   /** Question sentence, shown above the highlighted expression. */
   prompt: string;
   /** Highlighted math expression (optional). */
@@ -47,6 +44,9 @@ export interface QuestionCard {
   options: string[];
   answer: string;
   shape?: Shape;
+  pizzaParts?: number;
+  pizzaFilled?: number;
+  pizzaTarget?: number;
 }
 
 export interface BonusCard {
@@ -62,12 +62,15 @@ export interface MinefieldEvaluation {
   isError: boolean;
 }
 
-/** Avalia a resposta fornecida a uma carta com desafio (V/F, conta misteriosa ou forma). */
+/** Avalia a resposta fornecida a uma carta com desafio. */
 export function evaluateQuestionAnswer(
   card: QuestionCard,
   selectedOption: string,
 ): MinefieldEvaluation {
-  const isCorrect = selectedOption === card.answer;
+  const isCorrect =
+    card.kind === "pizza-build"
+      ? Number(selectedOption) === card.pizzaTarget
+      : selectedOption === card.answer;
   return {
     isCorrect,
     scoreDelta: isCorrect ? POINTS_CORRECT : -POINTS_WRONG,
@@ -191,6 +194,37 @@ export function genShape(): QuestionCard {
   };
 }
 
+/* ---------- Pizza 10 partes (fração e porcentagem) ---------- */
+export function genPizzaChoice(): QuestionCard {
+  const filled = 1 + ri(9);
+  const nums = new Set<number>([filled]);
+  while (nums.size < 4) {
+    nums.add(1 + ri(9));
+  }
+  return {
+    kind: "pizza-choice",
+    prompt: "Qual fração está representada na pizza?",
+    options: shuffle([...nums]).map((n) => `${n}/10`),
+    answer: `${filled}/10`,
+    pizzaParts: 10,
+    pizzaFilled: filled,
+  };
+}
+
+export function genPizzaBuild(): QuestionCard {
+  const target = 1 + ri(9);
+  const usePercent = Math.random() < 0.5;
+  const label = usePercent ? `${target * 10}%` : `${target}/10`;
+  return {
+    kind: "pizza-build",
+    prompt: usePercent ? `Represente ${label} na pizza` : `Represente a fração ${label} na pizza`,
+    options: [],
+    answer: `${target} de 10 partes`,
+    pizzaParts: 10,
+    pizzaTarget: target,
+  };
+}
+
 export function genBonus(): BonusCard {
   const magnitude = 1 + ri(3);
   const positive = Math.random() < 0.6;
@@ -208,9 +242,11 @@ export function buildBoard(): MineCard[] {
     const roll = Math.random();
     const base =
       roll < 0.25 ? genBonus()
-      : roll < 0.47 ? genTF()
-      : roll < 0.72 ? genMystery()
-      : genShape();
+      : roll < 0.43 ? genTF()
+      : roll < 0.63 ? genMystery()
+      : roll < 0.80 ? genShape()
+      : roll < 0.90 ? genPizzaChoice()
+      : genPizzaBuild();
     cards.push({ ...base, id: `c${i}`, label: cellLabel(i) });
   }
   return cards;

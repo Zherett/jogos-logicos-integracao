@@ -77,6 +77,7 @@ export function PercentGame({ onExit, onStatsChange, isRanked }: Props) {
   const [feedback, setFeedback] = useState<"ok" | "bad" | null>(null);
   const [slices, setSlices] = useState<boolean[]>([]);
   const [pizzas, setPizzas] = useState<boolean[][]>([]);
+  const [mixedPizzas, setMixedPizzas] = useState<boolean[][]>([]);
   const [bonusFlash, setBonusFlash] = useState(0);
   const [sliderValues, setSliderValues] = useState<number[]>([]);
   const [sliderResults, setSliderResults] = useState<(boolean | null)[] | null>(null);
@@ -151,7 +152,18 @@ export function PercentGame({ onExit, onStatsChange, isRanked }: Props) {
       setQuestion(q);
       setFracQuestion(null);
       setSlices(q.kind === "pie-build" ? Array.from({ length: q.parts }, () => false) : []);
-      setSliderValues(q.kind === "slider" ? q.targets.map(() => 0) : []);
+      setSliderValues(
+        q.kind === "slider"
+          ? q.targets.map(() => 0)
+          : q.kind === "mixed-build"
+            ? q.bars.map(() => 0)
+            : [],
+      );
+      setMixedPizzas(
+        q.kind === "mixed-build"
+          ? q.pizzas.map((p) => Array.from({ length: p.parts }, () => false))
+          : [],
+      );
       setSliderResults(null);
       setSliderMsg(null);
     }
@@ -261,6 +273,33 @@ export function PercentGame({ onExit, onStatsChange, isRanked }: Props) {
       return;
     }
     setSliderMsg(`${misses}/${question.targets.length} barras incorretas.`);
+    register(false);
+  }
+
+  function toggleMixedPizza(p: number, i: number) {
+    if (!running || !question || question.kind !== "mixed-build" || feedback) return;
+    soundClick();
+    setMixedPizzas((all) => all.map((arr, pi) => (pi === p ? arr.map((v, idx) => (idx === i ? !v : v)) : arr)));
+  }
+
+  function validateMixed() {
+    if (lockRef.current || !running || !question || question.kind !== "mixed-build" || feedback) return;
+    lockRef.current = true;
+    const barRes = question.bars.map((t, i) => (sliderValues[i] ?? 0) === t);
+    const barMisses = barRes.filter((r) => !r).length;
+    const pizzaMisses = question.pizzas.filter(
+      (spec, i) => (mixedPizzas[i]?.filter(Boolean).length ?? 0) !== spec.target,
+    ).length;
+    setSliderResults(barRes);
+    if (barMisses === 0 && pizzaMisses === 0) {
+      setSliderMsg(null);
+      register(true);
+      return;
+    }
+    const parts: string[] = [];
+    if (barMisses > 0) parts.push(`${barMisses} barra(s) incorreta(s)`);
+    if (pizzaMisses > 0) parts.push(`${pizzaMisses} pizza(s) incorreta(s)`);
+    setSliderMsg(parts.join(" • "));
     register(false);
   }
 
@@ -460,6 +499,44 @@ export function PercentGame({ onExit, onStatsChange, isRanked }: Props) {
               )}
               {question?.kind === "word" && (
                 <div className="text-5xl sm:text-6xl">{question.emoji}</div>
+              )}
+              {question?.kind === "mixed-build" && (
+                <div className="flex w-full flex-col items-center gap-4">
+                  <PercentSliders
+                    targets={question.bars}
+                    values={sliderValues}
+                    results={sliderResults ?? undefined}
+                    disabled={!!feedback}
+                    onChange={(i, v) =>
+                      setSliderValues((arr) => arr.map((old, idx) => (idx === i ? v : old)))
+                    }
+                  />
+                  <div className="flex flex-wrap items-start justify-center gap-4">
+                    {question.pizzas.map((spec, pi) => {
+                      const count = mixedPizzas[pi]?.filter(Boolean).length ?? 0;
+                      const state = !feedback ? "idle" : count === spec.target ? "ok" : "bad";
+                      return (
+                        <FractionPizza
+                          key={pi}
+                          parts={spec.parts}
+                          selected={mixedPizzas[pi] ?? []}
+                          onToggle={(i) => toggleMixedPizza(pi, i)}
+                          label={`${spec.pct}% (${spec.parts} partes)`}
+                          state={state}
+                          size={question.pizzas.length >= 2 ? 175 : 200}
+                        />
+                      );
+                    })}
+                  </div>
+                  {sliderMsg && (
+                    <div className="animate-shake-x rounded-2xl bg-destructive/15 px-4 py-2 font-semibold text-destructive">
+                      {sliderMsg}
+                    </div>
+                  )}
+                  <Button size="lg" className="h-12 rounded-2xl px-8 text-base font-bold" onClick={validateMixed} disabled={!!feedback}>
+                    Confirmar
+                  </Button>
+                </div>
               )}
 
               {fracQuestion?.kind === "frac-id" && (

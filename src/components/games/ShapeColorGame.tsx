@@ -50,11 +50,11 @@ interface Props {
 
 export function ShapeColorGame({ onExit, onStatsChange, isRanked }: Props) {
   const [phase, setPhase] = useState<"setup" | "countdown" | "playing">("countdown");
-  const [startLevel, setStartLevel] = useState(isRanked ? 4 : 1);
+  const [startLevel, setStartLevel] = useState(isRanked ? 5 : 1);
 
   useEffect(() => {
     if (isRanked) {
-      setStartLevel(4);
+      setStartLevel(5);
     }
   }, [isRanked]);
   const [lastMatch, setLastMatch] = useState<LastMatch | null>(null);
@@ -73,7 +73,7 @@ export function ShapeColorGame({ onExit, onStatsChange, isRanked }: Props) {
   const [level, setLevel] = useState(1);
   const [qInLevel, setQInLevel] = useState(0);
   const [question, setQuestion] = useState<Question | null>(null);
-  const prevModeRef = useRef<1 | 2 | 3 | undefined>(undefined);
+  const prevModeRef = useRef<1 | 2 | 3 | 4 | undefined>(undefined);
   const solveLockRef = useRef(false);
 
   // Per-question runtime state
@@ -164,7 +164,7 @@ export function ShapeColorGame({ onExit, onStatsChange, isRanked }: Props) {
   function solveQuestion() {
     if (solveLockRef.current) return;
     solveLockRef.current = true;
-    const pts = level >= 4 ? POINTS_CORRECT_L4 : POINTS_CORRECT;
+    const pts = level >= 5 ? POINTS_CORRECT_L4 : POINTS_CORRECT;
     setScore((s) => s + pts);
     setCorrect((c) => c + 1);
     if (bonusOn) clock.addBonus();
@@ -193,6 +193,25 @@ export function ShapeColorGame({ onExit, onStatsChange, isRanked }: Props) {
       if (next.size >= question.targetIds.length) solveQuestion();
     } else {
       registerWrong("m1-dropzone");
+    }
+  }
+
+  function handleMode4Drop(side: "left" | "right", pieceId: string) {
+    if (solveLockRef.current || !question || question.mode !== 4) return;
+    if (droppedIds.has(pieceId)) return;
+    const isTarget = side === "left"
+      ? question.leftTargetIds.includes(pieceId)
+      : question.rightTargetIds.includes(pieceId);
+    if (isTarget) {
+      registerPlacement();
+      const next = new Set(droppedIds);
+      next.add(pieceId);
+      setDroppedIds(next);
+      if (next.size >= question.leftTargetIds.length + question.rightTargetIds.length) {
+        solveQuestion();
+      }
+    } else {
+      registerWrong(side === "left" ? "m4-left" : "m4-right");
     }
   }
 
@@ -296,10 +315,10 @@ export function ShapeColorGame({ onExit, onStatsChange, isRanked }: Props) {
         </div>
         <div>
           <div className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3 text-center">
-            Nível inicial {isRanked && "• 🔒 Travado no Nível 4 (Torneio Ranqueado)"}
+            Nível inicial {isRanked && "• 🔒 Travado no Nível 5 (Torneio Ranqueado)"}
           </div>
-          <div className="grid grid-cols-4 gap-2">
-            {[1, 2, 3, 4].map((n) => (
+          <div className="grid grid-cols-5 gap-2">
+            {[1, 2, 3, 4, 5].map((n) => (
               <OptionChip
                 key={n}
                 active={startLevel === n}
@@ -307,15 +326,16 @@ export function ShapeColorGame({ onExit, onStatsChange, isRanked }: Props) {
                   if (!isRanked) setStartLevel(n);
                 }}
               >
-                {n} {isRanked && n === 4 ? "🔒" : ""}
+                {n} {isRanked && n === 5 ? "🔒" : ""}
               </OptionChip>
             ))}
           </div>
-          <div className="mt-3 grid grid-cols-1 sm:grid-cols-4 gap-2 text-xs text-muted-foreground text-center">
-            <div>1: cores</div>
-            <div>2: formas</div>
-            <div>3: forma + tamanho</div>
-            <div>4+: formas avançadas (15 pts)</div>
+          <div className="mt-3 grid grid-cols-1 sm:grid-cols-5 gap-2 text-xs text-muted-foreground text-center">
+            <div>1: 1 cor</div>
+            <div>2: 2 cores (azul/amarelo)</div>
+            <div>3: formas</div>
+            <div>4: forma + tamanho</div>
+            <div>5+: avançadas (15 pts)</div>
           </div>
         </div>
       </StartScreen>
@@ -363,6 +383,7 @@ export function ShapeColorGame({ onExit, onStatsChange, isRanked }: Props) {
           flashSlot={flashSlot}
           showLevelUp={showLevelUp}
           onMode1Drop={handleMode1Drop}
+          onMode4Drop={handleMode4Drop}
           onMode2Drop={handleMode2Drop}
           onMode3DropToAdjust={handleMode3DropToAdjust}
           onMode3DropToSlot={handleMode3DropToSlot}
@@ -434,6 +455,7 @@ interface PlayProps {
   flashSlot: string | null;
   showLevelUp: number | null;
   onMode1Drop: (pieceId: string) => void;
+  onMode4Drop: (side: "left" | "right", pieceId: string) => void;
   onMode2Drop: (slotId: string, pieceId: string) => void;
   onMode3DropToAdjust: (pieceId: string) => void;
   onMode3DropToSlot: (slotId: string, pieceId: string) => void;
@@ -463,6 +485,9 @@ function PlayArea(p: PlayProps) {
     if (!overId) return;
     if (p.question.mode === 1) {
       if (overId === "m1-dropzone") p.onMode1Drop(pieceId);
+    } else if (p.question.mode === 4) {
+      if (overId === "m4-left") p.onMode4Drop("left", pieceId);
+      else if (overId === "m4-right") p.onMode4Drop("right", pieceId);
     } else if (p.question.mode === 2) {
       if (overId.startsWith("slot-")) p.onMode2Drop(overId.slice(5), pieceId);
     } else {
@@ -485,6 +510,9 @@ function PlayArea(p: PlayProps) {
         )}
         {p.question.mode === 1 && (
           <Mode1View q={p.question} droppedIds={p.droppedIds} flashSlot={p.flashSlot} />
+        )}
+        {p.question.mode === 4 && (
+          <Mode4View q={p.question} droppedIds={p.droppedIds} flashSlot={p.flashSlot} />
         )}
         {p.question.mode === 2 && (
           <Mode2View q={p.question} placed={p.placed} flashSlot={p.flashSlot} />
@@ -569,6 +597,96 @@ function ColorDropZone({ children, flashing }: { children: React.ReactNode; flas
       className={`rounded-3xl border-4 border-dashed p-3 min-h-[110px] grid place-items-center transition-all ${tone}`}
     >
       {children}
+    </div>
+  );
+}
+
+/* -------- Mode 4: dual color separation (left: azul, right: amarelo) -------- */
+function DualColorDropZone({
+  id,
+  color,
+  flashing,
+  children,
+}: {
+  id: string;
+  color: string;
+  flashing: boolean;
+  children: React.ReactNode;
+}) {
+  const { isOver, setNodeRef } = useDroppable({ id });
+  const tone = flashing
+    ? "border-destructive bg-destructive/10 animate-shake-x"
+    : isOver
+      ? "border-primary bg-primary/10 animate-glow-pulse"
+      : "border-primary/40 bg-primary/5";
+  return (
+    <div
+      ref={setNodeRef}
+      className={`rounded-3xl border-4 border-dashed p-3 min-h-[120px] flex flex-col items-center justify-center gap-2 transition-all ${tone}`}
+    >
+      <div className="inline-flex items-center gap-2 font-display text-base sm:text-lg font-extrabold uppercase">
+        <span
+          className="inline-block h-5 w-5 rounded-full border"
+          style={{ background: colorFor(color), borderColor: "rgba(0,0,0,0.2)" }}
+        />
+        {color}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function Mode4View({ q, droppedIds, flashSlot }: {
+  q: Extract<Question, { mode: 4 }>; droppedIds: Set<string>; flashSlot: string | null;
+}) {
+  const leftCollected = q.pieces.filter((p) => droppedIds.has(p.id) && q.leftTargetIds.includes(p.id));
+  const rightCollected = q.pieces.filter((p) => droppedIds.has(p.id) && q.rightTargetIds.includes(p.id));
+  const sc = scaleFor(q.pieces.length);
+  return (
+    <div className="space-y-4">
+      <div className="rounded-3xl border bg-card p-3 sm:p-4 shadow-lg text-center">
+        <div className="text-sm uppercase tracking-wider text-muted-foreground">
+          Separe as duas cores simultaneamente
+        </div>
+        <div className="mt-1 font-display text-lg sm:text-xl font-bold">
+          Esquerda: <span className="text-blue-500 uppercase">{q.leftColor}</span> • Direita:{" "}
+          <span className="text-yellow-500 uppercase">{q.rightColor}</span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <DualColorDropZone id="m4-left" color={q.leftColor} flashing={flashSlot === "m4-left"}>
+          {leftCollected.length === 0 && (
+            <span className="text-muted-foreground text-xs">Solte aqui ({q.leftColor})</span>
+          )}
+          <div className="flex flex-wrap items-center justify-center gap-1.5">
+            {leftCollected.map((pc) => (
+              <div key={pc.id} className="animate-snap-in">
+                <ShapeSvg shape={pc.shape} color={pc.color} size={pc.size} scale={sc * 0.75} />
+              </div>
+            ))}
+          </div>
+        </DualColorDropZone>
+
+        <DualColorDropZone id="m4-right" color={q.rightColor} flashing={flashSlot === "m4-right"}>
+          {rightCollected.length === 0 && (
+            <span className="text-muted-foreground text-xs">Solte aqui ({q.rightColor})</span>
+          )}
+          <div className="flex flex-wrap items-center justify-center gap-1.5">
+            {rightCollected.map((pc) => (
+              <div key={pc.id} className="animate-snap-in">
+                <ShapeSvg shape={pc.shape} color={pc.color} size={pc.size} scale={sc * 0.75} />
+              </div>
+            ))}
+          </div>
+        </DualColorDropZone>
+      </div>
+
+      <Tray>
+        {q.pieces.map((pc) => (
+          <DraggablePiece key={pc.id} piece={pc} disabled={droppedIds.has(pc.id)} scale={sc} />
+        ))}
+      </Tray>
     </div>
   );
 }

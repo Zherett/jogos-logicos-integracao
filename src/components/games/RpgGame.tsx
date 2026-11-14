@@ -15,7 +15,14 @@ import { GameTopBar } from "./GameTopBar";
 import { Countdown } from "./Countdown";
 import { ResultPanel } from "./ResultPanel";
 import { saveLastMatch, updateBest } from "@/lib/game-storage";
-import { playCorrect, playTone, playWrong } from "@/lib/sound";
+import {
+  playCorrect,
+  playRpgAttackHit,
+  playRpgEnemyDefeated,
+  playRpgPlayerHit,
+  playTone,
+  playWrong,
+} from "@/lib/sound";
 import {
   applyClashTick,
   evaluateClashAnswer,
@@ -61,6 +68,8 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
 
   // Visual combat feedback states
   const [enemyHitKind, setEnemyHitKind] = useState<null | "normal" | "super">(null);
+  const [enemyDefeatedAnim, setEnemyDefeatedAnim] = useState(false);
+  const [enemyEnteringAnim, setEnemyEnteringAnim] = useState(false);
   const [playerHitFlash, setPlayerHitFlash] = useState(false);
   const [clashBanner, setClashBanner] = useState<string | null>(null);
 
@@ -69,6 +78,7 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
   const blueShareRef = useRef(INITIAL_BLUE_SHARE);
   const displayedBlueRef = useRef(INITIAL_BLUE_SHARE);
   const stunnedUntilRef = useRef(0);
+  const isTransitioningRef = useRef(false);
   const unlockedMedalRef = useRef<MedalDefinition | null>(null);
   const blueBarRef = useRef<HTMLDivElement | null>(null);
   const redBarRef = useRef<HTMLDivElement | null>(null);
@@ -169,6 +179,9 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
     setCorrectCount(0);
     setWrongCount(0);
     stunnedUntilRef.current = 0;
+    isTransitioningRef.current = false;
+    setEnemyDefeatedAnim(false);
+    setEnemyEnteringAnim(false);
     setStunnedUntil(0);
     setIsStunned(false);
     setClashBanner(null);
@@ -184,7 +197,7 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
     let frameId = 0;
 
     const loop = (now: number) => {
-      if (unlockedMedalRef.current) {
+      if (unlockedMedalRef.current || isTransitioningRef.current) {
         lastTime = now;
         frameId = requestAnimationFrame(loop);
         return;
@@ -201,7 +214,7 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
 
       if (tickRes.redOvertookAll) {
         // Red bar reached 100% on the left! Player robot suffers an overload shock
-        playWrong();
+        playRpgPlayerHit();
         setPlayerHitFlash(true);
         window.setTimeout(() => setPlayerHitFlash(false), 550);
 
@@ -231,7 +244,7 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
 
   const handleAnswer = useCallback(
     (chosen: boolean) => {
-      if (phase !== "playing") return;
+      if (phase !== "playing" || isTransitioningRef.current) return;
       if (performance.now() < stunnedUntilRef.current) return;
 
       const currentBoss = bossRef.current;
@@ -246,7 +259,7 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
       recentAnsRef.current = [...recentAnsRef.current.slice(-8), question.answer];
 
       if (!outcome.isCorrect) {
-        playWrong();
+        playRpgPlayerHit();
         setWrongCount((w) => w + 1);
         setStreak(0);
         setScore((s) => Math.max(0, s + outcome.scoreDelta));
@@ -280,14 +293,13 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
 
       // Correct answer!
       if (outcome.isSuperHit) {
-        playTone(880, 0.12, "triangle");
-        window.setTimeout(() => playTone(1175, 0.22, "sawtooth"), 90);
+        playRpgAttackHit(true);
         setEnemyHitKind("super");
         setClashBanner(
           `⚡ SUPER RAIO AZUL (100%)! Golpe Triplo causou -${SUPER_HIT_DAMAGE} de vida no inimigo!`,
         );
       } else {
-        playCorrect();
+        playRpgAttackHit(false);
         setEnemyHitKind("normal");
         setClashBanner(null);
       }
@@ -306,6 +318,7 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
       const nextScore = Math.max(0, score + outcome.scoreDelta + comboBonus);
 
       if (outcome.enemyDefeated) {
+        playRpgEnemyDefeated();
         // Concede medalha platina se derrotou robô especial e dispara celebração visual
         if (currentBoss.isSpecial) {
           const medalId = currentBoss.specialType === "carmesim" ? "m_rpg_carmesim" : "m_rpg_ametista";
@@ -331,38 +344,46 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
           return;
         }
 
-        // Avança para o próximo robô com 10% de chance de especial (máx 1 por partida)
+        // Congela a barra e exibe transição clara de derrota + entrada do próximo robô
+        isTransitioningRef.current = true;
+        setEnemyHp(0);
+        setEnemyDefeatedAnim(true);
+        setClashBanner(`💥 ${currentBoss.name} DERROTADO! (+${currentBoss.rewardPoints} pts)`);
+
         const nextStage = stage + 1;
         let isSpecial = false;
         if (!specialSpawnedRef.current && Math.random() < 0.10) {
           isSpecial = true;
           specialSpawnedRef.current = true;
         }
-
         const nextBoss = getRobotBoss(nextStage, isSpecial);
-        setBoss(nextBoss);
-        bossRef.current = nextBoss;
-        setStage(nextStage);
-        setEnemyHp(nextBoss.maxHp);
-        applyVisualShare(INITIAL_BLUE_SHARE);
 
-        if (isSpecial) {
-          if (nextBoss.specialType === "carmesim") {
+        window.setTimeout(() => {
+          setEnemyDefeatedAnim(false);
+          setEnemyEnteringAnim(true);
+          setBoss(nextBoss);
+          bossRef.current = nextBoss;
+          setStage(nextStage);
+          setEnemyHp(nextBoss.maxHp);
+          applyVisualShare(INITIAL_BLUE_SHARE);
+
+          if (isSpecial) {
             setClashBanner(
-              `🔥 ALERTA MÁXIMO! Robô Carmesim Lendário avistado! (3x Pontos + 100 Bônus + Medalha Platina)`,
+              nextBoss.specialType === "carmesim"
+                ? `🔥 FASE ${nextStage}: Robô Carmesim Lendário! (HP ${nextBoss.maxHp})`
+                : `✨ FASE ${nextStage}: Robô Ametista Especial! (HP ${nextBoss.maxHp})`,
             );
           } else {
-            setClashBanner(
-              `✨ ALERTA ESPECIAL! Robô Ametista avistado! (2x Pontos + Medalha Platina)`,
-            );
+            setClashBanner(`🤖 FASE ${nextStage}: Novo Inimigo — ${nextBoss.name} (HP ${nextBoss.maxHp})`);
           }
-        } else {
-          setClashBanner(
-            `🏆 ${currentBoss.name} derrotado! (+${currentBoss.rewardPoints} pts) • Prepare-se para a Fase ${nextStage}!`,
-          );
-        }
-        window.setTimeout(() => setClashBanner(null), 3200);
-        nextQuestion(nextStage);
+
+          window.setTimeout(() => {
+            setEnemyEnteringAnim(false);
+            isTransitioningRef.current = false;
+            nextQuestion(nextStage);
+            window.setTimeout(() => setClashBanner(null), 2000);
+          }, 700);
+        }, 700);
         return;
       }
 
@@ -592,15 +613,26 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
               {/* LADO DIREITO: ROBÔ INIMIGO DE FORMAS GEOMÉTRICAS */}
               <div className="flex flex-col items-center shrink-0">
                 <div
-                  className={`relative transition-transform duration-200 ${
-                    enemyHitKind === "super"
-                      ? "translate-x-3 scale-90 brightness-150"
-                      : enemyHitKind === "normal"
-                        ? "translate-x-2 scale-95 brightness-125"
-                        : ""
+                  className={`relative transition-all duration-300 ${
+                    enemyDefeatedAnim
+                      ? "scale-75 rotate-6 opacity-25 grayscale"
+                      : enemyEnteringAnim
+                        ? "animate-pop-in scale-105"
+                        : enemyHitKind === "super"
+                          ? "translate-x-3 scale-90 brightness-150"
+                          : enemyHitKind === "normal"
+                            ? "translate-x-2 scale-95 brightness-125"
+                            : ""
                   }`}
                 >
                   <EnemyGeoRobot boss={boss} hit={enemyHitKind} />
+                  {enemyDefeatedAnim && (
+                    <div className="absolute inset-0 grid place-items-center">
+                      <span className="rounded-xl bg-rose-600/95 px-2.5 py-1 text-[11px] font-black uppercase tracking-wider text-white shadow-lg">
+                        💥 DERROTADO!
+                      </span>
+                    </div>
+                  )}
                   {enemyHitKind && (
                     <span
                       className={`animate-pop-in absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full px-2.5 py-0.5 font-display text-xs font-extrabold shadow-lg ${

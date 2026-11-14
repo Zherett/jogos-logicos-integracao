@@ -8,6 +8,7 @@ import { TeamSetup } from "./TeamSetup";
 import { TeamScoreBar, TeamResults } from "./TeamScoreBar";
 import { SessionSummary } from "./SessionSummary";
 import { ShapeSvg } from "./ShapeSvg";
+import { FractionPizza } from "./percent/FractionPizza";
 import { NORMAL_CONFIG, teamColor, TEAM_COLOR_CLASSES, type TeamConfig } from "@/lib/teams";
 import { GameTopBar } from "./GameTopBar";
 import { useTeamSession } from "@/lib/use-team-session";
@@ -56,6 +57,7 @@ export function MinefieldGame({ onExit, onStatsChange, isRanked }: Props) {
   const [flipping, setFlipping] = useState<string | null>(null);
   const [openCard, setOpenCard] = useState<MineCard | null>(null);
   const [answered, setAnswered] = useState<{ chosen: string; ok: boolean } | null>(null);
+  const [pizzaSlices, setPizzaSlices] = useState<boolean[]>([]);
   const [timeLeft, setTimeLeft] = useState(answerSeconds);
   const [toast, setToast] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
@@ -151,6 +153,11 @@ export function MinefieldGame({ onExit, onStatsChange, isRanked }: Props) {
         answerLockRef.current = false;
         setOpenCard(card);
         setAnswered(null);
+        setPizzaSlices(
+          card.kind === "pizza-build"
+            ? Array.from({ length: card.pizzaParts ?? 10 }, () => false)
+            : [],
+        );
         setTimeLeft(answerSeconds);
         clearTimer();
         timerRef.current = window.setInterval(() => {
@@ -369,6 +376,19 @@ export function MinefieldGame({ onExit, onStatsChange, isRanked }: Props) {
                 </div>
               )}
 
+              {openCard.kind === "pizza-choice" && (
+                <div className="mt-3 grid place-items-center">
+                  <FractionPizza
+                    parts={openCard.pizzaParts ?? 10}
+                    selected={Array.from(
+                      { length: openCard.pizzaParts ?? 10 },
+                      (_, i) => i < (openCard.pizzaFilled ?? 0),
+                    )}
+                    size={170}
+                  />
+                </div>
+              )}
+
               <p className="mt-3 text-center font-display text-lg font-bold text-muted-foreground">
                 {openCard.prompt}
               </p>
@@ -378,28 +398,55 @@ export function MinefieldGame({ onExit, onStatsChange, isRanked }: Props) {
                 </p>
               )}
 
-              <div className="mt-4 grid grid-cols-2 gap-2">
-                {openCard.options.map((o) => {
-                  const chosen = answered?.chosen === o;
-                  const isRight = answered && o === openCard.answer;
-                  const tone = isRight
-                    ? "border-success bg-success/15 text-success"
-                    : chosen
-                      ? "border-destructive bg-destructive/15 text-destructive animate-shake-x"
-                      : "border-border bg-background hover:bg-secondary";
-                  return (
-                    <button
-                      key={o}
-                      type="button"
-                      disabled={!!answered}
-                      onClick={() => answer(o)}
-                      className={`rounded-2xl border-2 px-3 py-3 font-display text-base font-bold transition-all active:scale-95 ${tone}`}
-                    >
-                      {o}
-                    </button>
-                  );
-                })}
-              </div>
+              {openCard.kind === "pizza-build" ? (
+                <div className="mt-3 flex flex-col items-center gap-3">
+                  <FractionPizza
+                    parts={openCard.pizzaParts ?? 10}
+                    selected={pizzaSlices}
+                    onToggle={(i) => {
+                      if (answered) return;
+                      beep(520, 0.04, "sine");
+                      setPizzaSlices((s) => s.map((v, idx) => (idx === i ? !v : v)));
+                    }}
+                    state={!answered ? "idle" : answered.ok ? "ok" : "bad"}
+                    size={180}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Selecionadas: <b className="text-foreground">{pizzaSlices.filter(Boolean).length}</b> de {openCard.pizzaParts ?? 10}
+                  </p>
+                  <Button
+                    type="button"
+                    disabled={!!answered}
+                    onClick={() => answer(String(pizzaSlices.filter(Boolean).length))}
+                    className="h-11 rounded-2xl px-6 font-display text-base font-bold"
+                  >
+                    Confirmar
+                  </Button>
+                </div>
+              ) : (
+                <div className="mt-4 grid grid-cols-2 gap-2">
+                  {openCard.options.map((o) => {
+                    const chosen = answered?.chosen === o;
+                    const isRight = answered && o === openCard.answer;
+                    const tone = isRight
+                      ? "border-success bg-success/15 text-success"
+                      : chosen
+                        ? "border-destructive bg-destructive/15 text-destructive animate-shake-x"
+                        : "border-border bg-background hover:bg-secondary";
+                    return (
+                      <button
+                        key={o}
+                        type="button"
+                        disabled={!!answered}
+                        onClick={() => answer(o)}
+                        className={`rounded-2xl border-2 px-3 py-3 font-display text-base font-bold transition-all active:scale-95 ${tone}`}
+                      >
+                        {o}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
 
               {answered && (
                 <p className="mt-3 text-center text-sm font-bold">

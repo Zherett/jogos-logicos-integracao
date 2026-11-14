@@ -307,6 +307,93 @@ export function stopHourglassTicking() {
   }
 }
 
+/**
+ * Som de golpe acertado no inimigo na Batalha de Robôs (laser + impacto energético)
+ */
+export function playRpgAttackHit(isSuper = false) {
+  if (isSoundMuted()) return;
+  const ctx = getAudioContext();
+  if (!ctx) return;
+  try {
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = isSuper ? "sawtooth" : "triangle";
+    osc.frequency.setValueAtTime(isSuper ? 980 : 680, now);
+    osc.frequency.exponentialRampToValueAtTime(isSuper ? 320 : 240, now + 0.14);
+
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.linearRampToValueAtTime(isSuper ? 0.14 : 0.1, now + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.16);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.18);
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Som de dano sofrido pelo robô do jogador na Batalha de Robôs (choque metálico grave)
+ */
+export function playRpgPlayerHit() {
+  if (isSoundMuted()) return;
+  const ctx = getAudioContext();
+  if (!ctx) return;
+  try {
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(195, now);
+    osc.frequency.exponentialRampToValueAtTime(62, now + 0.28);
+
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.linearRampToValueAtTime(0.14, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.3);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.32);
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Som de robô inimigo derrotado na Batalha de Robôs (explosão + fanfarra curta)
+ */
+export function playRpgEnemyDefeated() {
+  if (isSoundMuted()) return;
+  const ctx = getAudioContext();
+  if (!ctx) return;
+  try {
+    const now = ctx.currentTime;
+    const notes = [392, 523.25, 659.25, 783.99];
+    notes.forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      const start = now + idx * 0.07;
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(freq, start);
+
+      gain.gain.setValueAtTime(0.001, start);
+      gain.gain.linearRampToValueAtTime(0.11, start + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.18);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(start);
+      osc.stop(start + 0.2);
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
 export function playSound(
   type:
     | "correct"

@@ -4,6 +4,8 @@ import {
   genShape,
   genTF,
   genMystery,
+  genPizzaChoice,
+  genPizzaBuild,
   genBonus,
   buildBoard,
   cellLabel,
@@ -227,6 +229,41 @@ describe("Campo Minado - Lógica de Conteúdo e Questões de Formas Geométricas
       assert.equal(correct, 3);
       assert.equal(wrong, 5);
       assert.equal(score, 1);
+    });
+  });
+
+  describe("Formas complexas e Pizza de 10 partes", () => {
+    it("não inclui formas simples (círculo, triângulo, quadrado) em GENERAL_SHAPES", () => {
+      const forbidden = new Set(["circle", "triangle", "square"]);
+      for (const s of GENERAL_SHAPES) {
+        assert.equal(forbidden.has(s.shape), false);
+      }
+      const labels = new Set(GENERAL_SHAPES.map((s) => s.label));
+      assert.ok(labels.has("Pentágono"));
+      assert.ok(labels.has("Hexágono"));
+    });
+
+    it("genPizzaChoice usa pizza de 10 partes com 4 alternativas únicas de fração", () => {
+      for (let i = 0; i < 20; i++) {
+        const q = genPizzaChoice();
+        assert.equal(q.kind, "pizza-choice");
+        assert.equal(q.pizzaParts, 10);
+        assert.ok(q.pizzaFilled && q.pizzaFilled >= 1 && q.pizzaFilled <= 9);
+        assert.equal(q.options.length, 4);
+        assert.equal(new Set(q.options).size, 4);
+        assert.ok(q.options.includes(q.answer));
+      }
+    });
+
+    it("genPizzaBuild usa pizza de 10 partes e evaluateQuestionAnswer valida contagem marcada", () => {
+      for (let i = 0; i < 20; i++) {
+        const q = genPizzaBuild();
+        assert.equal(q.kind, "pizza-build");
+        assert.equal(q.pizzaParts, 10);
+        assert.ok(q.pizzaTarget && q.pizzaTarget >= 1 && q.pizzaTarget <= 9);
+        assert.equal(evaluateQuestionAnswer(q, String(q.pizzaTarget)).isCorrect, true);
+        assert.equal(evaluateQuestionAnswer(q, String(q.pizzaTarget === 1 ? 2 : 1)).isCorrect, false);
+      }
     });
   });
 });

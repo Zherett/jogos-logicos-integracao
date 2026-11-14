@@ -53,11 +53,30 @@ export interface WordQuestion extends BaseQuestion {
   emoji: string;
 }
 
+export interface MixedBuildPizza {
+  parts: 4 | 5 | 10;
+  target: number;
+  pct: number;
+}
+
+export interface MixedBuildQuestion {
+  kind: "mixed-build";
+  id: number;
+  prompt: string;
+  highlight?: string;
+  /** Percentages the player must set on each bar. */
+  bars: number[];
+  /** Pizzas the player must mark to match each percentage. */
+  pizzas: MixedBuildPizza[];
+  tip: string;
+}
+
 export type PercentQuestion =
   | BarQuestion
   | PieQuestion
   | PieBuildQuestion
   | SliderQuestion
+  | MixedBuildQuestion
   | WordQuestion;
 
 export const PERCENTS = [10, 25, 50, 75, 100] as const;
@@ -215,7 +234,48 @@ function makeSliders(): SliderQuestion {
   };
 }
 
-/* ------------------------ Level 4: everyday problems ----------------------- */
+/* ----------------------- Level 4: mixed + everyday ------------------------- */
+
+const MIXED_LAYOUTS: ReadonlyArray<{ bars: number; pizzas: number }> = [
+  { bars: 1, pizzas: 1 },
+  { bars: 2, pizzas: 1 },
+  { bars: 1, pizzas: 2 },
+];
+const MIXED_PARTS = [4, 5, 10] as const;
+let mixedLayoutIdx = 0;
+let mixedPartIdx = 0;
+
+function makeMixedBuild(): MixedBuildQuestion {
+  const layout = MIXED_LAYOUTS[mixedLayoutIdx % MIXED_LAYOUTS.length];
+  mixedLayoutIdx++;
+
+  const bars: number[] = [];
+  while (bars.length < layout.bars) {
+    const v = pick(SLIDER_VALUES);
+    if (!bars.includes(v)) bars.push(v);
+  }
+
+  const pizzas: MixedBuildPizza[] = [];
+  for (let i = 0; i < layout.pizzas; i++) {
+    const parts = MIXED_PARTS[(mixedPartIdx + i) % MIXED_PARTS.length];
+    const target = 1 + Math.floor(Math.random() * (parts - 1));
+    const pct = Math.round((target / parts) * 100);
+    pizzas.push({ parts, target, pct });
+  }
+  mixedPartIdx++;
+
+  const barDesc = bars.map((b) => `Barra ${b}%`).join(" • ");
+  const pizzaDesc = pizzas.map((p) => `Pizza ${p.pct}%`).join(" • ");
+  return {
+    kind: "mixed-build",
+    id: nextId(),
+    prompt: "Ajuste as barras e marque as pizzas conforme a porcentagem",
+    highlight: `${barDesc} | ${pizzaDesc}`,
+    bars,
+    pizzas,
+    tip: `Na pizza de ${pizzas[0].parts} partes, cada fatia vale ${Math.round(100 / pizzas[0].parts)}%.`,
+  };
+}
 
 function makeWord(avoid?: number): WordQuestion {
   const pct = pickAvoid([10, 25, 50, 75] as const, avoid);
@@ -291,6 +351,7 @@ function valueOf(q: PercentQuestion): number | undefined {
   if (q.kind === "pie-build") return (q.target / q.parts) * 100;
   if (q.kind === "bar" || q.kind === "pie") return parseInt(q.answer, 10);
   if (q.kind === "slider") return q.targets[0];
+  if (q.kind === "mixed-build") return q.bars[0];
   const m = q.highlight?.match(/(\d+)%/);
   return m ? parseInt(m[1], 10) : undefined;
 }
@@ -308,7 +369,11 @@ export function makeQuestion(level: PercentLevel, previous?: PercentQuestion): P
     case 1: return makeBar(avoid);
     case 2: return makePie(avoid);
     case 3: return makeSliders();
-    default: return makeWord(avoid);
+    default:
+      if (previous?.kind === "word" || Math.random() < 0.7) {
+        return makeMixedBuild();
+      }
+      return makeWord(avoid);
   }
 }
 

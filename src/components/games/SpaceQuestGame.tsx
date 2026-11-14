@@ -1340,12 +1340,12 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
                           setActiveTargetId(item.instanceId);
                         }
                       }}
-                      className={`absolute -translate-x-1/2 cursor-pointer transition-all duration-75 select-none ${
+                      className={`absolute -translate-x-1/2 cursor-pointer select-none will-change-[top] ${
                         item.isDestroying
-                          ? "scale-90 opacity-20 pointer-events-none"
+                          ? "pointer-events-none"
                           : isTarget
-                            ? "scale-105 z-20"
-                            : "opacity-90 z-10 hover:opacity-100"
+                            ? "z-20"
+                            : "z-10"
                       }`}
                       style={{
                         left: `${item.laneXPercent}%`,
@@ -1353,12 +1353,14 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
                       }}
                     >
                       <div
-                        className={`relative flex flex-col items-center rounded-2xl border-2 px-4 py-2.5 shadow-2xl ${
+                        className={`relative flex flex-col items-center rounded-2xl border-2 px-4 py-2.5 shadow-2xl transition-[transform,opacity] duration-150 ${
                           auraCfg.borderClass
                         } ${
-                          isTarget
-                            ? "ring-2 ring-sky-300 ring-offset-2 ring-offset-neutral-950"
-                            : ""
+                          item.isDestroying
+                            ? "scale-90 opacity-20"
+                            : isTarget
+                              ? "scale-105 ring-2 ring-sky-300 ring-offset-2 ring-offset-neutral-950"
+                              : "opacity-90 hover:opacity-100"
                         }`}
                         style={{
                           backgroundColor: "rgba(15, 23, 42, 0.94)",
