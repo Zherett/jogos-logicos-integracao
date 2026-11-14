@@ -1177,10 +1177,26 @@ export function getAllAvailableMedals(customMedals?: MedalDefinition[]): MedalDe
     cachedBaseMedalsCatalog = buildBaseMedalsCatalog();
   }
   const base = cachedBaseMedalsCatalog;
-  if (!customMedals || customMedals.length === 0) return base;
+  let customs = customMedals;
+  if ((!customs || customs.length === 0) && typeof window !== "undefined") {
+    try {
+      const raw =
+        window.localStorage.getItem("desafios-logica-admin-config-v1") ||
+        window.localStorage.getItem("desafios-remote-admin-config-v1");
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed?.customMedals) && parsed.customMedals.length > 0) {
+          customs = parsed.customMedals;
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  if (!customs || customs.length === 0) return base;
   const map = new Map<string, MedalDefinition>();
   base.forEach((m) => map.set(m.id, m));
-  customMedals.forEach((m) => map.set(m.id, m));
+  customs.forEach((m) => map.set(m.id, m));
   return Array.from(map.values());
 }
 
@@ -2508,8 +2524,9 @@ export function filterMedalsByQuery(
   const terms = q.split(/\s+/).filter(Boolean);
   return medals.filter((m) => {
     const rarityLabel = RARITY_INFO[m.rarity]?.label ?? "";
+    const categoryLabel = CATEGORY_LABELS[m.category] ?? "";
     const haystack = normalizeSearchText(
-      `${m.title} ${m.description} ${m.id} ${m.rarity} ${rarityLabel}`
+      `${m.title ?? ""} ${m.description ?? ""} ${m.id ?? ""} ${m.rarity ?? ""} ${rarityLabel} ${m.category ?? ""} ${categoryLabel}`
     );
     return terms.every((term) => haystack.includes(term));
   });

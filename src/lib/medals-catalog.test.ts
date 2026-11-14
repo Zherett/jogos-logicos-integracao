@@ -2033,5 +2033,33 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
 
     const ametista = filterMedalsByQuery(all, "ametista");
     assert.ok(ametista.some((m) => m.id === "m_rpg_ametista" || m.id === "sq_ametista"));
+
+    // Simula medalha customizada criada manualmente pelo administrador com nível platina
+    const customManualPlatina: MedalDefinition = {
+      id: "custom_adm_platina_123",
+      title: "Gênio da Robótica",
+      description: "Medalha concedida manualmente pelo administrador.",
+      rarity: "platina",
+      category: "evento",
+      iconName: "Award",
+      condition: { type: "manual_event" },
+      isCustom: true,
+      createdByAdmin: true,
+    };
+
+    const allWithCustom = getAllAvailableMedals([customManualPlatina]);
+    assert.ok(allWithCustom.some((m) => m.id === "custom_adm_platina_123"));
+
+    // Busca por termo do título
+    const searchByTitle = filterMedalsByQuery(allWithCustom, "Robótica");
+    assert.ok(searchByTitle.some((m) => m.id === "custom_adm_platina_123"));
+
+    // Busca pela raridade "platina"
+    const searchByPlatina = filterMedalsByQuery(allWithCustom, "platina");
+    assert.ok(searchByPlatina.some((m) => m.id === "custom_adm_platina_123"));
+
+    // Busca por "manual"
+    const searchByManual = filterMedalsByQuery(allWithCustom, "manual");
+    assert.ok(searchByManual.some((m) => m.id === "custom_adm_platina_123"));
   });
 });

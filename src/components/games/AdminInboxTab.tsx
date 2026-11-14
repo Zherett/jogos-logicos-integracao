@@ -70,6 +70,7 @@ import {
 } from "@/lib/scheduled-inbox";
 import { getAllAvailableMedals, RARITY_INFO } from "@/lib/medals-catalog";
 import { MedalPicker } from "./MedalPicker";
+import { loadAdminConfig } from "@/lib/game-codes";
 import { ALL_GAME_IDS, GAME_NAMES, type GameId } from "@/lib/game-storage";
 import { loadSpecialEvents, loadRecurringEvents } from "@/lib/custom-events";
 import {
@@ -407,14 +408,27 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
     );
   };
 
-  // Carrega lista de medalhas disponíveis de forma segura
-  const availableMedals = useMemo(() => {
+  // Carrega medalhas customizadas criadas pelo Administrador
+  const adminCustomMedals = useMemo(() => {
+    if (Array.isArray(auth?.adminConfig?.customMedals) && auth.adminConfig.customMedals.length > 0) {
+      return auth.adminConfig.customMedals;
+    }
     try {
-      return getAllAvailableMedals() || [];
+      const cfg = loadAdminConfig();
+      return Array.isArray(cfg.customMedals) ? cfg.customMedals : [];
     } catch {
       return [];
     }
-  }, []);
+  }, [auth?.adminConfig?.customMedals]);
+
+  // Carrega lista de medalhas disponíveis (base + customizadas do ADM) de forma segura
+  const availableMedals = useMemo(() => {
+    try {
+      return getAllAvailableMedals(adminCustomMedals) || [];
+    } catch {
+      return [];
+    }
+  }, [adminCustomMedals]);
 
   const createEmptyRewardDraft = (): RewardDraftItem => ({
     id: `rew_draft_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
