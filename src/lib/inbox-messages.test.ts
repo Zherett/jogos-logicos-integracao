@@ -26,6 +26,7 @@ import {
   loadCanceledMessageIds,
   saveAllInboxMessages,
   isMessageEligibleForPlayer,
+  getMessageRewards,
 } from "./inbox-messages.ts";
 import type { PlayerProfile } from "./playfab.ts";
 
@@ -911,5 +912,39 @@ describe("Sistema Completo de Caixa de Entrada e Correio (inbox-messages)", () =
       // O XP ganho deve ser exatamente 150 (bonusXpAwarded) e JAMAIS os 500 pointsAmount!
       assert.equal(res.profile.xp, 250);
     });
+  });
+
+  it("permite enviar e resgatar mensagem com múltiplas recompensas (pontos + medalhas)", () => {
+    const student = createTestStudent({ id: "aluno_multi_rew", careerPoints: 50, totalCareerPoints: 50 });
+    const msg = sendAdminBroadcastMessage({
+      mode: "students",
+      targetStudentIds: [student.id],
+      singleStudentId: student.id,
+      title: "Pacote de Prêmios",
+      body: "Você ganhou pontos e medalhas!",
+      rewards: [
+        { type: "points", pointsAmount: 250, isSecret: false },
+        { type: "medal", medalId: "m_rpg_ametista", isSecret: false },
+        { type: "medal", medalId: "sq_safira", isSecret: true },
+      ],
+    });
+
+    const msgRewards = getMessageRewards(msg);
+    assert.equal(msgRewards.length, 3);
+
+    const beforeMsgs = getInboxMessagesForPlayer(student);
+    const found = beforeMsgs.find((m) => m.id === msg.id);
+    assert.equal(getMessageRewards(found).length, 3);
+    assert.equal(getMessageRewards(found).every((r) => !r.claimed), true);
+
+    const claimRes = claimInboxReward(msg.id, student);
+    assert.equal(claimRes.success, true);
+    assert.equal(claimRes.profile.careerPoints, 300);
+    assert.ok(claimRes.profile.unlockedMedals?.some((u) => u.medalId === "m_rpg_ametista"));
+    assert.ok(claimRes.profile.unlockedMedals?.some((u) => u.medalId === "sq_safira"));
+
+    const afterMsgs = getInboxMessagesForPlayer(claimRes.profile);
+    const afterFound = afterMsgs.find((m) => m.id === msg.id);
+    assert.equal(getMessageRewards(afterFound).every((r) => r.claimed), true);
   });
 });

@@ -1,7 +1,7 @@
 import type { PlayerProfile } from "./playfab.ts";
 import { getAllAvailableMedals, type MedalRarity } from "./medals-catalog.ts";
 import { getLocalDateKey } from "./player-profile.ts";
-import { loadAllInboxMessages } from "./inbox-messages.ts";
+import { loadAllInboxMessages, getMessageRewards } from "./inbox-messages.ts";
 import { recordScoreLedgerEntry } from "./score-history-ledger.ts";
 
 /** Pontos concedidos por raridade de medalha */
@@ -487,8 +487,10 @@ export function sanitizeInflatedCareerPoints(
       const msgMap = new Map(allMsgs.map((m) => [m.id, m]));
       for (const mId of profile.claimedInboxRewardIds) {
         const msg = msgMap.get(mId);
-        if (msg?.reward?.type === "points" && (msg.reward.pointsAmount ?? 0) > 0) {
-          claimedInboxPoints += msg.reward.pointsAmount!;
+        for (const r of getMessageRewards(msg)) {
+          if (r.type === "points" && (r.pointsAmount ?? 0) > 0) {
+            claimedInboxPoints += r.pointsAmount!;
+          }
         }
       }
     } catch {

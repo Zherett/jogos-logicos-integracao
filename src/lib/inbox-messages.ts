@@ -68,6 +68,7 @@ export interface SystemInboxMessage {
     linkEventDetails?: boolean;
   }>; // Tags indexadas de eventos: { event: { eventId, ... }, event1: { ... } }
   reward?: InboxReward;
+  rewards?: InboxReward[];
   metadata?: {
     deviceInfo?: string;
     attemptedAt?: string;
@@ -424,6 +425,7 @@ export function createInboxMessage(
     mentionedGames: data.mentionedGames ?? {},
     mentionedEvents: data.mentionedEvents ?? {},
     reward: data.reward,
+    rewards: data.rewards,
     metadata: data.metadata,
     read: false,
     createdAt: data.createdAt ?? new Date().toISOString(),
@@ -476,6 +478,28 @@ export interface AdminBroadcastDraft {
     medalId?: string;
     isSecret: boolean;
   };
+  rewards?: Array<{
+    type: InboxRewardType;
+    pointsAmount?: number;
+    medalId?: string;
+    isSecret: boolean;
+  }>;
+}
+
+/**
+ * Normaliza as recompensas de uma mensagem (suporta `rewards[]` novo e `reward` legado).
+ */
+export function getMessageRewards(
+  msg?: Pick<SystemInboxMessage, "reward" | "rewards"> | null
+): InboxReward[] {
+  if (!msg) return [];
+  if (Array.isArray(msg.rewards) && msg.rewards.length > 0) {
+    return msg.rewards;
+  }
+  if (msg.reward) {
+    return [msg.reward];
+  }
+  return [];
 }
 
 export interface ExtractedInboxTags {
@@ -644,17 +668,26 @@ export function formatInboxMessageText(
  * Cria uma transmissão oficial pelo Administrador para múltiplos ou todos os alunos
  */
 export function sendAdminBroadcastMessage(draft: AdminBroadcastDraft): SystemInboxMessage {
-  let rewardObj: InboxReward | undefined;
-  if (draft.reward && (draft.reward.pointsAmount || draft.reward.medalId)) {
-    rewardObj = {
-      id: `rew_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-      type: draft.reward.type,
-      pointsAmount: draft.reward.pointsAmount,
-      medalId: draft.reward.medalId,
-      isSecret: Boolean(draft.reward.isSecret),
+  const rawRewards =
+    Array.isArray(draft.rewards) && draft.rewards.length > 0
+      ? draft.rewards
+      : draft.reward
+        ? [draft.reward]
+        : [];
+
+  const nowTs = Date.now();
+  const rewardsList: InboxReward[] = rawRewards
+    .filter((r) => (r.pointsAmount && r.pointsAmount > 0) || Boolean(r.medalId) || r.type === "future_item")
+    .map((r, idx) => ({
+      id: `rew_${nowTs}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
+      type: r.type,
+      pointsAmount: r.pointsAmount,
+      medalId: r.medalId,
+      isSecret: Boolean(r.isSecret),
       claimed: false,
-    };
-  }
+    }));
+
+  const rewardObj: InboxReward | undefined = rewardsList[0];
 
   const broadcastFilter: RecipientFilter = {
     school: draft.mode === "school" ? draft.targetSchool : undefined,
@@ -691,6 +724,7 @@ export function sendAdminBroadcastMessage(draft: AdminBroadcastDraft): SystemInb
     mentionedGames: draft.mentionedGames ?? {},
     mentionedEvents: draft.mentionedEvents ?? {},
     reward: rewardObj,
+    rewards: rewardsList.length > 0 ? rewardsList : undefined,
   });
 
   return msg;
@@ -844,21 +878,28 @@ export function getInboxMessagesForPlayer(
         Array.isArray((player as any).claimedInboxRewardIds) &&
         (player as any).claimedInboxRewardIds.includes(raw.id);
 
-      const claimedAt = claimsMap[raw.id] || (isClaimedInProfile ? (raw.reward?.claimedAt || new Date().toISOString()) : undefined);
-      const isClaimed = Boolean(claimedAt || isClaimedInProfile || raw.reward?.claimed);
+      const rawRewards = getMessageRewards(raw);
+      const anyRawClaimed = rawRewards.some((r) => r.claimed);
+      const rawFirstClaimedAt = rawRewards.find((r) => r.claimedAt)?.claimedAt;
+      const claimedAt = claimsMap[raw.id] || (isClaimedInProfile ? (rawFirstClaimedAt || new Date().toISOString()) : undefined);
+      const isClaimed = Boolean(claimedAt || isClaimedInProfile || anyRawClaimed);
+      const resolvedClaimedAt = claimedAt || (isClaimed ? rawFirstClaimedAt || new Date().toISOString() : undefined);
+
+      const clonedRewards: InboxReward[] | undefined = rawRewards.length > 0
+        ? rawRewards.map((r) => ({
+            ...r,
+            claimed: isClaimed,
+            claimedAt: resolvedClaimedAt,
+          }))
+        : undefined;
 
       // Clone com estados locais do aluno
       const cloned: SystemInboxMessage = {
         ...raw,
         read: Boolean(isRead),
         readAt: typeof readVal === "string" ? readVal : raw.readAt,
-        reward: raw.reward
-          ? {
-              ...raw.reward,
-              claimed: isClaimed,
-              claimedAt: claimedAt || (isClaimed ? raw.reward.claimedAt || new Date().toISOString() : undefined),
-            }
-          : undefined,
+        reward: clonedRewards ? clonedRewards[0] : undefined,
+        rewards: clonedRewards,
       };
 
       // REGRA DO USUÁRIO: AUTO-EXCLUSÃO EM 24 HORAS
@@ -1238,7 +1279,8 @@ export function claimInboxReward(
 
   const all = loadAllInboxMessages();
   const msg = all.find((m) => m.id === messageId);
-  if (!msg || !msg.reward) {
+  const rewardsList = getMessageRewards(msg);
+  if (!msg || rewardsList.length === 0) {
     return { success: false, error: "Nenhuma recompensa encontrada nesta mensagem.", profile };
   }
 
@@ -1248,129 +1290,130 @@ export function claimInboxReward(
     }
   }
 
-  if (msg.recipientId !== "ALL" && msg.reward.claimed) {
+  if (msg.recipientId !== "ALL" && rewardsList.every((r) => r.claimed)) {
     return { success: false, error: "Esta recompensa já foi resgatada anteriormente.", profile };
   }
 
-  const reward = msg.reward;
   const nowIso = new Date().toISOString();
 
-  // 1. Conceder Pontos se houver
-  if (reward.type === "points" && reward.pointsAmount && reward.pointsAmount > 0) {
-    awardCareerPoints(profile, reward.pointsAmount, `Recompensa Correio: ${msg.title}`);
-    try {
-      recordScoreLedgerEntry({
-        playerId: profile.id,
-        playerNick: profile.nick,
-        type: "career_points",
-        source: "correio",
-        amount: reward.pointsAmount!,
-        balanceAfter: profile.careerPoints,
-        reason: `Recompensa Postal: ${reward.pointsAmount} Pontos`,
-        metadata: { messageId },
-      });
-    } catch {
-      /* ignore */
-    }
-  }
-
-  // 1.1 Conceder XP direto se houver
-  if (reward.type === "xp" && reward.pointsAmount && reward.pointsAmount > 0) {
-    const xpBonus = reward.pointsAmount;
-    profile.xp = (profile.xp ?? 0) + xpBonus;
-    profile.seasonXp = (profile.seasonXp ?? 0) + xpBonus;
-    profile.level = calculatePlayerLevel({
-      xp: profile.xp,
-      matchesPlayed: profile.matchesPlayed ?? 0,
-      wins: profile.wins ?? 0,
-      distinctGames: profile.distinctGamesPlayed ?? 0,
-    });
-    try {
-      recordScoreLedgerEntry({
-        playerId: profile.id,
-        playerNick: profile.nick,
-        type: "xp",
-        source: "correio",
-        amount: xpBonus,
-        balanceAfter: profile.xp,
-        reason: `Recompensa Postal: +${xpBonus} XP (${msg.title})`,
-        metadata: { messageId },
-      });
-    } catch {
-      /* ignore */
-    }
-  }
-
-  // 2. Conceder Medalha se houver
-  if (reward.type === "medal") {
-    if (reward.medalId) {
-      const allMedals = getAllAvailableMedals();
-      const medalDef = allMedals.find((m) => m.id === reward.medalId);
-      if (medalDef) {
-        if (!Array.isArray(profile.unlockedMedals)) {
-          profile.unlockedMedals = [];
-        }
-        const existing = profile.unlockedMedals.find((u) => u.medalId === reward.medalId);
-        if (!existing) {
-          const newUnlocked: PlayerUnlockedMedal = {
-            medalId: medalDef.id,
-            unlockedAt: nowIso,
-            count: 1,
-            rarity: medalDef.rarity,
-          };
-          profile.unlockedMedals.push(newUnlocked);
-        } else {
-          existing.count = (existing.count ?? 1) + 1;
-        }
-      }
-    }
-
-    // Se houver dados de medalha do torneio ranqueado no itemData
-    const tm = (reward.itemData as any)?.tournamentMedal as TournamentMedal | undefined;
-    if (tm) {
-      profile.tournamentMedals = accumulateTournamentMedal(profile.tournamentMedals ?? [], tm);
-      // Concede exclusivamente o bônus de XP previsto na medalha ranqueada (jamais converte pointsAmount de moedas/loja em XP!)
-      const bonusXp = tm.bonusXpAwarded ?? 0;
-      if (bonusXp > 0) {
-        profile.xp = (profile.xp ?? 0) + bonusXp;
-        profile.seasonXp = (profile.seasonXp ?? 0) + bonusXp;
-        profile.level = calculatePlayerLevel({
-          xp: profile.xp,
-          matchesPlayed: profile.matchesPlayed ?? 0,
-          wins: profile.wins ?? 0,
-          distinctGames: profile.distinctGamesPlayed ?? 0,
-        });
-        try {
-          recordScoreLedgerEntry({
-            playerId: profile.id,
-            playerNick: profile.nick,
-            type: "xp",
-            source: "torneio_semanal",
-            amount: bonusXp,
-            balanceAfter: profile.xp,
-            reason: `Bônus de XP do Torneio Ranqueado (${tm.title})`,
-            metadata: { messageId },
-          });
-        } catch {
-          /* ignore */
-        }
-      }
-    }
-
-    try {
-      if (reward.medalId) {
+  for (const reward of rewardsList) {
+    // 1. Conceder Pontos se houver
+    if (reward.type === "points" && reward.pointsAmount && reward.pointsAmount > 0) {
+      awardCareerPoints(profile, reward.pointsAmount, `Recompensa Correio: ${msg.title}`);
+      try {
         recordScoreLedgerEntry({
           playerId: profile.id,
           playerNick: profile.nick,
-          type: "medal",
+          type: "career_points",
           source: "correio",
-          amount: 1,
-          reason: `Medalha Resgatada da Caixa Postal (${reward.medalId})`,
-          metadata: { messageId, medalId: reward.medalId },
+          amount: reward.pointsAmount!,
+          balanceAfter: profile.careerPoints,
+          reason: `Recompensa Postal: ${reward.pointsAmount} Pontos`,
+          metadata: { messageId, rewardId: reward.id },
         });
+      } catch {
+        /* ignore */
       }
-    } catch {
-      /* ignore */
+    }
+
+    // 1.1 Conceder XP direto se houver
+    if (reward.type === "xp" && reward.pointsAmount && reward.pointsAmount > 0) {
+      const xpBonus = reward.pointsAmount;
+      profile.xp = (profile.xp ?? 0) + xpBonus;
+      profile.seasonXp = (profile.seasonXp ?? 0) + xpBonus;
+      profile.level = calculatePlayerLevel({
+        xp: profile.xp,
+        matchesPlayed: profile.matchesPlayed ?? 0,
+        wins: profile.wins ?? 0,
+        distinctGames: profile.distinctGamesPlayed ?? 0,
+      });
+      try {
+        recordScoreLedgerEntry({
+          playerId: profile.id,
+          playerNick: profile.nick,
+          type: "xp",
+          source: "correio",
+          amount: xpBonus,
+          balanceAfter: profile.xp,
+          reason: `Recompensa Postal: +${xpBonus} XP (${msg.title})`,
+          metadata: { messageId, rewardId: reward.id },
+        });
+      } catch {
+        /* ignore */
+      }
+    }
+
+    // 2. Conceder Medalha se houver
+    if (reward.type === "medal") {
+      if (reward.medalId) {
+        const allMedals = getAllAvailableMedals();
+        const medalDef = allMedals.find((m) => m.id === reward.medalId);
+        if (medalDef) {
+          if (!Array.isArray(profile.unlockedMedals)) {
+            profile.unlockedMedals = [];
+          }
+          const existing = profile.unlockedMedals.find((u) => u.medalId === reward.medalId);
+          if (!existing) {
+            const newUnlocked: PlayerUnlockedMedal = {
+              medalId: medalDef.id,
+              unlockedAt: nowIso,
+              count: 1,
+              rarity: medalDef.rarity,
+            };
+            profile.unlockedMedals.push(newUnlocked);
+          } else {
+            existing.count = (existing.count ?? 1) + 1;
+          }
+        }
+      }
+
+      // Se houver dados de medalha do torneio ranqueado no itemData
+      const tm = (reward.itemData as any)?.tournamentMedal as TournamentMedal | undefined;
+      if (tm) {
+        profile.tournamentMedals = accumulateTournamentMedal(profile.tournamentMedals ?? [], tm);
+        // Concede exclusivamente o bônus de XP previsto na medalha ranqueada (jamais converte pointsAmount de moedas/loja em XP!)
+        const bonusXp = tm.bonusXpAwarded ?? 0;
+        if (bonusXp > 0) {
+          profile.xp = (profile.xp ?? 0) + bonusXp;
+          profile.seasonXp = (profile.seasonXp ?? 0) + bonusXp;
+          profile.level = calculatePlayerLevel({
+            xp: profile.xp,
+            matchesPlayed: profile.matchesPlayed ?? 0,
+            wins: profile.wins ?? 0,
+            distinctGames: profile.distinctGamesPlayed ?? 0,
+          });
+          try {
+            recordScoreLedgerEntry({
+              playerId: profile.id,
+              playerNick: profile.nick,
+              type: "xp",
+              source: "torneio_semanal",
+              amount: bonusXp,
+              balanceAfter: profile.xp,
+              reason: `Bônus de XP do Torneio Ranqueado (${tm.title})`,
+              metadata: { messageId, rewardId: reward.id },
+            });
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+
+      try {
+        if (reward.medalId) {
+          recordScoreLedgerEntry({
+            playerId: profile.id,
+            playerNick: profile.nick,
+            type: "medal",
+            source: "correio",
+            amount: 1,
+            reason: `Medalha Resgatada da Caixa Postal (${reward.medalId})`,
+            metadata: { messageId, medalId: reward.medalId, rewardId: reward.id },
+          });
+        }
+      } catch {
+        /* ignore */
+      }
     }
   }
 
@@ -1402,14 +1445,20 @@ export function claimInboxReward(
 
   // Se a mensagem for direta (não ALL), atualiza o objeto global da mensagem
   if (msg.recipientId !== "ALL") {
-    reward.claimed = true;
-    reward.claimedAt = nowIso;
+    for (const r of rewardsList) {
+      r.claimed = true;
+      r.claimedAt = nowIso;
+    }
+    if (msg.reward) {
+      msg.reward.claimed = true;
+      msg.reward.claimedAt = nowIso;
+    }
     saveAllInboxMessages(all);
   }
 
   return {
     success: true,
-    reward: { ...reward, claimed: true, claimedAt: nowIso },
+    reward: { ...rewardsList[0], claimed: true, claimedAt: nowIso },
     profile,
   };
 }
@@ -1431,9 +1480,12 @@ export function deleteInboxMessageForPlayer(
   }
 
   // Se a mensagem tiver recompensa, verificar se o aluno já resgatou
-  if (msg.reward) {
+  const msgRewards = getMessageRewards(msg);
+  if (msgRewards.length > 0) {
     const claims = loadStudentMap(STUDENT_CLAIMS_KEY, memoryStudentClaims);
-    const hasClaimed = Boolean(claims[pId]?.[messageId] || (msg.recipientId !== "ALL" && msg.reward.claimed));
+    const hasClaimed = Boolean(
+      claims[pId]?.[messageId] || (msg.recipientId !== "ALL" && msgRewards.every((r) => r.claimed))
+    );
     if (!hasClaimed) {
       return {
         success: false,
@@ -1475,7 +1527,8 @@ export function getInboxCountsForPlayer(
 
   for (const m of msgs) {
     if (!m.read) unreadCount++;
-    if (m.reward && !m.reward.claimed) unclaimedRewardsCount++;
+    const mRewards = getMessageRewards(m);
+    if (mRewards.some((r) => !r.claimed)) unclaimedRewardsCount++;
   }
 
   return {

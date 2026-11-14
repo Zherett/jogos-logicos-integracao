@@ -2486,3 +2486,31 @@ export function calculateMedalProgress(
       return { percent: 0, progressText: medal.description };
   }
 }
+
+function normalizeSearchText(value: string): string {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
+}
+
+/**
+ * Filtra medalhas por título, descrição, ID ou raridade (ex: "prata", "ouro", "platina").
+ */
+export function filterMedalsByQuery(
+  medals: MedalDefinition[],
+  query: string
+): MedalDefinition[] {
+  const q = normalizeSearchText(query);
+  if (!q) return medals;
+
+  const terms = q.split(/\s+/).filter(Boolean);
+  return medals.filter((m) => {
+    const rarityLabel = RARITY_INFO[m.rarity]?.label ?? "";
+    const haystack = normalizeSearchText(
+      `${m.title} ${m.description} ${m.id} ${m.rarity} ${rarityLabel}`
+    );
+    return terms.every((term) => haystack.includes(term));
+  });
+}

@@ -51,8 +51,10 @@ import {
   validateMessageTags,
   cancelInboxMessage,
   loadCanceledMessageIds,
+  getMessageRewards,
   type SystemInboxMessage,
   type AdminBroadcastDraft,
+  type InboxReward,
 } from "@/lib/inbox-messages";
 import {
   loadScheduledInboxRules,
@@ -67,6 +69,7 @@ import {
   type ScheduleRecurrenceType,
 } from "@/lib/scheduled-inbox";
 import { getAllAvailableMedals, RARITY_INFO } from "@/lib/medals-catalog";
+import { MedalPicker } from "./MedalPicker";
 import { ALL_GAME_IDS, GAME_NAMES, type GameId } from "@/lib/game-storage";
 import { loadSpecialEvents, loadRecurringEvents } from "@/lib/custom-events";
 import {
@@ -196,12 +199,24 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
     }
   }, []);
 
-  // Configurações de Recompensa
-  const [hasReward, setHasReward] = useState(false);
-  const [rewardType, setRewardType] = useState<"points" | "medal" | "future_item">("points");
-  const [rewardPoints, setRewardPoints] = useState<number>(100);
-  const [selectedMedalId, setSelectedMedalId] = useState<string>("");
-  const [isSecretReward, setIsSecretReward] = useState<boolean>(false);
+  // Configurações de Múltiplas Recompensas (Envio Imediato)
+  type RewardDraftItem = {
+    id: string;
+    type: "points" | "medal" | "future_item";
+    pointsAmount: number;
+    medalId: string;
+    isSecret: boolean;
+  };
+  const [rewardsList, setRewardsList] = useState<RewardDraftItem[]>([]);
+
+  // Modal de Confirmação com Pré-visualização antes do envio
+  const [pendingSendConfirm, setPendingSendConfirm] = useState<{
+    draft: AdminBroadcastDraft;
+    previewMsg: SystemInboxMessage;
+    recipientSummary: string;
+    recipientCount: number;
+  } | null>(null);
+  const [isSendingConfirmed, setIsSendingConfirmed] = useState(false);
 
   // ABA DO COMPOSITOR: Envio Imediato ("immediate") ou Mensagens Programadas ("scheduled")
   const [inboxTab, setInboxTab] = useState<"immediate" | "scheduled">("immediate");
@@ -231,11 +246,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
 
   // Tags dinamicamente detectadas no texto da mensagem programada
   const schedDetectedTags = useMemo(() => extractInboxTags(schedBody), [schedBody]);
-  const [schedHasReward, setSchedHasReward] = useState<boolean>(false);
-  const [schedRewardType, setSchedRewardType] = useState<"points" | "medal" | "future_item">("points");
-  const [schedRewardPoints, setSchedRewardPoints] = useState<number>(100);
-  const [schedSelectedMedalId, setSchedSelectedMedalId] = useState<string>("");
-  const [schedIsSecretReward, setSchedIsSecretReward] = useState<boolean>(false);
+  const [schedRewardsList, setSchedRewardsList] = useState<RewardDraftItem[]>([]);
 
   // Histórico de mensagens enviadas e visualizador de leituras
   const [sentHistory, setSentHistory] = useState<SystemInboxMessage[]>([]);
@@ -405,12 +416,21 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
     }
   }, []);
 
-  // Define medalha padrão caso vazio
-  useEffect(() => {
-    if (!selectedMedalId && availableMedals.length > 0) {
-      setSelectedMedalId(availableMedals[0].id);
-    }
-  }, [availableMedals, selectedMedalId]);
+  const createEmptyRewardDraft = (): RewardDraftItem => ({
+    id: `rew_draft_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    type: "points",
+    pointsAmount: 100,
+    medalId: availableMedals[0]?.id ?? "",
+    isSecret: false,
+  });
+
+  const toBroadcastRewards = (items: RewardDraftItem[]) =>
+    items.map((item) => ({
+      type: item.type,
+      pointsAmount: item.type === "points" ? Number(item.pointsAmount) || 50 : undefined,
+      medalId: item.type === "medal" ? item.medalId || availableMedals[0]?.id : undefined,
+      isSecret: item.isSecret,
+    }));
 
   // Carrega histórico de mensagens enviadas
   const refreshHistory = () => {
@@ -698,8 +718,8 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
     setTimeout(() => setCopiedTag(null), 2000);
   };
 
-  // Envio da Mensagem
-  const handleSendMessage = async () => {
+  // Prepara e abre modal de confirmação com pré-visualização antes do envio
+  const handlePrepareSendMessage = () => {
     if (!title.trim()) {
       alert("Por favor, informe o título da mensagem.");
       return;
@@ -787,6 +807,8 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
       ? "students"
       : recipientMode;
 
+    const convertedRewards = toBroadcastRewards(rewardsList);
+
     const draft: AdminBroadcastDraft = {
       mode: effectiveMode,
       targetSchool: effectiveMode === "school" ? selectedSchool : undefined,
@@ -804,47 +826,112 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
       linkEventDetails: linkEventDetails,
       mentionedGames: Object.keys(effectiveGames).length > 0 ? effectiveGames : undefined,
       mentionedEvents: Object.keys(effectiveEvents).length > 0 ? effectiveEvents : undefined,
-      reward: hasReward
-        ? {
-            type: rewardType,
-            pointsAmount: rewardType === "points" ? Number(rewardPoints) || 50 : undefined,
-            medalId: rewardType === "medal" ? selectedMedalId : undefined,
-            isSecret: isSecretReward,
-          }
-        : undefined,
+      reward: convertedRewards[0],
+      rewards: convertedRewards.length > 0 ? convertedRewards : undefined,
     };
 
-    const sent = sendAdminBroadcastMessage(draft);
+    const simulatedRewards: InboxReward[] = convertedRewards.map((r, idx) => ({
+      id: `preview_rew_${idx}`,
+      type: r.type,
+      pointsAmount: r.pointsAmount,
+      medalId: r.medalId,
+      isSecret: r.isSecret,
+      claimed: false,
+    }));
 
-    // Sincroniza imediatamente com PlayFab Cloud através de PlatformAdminConfig
-    const allMsgs = loadAllInboxMessages();
-    try {
-      await auth.updateAdminConfig({
-        ...auth.adminConfig,
-        inboxMessages: allMsgs.slice(0, 50),
-      });
-    } catch (err) {
-      console.warn("Aviso ao salvar configuração remota:", err);
+    const previewMsg: SystemInboxMessage = {
+      id: "preview_pending",
+      recipientId: isSingleStudent ? selectedStudents[0].nick || selectedStudents[0].id : "ALL",
+      recipientFilter: {
+        school: draft.targetSchool,
+        stage: draft.targetStage,
+        targetStudentIds: draft.targetStudentIds,
+        excludedStudentIds: draft.excludedStudentIds,
+      },
+      sender: "adm",
+      senderName: "Administração SEMED",
+      category: simulatedRewards.length > 0 ? "recompensa_especial" : "comunicado",
+      title: draft.title,
+      body: draft.body,
+      gifLinks: draft.gifLinks,
+      imageLinks: draft.imageLinks,
+      mentionedGameId: draft.mentionedGameId,
+      mentionedEventId: draft.mentionedEventId,
+      mentionedEventTitle: draft.mentionedEventTitle,
+      linkEventDetails: draft.linkEventDetails,
+      mentionedGames: draft.mentionedGames,
+      mentionedEvents: draft.mentionedEvents,
+      reward: simulatedRewards[0],
+      rewards: simulatedRewards.length > 0 ? simulatedRewards : undefined,
+      read: false,
+      createdAt: new Date().toISOString(),
+    };
+
+    const recipientCount = selectedStudents.length;
+    let recipientSummary = `Todos os Alunos da Rede (${recipientCount} aluno(s))`;
+    if (effectiveMode === "school") {
+      recipientSummary = `Escola: ${selectedSchool} (${recipientCount} aluno(s))`;
+    } else if (effectiveMode === "stage") {
+      recipientSummary = `Etapa: ${selectedStage} (${recipientCount} aluno(s))`;
+    } else if (effectiveMode === "students") {
+      const namesPreview = selectedStudents
+        .slice(0, 4)
+        .map((s) => s.fullName || s.nick)
+        .join(", ");
+      const extra = recipientCount > 4 ? ` e mais ${recipientCount - 4}` : "";
+      recipientSummary =
+        recipientCount === 1
+          ? `Aluno específico: ${namesPreview}`
+          : `${recipientCount} aluno(s) selecionado(s): ${namesPreview}${extra}`;
     }
 
-    refreshHistory();
+    setPendingSendConfirm({
+      draft,
+      previewMsg,
+      recipientSummary,
+      recipientCount,
+    });
+  };
 
-    const recipientCount = selectedStudentIds.size;
-    const msgFeedback = `✅ Mensagem "${sent.title}" transmitida com sucesso para ${recipientCount} aluno(s)!`;
-    onBroadcastSent?.(msgFeedback);
+  // Confirma e efetiva o envio após revisão no modal
+  const handleConfirmSendMessage = async () => {
+    if (!pendingSendConfirm || isSendingConfirmed) return;
+    setIsSendingConfirmed(true);
+    try {
+      const { draft, recipientCount } = pendingSendConfirm;
+      const sent = sendAdminBroadcastMessage(draft);
 
-    // Limpa campos do compositor e seleção
-    setTitle("");
-    setBody("");
-    setMediaList([]);
-    setSelectedMentionGame("");
-    setMentionedGames({});
-    setSelectedMentionEventId("");
-    setMentionedEvents({});
-    setLinkEventDetails(true);
-    setHasReward(false);
-    setIsSecretReward(false);
-    setSelectedStudentIds(new Set());
+      // Sincroniza imediatamente com PlayFab Cloud através de PlatformAdminConfig
+      const allMsgs = loadAllInboxMessages();
+      try {
+        await auth.updateAdminConfig({
+          ...auth.adminConfig,
+          inboxMessages: allMsgs.slice(0, 50),
+        });
+      } catch (err) {
+        console.warn("Aviso ao salvar configuração remota:", err);
+      }
+
+      refreshHistory();
+
+      const msgFeedback = `✅ Mensagem "${sent.title}" transmitida com sucesso para ${recipientCount} aluno(s)!`;
+      onBroadcastSent?.(msgFeedback);
+
+      // Limpa campos do compositor, fecha confirmação e limpa seleção
+      setPendingSendConfirm(null);
+      setTitle("");
+      setBody("");
+      setMediaList([]);
+      setSelectedMentionGame("");
+      setMentionedGames({});
+      setSelectedMentionEventId("");
+      setMentionedEvents({});
+      setLinkEventDetails(true);
+      setRewardsList([]);
+      setSelectedStudentIds(new Set());
+    } finally {
+      setIsSendingConfirmed(false);
+    }
   };
 
   // Mídias indexadas para o formulário de Mensagem Programada
@@ -946,8 +1033,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
     setSchedMentionEventId("");
     setSchedMentionEvents({});
     setSchedLinkEventDetails(true);
-    setSchedHasReward(false);
-    setSchedIsSecretReward(false);
+    setSchedRewardsList([]);
   };
 
   const handleSaveScheduledRule = async () => {
@@ -1054,14 +1140,8 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
       linkEventDetails: schedLinkEventDetails,
       mentionedGames: Object.keys(effectiveGames).length > 0 ? effectiveGames : undefined,
       mentionedEvents: Object.keys(effectiveEvents).length > 0 ? effectiveEvents : undefined,
-      reward: schedHasReward
-        ? {
-            type: schedRewardType,
-            pointsAmount: schedRewardType === "points" ? Number(schedRewardPoints) || 50 : undefined,
-            medalId: schedRewardType === "medal" ? schedSelectedMedalId : undefined,
-            isSecret: schedIsSecretReward,
-          }
-        : undefined,
+      reward: schedRewardsList.length > 0 ? toBroadcastRewards(schedRewardsList)[0] : undefined,
+      rewards: schedRewardsList.length > 0 ? toBroadcastRewards(schedRewardsList) : undefined,
       lastTriggeredAt: existingRule?.lastTriggeredAt,
       lastTriggeredCycleKey: existingRule?.lastTriggeredCycleKey,
       lastTriggeredMessageId: existingRule?.lastTriggeredMessageId,
@@ -1127,15 +1207,21 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
     }
     setSchedMediaList(media);
 
-    if (rule.reward) {
-      setSchedHasReward(true);
-      setSchedRewardType(rule.reward.type);
-      if (rule.reward.pointsAmount) setSchedRewardPoints(rule.reward.pointsAmount);
-      if (rule.reward.medalId) setSchedSelectedMedalId(rule.reward.medalId);
-      setSchedIsSecretReward(Boolean(rule.reward.isSecret));
-    } else {
-      setSchedHasReward(false);
-    }
+    const existingRewards =
+      Array.isArray(rule.rewards) && rule.rewards.length > 0
+        ? rule.rewards
+        : rule.reward
+          ? [rule.reward]
+          : [];
+    setSchedRewardsList(
+      existingRewards.map((r, idx) => ({
+        id: `edit_rew_${idx}_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`,
+        type: r.type,
+        pointsAmount: r.pointsAmount ?? 100,
+        medalId: r.medalId ?? availableMedals[0]?.id ?? "",
+        isSecret: Boolean(r.isSecret),
+      }))
+    );
 
     setRecipientMode(rule.recipientMode);
     if (rule.targetSchool) setSelectedSchool(rule.targetSchool);
@@ -1930,147 +2016,210 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
 
             {/* SEÇÃO DE RECOMPENSAS */}
             <div className="space-y-3 rounded-2xl border-2 border-primary/20 bg-primary/5 p-4">
-              <div className="flex items-center justify-between">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
-                  <Gift className="h-5 w-5 text-amber-500 animate-bounce" />
+                  <Gift className="h-5 w-5 text-amber-500" />
                   <div>
                     <span className="font-display text-xs font-bold text-foreground block">
                       Anexar Recompensa à Mensagem
                     </span>
                     <span className="text-[10px] text-muted-foreground">
-                      O aluno receberá um botão para resgatar o prêmio dentro do correio
+                      Adicione uma ou mais recompensas (pontos, medalhas) para o aluno resgatar no correio
                     </span>
                   </div>
                 </div>
-                <Switch
-                  checked={hasReward}
-                  onCheckedChange={setHasReward}
-                  className="data-[state=checked]:bg-primary"
-                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setRewardsList((prev) => [...prev, createEmptyRewardDraft()])}
+                  className="h-8 rounded-xl text-xs font-bold gap-1.5 cursor-pointer bg-amber-500/15 border-amber-500/40 text-amber-700 dark:text-amber-300 hover:bg-amber-500 hover:text-zinc-950"
+                >
+                  <Plus className="h-3.5 w-3.5" /> Adicionar Recompensa
+                </Button>
               </div>
 
-              {hasReward && (
-                <div className="space-y-3.5 pt-2 border-t border-primary/10">
-                  {/* TIPO DE RECOMPENSA */}
-                  <div className="space-y-1.5">
-                    <Label className="text-xs font-bold text-foreground">Tipo de Recompensa</Label>
-                    <div className="grid grid-cols-3 gap-1.5 rounded-xl bg-background p-1 border">
-                      <button
-                        type="button"
-                        onClick={() => setRewardType("points")}
-                        className={`flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-bold transition-all ${
-                          rewardType === "points"
-                            ? "bg-amber-500 text-zinc-950 shadow-xs"
-                            : "text-muted-foreground hover:text-foreground"
-                        }`}
-                      >
-                        <Coins className="h-3.5 w-3.5" /> Pontos
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setRewardType("medal")}
-                        className={`flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-bold transition-all ${
-                          rewardType === "medal"
-                            ? "bg-primary text-primary-foreground shadow-xs"
-                            : "text-muted-foreground hover:text-foreground"
-                        }`}
-                      >
-                        <Award className="h-3.5 w-3.5" /> Medalha
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setRewardType("future_item")}
-                        className={`flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-bold transition-all ${
-                          rewardType === "future_item"
-                            ? "bg-secondary text-foreground shadow-xs"
-                            : "text-muted-foreground hover:text-foreground"
-                        }`}
-                      >
-                        <Package className="h-3.5 w-3.5" /> Novo Item
-                      </button>
-                    </div>
-                  </div>
+              {rewardsList.length === 0 ? (
+                <p className="text-[11px] text-muted-foreground">
+                  Nenhuma recompensa anexada. Clique em <b>&quot;+ Adicionar Recompensa&quot;</b> para incluir pontos ou medalhas nesta mensagem.
+                </p>
+              ) : (
+                <div className="space-y-3 pt-2 border-t border-primary/10">
+                  {rewardsList.map((rew, idx) => (
+                    <div
+                      key={rew.id}
+                      className="space-y-3 rounded-xl border bg-background/95 p-3.5 shadow-xs"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-black uppercase tracking-wider text-primary">
+                          Recompensa #{idx + 1}
+                        </span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() =>
+                            setRewardsList((prev) => prev.filter((item) => item.id !== rew.id))
+                          }
+                          className="h-7 px-2 text-muted-foreground hover:text-destructive rounded-lg cursor-pointer text-xs gap-1"
+                          title="Remover esta recompensa"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" /> Remover
+                        </Button>
+                      </div>
 
-                  {/* CONFIGURAÇÃO ESPECÍFICA DO TIPO */}
-                  {rewardType === "points" && (
-                    <div className="space-y-1.5">
-                      <Label htmlFor="reward-points" className="text-xs font-bold text-foreground">
-                        Quantidade de Pontos de Carreira
-                      </Label>
-                      <div className="flex items-center gap-2">
-                        <Input
-                          id="reward-points"
-                          type="number"
-                          min={10}
-                          max={5000}
-                          step={10}
-                          value={rewardPoints}
-                          onChange={(e) => setRewardPoints(Math.max(1, Number(e.target.value)))}
-                          className="h-10 rounded-xl font-bold text-sm w-36"
+                      {/* TIPO DE RECOMPENSA */}
+                      <div className="grid grid-cols-3 gap-1.5 rounded-xl bg-secondary/40 p-1 border">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setRewardsList((prev) =>
+                              prev.map((item) =>
+                                item.id === rew.id ? { ...item, type: "points" } : item
+                              )
+                            )
+                          }
+                          className={`flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-bold transition-all cursor-pointer ${
+                            rew.type === "points"
+                              ? "bg-amber-500 text-zinc-950 shadow-xs"
+                              : "text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          <Coins className="h-3.5 w-3.5" /> Pontos
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setRewardsList((prev) =>
+                              prev.map((item) =>
+                                item.id === rew.id
+                                  ? {
+                                      ...item,
+                                      type: "medal",
+                                      medalId: item.medalId || availableMedals[0]?.id || "",
+                                    }
+                                  : item
+                              )
+                            )
+                          }
+                          className={`flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-bold transition-all cursor-pointer ${
+                            rew.type === "medal"
+                              ? "bg-primary text-primary-foreground shadow-xs"
+                              : "text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          <Award className="h-3.5 w-3.5" /> Medalha
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setRewardsList((prev) =>
+                              prev.map((item) =>
+                                item.id === rew.id ? { ...item, type: "future_item" } : item
+                              )
+                            )
+                          }
+                          className={`flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-bold transition-all cursor-pointer ${
+                            rew.type === "future_item"
+                              ? "bg-secondary text-foreground shadow-xs"
+                              : "text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          <Package className="h-3.5 w-3.5" /> Novo Item
+                        </button>
+                      </div>
+
+                      {/* CONFIGURAÇÃO ESPECÍFICA DO TIPO */}
+                      {rew.type === "points" && (
+                        <div className="space-y-1.5">
+                          <Label className="text-xs font-bold text-foreground">
+                            Quantidade de Pontos de Carreira
+                          </Label>
+                          <div className="flex items-center gap-2">
+                            <Input
+                              type="number"
+                              min={10}
+                              max={5000}
+                              step={10}
+                              value={rew.pointsAmount}
+                              onChange={(e) =>
+                                setRewardsList((prev) =>
+                                  prev.map((item) =>
+                                    item.id === rew.id
+                                      ? { ...item, pointsAmount: Math.max(1, Number(e.target.value)) }
+                                      : item
+                                  )
+                                )
+                              }
+                              className="h-10 rounded-xl font-bold text-sm w-36"
+                            />
+                            <span className="text-xs text-muted-foreground">
+                              Adicionados ao saldo do aluno.
+                            </span>
+                          </div>
+                        </div>
+                      )}
+
+                      {rew.type === "medal" && (
+                        <div className="space-y-1.5">
+                          <Label className="text-xs font-bold text-foreground">
+                            Medalha a Conceder
+                          </Label>
+                          <MedalPicker
+                            medals={availableMedals}
+                            value={rew.medalId}
+                            onChange={(medalId) =>
+                              setRewardsList((prev) =>
+                                prev.map((item) =>
+                                  item.id === rew.id ? { ...item, medalId } : item
+                                )
+                              )
+                            }
+                          />
+                        </div>
+                      )}
+
+                      {rew.type === "future_item" && (
+                        <div className="rounded-xl border border-dashed border-primary/40 bg-background/50 p-3 text-center space-y-1">
+                          <Package className="h-5 w-5 text-primary mx-auto opacity-70" />
+                          <div className="text-xs font-bold text-foreground">
+                            Módulo de Itens Futuros (Reservado)
+                          </div>
+                        </div>
+                      )}
+
+                      {/* TOGGLE DE RECOMPENSA SECRETA */}
+                      <div className="flex items-center justify-between rounded-xl border bg-secondary/20 p-2.5">
+                        <div className="flex items-center gap-2">
+                          <Lock className="h-4 w-4 text-amber-500" />
+                          <div>
+                            <span className="font-display text-xs font-bold text-foreground block">
+                              Tornar Recompensa Secreta
+                            </span>
+                            <span className="text-[10px] text-muted-foreground">
+                              O aluno precisará revelar o presente antes de abrir
+                            </span>
+                          </div>
+                        </div>
+                        <Switch
+                          checked={rew.isSecret}
+                          onCheckedChange={(checked) =>
+                            setRewardsList((prev) =>
+                              prev.map((item) =>
+                                item.id === rew.id ? { ...item, isSecret: checked } : item
+                              )
+                            )
+                          }
+                          className="data-[state=checked]:bg-amber-500"
                         />
-                        <span className="text-xs text-muted-foreground">
-                          Serão adicionados diretamente ao saldo de pontos do aluno.
-                        </span>
                       </div>
                     </div>
-                  )}
-
-                  {rewardType === "medal" && (
-                    <div className="space-y-1.5">
-                      <Label htmlFor="reward-medal" className="text-xs font-bold text-foreground">
-                        Medalha a Conceder
-                      </Label>
-                      <select
-                        id="reward-medal"
-                        value={selectedMedalId}
-                        onChange={(e) => setSelectedMedalId(e.target.value)}
-                        className="h-10 w-full rounded-xl border bg-background px-3 text-xs font-bold"
-                      >
-                        {availableMedals.map((m) => (
-                          <option key={m.id} value={m.id}>
-                            [{m.rarity.toUpperCase()}] {m.title} — {m.description}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-
-                  {rewardType === "future_item" && (
-                    <div className="rounded-xl border border-dashed border-primary/40 bg-background/50 p-3 text-center space-y-1">
-                      <Package className="h-6 w-6 text-primary mx-auto opacity-70" />
-                      <div className="text-xs font-bold text-foreground">
-                        Módulo de Itens Futuros (Reservado)
-                      </div>
-                      <div className="text-[11px] text-muted-foreground">
-                        Esta área já está isolada e estruturada para expansões de inventário e itens especiais que serão adicionados futuramente à plataforma.
-                      </div>
-                    </div>
-                  )}
-
-                  {/* TOGGLE DE RECOMPENSA SECRETA */}
-                  <div className="flex items-center justify-between rounded-xl border bg-background/80 p-3">
-                    <div className="flex items-center gap-2.5">
-                      <Lock className="h-4 w-4 text-amber-500" />
-                      <div>
-                        <span className="font-display text-xs font-bold text-foreground block">
-                          Tornar Recompensa Secreta
-                        </span>
-                        <span className="text-[10px] text-muted-foreground">
-                          O aluno terá que pressionar para carregar a barra de revelação antes de abrir o prêmio
-                        </span>
-                      </div>
-                    </div>
-                    <Switch
-                      checked={isSecretReward}
-                      onCheckedChange={setIsSecretReward}
-                      className="data-[state=checked]:bg-amber-500"
-                    />
-                  </div>
+                  ))}
 
                   <div className="text-[11px] text-amber-600 dark:text-amber-400 font-medium flex items-center gap-1.5">
                     <AlertCircle className="h-3.5 w-3.5 shrink-0" />
                     <span>
-                      Regra do Sistema: O aluno só poderá excluir esta mensagem após resgatar a recompensa.
+                      Regra do Sistema: O aluno só poderá excluir esta mensagem após resgatar as recompensas.
                     </span>
                   </div>
                 </div>
@@ -2081,7 +2230,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
             <Button
               type="button"
               size="lg"
-              onClick={() => void handleSendMessage()}
+              onClick={handlePrepareSendMessage}
               className="h-12 w-full rounded-2xl font-display text-sm font-extrabold gap-2 shadow-lg cursor-pointer"
             >
               <Send className="h-4 w-4" /> Transmitir Mensagem para {selectedStudentIds.size} Aluno(s)
@@ -2652,102 +2801,166 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
             </div>
 
             {/* RECOMPENSAS DA MENSAGEM PROGRAMADA */}
-            <div className="space-y-3.5 rounded-2xl border bg-secondary/30 p-3.5">
-              <div className="flex items-center justify-between">
+            <div className="space-y-3 rounded-2xl border bg-secondary/30 p-3.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <Gift className="h-4 w-4 text-amber-500" />
                   <span className="font-display text-xs font-bold text-foreground">
                     Anexar Recompensa na Mensagem Programada
                   </span>
                 </div>
-                <Switch
-                  checked={schedHasReward}
-                  onCheckedChange={setSchedHasReward}
-                  aria-label="Ativar recompensa na mensagem programada"
-                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSchedRewardsList((prev) => [...prev, createEmptyRewardDraft()])}
+                  className="h-8 rounded-xl text-xs font-bold gap-1.5 cursor-pointer bg-amber-500/15 border-amber-500/40 text-amber-700 dark:text-amber-300 hover:bg-amber-500 hover:text-zinc-950"
+                >
+                  <Plus className="h-3.5 w-3.5" /> Adicionar Recompensa
+                </Button>
               </div>
 
-              {schedHasReward && (
-                <div className="space-y-3.5 border-t border-border/50 pt-3">
-                  <div className="grid grid-cols-2 gap-1.5 rounded-2xl bg-secondary/50 p-1">
-                    <button
-                      type="button"
-                      onClick={() => setSchedRewardType("points")}
-                      className={`flex items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-bold transition-all cursor-pointer ${
-                        schedRewardType === "points"
-                          ? "bg-primary text-primary-foreground shadow-sm"
-                          : "text-muted-foreground hover:text-foreground"
-                      }`}
+              {schedRewardsList.length === 0 ? (
+                <p className="text-[11px] text-muted-foreground">
+                  Nenhuma recompensa anexada. Clique em <b>&quot;+ Adicionar Recompensa&quot;</b> para incluir prêmios nesta mensagem programada.
+                </p>
+              ) : (
+                <div className="space-y-3 border-t border-border/50 pt-3">
+                  {schedRewardsList.map((rew, idx) => (
+                    <div
+                      key={rew.id}
+                      className="space-y-3 rounded-xl border bg-background p-3 shadow-xs"
                     >
-                      <Coins className="h-3.5 w-3.5" /> Pontos / Moedas
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSchedRewardType("medal")}
-                      className={`flex items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-bold transition-all cursor-pointer ${
-                        schedRewardType === "medal"
-                          ? "bg-primary text-primary-foreground shadow-sm"
-                          : "text-muted-foreground hover:text-foreground"
-                      }`}
-                    >
-                      <Award className="h-3.5 w-3.5" /> Medalha
-                    </button>
-                  </div>
-
-                  {schedRewardType === "points" && (
-                    <div className="space-y-1.5">
-                      <Label className="text-xs font-bold text-foreground">
-                        Quantidade de Pontos de Carreira
-                      </Label>
-                      <Input
-                        type="number"
-                        min={10}
-                        max={10000}
-                        step={10}
-                        value={schedRewardPoints}
-                        onChange={(e) => setSchedRewardPoints(Math.max(1, Number(e.target.value) || 0))}
-                        className="h-10 rounded-xl font-mono font-bold text-sm"
-                      />
-                    </div>
-                  )}
-
-                  {schedRewardType === "medal" && (
-                    <div className="space-y-1.5">
-                      <Label className="text-xs font-bold text-foreground">
-                        Selecione a Medalha a Conceder
-                      </Label>
-                      <select
-                        value={schedSelectedMedalId}
-                        onChange={(e) => setSchedSelectedMedalId(e.target.value)}
-                        className="w-full h-10 rounded-xl border bg-background px-3 text-xs font-bold"
-                      >
-                        {availableMedals.map((m) => {
-                          const rarity = RARITY_INFO[m.rarity] || RARITY_INFO.ouro;
-                          return (
-                            <option key={m.id} value={m.id}>
-                              🏅 {m.title} — [{rarity.label.toUpperCase()}]
-                            </option>
-                          );
-                        })}
-                      </select>
-                    </div>
-                  )}
-
-                  <div className="flex items-center justify-between rounded-xl bg-background/50 p-2.5 border">
-                    <div className="space-y-0.5">
-                      <div className="text-xs font-bold text-foreground flex items-center gap-1.5">
-                        <Sparkles className="h-3.5 w-3.5 text-amber-500" /> Recompensa Secreta
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-black uppercase tracking-wider text-primary">
+                          Recompensa #{idx + 1}
+                        </span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() =>
+                            setSchedRewardsList((prev) => prev.filter((item) => item.id !== rew.id))
+                          }
+                          className="h-7 px-2 text-muted-foreground hover:text-destructive rounded-lg cursor-pointer text-xs gap-1"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" /> Remover
+                        </Button>
                       </div>
-                      <p className="text-[10px] text-muted-foreground">
-                        O aluno só descobrirá o prêmio ao clicar no presente misterioso.
-                      </p>
+
+                      <div className="grid grid-cols-2 gap-1.5 rounded-2xl bg-secondary/50 p-1">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setSchedRewardsList((prev) =>
+                              prev.map((item) =>
+                                item.id === rew.id ? { ...item, type: "points" } : item
+                              )
+                            )
+                          }
+                          className={`flex items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-bold transition-all cursor-pointer ${
+                            rew.type === "points"
+                              ? "bg-primary text-primary-foreground shadow-sm"
+                              : "text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          <Coins className="h-3.5 w-3.5" /> Pontos / Moedas
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setSchedRewardsList((prev) =>
+                              prev.map((item) =>
+                                item.id === rew.id
+                                  ? {
+                                      ...item,
+                                      type: "medal",
+                                      medalId: item.medalId || availableMedals[0]?.id || "",
+                                    }
+                                  : item
+                              )
+                            )
+                          }
+                          className={`flex items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-bold transition-all cursor-pointer ${
+                            rew.type === "medal"
+                              ? "bg-primary text-primary-foreground shadow-sm"
+                              : "text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          <Award className="h-3.5 w-3.5" /> Medalha
+                        </button>
+                      </div>
+
+                      {rew.type === "points" && (
+                        <div className="space-y-1.5">
+                          <Label className="text-xs font-bold text-foreground">
+                            Quantidade de Pontos de Carreira
+                          </Label>
+                          <Input
+                            type="number"
+                            min={10}
+                            max={10000}
+                            step={10}
+                            value={rew.pointsAmount}
+                            onChange={(e) =>
+                              setSchedRewardsList((prev) =>
+                                prev.map((item) =>
+                                  item.id === rew.id
+                                    ? {
+                                        ...item,
+                                        pointsAmount: Math.max(1, Number(e.target.value) || 0),
+                                      }
+                                    : item
+                                )
+                              )
+                            }
+                            className="h-10 rounded-xl font-mono font-bold text-sm"
+                          />
+                        </div>
+                      )}
+
+                      {rew.type === "medal" && (
+                        <div className="space-y-1.5">
+                          <Label className="text-xs font-bold text-foreground">
+                            Selecione a Medalha a Conceder
+                          </Label>
+                          <MedalPicker
+                            medals={availableMedals}
+                            value={rew.medalId}
+                            onChange={(medalId) =>
+                              setSchedRewardsList((prev) =>
+                                prev.map((item) =>
+                                  item.id === rew.id ? { ...item, medalId } : item
+                                )
+                              )
+                            }
+                          />
+                        </div>
+                      )}
+
+                      <div className="flex items-center justify-between rounded-xl bg-secondary/20 p-2.5 border">
+                        <div className="space-y-0.5">
+                          <div className="text-xs font-bold text-foreground flex items-center gap-1.5">
+                            <Sparkles className="h-3.5 w-3.5 text-amber-500" /> Recompensa Secreta
+                          </div>
+                          <p className="text-[10px] text-muted-foreground">
+                            O aluno só descobrirá o prêmio ao clicar no presente misterioso.
+                          </p>
+                        </div>
+                        <Switch
+                          checked={rew.isSecret}
+                          onCheckedChange={(checked) =>
+                            setSchedRewardsList((prev) =>
+                              prev.map((item) =>
+                                item.id === rew.id ? { ...item, isSecret: checked } : item
+                              )
+                            )
+                          }
+                          aria-label="Ativar recompensa secreta"
+                        />
+                      </div>
                     </div>
-                    <Switch
-                      checked={schedIsSecretReward}
-                      onCheckedChange={setSchedIsSecretReward}
-                      aria-label="Ativar recompensa secreta"
-                    />
-                  </div>
+                  ))}
                 </div>
               )}
             </div>
@@ -3518,8 +3731,12 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                   {renderPreviewBody(previewMessage)}
                 </div>
 
-                {/* Recompensa Anexa (se houver) */}
-                {previewMessage.reward && (
+                {/* Recompensas Anexas (se houver) */}
+                {(() => {
+                  const previewRewards = getMessageRewards(previewMessage);
+                  if (previewRewards.length === 0) return null;
+                  const anySecret = previewRewards.some((r) => r.isSecret);
+                  return (
                   <div className="rounded-2xl border-2 border-amber-500/40 bg-gradient-to-br from-amber-500/15 via-amber-500/5 to-transparent p-4 sm:p-5 space-y-3.5 shadow-md">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
@@ -3528,12 +3745,14 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                         </span>
                         <div>
                           <h3 className="font-display text-sm sm:text-base font-black text-foreground">
-                            {previewMessage.reward.isSecret
+                            {anySecret
                               ? "Presente Misterioso do ADM"
-                              : "Recompensa Especial Anexa"}
+                              : previewRewards.length > 1
+                                ? `${previewRewards.length} Recompensas Especiais Anexas`
+                                : "Recompensa Especial Anexa"}
                           </h3>
                           <p className="text-xs text-muted-foreground">
-                            {previewMessage.reward.isSecret
+                            {anySecret
                               ? "O aluno verá o efeito de revelação misteriosa ao abrir"
                               : "Disponível para coletar na conta do aluno"}
                           </p>
@@ -3545,55 +3764,55 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                       </span>
                     </div>
 
-                    <div className="rounded-xl border bg-background/90 p-3.5 flex flex-col sm:flex-row items-center justify-between gap-3">
-                      <div className="flex items-center gap-3">
-                        {previewMessage.reward.type === "points" && (
-                          <div className="grid h-11 w-11 place-items-center rounded-xl bg-amber-500/20 text-2xl font-black shrink-0">
-                            🪙
-                          </div>
-                        )}
-                        {previewMessage.reward.type === "medal" && (
-                          <div className="grid h-11 w-11 place-items-center rounded-xl bg-primary/20 text-2xl shrink-0">
-                            🏅
-                          </div>
-                        )}
+                    <div className="space-y-2">
+                      {previewRewards.map((rew, idx) => (
+                        <div key={rew.id || idx} className="rounded-xl border bg-background/90 p-3.5 flex items-center gap-3">
+                          {rew.type === "points" && (
+                            <div className="grid h-10 w-10 place-items-center rounded-xl bg-amber-500/20 text-xl font-black shrink-0">
+                              🪙
+                            </div>
+                          )}
+                          {rew.type === "medal" && (
+                            <div className="grid h-10 w-10 place-items-center rounded-xl bg-primary/20 text-xl shrink-0">
+                              🏅
+                            </div>
+                          )}
+                          {rew.type === "future_item" && (
+                            <div className="grid h-10 w-10 place-items-center rounded-xl bg-secondary text-xl shrink-0">
+                              📦
+                            </div>
+                          )}
 
-                        <div>
-                          <div className="font-display text-sm sm:text-base font-black text-foreground">
-                            {previewMessage.reward.type === "points" && (
-                              <span>+{previewMessage.reward.pointsAmount} Pontos Conquistados</span>
-                            )}
-                            {previewMessage.reward.type === "medal" && (() => {
-                              const itemData = previewMessage.reward?.itemData as any;
-                              const tourMedal = itemData?.tournamentMedal;
-                              if (tourMedal?.label) {
-                                return <span>{tourMedal.label}</span>;
-                              }
-                              const def = availableMedals.find((m) => m.id === previewMessage.reward?.medalId);
-                              return <span>Medalha: {def ? def.title : previewMessage.reward.medalId}</span>;
-                            })()}
-                          </div>
-                          <div className="text-xs text-muted-foreground">
-                            {previewMessage.reward.type === "points"
-                              ? "Pontos creditados na carteira e Hall da Fama"
-                              : (previewMessage.reward?.itemData as any)?.tournamentMedal
-                                ? `+${(previewMessage.reward?.itemData as any).tournamentMedal.bonusXpAwarded ?? 0} XP Extra e Medalha de Pódio Oficial`
-                                : "Adicionada à galeria de medalhas do aluno"}
+                          <div>
+                            <div className="font-display text-sm font-black text-foreground">
+                              {rew.type === "points" && (
+                                <span>+{rew.pointsAmount} Pontos Conquistados</span>
+                              )}
+                              {rew.type === "medal" && (() => {
+                                const itemData = rew.itemData as any;
+                                const tourMedal = itemData?.tournamentMedal;
+                                if (tourMedal?.label) {
+                                  return <span>{tourMedal.label}</span>;
+                                }
+                                const def = availableMedals.find((m) => m.id === rew.medalId);
+                                return <span>Medalha: {def ? def.title : rew.medalId}</span>;
+                              })()}
+                              {rew.type === "future_item" && <span>Item Especial</span>}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {rew.type === "points"
+                                ? "Pontos creditados na carteira e Hall da Fama"
+                                : (rew.itemData as any)?.tournamentMedal
+                                  ? `+${(rew.itemData as any).tournamentMedal.bonusXpAwarded ?? 0} XP Extra e Medalha de Pódio Oficial`
+                                  : "Adicionada à galeria de medalhas do aluno"}
+                            </div>
                           </div>
                         </div>
-                      </div>
-
-                      <Button
-                        type="button"
-                        size="sm"
-                        disabled
-                        className="w-full sm:w-auto rounded-xl font-display font-black bg-amber-500/80 text-zinc-950 opacity-90 cursor-default shadow-xs"
-                      >
-                        <Gift className="h-4 w-4 mr-1.5" /> Botão do Aluno: Resgatar Recompensa
-                      </Button>
+                      ))}
                     </div>
                   </div>
-                )}
+                  );
+                })()}
               </div>
 
               {/* Rodapé de Ações do Administrador */}
@@ -3621,6 +3840,130 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                   className="rounded-xl text-xs font-bold cursor-pointer"
                 >
                   Fechar Visualização
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* MODAL DE CONFIRMAÇÃO E PRÉ-VISUALIZAÇÃO ANTES DE TRANSMITIR */}
+      <Dialog
+        open={Boolean(pendingSendConfirm)}
+        onOpenChange={(open) => {
+          if (!open && !isSendingConfirmed) setPendingSendConfirm(null);
+        }}
+      >
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          {pendingSendConfirm && (
+            <div className="space-y-4">
+              <DialogHeader className="border-b pb-3">
+                <div className="flex items-center gap-2">
+                  <span className="grid h-8 w-8 place-items-center rounded-xl bg-amber-500/15 text-amber-500">
+                    <Eye className="h-4 w-4" />
+                  </span>
+                  <div>
+                    <DialogTitle className="font-display text-base sm:text-lg font-black text-foreground">
+                      Confirmar Transmissão da Mensagem
+                    </DialogTitle>
+                    <p className="text-[11px] text-muted-foreground">
+                      Revise os destinatários e a pré-visualização antes de enviar para os alunos
+                    </p>
+                  </div>
+                </div>
+              </DialogHeader>
+
+              {/* Resumo dos destinatários */}
+              <div className="rounded-2xl bg-secondary/40 border px-4 py-3 text-xs space-y-1">
+                <div className="flex items-center gap-2">
+                  <Users className="h-4 w-4 text-primary shrink-0" />
+                  <span className="font-bold text-muted-foreground">Para quem será enviada:</span>
+                </div>
+                <div className="font-extrabold text-foreground pl-6">
+                  {pendingSendConfirm.recipientSummary}
+                </div>
+              </div>
+
+              {/* Pré-visualização da mensagem */}
+              <div className="space-y-4 rounded-3xl border border-slate-200 dark:border-border/80 bg-slate-50/70 dark:bg-card/60 p-4 sm:p-5 shadow-inner">
+                <div className="rounded-2xl border border-slate-200 dark:border-border bg-white dark:bg-secondary/40 p-4 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 border border-primary/30 px-2.5 py-0.5 text-xs font-extrabold text-primary">
+                      Administração SEMED
+                    </span>
+                    <span className="text-xs text-muted-foreground font-medium flex items-center gap-1">
+                      <Clock className="h-3.5 w-3.5" /> Prévia do Envio
+                    </span>
+                  </div>
+                  <h2 className="font-display text-xl sm:text-2xl font-black text-slate-900 dark:text-foreground">
+                    {pendingSendConfirm.previewMsg.title}
+                  </h2>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 dark:border-border bg-white dark:bg-card p-5 shadow-xs text-slate-800 dark:text-foreground">
+                  {renderPreviewBody(pendingSendConfirm.previewMsg)}
+                </div>
+
+                {(() => {
+                  const rewards = getMessageRewards(pendingSendConfirm.previewMsg);
+                  if (rewards.length === 0) return null;
+                  return (
+                    <div className="rounded-2xl border-2 border-amber-500/40 bg-gradient-to-br from-amber-500/15 via-amber-500/5 to-transparent p-4 space-y-2.5">
+                      <div className="flex items-center gap-2 font-display text-xs font-black text-foreground uppercase tracking-wider">
+                        <Gift className="h-4 w-4 text-amber-500" />
+                        {rewards.length} Recompensa(s) Anexada(s)
+                      </div>
+                      <div className="space-y-2">
+                        {rewards.map((rew, idx) => (
+                          <div
+                            key={rew.id || idx}
+                            className="rounded-xl border bg-background/90 p-3 flex items-center justify-between gap-2 text-xs"
+                          >
+                            <div className="flex items-center gap-2 font-bold text-foreground">
+                              <span>
+                                {rew.type === "points"
+                                  ? `🪙 +${rew.pointsAmount} Pontos`
+                                  : rew.type === "medal"
+                                    ? `🏅 Medalha: ${
+                                        availableMedals.find((m) => m.id === rew.medalId)?.title ??
+                                        rew.medalId
+                                      }`
+                                    : "📦 Item Especial"}
+                              </span>
+                            </div>
+                            {rew.isSecret && (
+                              <span className="rounded-full bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 text-[10px] font-bold text-amber-600 dark:text-amber-400">
+                                Secreta
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              <div className="flex flex-wrap items-center justify-end gap-2 pt-2 border-t">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={isSendingConfirmed}
+                  onClick={() => setPendingSendConfirm(null)}
+                  className="rounded-xl text-xs font-bold cursor-pointer"
+                >
+                  Cancelar e Continuar Editando
+                </Button>
+                <Button
+                  type="button"
+                  disabled={isSendingConfirmed}
+                  onClick={() => void handleConfirmSendMessage()}
+                  className="rounded-xl text-xs font-extrabold gap-1.5 cursor-pointer shadow-md"
+                >
+                  <Send className="h-3.5 w-3.5" />
+                  {isSendingConfirmed
+                    ? "Transmitindo..."
+                    : `Confirmar e Enviar para ${pendingSendConfirm.recipientCount} Aluno(s)`}
                 </Button>
               </div>
             </div>

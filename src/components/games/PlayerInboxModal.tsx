@@ -22,6 +22,7 @@ import {
   markInboxMessageAsRead,
   markAllInboxMessagesAsReadForRecipient,
   claimInboxReward,
+  getMessageRewards,
   deleteInboxMessageForPlayer,
   formatInboxMessageText,
   type SystemInboxMessage,
@@ -100,13 +101,15 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
   const filteredMessages = useMemo(() => {
     return messages.filter((m) => {
       if (filterTab === "unread") return !m.read;
-      if (filterTab === "rewards") return Boolean(m.reward && !m.reward.claimed);
+      if (filterTab === "rewards") return getMessageRewards(m).some((r) => !r.claimed);
       return true;
     });
   }, [messages, filterTab]);
 
   const unreadCount = messages.filter((m) => !m.read).length;
-  const unclaimedRewardsCount = messages.filter((m) => m.reward && !m.reward.claimed).length;
+  const unclaimedRewardsCount = messages.filter((m) =>
+    getMessageRewards(m).some((r) => !r.claimed)
+  ).length;
 
   const handleSelectMessage = (msg: SystemInboxMessage) => {
     setSelectedMessageId(msg.id);
@@ -450,7 +453,7 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                   filteredMessages.map((msg) => {
                     const isSelected = selectedMessageId === msg.id;
                     const isUnread = !msg.read;
-                    const hasUnclaimedReward = msg.reward && !msg.reward.claimed;
+                    const hasUnclaimedReward = getMessageRewards(msg).some((r) => !r.claimed);
 
                     return (
                       <div
@@ -582,7 +585,15 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                   </div>
 
                   {/* Seção de Recompensa Anexa (se houver) */}
-                  {activeMessage.reward && (
+                  {(() => {
+                    const activeRewards = getMessageRewards(activeMessage);
+                    if (activeRewards.length === 0) return null;
+                    const allClaimed = activeRewards.every((r) => r.claimed);
+                    const hasSecret = activeRewards.some((r) => r.isSecret);
+                    const firstClaimedAt = activeRewards.find((r) => r.claimedAt)?.claimedAt;
+                    const firstSecret = activeRewards.find((r) => r.isSecret) ?? activeRewards[0];
+
+                    return (
                     <div className="rounded-3xl border-2 border-amber-500/40 bg-gradient-to-br from-amber-500/15 via-amber-500/5 to-transparent p-5 space-y-4 shadow-md">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
@@ -591,23 +602,27 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                           </span>
                           <div>
                             <h3 className="font-display text-sm sm:text-base font-black text-foreground">
-                              {activeMessage.reward.claimed
-                                ? "Recompensa Resgatada"
-                                : activeMessage.reward.isSecret
+                              {allClaimed
+                                ? activeRewards.length > 1
+                                  ? "Recompensas Resgatadas"
+                                  : "Recompensa Resgatada"
+                                : hasSecret
                                   ? "Presente Misterioso do ADM"
-                                  : "Recompensa Especial Anexa"}
+                                  : activeRewards.length > 1
+                                    ? `${activeRewards.length} Recompensas Especiais Anexas`
+                                    : "Recompensa Especial Anexa"}
                             </h3>
                             <p className="text-xs text-muted-foreground">
-                              {activeMessage.reward.claimed
+                              {allClaimed
                                 ? `Resgatada com sucesso!`
-                                : activeMessage.reward.isSecret
+                                : hasSecret
                                   ? "Descubra qual surpresa foi enviada para você"
                                   : "Disponível para coletar na sua conta"}
                             </p>
                           </div>
                         </div>
 
-                        {activeMessage.reward.claimed && (
+                        {allClaimed && (
                           <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-3 py-1 text-xs font-black text-emerald-600 dark:text-emerald-400">
                             <CheckCircle2 className="h-4 w-4" /> Resgatado
                           </span>
@@ -615,20 +630,20 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                       </div>
 
                       {/* Estado: Já Resgatada */}
-                      {activeMessage.reward.claimed ? (
+                      {allClaimed ? (
                         <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-700 dark:text-emerald-300 flex items-center gap-2">
                           <CheckCircle2 className="h-4 w-4 shrink-0" />
                           <span>
-                            Você já resgatou esta recompensa em{" "}
+                            Você já resgatou {activeRewards.length > 1 ? "estas recompensas" : "esta recompensa"} em{" "}
                             <b>
-                              {activeMessage.reward.claimedAt
-                                ? new Date(activeMessage.reward.claimedAt).toLocaleString("pt-BR")
+                              {firstClaimedAt
+                                ? new Date(firstClaimedAt).toLocaleString("pt-BR")
                                 : "data recente"}
                             </b>
                             .
                           </span>
                         </div>
-                      ) : activeMessage.reward.isSecret ? (
+                      ) : hasSecret ? (
                         /* Estado: Recompensa Secreta Pendente */
                         <div className="rounded-2xl border border-dashed border-amber-500/50 bg-background/80 p-5 text-center space-y-3">
                           <div className="mx-auto grid h-14 w-14 place-items-center rounded-3xl bg-amber-500/20 text-3xl ring-2 ring-amber-500/30">
@@ -656,7 +671,7 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                           ) : (
                             <Button
                               size="lg"
-                              onClick={() => handleStartSecretReveal(activeMessage.reward!)}
+                              onClick={() => handleStartSecretReveal(firstSecret)}
                               className="rounded-2xl font-display font-black bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-zinc-950 shadow-lg"
                             >
                               <Sparkles className="h-4 w-4 mr-2" /> Revelar Recompensa
@@ -664,66 +679,78 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                           )}
                         </div>
                       ) : (
-                        /* Estado: Recompensa Normal Visível */
-                        <div className="rounded-2xl border bg-background/90 p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
-                          <div className="flex items-center gap-3">
-                            {activeMessage.reward.type === "points" && (
-                              <div className="grid h-12 w-12 place-items-center rounded-2xl bg-amber-500/20 text-2xl font-black">
-                                🪙
-                              </div>
-                            )}
-                            {activeMessage.reward.type === "medal" && (
-                              <div className="grid h-12 w-12 place-items-center rounded-2xl bg-primary/20 text-2xl">
-                                🏅
-                              </div>
-                            )}
+                        /* Estado: Recompensas Normais Visíveis */
+                        <div className="space-y-2.5">
+                          {activeRewards.map((rew, idx) => (
+                            <div key={rew.id || idx} className="rounded-2xl border bg-background/90 p-3.5 flex items-center gap-3">
+                              {rew.type === "points" && (
+                                <div className="grid h-11 w-11 place-items-center rounded-2xl bg-amber-500/20 text-2xl font-black shrink-0">
+                                  🪙
+                                </div>
+                              )}
+                              {rew.type === "medal" && (
+                                <div className="grid h-11 w-11 place-items-center rounded-2xl bg-primary/20 text-2xl shrink-0">
+                                  🏅
+                                </div>
+                              )}
+                              {rew.type === "future_item" && (
+                                <div className="grid h-11 w-11 place-items-center rounded-2xl bg-secondary text-2xl shrink-0">
+                                  📦
+                                </div>
+                              )}
 
-                            <div>
-                              <div className="font-display text-base font-black text-foreground">
-                                {activeMessage.reward.type === "points" && (
-                                  <span>+{activeMessage.reward.pointsAmount} Pontos Conquistados</span>
-                                )}
-                                {activeMessage.reward.type === "medal" && (() => {
-                                  const itemData = activeMessage.reward?.itemData as any;
-                                  const tourMedal = itemData?.tournamentMedal;
-                                  if (tourMedal?.label) {
-                                    return <span>{tourMedal.label}</span>;
-                                  }
-                                  const def = allCatalogMedals.find(
-                                    (m) => m.id === activeMessage.reward?.medalId
-                                  );
-                                  return (
-                                    <span>
-                                      Medalha: {def ? def.title : activeMessage.reward.medalId}
-                                    </span>
-                                  );
-                                })()}
-                              </div>
-                              <div className="text-xs text-muted-foreground">
-                                {activeMessage.reward.type === "points"
-                                  ? "Pontos serão somados à sua carteira e Hall da Fama"
-                                  : (activeMessage.reward?.itemData as any)?.tournamentMedal
-                                    ? `+${(activeMessage.reward?.itemData as any).tournamentMedal.bonusXpAwarded ?? 0} XP Extra e Medalha de Pódio Oficial`
-                                    : "Adicionada à sua galeria de troféus e medalhas"}
+                              <div>
+                                <div className="font-display text-sm sm:text-base font-black text-foreground">
+                                  {rew.type === "points" && (
+                                    <span>+{rew.pointsAmount} Pontos Conquistados</span>
+                                  )}
+                                  {rew.type === "medal" && (() => {
+                                    const itemData = rew.itemData as any;
+                                    const tourMedal = itemData?.tournamentMedal;
+                                    if (tourMedal?.label) {
+                                      return <span>{tourMedal.label}</span>;
+                                    }
+                                    const def = allCatalogMedals.find(
+                                      (m) => m.id === rew.medalId
+                                    );
+                                    return (
+                                      <span>
+                                        Medalha: {def ? def.title : rew.medalId}
+                                      </span>
+                                    );
+                                  })()}
+                                  {rew.type === "future_item" && (
+                                    <span>Item Especial</span>
+                                  )}
+                                </div>
+                                <div className="text-xs text-muted-foreground">
+                                  {rew.type === "points"
+                                    ? "Pontos serão somados à sua carteira e Hall da Fama"
+                                    : (rew.itemData as any)?.tournamentMedal
+                                      ? `+${(rew.itemData as any).tournamentMedal.bonusXpAwarded ?? 0} XP Extra e Medalha de Pódio Oficial`
+                                      : "Adicionada à sua galeria de troféus e medalhas"}
+                                </div>
                               </div>
                             </div>
-                          </div>
+                          ))}
 
                           <Button
                             size="lg"
                             onClick={() => handleClaimReward(activeMessage.id)}
-                            className="w-full sm:w-auto rounded-2xl font-display font-black bg-amber-500 text-zinc-950 hover:bg-amber-600 shadow-md"
+                            className="w-full rounded-2xl font-display font-black bg-amber-500 text-zinc-950 hover:bg-amber-600 shadow-md"
                           >
-                            <Gift className="h-4 w-4 mr-1.5" /> Resgatar Recompensa
+                            <Gift className="h-4 w-4 mr-1.5" />{" "}
+                            {activeRewards.length > 1 ? "Resgatar Recompensas" : "Resgatar Recompensa"}
                           </Button>
                         </div>
                       )}
                     </div>
-                  )}
+                    );
+                  })()}
 
                   {/* Rodapé: Ação de Exclusão da Mensagem */}
                   <div className="pt-4 border-t flex items-center justify-between gap-2">
-                    {activeMessage.reward && !activeMessage.reward.claimed ? (
+                    {getMessageRewards(activeMessage).some((r) => !r.claimed) ? (
                       <div className="text-xs text-amber-600 dark:text-amber-400 font-semibold flex items-center gap-1.5">
                         <AlertTriangle className="h-4 w-4 shrink-0" />
                         <span>Resgate sua recompensa antes de apagar esta mensagem</span>
@@ -737,7 +764,7 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                     <Button
                       variant="ghost"
                       size="sm"
-                      disabled={Boolean(activeMessage.reward && !activeMessage.reward.claimed)}
+                      disabled={getMessageRewards(activeMessage).some((r) => !r.claimed)}
                       onClick={() => handleDeleteMessage(activeMessage.id)}
                       className="text-destructive hover:bg-destructive/10 rounded-xl"
                     >

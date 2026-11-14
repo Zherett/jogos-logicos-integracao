@@ -60,6 +60,12 @@ export interface ScheduledInboxRule {
     medalId?: string;
     isSecret: boolean;
   };
+  rewards?: Array<{
+    type: "points" | "medal" | "future_item";
+    pointsAmount?: number;
+    medalId?: string;
+    isSecret: boolean;
+  }>;
 
   // Rastreamento de Ciclo
   lastTriggeredAt?: string;
@@ -252,6 +258,7 @@ export function triggerScheduledRule(
     mentionedGames: rule.mentionedGames,
     mentionedEvents: rule.mentionedEvents,
     reward: rule.reward,
+    rewards: rule.rewards,
   };
 
   const message = sendAdminBroadcastMessage(draft);

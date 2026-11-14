@@ -7,6 +7,7 @@ import {
   calculateMaxConsecutiveWeeks,
   calculateMedalProgress,
   evaluatePlayerMedals,
+  filterMedalsByQuery,
   getAllAvailableMedals,
   getDailyPostCapMatches,
   getDistinctFlawlessGames,
@@ -2015,5 +2016,22 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
     assert.equal(cart.total, 8);
     assert.equal(cart.earned, 1);
     assert.equal(cart.remaining, 7);
+  });
+
+  it("filterMedalsByQuery busca medalhas por nome, descrição e raridade (prata, ouro, platina)", () => {
+    const all = getAllAvailableMedals();
+    const prata = filterMedalsByQuery(all, "prata");
+    assert.ok(prata.length > 0);
+    assert.ok(prata.every((m) => m.rarity === "prata" || m.title.toLowerCase().includes("prata") || m.description.toLowerCase().includes("prata")));
+    assert.ok(prata.some((m) => m.rarity === "prata"));
+
+    const ouro = filterMedalsByQuery(all, "Ouro");
+    assert.ok(ouro.some((m) => m.rarity === "ouro"));
+
+    const platina = filterMedalsByQuery(all, "PLATINA");
+    assert.ok(platina.some((m) => m.rarity === "platina"));
+
+    const ametista = filterMedalsByQuery(all, "ametista");
+    assert.ok(ametista.some((m) => m.id === "m_rpg_ametista" || m.id === "sq_ametista"));
   });
 });
