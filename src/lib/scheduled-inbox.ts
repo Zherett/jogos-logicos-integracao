@@ -42,6 +42,7 @@ export interface ScheduledInboxRule {
   // Mídias e Menções
   gifLinks?: Record<string, string>;
   imageLinks?: Record<string, string>;
+  mediaScales?: Record<string, number>;
   mentionedGameId?: string;
   mentionedEventId?: string;
   mentionedEventTitle?: string;
@@ -251,6 +252,7 @@ export function triggerScheduledRule(
     body: rule.body,
     gifLinks: rule.gifLinks,
     imageLinks: rule.imageLinks,
+    mediaScales: rule.mediaScales,
     mentionedGameId: rule.mentionedGameId,
     mentionedEventId: rule.mentionedEventId,
     mentionedEventTitle: rule.mentionedEventTitle,

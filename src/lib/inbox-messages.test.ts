@@ -347,6 +347,22 @@ describe("Sistema Completo de Caixa de Entrada e Correio (inbox-messages)", () =
     assert.equal(found?.gifLinks?.["gif1"], "https://media.tenor.com/test.gif");
   });
 
+  it("persiste mediaScales personalizados permitindo definir a escala em porcentagem do GIF/Imagem", () => {
+    const student = createTestStudent({ id: "aluno_media_scale" });
+    const msg = sendAdminBroadcastMessage({
+      mode: "all",
+      title: "Comunicado com Escala de Mídia",
+      body: "Confira o meme:\n[gif1]",
+      gifLinks: { gif1: "https://media.tenor.com/cat.gif" },
+      mediaScales: { gif1: 60 },
+    });
+
+    const msgs = getInboxMessagesForPlayer(student);
+    const found = msgs.find((m) => m.id === msg.id);
+    assert.ok(found);
+    assert.equal(found?.mediaScales?.["gif1"], 60);
+  });
+
   it("formatInboxMessageText substitui [nick] dinamicamente e [game] pelo nome do jogo", () => {
     const text = "Olá, [nick]! O desafio de hoje no jogo [game] está imperdível!";
     const formatted = formatInboxMessageText(text, {

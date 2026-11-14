@@ -57,6 +57,7 @@ export interface SystemInboxMessage {
   body: string;
   gifLinks?: Record<string, string>; // ex: { gif1: "https://...", gif2: "https://..." }
   imageLinks?: Record<string, string>; // ex: { img1: "https://...", img2: "https://..." }
+  mediaScales?: Record<string, number>; // ex: { gif1: 60, img1: 100 } (escala 10..100%, padrão 100%)
   mentionedGameId?: string; // ID do jogo referenciado na tag [game] (apenas menção de texto)
   mentionedEventId?: string; // ID do evento referenciado na tag [event]
   mentionedEventTitle?: string; // Nome do evento para cache e fallback
@@ -418,6 +419,7 @@ export function createInboxMessage(
     body: data.body,
     gifLinks: data.gifLinks ?? {},
     imageLinks: data.imageLinks ?? {},
+    mediaScales: data.mediaScales ?? {},
     mentionedGameId: data.mentionedGameId,
     mentionedEventId: data.mentionedEventId,
     mentionedEventTitle: data.mentionedEventTitle,
@@ -462,6 +464,7 @@ export interface AdminBroadcastDraft {
   body: string;
   gifLinks?: Record<string, string>;
   imageLinks?: Record<string, string>;
+  mediaScales?: Record<string, number>;
   mentionedGameId?: string;
   mentionedEventId?: string;
   mentionedEventTitle?: string;
@@ -717,6 +720,7 @@ export function sendAdminBroadcastMessage(draft: AdminBroadcastDraft): SystemInb
     body: draft.body.trim(),
     gifLinks: draft.gifLinks ?? {},
     imageLinks: draft.imageLinks ?? {},
+    mediaScales: draft.mediaScales ?? {},
     mentionedGameId: defaultGameId,
     mentionedEventId: defaultEventId,
     mentionedEventTitle: defaultEventTitle,

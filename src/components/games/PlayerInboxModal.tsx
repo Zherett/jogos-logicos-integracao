@@ -304,13 +304,13 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
     imageLinks?: Record<string, string>,
     msg?: SystemInboxMessage | null
   ) => {
-    // Divide texto pelas tags [gif], [gif1], [gif2], [img], [img1], [img2], etc.
-    const parts = body.split(/(\[(?:gif|img)\d*\])/gi);
+    // Divide texto pelas tags [gif], [gif1], [gif2], [img], [img1], [img2], com suporte a escala opcional [gif1:60%]
+    const parts = body.split(/(\[(?:gif|img)\d*(?::\d+%?)?\])/gi);
 
     return (
       <div className="whitespace-pre-wrap text-sm text-foreground leading-relaxed space-y-3">
         {parts.map((part, index) => {
-          const match = /^\[(gif|img)(\d*)\]$/i.exec(part.trim());
+          const match = /^\[(gif|img)(\d*)(?::(\d+)%?)?\]$/i.exec(part.trim());
           if (match) {
             const prefix = match[1].toLowerCase();
             const tagNum = match[2];
@@ -324,12 +324,19 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
             const isGif = prefix === "gif";
 
             if (url) {
+              const inlineScale = match[3] ? Number(match[3]) : undefined;
+              const scale = Math.min(
+                100,
+                Math.max(10, msg?.mediaScales?.[tagKey] ?? inlineScale ?? 100)
+              );
+
               return (
-                <div key={index} className="my-3 flex justify-center">
+                <div key={index} className="my-3 flex justify-center w-full">
                   <img
                     src={url}
                     alt={isGif ? "GIF animado" : "Imagem"}
-                    className="max-h-80 w-auto rounded-2xl object-contain shadow-lg"
+                    style={{ maxWidth: `${scale}%` }}
+                    className="max-h-80 w-auto object-contain rounded-xl"
                     loading="lazy"
                     decoding="async"
                     onError={(e) => {

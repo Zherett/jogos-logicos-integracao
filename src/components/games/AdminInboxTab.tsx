@@ -168,8 +168,8 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
     });
   };
 
-  // Tags de Mídia unificadas (GIFs e Imagens Estáticas): [{ id: "...", type: "img" | "gif", url: "" }]
-  const [mediaList, setMediaList] = useState<{ id: string; type: "gif" | "img"; url: string }[]>([]);
+  // Tags de Mídia unificadas (GIFs e Imagens Estáticas): [{ id: "...", type: "img" | "gif", url: "", scale: 100 }]
+  const [mediaList, setMediaList] = useState<{ id: string; type: "gif" | "img"; url: string; scale?: number }[]>([]);
   const [copiedTag, setCopiedTag] = useState<string | null>(null);
 
   // Menção a Jogo na Tag [game] e tags dinâmicas [game1], [game2]
@@ -236,7 +236,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
   const [schedTimeOfDay, setSchedTimeOfDay] = useState<string>("08:00");
   const [schedValidFrom, setSchedValidFrom] = useState<string>("");
   const [schedValidUntil, setSchedValidUntil] = useState<string>("");
-  const [schedMediaList, setSchedMediaList] = useState<{ id: string; type: "gif" | "img"; url: string }[]>([]);
+  const [schedMediaList, setSchedMediaList] = useState<{ id: string; type: "gif" | "img"; url: string; scale?: number }[]>([]);
   const [schedMentionGame, setSchedMentionGame] = useState<string>("");
   const [schedMentionGames, setSchedMentionGames] = useState<Record<string, string>>({});
   const [schedMentionEventId, setSchedMentionEventId] = useState<string>("");
@@ -299,12 +299,12 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
           )?.nick || msg.recipientId)
         : "Aluno";
 
-    const parts = msg.body.split(/(\[(?:gif|img)\d*\])/gi);
+    const parts = msg.body.split(/(\[(?:gif|img)\d*(?::\d+%?)?\])/gi);
 
     return (
       <div className="whitespace-pre-wrap text-sm text-foreground leading-relaxed space-y-3">
         {parts.map((part, index) => {
-          const match = /^\[(gif|img)(\d*)\]$/i.exec(part.trim());
+          const match = /^\[(gif|img)(\d*)(?::(\d+)%?)?\]$/i.exec(part.trim());
           if (match) {
             const prefix = match[1].toLowerCase();
             const tagNum = match[2];
@@ -317,15 +317,19 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                   (tagKey === "img" ? msg.imageLinks?.["img1"] || Object.values(msg.imageLinks || {})[0] : undefined);
 
             if (url) {
+              const inlineScale = match[3] ? Number(match[3]) : undefined;
+              const scale = Math.min(
+                100,
+                Math.max(10, msg.mediaScales?.[tagKey] ?? inlineScale ?? 100)
+              );
+
               return (
-                <div
-                  key={index}
-                  className="my-3 overflow-hidden rounded-2xl border border-slate-200 dark:border-border bg-slate-100 dark:bg-muted/40 shadow-xs flex justify-center max-w-md mx-auto"
-                >
+                <div key={index} className="my-3 flex justify-center w-full">
                   <img
                     src={url}
                     alt={prefix === "gif" ? "Animação GIF" : "Imagem da Mensagem"}
-                    className="max-h-64 sm:max-h-80 w-auto rounded-xl object-contain"
+                    style={{ maxWidth: `${scale}%` }}
+                    className="max-h-64 sm:max-h-80 w-auto object-contain rounded-xl"
                     loading="lazy"
                     onError={(e) => {
                       (e.target as HTMLElement).style.display = "none";
@@ -721,6 +725,12 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
     );
   };
 
+  const handleUpdateMediaScale = (id: string, scale: number) => {
+    setMediaList((prev) =>
+      prev.map((m) => (m.id === id ? { ...m, scale: Math.min(100, Math.max(10, scale)) } : m))
+    );
+  };
+
   const handleRemoveMedia = (id: string) => {
     setMediaList((prev) => prev.filter((m) => m.id !== id));
   };
@@ -768,6 +778,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
     // Constrói mapas de gifLinks e imageLinks a partir da lista unificada de mídias
     const gifLinks: Record<string, string> = {};
     const imageLinks: Record<string, string> = {};
+    const mediaScales: Record<string, number> = {};
     for (const m of indexedMediaList) {
       if (m.url.trim()) {
         if (m.type === "gif") {
@@ -775,6 +786,9 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
         } else {
           imageLinks[m.tagKey] = m.url.trim();
         }
+      }
+      if (m.scale && m.scale < 100) {
+        mediaScales[m.tagKey] = m.scale;
       }
     }
 
@@ -834,6 +848,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
       body: body.trim(),
       gifLinks: Object.keys(gifLinks).length > 0 ? gifLinks : undefined,
       imageLinks: Object.keys(imageLinks).length > 0 ? imageLinks : undefined,
+      mediaScales: Object.keys(mediaScales).length > 0 ? mediaScales : undefined,
       mentionedGameId: selectedMentionGame || undefined,
       mentionedEventId: selectedMentionEventId || undefined,
       mentionedEventTitle: foundMentionEvent?.title || undefined,
@@ -980,6 +995,12 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
     );
   };
 
+  const handleUpdateSchedMediaScale = (id: string, scale: number) => {
+    setSchedMediaList((prev) =>
+      prev.map((m) => (m.id === id ? { ...m, scale: Math.min(100, Math.max(10, scale)) } : m))
+    );
+  };
+
   const handleRemoveSchedMedia = (id: string) => {
     setSchedMediaList((prev) => prev.filter((m) => m.id !== id));
   };
@@ -1081,6 +1102,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
 
     const gifLinks: Record<string, string> = {};
     const imageLinks: Record<string, string> = {};
+    const mediaScales: Record<string, number> = {};
     for (const m of indexedSchedMediaList) {
       if (m.url.trim()) {
         if (m.type === "gif") {
@@ -1088,6 +1110,9 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
         } else {
           imageLinks[m.tagKey] = m.url.trim();
         }
+      }
+      if (m.scale && m.scale < 100) {
+        mediaScales[m.tagKey] = m.scale;
       }
     }
 
@@ -1148,6 +1173,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
       excludedStudentIds: excludedStudentIds,
       gifLinks: Object.keys(gifLinks).length > 0 ? gifLinks : undefined,
       imageLinks: Object.keys(imageLinks).length > 0 ? imageLinks : undefined,
+      mediaScales: Object.keys(mediaScales).length > 0 ? mediaScales : undefined,
       mentionedGameId: schedMentionGame || undefined,
       mentionedEventId: schedMentionEventId || undefined,
       mentionedEventTitle: foundEvent?.title || undefined,
@@ -1208,15 +1234,25 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
     );
     setSchedLinkEventDetails(rule.linkEventDetails !== false);
 
-    const media: { id: string; type: "gif" | "img"; url: string }[] = [];
+    const media: { id: string; type: "gif" | "img"; url: string; scale?: number }[] = [];
     if (rule.imageLinks) {
       for (const [k, url] of Object.entries(rule.imageLinks)) {
-        media.push({ id: `edit_${k}_${Math.random()}`, type: "img", url });
+        media.push({
+          id: `edit_${k}_${Math.random()}`,
+          type: "img",
+          url,
+          scale: rule.mediaScales?.[k] ?? 100,
+        });
       }
     }
     if (rule.gifLinks) {
       for (const [k, url] of Object.entries(rule.gifLinks)) {
-        media.push({ id: `edit_${k}_${Math.random()}`, type: "gif", url });
+        media.push({
+          id: `edit_${k}_${Math.random()}`,
+          type: "gif",
+          url,
+          scale: rule.mediaScales?.[k] ?? 100,
+        });
       }
     }
     setSchedMediaList(media);
@@ -1993,6 +2029,32 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                         }
                         className="h-8 rounded-lg text-xs flex-1"
                       />
+
+                      {/* Seletor de Escala / Tamanho do GIF ou Imagem */}
+                      <div className="flex items-center gap-1 shrink-0 rounded-lg bg-secondary/60 p-1 border">
+                        <span className="text-[10px] font-bold text-muted-foreground px-1">
+                          Tamanho:
+                        </span>
+                        {[40, 60, 80, 100].map((pct) => {
+                          const currentScale = m.scale ?? 100;
+                          const isSelected = currentScale === pct;
+                          return (
+                            <button
+                              key={pct}
+                              type="button"
+                              onClick={() => handleUpdateMediaScale(m.id, pct)}
+                              className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition-all cursor-pointer ${
+                                isSelected
+                                  ? "bg-primary text-primary-foreground shadow-xs font-black"
+                                  : "text-muted-foreground hover:text-foreground"
+                              }`}
+                              title={`Definir largura em ${pct}% (padrão 100%)`}
+                            >
+                              {pct}%
+                            </button>
+                          );
+                        })}
+                      </div>
 
                       {/* Preview em miniatura */}
                       {m.url && (
@@ -2798,6 +2860,31 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                         placeholder="URL da mídia..."
                         className="h-7 text-xs flex-1"
                       />
+
+                      {/* Seletor de Escala */}
+                      <div className="flex items-center gap-1 shrink-0 rounded-lg bg-secondary/60 p-0.5 border">
+                        <span className="text-[10px] font-bold text-muted-foreground px-1">
+                          Tam:
+                        </span>
+                        {[40, 60, 80, 100].map((pct) => {
+                          const currentScale = m.scale ?? 100;
+                          const isSelected = currentScale === pct;
+                          return (
+                            <button
+                              key={pct}
+                              type="button"
+                              onClick={() => handleUpdateSchedMediaScale(m.id, pct)}
+                              className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition-all cursor-pointer ${
+                                isSelected
+                                  ? "bg-primary text-primary-foreground shadow-xs font-black"
+                                  : "text-muted-foreground hover:text-foreground"
+                              }`}
+                            >
+                              {pct}%
+                            </button>
+                          );
+                        })}
+                      </div>
 
                       <Button
                         type="button"
