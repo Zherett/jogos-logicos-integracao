@@ -2903,24 +2903,44 @@ export async function syncStudentRosterFromPlayFab(
       const xpLbPromises = [
         callPlayFabClient<{ Leaderboard?: LbRow[] }>(
           "GetLeaderboard",
-          { StatisticName: "XP_Total", StartPosition: 0, MaxResultsCount: 100 },
+          {
+            StatisticName: "XP_Total",
+            StartPosition: 0,
+            MaxResultsCount: 100,
+            ProfileConstraints: { ShowDisplayName: true },
+          },
           ticket,
         ),
         callPlayFabClient<{ Leaderboard?: LbRow[] }>(
           "GetLeaderboard",
-          { StatisticName: `XP_Season_S${cfg.seasonId}`, StartPosition: 0, MaxResultsCount: 100 },
+          {
+            StatisticName: `XP_Season_S${cfg.seasonId}`,
+            StartPosition: 0,
+            MaxResultsCount: 100,
+            ProfileConstraints: { ShowDisplayName: true },
+          },
           ticket,
         ),
       ];
       const gameLbPromises = enabledGameIds.flatMap((gId) => [
         callPlayFabClient<{ Leaderboard?: LbRow[] }>(
           "GetLeaderboard",
-          { StatisticName: `Best_${gId}_S${cfg.seasonId}`, StartPosition: 0, MaxResultsCount: 100 },
+          {
+            StatisticName: `Best_${gId}_S${cfg.seasonId}`,
+            StartPosition: 0,
+            MaxResultsCount: 100,
+            ProfileConstraints: { ShowDisplayName: true },
+          },
           ticket,
         ).then((r) => ({ gId, rows: r.data?.Leaderboard ?? [] })),
         callPlayFabClient<{ Leaderboard?: LbRow[] }>(
           "GetLeaderboard",
-          { StatisticName: `Best_${gId}`, StartPosition: 0, MaxResultsCount: 100 },
+          {
+            StatisticName: `Best_${gId}`,
+            StartPosition: 0,
+            MaxResultsCount: 100,
+            ProfileConstraints: { ShowDisplayName: true },
+          },
           ticket,
         ).then((r) => ({ gId, rows: r.data?.Leaderboard ?? [] })),
       ]);
@@ -5371,25 +5391,53 @@ export async function fetchLeaderboard(
       statName = `School_${schoolSlug(filter.school)}_XP`;
     }
 
-    const { data } = await callPlayFabClient<{
-      Leaderboard?: {
-        PlayFabId: string;
-        DisplayName?: string;
-        StatValue: number;
-        Position: number;
-      }[];
-    }>(
-      "GetLeaderboard",
-      {
-        StatisticName: statName,
-        StartPosition: 0,
-        MaxResultsCount: maxResults,
-      },
-      session.sessionTicket,
-    );
+    const [lbRes, aroundRes] = await Promise.allSettled([
+      callPlayFabClient<{
+        Leaderboard?: {
+          PlayFabId: string;
+          DisplayName?: string;
+          StatValue: number;
+          Position: number;
+        }[];
+      }>(
+        "GetLeaderboard",
+        {
+          StatisticName: statName,
+          StartPosition: 0,
+          MaxResultsCount: maxResults,
+          ProfileConstraints: {
+            ShowDisplayName: true,
+          },
+        },
+        session.sessionTicket,
+      ),
+      callPlayFabClient<{
+        Leaderboard?: {
+          PlayFabId: string;
+          DisplayName?: string;
+          StatValue: number;
+          Position: number;
+        }[];
+      }>(
+        "GetLeaderboardAroundPlayer",
+        {
+          StatisticName: statName,
+          MaxResultsCount: 5,
+          ProfileConstraints: {
+            ShowDisplayName: true,
+          },
+        },
+        session.sessionTicket,
+      ),
+    ]);
 
-    if (data?.Leaderboard && data.Leaderboard.length > 0) {
-      for (const row of data.Leaderboard) {
+    const mergedRows = [
+      ...(lbRes.status === "fulfilled" ? (lbRes.value.data?.Leaderboard ?? []) : []),
+      ...(aroundRes.status === "fulfilled" ? (aroundRes.value.data?.Leaderboard ?? []) : []),
+    ];
+
+    if (mergedRows.length > 0) {
+      for (const row of mergedRows) {
         if (row.PlayFabId) {
           playfabStatByPlayer.set(row.PlayFabId, row.StatValue);
         }
@@ -6259,6 +6307,157 @@ export function getPlayerPublicProfile(identifier: string): PlayerProfile | null
     }
   }
   return null;
+}
+
+/**
+ * Fetches and merges only a single student's cloud profile & stats (O(1) calls),
+ * avoiding full-roster GetSharedGroupData + N+1 GetUserData bursts when opening a profile.
+ */
+export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<PlayerProfile | null> {
+  const localProfile = getPlayerPublicProfile(identifier);
+  const ticket = (await getAdminPlayFabTicket()) ?? loadStoredSession()?.sessionTicket;
+  if (!ticket || !isPlayFabConfigured()) {
+    return localProfile;
+  }
+
+  const slug = localProfile
+    ? localProfile.nickNormalized || nickSlug(localProfile.nick)
+    : nickSlug(identifier.trim().replace(/^stu_/, ""));
+
+  if (!slug) return localProfile;
+
+  try {
+    const cloudKey = getStudentRosterCloudKey(slug);
+    const knownPfId = localProfile?.playfabId;
+
+    const [rosterRes, userDataRes] = await Promise.allSettled([
+      callPlayFabClient<{ Data?: Record<string, { Value: string }> }>(
+        "GetSharedGroupData",
+        { SharedGroupId: ROSTER_SHARED_GROUP_ID, Keys: [cloudKey] },
+        ticket,
+      ),
+      knownPfId
+        ? callPlayFabClient<{ Data?: Record<string, { Value: string }> }>(
+            "GetUserData",
+            { PlayFabId: knownPfId, Keys: ["PlayerProfile", "GameStats"] },
+            ticket,
+          )
+        : Promise.resolve(null),
+    ]);
+
+    let cloudProfile: Partial<PlayerProfile> | undefined;
+    let cloudStats: GameStatRow[] | undefined;
+
+    if (rosterRes.status === "fulfilled") {
+      const rawVal = rosterRes.value.data?.Data?.[cloudKey]?.Value;
+      if (rawVal) {
+        try {
+          const parsed = JSON.parse(rawVal) as Partial<PlayerProfile> & { stats?: GameStatRow[] };
+          cloudProfile = parsed;
+          if (Array.isArray(parsed.stats)) cloudStats = parsed.stats;
+        } catch {
+          /* ignore malformed roster JSON */
+        }
+      }
+    }
+
+    if (userDataRes.status === "fulfilled" && userDataRes.value?.data?.Data) {
+      const ud = userDataRes.value.data.Data;
+      if (ud.PlayerProfile?.Value) {
+        try {
+          const udProf = JSON.parse(ud.PlayerProfile.Value) as Partial<PlayerProfile>;
+          cloudProfile = cloudProfile ? { ...cloudProfile, ...udProf } : udProf;
+        } catch {
+          /* ignore */
+        }
+      }
+      if (ud.GameStats?.Value) {
+        try {
+          const udStats = JSON.parse(ud.GameStats.Value) as GameStatRow[];
+          if (Array.isArray(udStats)) {
+            cloudStats = udStats;
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+
+    // If neither local nor cloud entry was found by key, fall back to a single lightweight roster sync
+    if (!cloudProfile && !localProfile) {
+      await syncStudentRosterFromPlayFab(ticket, false, { lightweight: true });
+      return getPlayerPublicProfile(identifier);
+    }
+
+    if (cloudProfile) {
+      const cfg = checkAndApplyScheduledReset();
+      const reg = loadRegistry();
+      const targetKey =
+        Object.keys(reg).find((k) => {
+          const p = reg[k]?.profile;
+          return p && (p.nickNormalized === slug || p.id === localProfile?.id);
+        }) ?? slug;
+      const existing = reg[targetKey];
+
+      if (existing) {
+        const mergedMedals = new Map<string, PlayerUnlockedMedal>();
+        for (const m of [...(existing.profile.unlockedMedals ?? []), ...(cloudProfile.unlockedMedals ?? [])]) {
+          if (!m?.medalId) continue;
+          const prev = mergedMedals.get(m.medalId);
+          if (!prev) mergedMedals.set(m.medalId, { ...m });
+          else mergedMedals.set(m.medalId, { ...prev, count: Math.max(prev.count ?? 1, m.count ?? 1) });
+        }
+
+        const statMap = new Map<string, GameStatRow>();
+        for (const s of [...(existing.stats ?? []), ...(cloudStats ?? [])]) {
+          if (!s?.game_id) continue;
+          const sKey = `${s.game_id}__${s.mode || "padrao"}`;
+          const cur = statMap.get(sKey);
+          if (!cur) statMap.set(sKey, { ...s });
+          else {
+            statMap.set(sKey, {
+              ...cur,
+              plays: Math.max(cur.plays ?? 0, s.plays ?? 0),
+              wins: Math.max(cur.wins ?? 0, s.wins ?? 0),
+              flawless_wins: Math.max(cur.flawless_wins ?? 0, s.flawless_wins ?? 0),
+              best_score: Math.max(cur.best_score ?? 0, s.best_score ?? 0),
+              best_level: Math.max(cur.best_level ?? 1, s.best_level ?? 1),
+            });
+          }
+        }
+
+        const mergedStats = Array.from(statMap.values());
+        reg[targetKey] = ensurePlayerSeasonAligned(
+          {
+            ...existing,
+            stats: mergedStats,
+            profile: {
+              ...existing.profile,
+              ...cloudProfile,
+              id: existing.profile.id,
+              playfabId: cloudProfile.playfabId || existing.profile.playfabId,
+              xp: Math.max(existing.profile.xp ?? 0, cloudProfile.xp ?? 0),
+              seasonXp: Math.max(existing.profile.seasonXp ?? 0, cloudProfile.seasonXp ?? 0),
+              level: Math.max(existing.profile.level ?? 1, cloudProfile.level ?? 1),
+              matchesPlayed: Math.max(existing.profile.matchesPlayed ?? 0, cloudProfile.matchesPlayed ?? 0),
+              wins: Math.max(existing.profile.wins ?? 0, cloudProfile.wins ?? 0),
+              careerPoints: Math.max(existing.profile.careerPoints ?? 0, cloudProfile.careerPoints ?? 0),
+              pointsBalance: Math.max(existing.profile.pointsBalance ?? 0, cloudProfile.pointsBalance ?? 0),
+              unlockedMedals: Array.from(mergedMedals.values()),
+              stats: mergedStats,
+            },
+          },
+          cfg,
+        );
+        saveRegistry(reg);
+        return reg[targetKey].profile;
+      }
+    }
+
+    return getPlayerPublicProfile(identifier) ?? localProfile;
+  } catch {
+    return localProfile;
+  }
 }
 
 export interface MedalsAuditResult {

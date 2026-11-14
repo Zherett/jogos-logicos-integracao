@@ -243,7 +243,7 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
       setLoading(false);
       // Ainda assim sincroniza suavemente em segundo plano para garantir escolas atualizadas
       setSyncingBackground(true);
-      void fetchLeaderboard({ kind: "xp_season", stage: selectedStage }, 50, {
+      void fetchLeaderboard({ kind: "xp_season", stage: selectedStage }, PAGE_BATCH_SIZE, {
         forceCloudSync: forceSyncTick > 0,
       })
         .then(() => {
@@ -273,7 +273,7 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
     );
     const cached = leaderboardSessionCache.get(currentKey);
     const localSnapshot =
-      cached && cached.length > 0 ? cached : getLeaderboardSnapshotLocal(filter, 50);
+      cached && cached.length > 0 ? cached : getLeaderboardSnapshotLocal(filter, PAGE_BATCH_SIZE);
 
     if (localSnapshot.length > 0) {
       leaderboardSessionCache.set(currentKey, localSnapshot);
@@ -286,7 +286,7 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
 
     setSyncingBackground(true);
     const isForced = forceSyncTick > 0;
-    void fetchLeaderboard(filter, 50, { forceCloudSync: isForced })
+    void fetchLeaderboard(filter, PAGE_BATCH_SIZE, { forceCloudSync: isForced })
       .then((res) => {
         if (!active) return;
         leaderboardSessionCache.set(currentKey, res);

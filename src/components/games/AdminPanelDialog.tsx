@@ -370,6 +370,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
   const [turmaSubTab, setTurmaSubTab] = useState<"visao" | "solicitacoes">("visao");
   const [selectedAdminSchool, setSelectedAdminSchool] = useState<string>("TODAS");
   const [selectedAdminTurma, setSelectedAdminTurma] = useState<TurmaCode | "TODAS">("TODAS");
+  const [adminStudentsVisibleLimit, setAdminStudentsVisibleLimit] = useState<number>(24);
   const [registeredStudents, setRegisteredStudents] = useState<PlayerProfile[]>([]);
   const [trashPlayers, setTrashPlayers] = useState<PlayerProfile[]>([]);
   const [turmaRequests, setTurmaRequests] = useState<TurmaChangeRequest[]>([]);
@@ -528,7 +529,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
     let active = true;
     setSyncingRoster(true);
     void syncPresenceFromPlayFab(true);
-    void syncStudentRosterFromPlayFab()
+    void syncStudentRosterFromPlayFab(undefined, false, { lightweight: true })
       .then(async () => {
         if (!active) return;
         refreshRoster();
@@ -551,6 +552,10 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
       active = false;
     };
   }, [open]);
+
+  useEffect(() => {
+    setAdminStudentsVisibleLimit(24);
+  }, [selectedAdminSchool, selectedAdminTurma]);
 
   // Polling de presença e histórico X1 isolado (só re-renderiza o painel em abas que consomem presença/X1)
   useEffect(() => {
@@ -3259,7 +3264,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                           </div>
 
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-80 overflow-y-auto pr-1">
-                            {sortedFiltered.map(({ st, stProg }) => {
+                            {sortedFiltered.slice(0, adminStudentsVisibleLimit).map(({ st, stProg }) => {
 
                               return (
                                 <div
@@ -3333,6 +3338,19 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                               );
                             })}
                           </div>
+                          {sortedFiltered.length > adminStudentsVisibleLimit && (
+                            <div className="flex justify-center pt-1">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="rounded-xl text-xs font-bold"
+                                onClick={() => setAdminStudentsVisibleLimit((v) => v + 24)}
+                              >
+                                Carregar mais alunos (exibindo {Math.min(adminStudentsVisibleLimit, sortedFiltered.length)} de {sortedFiltered.length})
+                              </Button>
+                            </div>
+                          )}
                         </div>
                       );
                     })()}

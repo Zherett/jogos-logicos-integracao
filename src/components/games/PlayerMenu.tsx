@@ -226,7 +226,8 @@ export function PlayerMenu({ onConfigChanged }: Props) {
       active = false;
       window.removeEventListener("desafios:weekly-tournament-updated", refreshRank);
     };
-  }, [profileOpen, profile]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profileOpen, profile?.id]);
 
   // Atualiza em tempo real a atividade do aluno quando ele visualiza perfil, medalhas ou caixa de entrada
   useEffect(() => {
@@ -328,7 +329,8 @@ export function PlayerMenu({ onConfigChanged }: Props) {
       window.removeEventListener("focus", handleFocus);
       window.removeEventListener("desafios:inbox-message-received", handleNewMessageOnline);
     };
-  }, [profile, inboxOpen]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile?.id, inboxOpen]);
 
   async function handleSaveInitialSchoolAndGrade() {
     if (!profile) return;

@@ -406,11 +406,13 @@ function Index() {
           <img
             src={integracaoPreto}
             alt="Logo do Projeto INTEGRAÇÃO"
+            decoding="async"
             className="h-6 sm:h-7 w-auto object-contain rounded-sm dark:brightness-110"
           />
           <img
             src={semed}
             alt="Logo da SEMED Coari"
+            decoding="async"
             className="h-6 sm:h-7 w-auto object-contain rounded-sm dark:brightness-110"
           />
         </div>

@@ -328,6 +328,7 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                     alt={isGif ? "GIF animado" : "Imagem"}
                     className="max-h-80 w-auto rounded-2xl object-contain shadow-lg"
                     loading="lazy"
+                    decoding="async"
                     onError={(e) => {
                       (e.target as HTMLElement).style.display = "none";
                     }}

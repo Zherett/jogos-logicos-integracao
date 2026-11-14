@@ -51,15 +51,23 @@ export function PlayerMedalsInventory({
   // Selected medal for detail modal
   const [selectedMedal, setSelectedMedal] = useState<MedalDefinition | null>(null);
 
-  const allMedals = getAllAvailableMedals(customMedals);
-  const eventMedalsList = allMedals.filter((m) => m.category === "evento" || Boolean(m.eventId));
-  const unlockedMap = new Map<string, PlayerUnlockedMedal>();
-  (unlockedMedals ?? []).forEach((u) => {
-    if (u && u.medalId) unlockedMap.set(u.medalId, u);
-  });
+  const allMedals = useMemo(() => getAllAvailableMedals(customMedals), [customMedals]);
+  const eventMedalsList = useMemo(
+    () => allMedals.filter((m) => m.category === "evento" || Boolean(m.eventId)),
+    [allMedals],
+  );
+  const unlockedMap = useMemo(() => {
+    const map = new Map<string, PlayerUnlockedMedal>();
+    (unlockedMedals ?? []).forEach((u) => {
+      if (u && u.medalId) map.set(u.medalId, u);
+    });
+    return map;
+  }, [unlockedMedals]);
 
   const pioneers = useMemo(() => {
     try {
+      const cached = getCachedMedalPioneers();
+      if (cached && Object.keys(cached).length > 0) return cached;
       const players = getAllRegisteredPlayers();
       return getCachedMedalPioneers(players) ?? {};
     } catch {
@@ -67,43 +75,48 @@ export function PlayerMedalsInventory({
     }
   }, []);
 
-  const showcase = getTopShowcaseMedals(unlockedMedals ?? [], allMedals);
+  const showcase = useMemo(
+    () => getTopShowcaseMedals(unlockedMedals ?? [], allMedals),
+    [unlockedMedals, allMedals],
+  );
 
   // Map each medal to its progress and unlock state
-  const medalsWithProgress = allMedals.map((m) => {
-    const unlocked = unlockedMap.get(m.id) ?? null;
-    const progress = calculateMedalProgress(m, profile, stats);
-    return {
-      medal: m,
-      unlocked,
-      progress,
-    };
-  });
+  const sortedMedals = useMemo(() => {
+    const medalsWithProgress = allMedals.map((m) => {
+      const unlocked = unlockedMap.get(m.id) ?? null;
+      const progress = calculateMedalProgress(m, profile, stats);
+      return {
+        medal: m,
+        unlocked,
+        progress,
+      };
+    });
 
-  // Smart sorting:
-  // 1º) Conquistadas (obtidas) primeiro
-  // 2º) Mais próximas de serem obtidas (maior percentual de progresso)
-  // 3º) Raridade / Título
-  const sortedMedals = [...medalsWithProgress].sort((a, b) => {
-    const aUnlocked = Boolean(a.unlocked);
-    const bUnlocked = Boolean(b.unlocked);
-    if (aUnlocked && !bUnlocked) return -1;
-    if (!aUnlocked && bUnlocked) return 1;
+    // Smart sorting:
+    // 1º) Conquistadas (obtidas) primeiro
+    // 2º) Mais próximas de serem obtidas (maior percentual de progresso)
+    // 3º) Raridade / Título
+    return [...medalsWithProgress].sort((a, b) => {
+      const aUnlocked = Boolean(a.unlocked);
+      const bUnlocked = Boolean(b.unlocked);
+      if (aUnlocked && !bUnlocked) return -1;
+      if (!aUnlocked && bUnlocked) return 1;
 
-    // Both locked: sort by highest progress percent
-    if (!aUnlocked && !bUnlocked) {
-      if (b.progress.percent !== a.progress.percent) {
-        return b.progress.percent - a.progress.percent;
+      // Both locked: sort by highest progress percent
+      if (!aUnlocked && !bUnlocked) {
+        if (b.progress.percent !== a.progress.percent) {
+          return b.progress.percent - a.progress.percent;
+        }
       }
-    }
 
-    // Both unlocked: sort by rarity weight (Diamante -> Platina -> Ouro -> Prata -> Bronze)
-    const wA = RARITY_INFO[a.medal.rarity]?.weight ?? 0;
-    const wB = RARITY_INFO[b.medal.rarity]?.weight ?? 0;
-    if (wB !== wA) return wB - wA;
+      // Both unlocked: sort by rarity weight (Diamante -> Platina -> Ouro -> Prata -> Bronze)
+      const wA = RARITY_INFO[a.medal.rarity]?.weight ?? 0;
+      const wB = RARITY_INFO[b.medal.rarity]?.weight ?? 0;
+      if (wB !== wA) return wB - wA;
 
-    return a.medal.title.localeCompare(b.medal.title);
-  });
+      return a.medal.title.localeCompare(b.medal.title);
+    });
+  }, [allMedals, unlockedMap, profile, stats]);
 
   const filtered = sortedMedals.filter(({ medal: m }) => {
     if (activeTab === "eventos" && m.category !== "evento" && !m.eventId) return false;
@@ -125,7 +138,7 @@ export function PlayerMedalsInventory({
   });
 
   const selectedMedalEntry = selectedMedal
-    ? medalsWithProgress.find((e) => e.medal.id === selectedMedal.id)
+    ? sortedMedals.find((e) => e.medal.id === selectedMedal.id)
     : null;
 
   return (

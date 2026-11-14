@@ -52,19 +52,19 @@ async function fetchEntriesForFilter(
   school: string,
 ): Promise<LeaderboardEntry[]> {
   if (targetTab === "pontos") {
-    return fetchLeaderboard({ kind: "points", stage }, 50);
+    return fetchLeaderboard({ kind: "points", stage }, 20);
   }
   if (targetTab === "medalhas") {
-    return fetchLeaderboard({ kind: "medals", stage }, 50);
+    return fetchLeaderboard({ kind: "medals", stage }, 20);
   }
   if (targetTab === "geral") {
-    return fetchLeaderboard({ kind: "xp_season", stage }, 50);
+    return fetchLeaderboard({ kind: "xp_season", stage }, 20);
   }
   if (targetTab === "jogos") {
-    return fetchLeaderboard({ kind: "game", gameId: game, stage }, 50);
+    return fetchLeaderboard({ kind: "game", gameId: game, stage }, 20);
   }
   if (targetTab === "escolas" && school !== "TODAS") {
-    return fetchLeaderboard({ kind: "school", school, stage }, 50);
+    return fetchLeaderboard({ kind: "school", school, stage }, 20);
   }
   return [];
 }
@@ -157,25 +157,6 @@ export function LeaderboardDialog({ open, onOpenChange }: Props) {
     prevOpenRef.current = open;
   }, [open, auth.profile]);
 
-  // Pré-carregamento silencioso em background das abas irmãs ("pontos", "medalhas", "geral")
-  const prefetchSisterTabs = useCallback(
-    async (stage: RankingFilterCategory, seasonId: number | string) => {
-      const sisterTabs: TabKind[] = ["medalhas", "pontos", "geral"];
-      for (const t of sisterTabs) {
-        const k = getLeaderboardCacheKey(t, stage, selectedGame, selectedSchool, seasonId);
-        if (!leaderboardSessionCache.has(k)) {
-          try {
-            const sisterRes = await fetchEntriesForFilter(t, stage, selectedGame, selectedSchool);
-            leaderboardSessionCache.set(k, sisterRes);
-          } catch {
-            // Silencioso em caso de erro na prefetch de fundo
-          }
-        }
-      }
-    },
-    [selectedGame, selectedSchool],
-  );
-
   // Carregamento com Stale-While-Revalidate:
   // Se já há cache, exibe instantaneamente (0ms) e revalida em segundo plano sem apagar a tela.
   // Se não há cache, exibe os 10 slots esqueletos já dimensionados (Zero Cumulative Layout Shift).
@@ -214,9 +195,6 @@ export function LeaderboardDialog({ open, onOpenChange }: Props) {
         leaderboardSessionCache.set(currentKey, res);
         setEntries(res);
         setLoading(false);
-
-        // Dispara o pré-carregamento em background das outras abas para que a troca seja imediata
-        void prefetchSisterTabs(selectedStage, cfg.seasonId);
       } catch {
         if (active) setLoading(false);
       }
@@ -234,7 +212,6 @@ export function LeaderboardDialog({ open, onOpenChange }: Props) {
     selectedStage,
     cfg.seasonId,
     refreshCounter,
-    prefetchSisterTabs,
   ]);
 
   const scheduledDate = cfg.seasonEndAt

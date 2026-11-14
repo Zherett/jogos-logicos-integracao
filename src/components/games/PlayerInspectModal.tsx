@@ -44,7 +44,7 @@ import {
   restoreStudentFromTrash,
   permanentlyDeleteStudent,
   playfabCompleteInitialSchoolSetup,
-  syncStudentRosterFromPlayFab,
+  syncSinglePlayerFromPlayFab,
   updateStudentProfileByAdmin,
   type PlayerProfile,
 } from "@/lib/playfab";
@@ -159,7 +159,7 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
       }
       let cancelled = false;
       void Promise.all([
-        syncStudentRosterFromPlayFab(undefined, true),
+        syncSinglePlayerFromPlayFab(playerId),
         syncWeeklyTournamentWithPlayFab(),
       ]).then(() => {
         if (cancelled) return;
