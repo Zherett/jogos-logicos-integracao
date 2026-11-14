@@ -26,7 +26,9 @@ import type { GameRegistration } from "@/lib/game-registry";
 import type { GameId } from "@/lib/game-storage";
 import type { StageGameRecord, RecordHolder } from "@/lib/game-records";
 import { getGameInstructions } from "@/lib/game-instructions";
-import { buildBaseMedalsCatalog } from "@/lib/medals-catalog";
+import { getGameMedalsProgress, type PlayerUnlockedMedal } from "@/lib/medals-catalog";
+import { loadAdminConfig } from "@/lib/game-codes";
+import { loadSpecialEvents, loadRecurringEvents } from "@/lib/custom-events";
 
 interface GameDetailDialogProps {
   game: GameRegistration | null;
@@ -34,7 +36,7 @@ interface GameDetailDialogProps {
   onOpenChange: (open: boolean) => void;
   onPlay: (gameId: GameId) => void;
   personalStats: { bestScore: number; bestLevel: number; plays?: number };
-  unlockedMedals?: string[];
+  unlockedMedals?: Array<string | PlayerUnlockedMedal>;
   stageRecord?: StageGameRecord | null;
   stageName?: string;
   isUnlocked?: boolean;
@@ -70,12 +72,13 @@ export function GameDetailDialog({
   if (!game) return null;
 
   const instructions = getGameInstructions(game.id);
-  const gameMedals = buildBaseMedalsCatalog().filter(
-    (m) => m.gameId === game.id || m.condition.gameId === game.id,
-  );
-  const totalGameMedals = gameMedals.length;
-  const earnedGameMedals = gameMedals.filter((m) => unlockedMedals.includes(m.id)).length;
-  const remainingGameMedals = Math.max(0, totalGameMedals - earnedGameMedals);
+  const cfg = loadAdminConfig();
+  const events = [...loadSpecialEvents(), ...loadRecurringEvents()];
+  const {
+    total: totalGameMedals,
+    earned: earnedGameMedals,
+    remaining: remainingGameMedals,
+  } = getGameMedalsProgress(game.id, unlockedMedals, cfg.customMedals, events);
   const playsCount = personalStats.plays ?? 0;
 
   function handleStartPlay() {

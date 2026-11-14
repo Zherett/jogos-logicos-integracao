@@ -12,6 +12,7 @@ import {
   getDistinctFlawlessGames,
   getDistinctGamesPlayed,
   getEffectivePlayerProgression,
+  getGameMedalsProgress,
   getPlayerStreakDays,
   getTopShowcaseMedals,
   isFlawlessMatch,
@@ -210,20 +211,34 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
     assert.equal(top3[2].id, "m_platina_2");
   });
 
-  it("garante que cada jogo registrado gera automaticamente 7 medalhas dedicadas", () => {
+  it("garante que cada jogo registrado gera automaticamente 7 medalhas dedicadas (além das exclusivas vinculadas)", () => {
     const catalog = buildBaseMedalsCatalog();
+    const expectedTotalByGame: Partial<Record<string, number>> = {
+      rpg: 9,
+      spacequest: 15,
+    };
 
     for (const gId of ALL_GAME_IDS) {
-      const gameMedals = catalog.filter((m) => m.gameId === gId);
-      assert.equal(
-        gameMedals.length,
-        7,
-        `Jogo ${gId} deveria ter 7 medalhas automáticas (1 nível, 1 sem erros, 5 partidas), mas tem ${gameMedals.length}`
+      const autoMedals = catalog.filter(
+        (m) => m.gameId === gId && m.id.startsWith(`game_${gId}_`)
       );
-      assert.ok(gameMedals.some((m) => m.id === `game_${gId}_lvl_master`));
-      assert.ok(gameMedals.some((m) => m.id === `game_${gId}_flawless`));
-      assert.ok(gameMedals.some((m) => m.id === `game_${gId}_matches_10`));
-      assert.ok(gameMedals.some((m) => m.id === `game_${gId}_matches_50`));
+      assert.equal(
+        autoMedals.length,
+        7,
+        `Jogo ${gId} deveria ter 7 medalhas automáticas (1 nível, 1 sem erros, 5 partidas), mas tem ${autoMedals.length}`
+      );
+      assert.ok(autoMedals.some((m) => m.id === `game_${gId}_lvl_master`));
+      assert.ok(autoMedals.some((m) => m.id === `game_${gId}_flawless`));
+      assert.ok(autoMedals.some((m) => m.id === `game_${gId}_matches_10`));
+      assert.ok(autoMedals.some((m) => m.id === `game_${gId}_matches_50`));
+
+      const allGameMedals = catalog.filter((m) => m.gameId === gId);
+      const expectedTotal = expectedTotalByGame[gId] ?? 7;
+      assert.equal(
+        allGameMedals.length,
+        expectedTotal,
+        `Jogo ${gId} deveria ter ${expectedTotal} medalhas no catálogo base, mas tem ${allGameMedals.length}`
+      );
     }
   });
 
@@ -1947,5 +1962,58 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
       0,
       "tournamentMedals prematuro da W46 deve ser purgado",
     );
+  });
+
+  it("getGameMedalsProgress contabiliza PlayerUnlockedMedal[], extras (RPG=9, SpaceQuest=15) e medalhas de eventos por jogo", () => {
+    const unlocked = [
+      { medalId: "game_formas_lvl_master", unlockedAt: "2026-11-14T10:00:00Z" },
+      { medalId: "game_formas_flawless", unlockedAt: "2026-11-14T10:05:00Z" },
+      { medalId: "m_rpg_ametista", unlockedAt: "2026-11-14T10:10:00Z" },
+      { medalId: "sq_rubi", unlockedAt: "2026-11-14T10:15:00Z" },
+    ];
+
+    const formas = getGameMedalsProgress("formas", unlocked);
+    assert.equal(formas.total, 7);
+    assert.equal(formas.earned, 2);
+    assert.equal(formas.remaining, 5);
+
+    const rpg = getGameMedalsProgress("rpg", unlocked);
+    assert.equal(rpg.total, 9);
+    assert.equal(rpg.earned, 1);
+    assert.equal(rpg.remaining, 8);
+
+    const sq = getGameMedalsProgress("spacequest", unlocked);
+    assert.equal(sq.total, 15);
+    assert.equal(sq.earned, 1);
+    assert.equal(sq.remaining, 14);
+
+    const customMedals: MedalDefinition[] = [
+      {
+        id: "ev_cart_1",
+        title: "Evento Cartesiano",
+        description: "Especial do Plano Cartesiano",
+        rarity: "ouro",
+        category: "evento",
+        iconName: "Award",
+        condition: { type: "manual_event" },
+      },
+      {
+        id: "ev_global_1",
+        title: "Evento Global",
+        description: "Para todos os jogos",
+        rarity: "ouro",
+        category: "evento",
+        iconName: "Award",
+        condition: { type: "manual_event" },
+      },
+    ];
+    const events = [
+      { scope: "cartesiano", linkedMedalIds: ["ev_cart_1"] },
+      { scope: "todos", linkedMedalIds: ["ev_global_1"] },
+    ];
+    const cart = getGameMedalsProgress("cartesiano", [{ medalId: "ev_cart_1", unlockedAt: "2026-11-14T11:00:00Z" }], customMedals, events);
+    assert.equal(cart.total, 8);
+    assert.equal(cart.earned, 1);
+    assert.equal(cart.remaining, 7);
   });
 });

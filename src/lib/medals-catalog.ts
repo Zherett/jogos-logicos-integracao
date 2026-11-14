@@ -906,6 +906,7 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
       rarity: "platina",
       category: "evento",
       iconName: "Shield",
+      gameId: "rpg",
       condition: { type: "manual_event" },
     },
     {
@@ -915,6 +916,7 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
       rarity: "platina",
       category: "evento",
       iconName: "Flame",
+      gameId: "rpg",
       condition: { type: "manual_event" },
     },
     // 16. Medalhas Especiais de Auras Cósmicas — Space Quest
@@ -925,6 +927,7 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
       rarity: "bronze",
       category: "evento",
       iconName: "Gem",
+      gameId: "spacequest",
       condition: { type: "manual_event" },
     },
     {
@@ -934,6 +937,7 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
       rarity: "prata",
       category: "evento",
       iconName: "Sparkles",
+      gameId: "spacequest",
       condition: { type: "manual_event" },
     },
     {
@@ -943,6 +947,7 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
       rarity: "ouro",
       category: "evento",
       iconName: "Flame",
+      gameId: "spacequest",
       condition: { type: "manual_event" },
     },
     {
@@ -952,6 +957,7 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
       rarity: "platina",
       category: "evento",
       iconName: "Crown",
+      gameId: "spacequest",
       condition: { type: "manual_event" },
     },
     // 17. Novas Medalhas de Habilidade e Sobrevivência — Space Quest
@@ -962,6 +968,7 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
       rarity: "prata",
       category: "evento",
       iconName: "Hourglass",
+      gameId: "spacequest",
       condition: { type: "manual_event" },
     },
     {
@@ -971,6 +978,7 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
       rarity: "prata",
       category: "evento",
       iconName: "Shield",
+      gameId: "spacequest",
       condition: { type: "manual_event" },
     },
     {
@@ -981,6 +989,7 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
       category: "evento",
       iconName: "Heart",
       secret: true,
+      gameId: "spacequest",
       condition: { type: "manual_event" },
     },
     {
@@ -990,6 +999,7 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
       rarity: "platina",
       category: "evento",
       iconName: "Zap",
+      gameId: "spacequest",
       condition: { type: "manual_event" },
     },
   );
@@ -1172,6 +1182,70 @@ export function getAllAvailableMedals(customMedals?: MedalDefinition[]): MedalDe
   base.forEach((m) => map.set(m.id, m));
   customMedals.forEach((m) => map.set(m.id, m));
   return Array.from(map.values());
+}
+
+export interface EventScopeMedalLink {
+  scope?: string;
+  linkedMedalId?: string | null;
+  linkedMedalIds?: string[];
+}
+
+export interface GameMedalsProgress {
+  total: number;
+  earned: number;
+  remaining: number;
+  medals: MedalDefinition[];
+}
+
+/**
+ * Calcula o progresso de medalhas vinculadas a um jogo específico,
+ * somando as medalhas padrão, extras exclusivas (Batalha de Robôs / Space Quest)
+ * e medalhas de eventos especiais (ativos ou encerrados) direcionadas ao jogo.
+ */
+export function getGameMedalsProgress(
+  gameId: GameId,
+  unlockedMedals: Array<string | PlayerUnlockedMedal> = [],
+  customMedals?: MedalDefinition[],
+  events: EventScopeMedalLink[] = [],
+): GameMedalsProgress {
+  const allMedals = getAllAvailableMedals(customMedals);
+  const eventLinkedIds = new Set<string>();
+
+  for (const ev of events) {
+    if (ev.scope !== gameId) continue;
+    if (ev.linkedMedalId) eventLinkedIds.add(ev.linkedMedalId);
+    if (Array.isArray(ev.linkedMedalIds)) {
+      for (const id of ev.linkedMedalIds) {
+        if (id) eventLinkedIds.add(id);
+      }
+    }
+  }
+
+  const medals = allMedals.filter(
+    (m) =>
+      m.gameId === gameId ||
+      m.condition.gameId === gameId ||
+      m.eventRequirement?.gameId === gameId ||
+      eventLinkedIds.has(m.id),
+  );
+
+  const unlockedSet = new Set<string>();
+  for (const entry of unlockedMedals) {
+    if (typeof entry === "string") {
+      if (entry) unlockedSet.add(entry);
+    } else if (entry?.medalId) {
+      unlockedSet.add(entry.medalId);
+    }
+  }
+
+  const earned = medals.filter((m) => unlockedSet.has(m.id)).length;
+  const total = medals.length;
+  return {
+    total,
+    earned,
+    remaining: Math.max(0, total - earned),
+    medals,
+  };
 }
 
 /** Selects the up to `limit` (default 6) highest-rarity / most valuable medals to feature in profile highlights */
