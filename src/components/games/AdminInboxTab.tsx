@@ -309,18 +309,32 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
             const prefix = match[1].toLowerCase();
             const tagNum = match[2];
             const tagKey = tagNum ? `${prefix}${tagNum}`.toLowerCase() : prefix;
+            const resolvedTagKey =
+              prefix === "gif"
+                ? msg.gifLinks?.[tagKey]
+                  ? tagKey
+                  : tagKey === "gif"
+                    ? msg.gifLinks?.["gif1"]
+                      ? "gif1"
+                      : Object.keys(msg.gifLinks || {})[0] || tagKey
+                    : tagKey
+                : msg.imageLinks?.[tagKey]
+                  ? tagKey
+                  : tagKey === "img"
+                    ? msg.imageLinks?.["img1"]
+                      ? "img1"
+                      : Object.keys(msg.imageLinks || {})[0] || tagKey
+                    : tagKey;
             const url =
               prefix === "gif"
-                ? msg.gifLinks?.[tagKey] ||
-                  (tagKey === "gif" ? msg.gifLinks?.["gif1"] || Object.values(msg.gifLinks || {})[0] : undefined)
-                : msg.imageLinks?.[tagKey] ||
-                  (tagKey === "img" ? msg.imageLinks?.["img1"] || Object.values(msg.imageLinks || {})[0] : undefined);
+                ? msg.gifLinks?.[resolvedTagKey]
+                : msg.imageLinks?.[resolvedTagKey];
 
             if (url) {
               const inlineScale = match[3] ? Number(match[3]) : undefined;
               const scale = Math.min(
                 100,
-                Math.max(10, msg.mediaScales?.[tagKey] ?? inlineScale ?? 100)
+                Math.max(10, msg.mediaScales?.[resolvedTagKey] ?? msg.mediaScales?.[tagKey] ?? inlineScale ?? 100)
               );
 
               return (
@@ -328,8 +342,11 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                   <img
                     src={url}
                     alt={prefix === "gif" ? "Animação GIF" : "Imagem da Mensagem"}
-                    style={{ maxWidth: `${scale}%` }}
-                    className="max-h-64 sm:max-h-80 w-auto object-contain rounded-xl"
+                    style={{
+                      maxWidth: `${scale}%`,
+                      maxHeight: `${(20 * scale) / 100}rem`,
+                    }}
+                    className="w-auto object-contain rounded-xl"
                     loading="lazy"
                     onError={(e) => {
                       (e.target as HTMLElement).style.display = "none";
@@ -2048,7 +2065,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                                   ? "bg-primary text-primary-foreground shadow-xs font-black"
                                   : "text-muted-foreground hover:text-foreground"
                               }`}
-                              title={`Definir largura em ${pct}% (padrão 100%)`}
+                              title={`Definir tamanho em ${pct}% (padrão 100%)`}
                             >
                               {pct}%
                             </button>

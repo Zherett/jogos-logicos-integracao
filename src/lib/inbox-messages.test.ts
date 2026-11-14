@@ -352,15 +352,17 @@ describe("Sistema Completo de Caixa de Entrada e Correio (inbox-messages)", () =
     const msg = sendAdminBroadcastMessage({
       mode: "all",
       title: "Comunicado com Escala de Mídia",
-      body: "Confira o meme:\n[gif1]",
+      body: "Confira o meme e a imagem:\n[gif1]\n[img1]",
       gifLinks: { gif1: "https://media.tenor.com/cat.gif" },
-      mediaScales: { gif1: 60 },
+      imageLinks: { img1: "https://exemplo.com/banner.png" },
+      mediaScales: { gif1: 60, img1: 40 },
     });
 
     const msgs = getInboxMessagesForPlayer(student);
     const found = msgs.find((m) => m.id === msg.id);
     assert.ok(found);
     assert.equal(found?.mediaScales?.["gif1"], 60);
+    assert.equal(found?.mediaScales?.["img1"], 40);
   });
 
   it("formatInboxMessageText substitui [nick] dinamicamente e [game] pelo nome do jogo", () => {

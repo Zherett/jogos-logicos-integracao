@@ -315,19 +315,33 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
             const prefix = match[1].toLowerCase();
             const tagNum = match[2];
             const tagKey = tagNum ? `${prefix}${tagNum}`.toLowerCase() : prefix;
+            const resolvedTagKey =
+              prefix === "gif"
+                ? gifLinks?.[tagKey]
+                  ? tagKey
+                  : tagKey === "gif"
+                    ? gifLinks?.["gif1"]
+                      ? "gif1"
+                      : Object.keys(gifLinks || {})[0] || tagKey
+                    : tagKey
+                : imageLinks?.[tagKey]
+                  ? tagKey
+                  : tagKey === "img"
+                    ? imageLinks?.["img1"]
+                      ? "img1"
+                      : Object.keys(imageLinks || {})[0] || tagKey
+                    : tagKey;
             const url =
               prefix === "gif"
-                ? gifLinks?.[tagKey] ||
-                  (tagKey === "gif" ? gifLinks?.["gif1"] || Object.values(gifLinks || {})[0] : undefined)
-                : imageLinks?.[tagKey] ||
-                  (tagKey === "img" ? imageLinks?.["img1"] || Object.values(imageLinks || {})[0] : undefined);
+                ? gifLinks?.[resolvedTagKey]
+                : imageLinks?.[resolvedTagKey];
             const isGif = prefix === "gif";
 
             if (url) {
               const inlineScale = match[3] ? Number(match[3]) : undefined;
               const scale = Math.min(
                 100,
-                Math.max(10, msg?.mediaScales?.[tagKey] ?? inlineScale ?? 100)
+                Math.max(10, msg?.mediaScales?.[resolvedTagKey] ?? msg?.mediaScales?.[tagKey] ?? inlineScale ?? 100)
               );
 
               return (
@@ -335,8 +349,11 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                   <img
                     src={url}
                     alt={isGif ? "GIF animado" : "Imagem"}
-                    style={{ maxWidth: `${scale}%` }}
-                    className="max-h-80 w-auto object-contain rounded-xl"
+                    style={{
+                      maxWidth: `${scale}%`,
+                      maxHeight: `${(20 * scale) / 100}rem`,
+                    }}
+                    className="w-auto object-contain rounded-xl"
                     loading="lazy"
                     decoding="async"
                     onError={(e) => {
@@ -507,8 +524,8 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                               }`}
                             >
                               {formatText(msg.body, msg, true)
-                                .replace(/\[gif\d*\]/gi, " [GIF] ")
-                                .replace(/\[img\d*\]/gi, " [IMAGEM] ")
+                                .replace(/\[gif\d*(?::\d+%?)?\]/gi, " [GIF] ")
+                                .replace(/\[img\d*(?::\d+%?)?\]/gi, " [IMAGEM] ")
                                 .replace(/\s{2,}/g, " ")
                                 .trim()}
                             </p>
