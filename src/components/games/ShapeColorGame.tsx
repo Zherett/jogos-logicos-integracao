@@ -683,8 +683,8 @@ function Mode4View({ q, droppedIds, flashSlot }: {
       </div>
 
       <Tray>
-        {q.pieces.map((pc) => (
-          <DraggablePiece key={pc.id} piece={pc} disabled={droppedIds.has(pc.id)} scale={sc} />
+        {q.pieces.filter((pc) => !droppedIds.has(pc.id)).map((pc) => (
+          <DraggablePiece key={pc.id} piece={pc} scale={sc} />
         ))}
       </Tray>
     </div>

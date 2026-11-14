@@ -57,36 +57,6 @@ export function GameDetailDialog({
 }: GameDetailDialogProps) {
   const [expandedDetails, setExpandedDetails] = useState(false);
 
-  // Preferências salvas para Lógica Matemática:
-  const [logicOps, setLogicOps] = useState<string[]>(() => {
-    try {
-      const raw = localStorage.getItem("desafios_logica_ops");
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.includes("add") && parsed.includes("sub")) {
-          return parsed;
-        }
-      }
-    } catch {
-      /* ignore */
-    }
-    return ["add", "sub", "mul", "div"];
-  });
-
-  // Preferências salvas para Plano Cartesiano:
-  const [cartesianSize, setCartesianSize] = useState<8 | 10 | 15>(() => {
-    try {
-      const raw = localStorage.getItem("desafios_cartesiano_size");
-      if (raw) {
-        const parsed = Number(raw);
-        if (parsed === 8 || parsed === 10 || parsed === 15) return parsed as 8 | 10 | 15;
-      }
-    } catch {
-      /* ignore */
-    }
-    return 8;
-  });
-
   useEffect(() => {
     if (open) {
       setExpandedDetails(false);
@@ -96,33 +66,6 @@ export function GameDetailDialog({
   if (!game) return null;
 
   const instructions = getGameInstructions(game.id);
-
-  function toggleLogicOp(op: "mul" | "div") {
-    let next: string[];
-    if (logicOps.includes(op)) {
-      next = logicOps.filter((o) => o !== op);
-    } else {
-      next = [...logicOps, op];
-    }
-    // Garante que soma e subtração nunca saem
-    if (!next.includes("add")) next.push("add");
-    if (!next.includes("sub")) next.push("sub");
-    setLogicOps(next);
-    try {
-      localStorage.setItem("desafios_logica_ops", JSON.stringify(next));
-    } catch {
-      /* ignore */
-    }
-  }
-
-  function handleSelectCartesianSize(size: 8 | 10 | 15) {
-    setCartesianSize(size);
-    try {
-      localStorage.setItem("desafios_cartesiano_size", String(size));
-    } catch {
-      /* ignore */
-    }
-  }
 
   function handleStartPlay() {
     onOpenChange(false);
@@ -297,92 +240,27 @@ export function GameDetailDialog({
             )}
           </div>
 
-          {/* 3. Opções Específicas: Lógica Matemática */}
+          {/* 3. Informação Progressiva: Lógica Matemática */}
           {game.id === "logica" && (
-            <div className="rounded-2xl border border-primary/20 bg-card p-3.5 space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-black uppercase tracking-wider text-primary flex items-center gap-1.5">
-                  <Sparkles className="h-3.5 w-3.5" /> Operações no Desafio
-                </span>
-                <span className="text-[10px] text-muted-foreground font-medium">
-                  Soma e Subtração são obrigatórias
-                </span>
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                <div className="flex items-center gap-2 rounded-xl border border-primary/30 bg-primary/10 p-2.5 text-xs font-bold text-foreground select-none opacity-90">
-                  <input type="checkbox" checked disabled className="rounded text-primary h-4 w-4" />
-                  <span>Soma (+)</span>
-                </div>
-                <div className="flex items-center gap-2 rounded-xl border border-primary/30 bg-primary/10 p-2.5 text-xs font-bold text-foreground select-none opacity-90">
-                  <input type="checkbox" checked disabled className="rounded text-primary h-4 w-4" />
-                  <span>Subtração (−)</span>
-                </div>
-                <div
-                  onClick={() => toggleLogicOp("mul")}
-                  className={`flex items-center gap-2 rounded-xl border p-2.5 text-xs font-bold transition-all cursor-pointer select-none ${
-                    logicOps.includes("mul")
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border bg-card text-muted-foreground hover:border-primary/40"
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={logicOps.includes("mul")}
-                    onChange={() => toggleLogicOp("mul")}
-                    className="rounded text-primary h-4 w-4 cursor-pointer"
-                  />
-                  <span>Multiplicação (×)</span>
-                </div>
-                <div
-                  onClick={() => toggleLogicOp("div")}
-                  className={`flex items-center gap-2 rounded-xl border p-2.5 text-xs font-bold transition-all cursor-pointer select-none ${
-                    logicOps.includes("div")
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border bg-card text-muted-foreground hover:border-primary/40"
-                  }`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={logicOps.includes("div")}
-                    onChange={() => toggleLogicOp("div")}
-                    className="rounded text-primary h-4 w-4 cursor-pointer"
-                  />
-                  <span>Divisão (÷)</span>
-                </div>
-              </div>
+            <div className="rounded-2xl border border-primary/20 bg-card p-3.5 space-y-1">
+              <span className="text-xs font-black uppercase tracking-wider text-primary flex items-center gap-1.5">
+                <Sparkles className="h-3.5 w-3.5" /> Operações Progressivas
+              </span>
+              <p className="text-xs text-muted-foreground">
+                Todas as operações (+, −, ×, ÷) são liberadas e aumentam de dificuldade automaticamente conforme você avança de nível.
+              </p>
             </div>
           )}
 
-          {/* 4. Opções Específicas: Plano Cartesiano */}
+          {/* 4. Informação Progressiva: Plano Cartesiano */}
           {game.id === "cartesiano" && (
-            <div className="rounded-2xl border border-primary/20 bg-card p-3.5 space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-black uppercase tracking-wider text-primary flex items-center gap-1.5">
-                  <Target className="h-3.5 w-3.5" /> Tamanho do Plano Cartesiano
-                </span>
-                <span className="text-[10px] text-muted-foreground font-medium">
-                  Escolha o tamanho da grade
-                </span>
-              </div>
-              <div className="grid grid-cols-3 gap-2">
-                {([8, 10, 15] as const).map((size) => (
-                  <button
-                    key={size}
-                    type="button"
-                    onClick={() => handleSelectCartesianSize(size)}
-                    className={`flex flex-col items-center justify-center rounded-xl border p-2.5 font-display transition-all cursor-pointer ${
-                      cartesianSize === size
-                        ? "border-primary bg-primary text-primary-foreground shadow-md scale-[1.02]"
-                        : "border-border bg-card text-foreground hover:border-primary/40 hover:bg-secondary/50"
-                    }`}
-                  >
-                    <span className="text-sm font-black">{size} × {size}</span>
-                    <span className="text-[10px] opacity-80 font-medium">
-                      {size === 8 ? "8x8 (Fácil)" : size === 10 ? "10x10 (Médio)" : "15x15 (Avançado)"}
-                    </span>
-                  </button>
-                ))}
-              </div>
+            <div className="rounded-2xl border border-primary/20 bg-card p-3.5 space-y-1">
+              <span className="text-xs font-black uppercase tracking-wider text-primary flex items-center gap-1.5">
+                <Target className="h-3.5 w-3.5" /> Grade Progressiva
+              </span>
+              <p className="text-xs text-muted-foreground">
+                O tamanho do plano escala automaticamente conforme você avança de nível: <b>8×8</b> (Nível 1) → <b>10×10</b> (Nível 2) → <b>15×15</b> (Nível 3).
+              </p>
             </div>
           )}
 
