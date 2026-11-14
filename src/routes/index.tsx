@@ -193,9 +193,12 @@ function Index() {
 
   useEffect(() => {
     setMounted(true);
-    refreshLocal();
     seedRecordsFromRegistry();
     void syncGameRecordsWithPlayFab();
+  }, []);
+
+  useEffect(() => {
+    refreshLocal();
   }, [view]);
 
   // Instantly re-render when ADM updates enabled/disabled games or lock gates
@@ -248,6 +251,9 @@ function Index() {
   // Keep logged-in student visible in the online players list across the platform
   useEffect(() => {
     if (!auth.profile) return;
+    // Enquanto o aluno está jogando uma partida solo (fora do menu e sem sala X1), não sobrecarrega com sync de lobby X1
+    if (view !== "menu" && !activeX1Room?.code && !x1Open) return;
+
     const p = auth.profile;
     const pulse = () => {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
@@ -265,9 +271,10 @@ function Index() {
       void syncX1WithPlayFabCloud(activeX1Room?.code ?? null);
     };
     pulse();
-    const id = window.setInterval(pulse, activeX1Room?.code ? 5000 : 10000);
+    const id = window.setInterval(pulse, activeX1Room?.code ? 5000 : 25000);
     return () => window.clearInterval(id);
-  }, [auth.profile, activeX1Room?.code]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auth.profile?.id, activeX1Room?.code, view, x1Open]);
 
   // Monitor incoming X1 challenge invites in real-time
   useEffect(() => {
@@ -281,7 +288,7 @@ function Index() {
 
     const checkInvites = () => {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-      if (isArenaClosed || activeX1Room) {
+      if (view !== "menu" || isArenaClosed || activeX1Room) {
         if (incomingInvite) setIncomingInvite(null);
         return;
       }
@@ -297,7 +304,7 @@ function Index() {
 
     checkInvites();
     const unsub = subscribeX1Updates(checkInvites);
-    const pollId = window.setInterval(checkInvites, 10000);
+    const pollId = window.setInterval(checkInvites, 25000);
 
     const handleReject = (e: Event) => {
       const detail = (e as CustomEvent).detail as
@@ -325,12 +332,13 @@ function Index() {
       window.removeEventListener("desafios:x1-invite-rejected", handleReject);
     };
   }, [
-    auth.profile,
+    auth.profile?.id,
     auth.isAdmin,
     auth.adminConfig.x1Enabled,
     auth.adminConfig.x1ArenaClosed,
     incomingInvite,
     activeX1Room,
+    view,
   ]);
 
   useEffect(() => {

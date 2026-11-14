@@ -1141,15 +1141,8 @@ export function usePresenceTracker(player?: {
   nickNormalized?: string;
 } | null) {
   useEffect(() => {
-    // Mesmo sem jogador logado (ou enquanto o ADM observa), sincroniza presenças da nuvem periodicamente
-    void syncPresenceFromPlayFab(true);
-    const cloudPollId = setInterval(() => {
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-      void syncPresenceFromPlayFab();
-    }, 10000);
-
     if (!player?.playerId) {
-      return () => clearInterval(cloudPollId);
+      return;
     }
 
     const playerId = player.playerId;
@@ -1160,7 +1153,7 @@ export function usePresenceTracker(player?: {
     let lastRecordedActivity = Date.now();
     recordLocalUserActivity(lastRecordedActivity);
 
-    //Pulso imediato e periodico a cada 12 segundos (local + nuvem PlayFab)
+    // Pulso periódico a cada 30 segundos (local + push na nuvem PlayFab, sem baixar toda a rede)
     const pulse = (disconnected = false) => {
       const now = Date.now();
 
@@ -1196,31 +1189,18 @@ export function usePresenceTracker(player?: {
       if (rec) {
         void pushPresenceToPlayFab(rec);
       }
-      if (!disconnected) {
-        void syncPresenceFromPlayFab();
-      }
     };
 
-    // Throttle de interacao do usuario (no maximo uma gravacao a cada 3 segundos)
+    // Throttle de interação do usuário (atualiza apenas timestamp leve, sem serializar o store inteiro no toque/scroll)
     const onUserInteraction = () => {
       const now = Date.now();
       const wasIdleOrStale = now - lastRecordedActivity >= 60_000;
-      if (now - lastRecordedActivity >= 3000) {
+      if (now - lastRecordedActivity >= 5000) {
         lastRecordedActivity = now;
         recordLocalUserActivity(now);
         // Se estava inativo há 1+ min e voltou a interagir, envia pulso imediato para ficar Verde na hora
         if (wasIdleOrStale) {
           pulse(false);
-        } else {
-          recordPlayerHeartbeat(playerId, {
-            playfabId,
-            nick,
-            nickNormalized,
-            lastActiveAt: now,
-            lastSeenAt: now,
-            idleMs: 0,
-            activity: getPlayerCurrentActivity(),
-          });
         }
       }
     };
@@ -1256,7 +1236,7 @@ export function usePresenceTracker(player?: {
     const intervalId = setInterval(() => {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       pulse(false);
-    }, 12000);
+    }, 30000);
 
     return () => {
       window.removeEventListener("pointerdown", onUserInteraction);
@@ -1269,7 +1249,6 @@ export function usePresenceTracker(player?: {
       window.removeEventListener("beforeunload", onPageHide);
       window.removeEventListener(ACTIVITY_CHANGED_EVENT, onActivityChange);
       clearInterval(intervalId);
-      clearInterval(cloudPollId);
     };
   }, [player?.playerId, player?.playfabId, player?.nick, player?.nickNormalized]);
 }

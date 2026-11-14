@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { lazy, Suspense, useState, useEffect } from "react";
 import {
   Trophy,
   Star,
@@ -40,7 +40,10 @@ import {
 } from "@/lib/game-records";
 import type { PlatformNoticeSlide } from "@/lib/game-codes";
 import { NoticeBoard } from "./NoticeBoard";
-import { GameDetailDialog } from "./GameDetailDialog";
+
+const GameDetailDialog = lazy(() =>
+  import("./GameDetailDialog").then((m) => ({ default: m.GameDetailDialog })),
+);
 
 interface Props {
   stats: AllStats;
@@ -139,11 +142,12 @@ export function Menu({
 
   useEffect(() => {
     const update = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       setActiveEvents(getAllActiveEvents());
       setCumulativeBonuses(calculateCumulativeActiveBonuses());
     };
     window.addEventListener("desafios:special-events-updated", update);
-    const id = window.setInterval(update, 10000);
+    const id = window.setInterval(update, 30000);
     return () => {
       window.removeEventListener("desafios:special-events-updated", update);
       window.clearInterval(id);
@@ -614,50 +618,36 @@ export function Menu({
       </p>
 
       {/* 6. Modal de Detalhes do Jogo (Instruções, Recorde Pessoal, Recorde da Etapa, Modalidades e Botão Jogar) */}
-      <GameDetailDialog
-        game={selectedGameForDetail}
-        open={Boolean(selectedGameForDetail)}
-        onOpenChange={(isOpen) => {
-          if (!isOpen) setSelectedGameForDetail(null);
-        }}
-        onPlay={(gameId) => {
-          setSelectedGameForDetail(null);
-          onSelect(gameId);
-        }}
-        personalStats={
-          selectedGameForDetail
-            ? stats[selectedGameForDetail.id] ?? { bestScore: 0, bestLevel: 1 }
-            : { bestScore: 0, bestLevel: 1 }
-        }
-        stageRecord={
-          selectedGameForDetail
-            ? getGameStageRecord(selectedGameForDetail.id, stageId, gameRecords)
-            : null
-        }
-        stageName={playerProfile ? undefined : "1ª Etapa (5º ano)"}
-        isGuest={!playerProfile}
-        isLevelLocked={
-          selectedGameForDetail
-            ? Boolean(
-                playerProfile &&
-                  !isAdmin &&
-                  playerLevel < (gameLevelRequirements?.[selectedGameForDetail.id] ?? 1),
-              )
-            : false
-        }
-        requiredLevel={
-          selectedGameForDetail ? (gameLevelRequirements?.[selectedGameForDetail.id] ?? 1) : 1
-        }
-        isUnlocked={
-          selectedGameForDetail
-            ? !requireCodeGate || unlocked.includes(selectedGameForDetail.id)
-            : true
-        }
-        onOpenCodeGate={() => {
-          setSelectedGameForDetail(null);
-          onAddCode();
-        }}
-      />
+      {selectedGameForDetail && (
+        <Suspense fallback={null}>
+          <GameDetailDialog
+            game={selectedGameForDetail}
+            open={Boolean(selectedGameForDetail)}
+            onOpenChange={(isOpen) => {
+              if (!isOpen) setSelectedGameForDetail(null);
+            }}
+            onPlay={(gameId) => {
+              setSelectedGameForDetail(null);
+              onSelect(gameId);
+            }}
+            personalStats={stats[selectedGameForDetail.id] ?? { bestScore: 0, bestLevel: 1 }}
+            stageRecord={getGameStageRecord(selectedGameForDetail.id, stageId, gameRecords)}
+            stageName={playerProfile ? undefined : "1ª Etapa (5º ano)"}
+            isGuest={!playerProfile}
+            isLevelLocked={Boolean(
+              playerProfile &&
+                !isAdmin &&
+                playerLevel < (gameLevelRequirements?.[selectedGameForDetail.id] ?? 1),
+            )}
+            requiredLevel={gameLevelRequirements?.[selectedGameForDetail.id] ?? 1}
+            isUnlocked={!requireCodeGate || unlocked.includes(selectedGameForDetail.id)}
+            onOpenCodeGate={() => {
+              setSelectedGameForDetail(null);
+              onAddCode();
+            }}
+          />
+        </Suspense>
+      )}
     </div>
   );
 }

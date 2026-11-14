@@ -287,8 +287,8 @@ export function PlayerMenu({ onConfigChanged }: Props) {
       }
     };
 
-    // 1. Sincronização periódica da nuvem a cada 20 segundos
-    const pollTimer = setInterval(syncInboxCloud, 20000);
+    // 1. Sincronização periódica da nuvem a cada 60 segundos (foco e BroadcastChannel já atualizam na hora)
+    const pollTimer = setInterval(syncInboxCloud, 60000);
 
     // 2. Sincronização imediata ao focar na janela/aba
     const handleFocus = () => {

@@ -65,8 +65,8 @@ export const PresenceDot: React.FC<PresenceDotProps> = ({
       title={tooltip}
       aria-label={tooltip}
     >
-      {/* Ping suave se estiver online e ativado */}
-      {status === "online" && showPingAnimation && (
+      {/* Ping suave se estiver online, ativado e fora de listas compactas */}
+      {status === "online" && showPingAnimation && size !== "xs" && (
         <span
           className={`absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60`}
         />
