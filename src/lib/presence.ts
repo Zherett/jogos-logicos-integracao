@@ -390,6 +390,36 @@ export function getPlayerActivityDetails(
 
 let cachedPresenceRaw: string | null = null;
 let cachedPresenceStore: PresenceStore | null = null;
+let cachedPresenceIndexMap: Map<string, PlayerPresenceRecord> | null = null;
+
+function buildPresenceIndexMap(store: PresenceStore): Map<string, PlayerPresenceRecord> {
+  const map = new Map<string, PlayerPresenceRecord>();
+  const put = (key: string | undefined | null, rec: PlayerPresenceRecord) => {
+    if (!key) return;
+    const cur = map.get(key);
+    if (!cur || rec.lastSeenAt > cur.lastSeenAt) {
+      map.set(key, rec);
+    }
+  };
+  for (const [k, item] of Object.entries(store.players ?? {})) {
+    if (!item) continue;
+    put(k, item);
+    put(k.toLowerCase(), item);
+    if (item.playerId) {
+      put(item.playerId, item);
+      put(item.playerId.toLowerCase(), item);
+    }
+    if (item.playfabId) {
+      put(item.playfabId, item);
+    }
+    const itemSlug = item.nickNormalized || (item.nick ? nickSlug(item.nick) : "");
+    if (itemSlug) {
+      put(itemSlug, item);
+      put(`pf_${itemSlug}`, item);
+    }
+  }
+  return map;
+}
 
 function loadPresenceStoreReadOnly(): PresenceStore {
   if (typeof window === "undefined") {
@@ -397,13 +427,19 @@ function loadPresenceStoreReadOnly(): PresenceStore {
   }
   try {
     const raw = localStorage.getItem(PRESENCE_STORAGE_KEY);
-    if (!raw) return { players: {}, updatedAt: 0 };
+    if (!raw) {
+      cachedPresenceRaw = null;
+      cachedPresenceStore = null;
+      cachedPresenceIndexMap = null;
+      return { players: {}, updatedAt: 0 };
+    }
     if (raw === cachedPresenceRaw && cachedPresenceStore) {
       return cachedPresenceStore;
     }
     const parsed = JSON.parse(raw) as PresenceStore;
     cachedPresenceRaw = raw;
     cachedPresenceStore = parsed;
+    cachedPresenceIndexMap = buildPresenceIndexMap(parsed);
     return parsed;
   } catch {
     return { players: {}, updatedAt: 0 };
@@ -436,6 +472,7 @@ export function savePresenceStore(store: PresenceStore): void {
     const serialized = JSON.stringify(store);
     cachedPresenceRaw = serialized;
     cachedPresenceStore = store;
+    cachedPresenceIndexMap = buildPresenceIndexMap(store);
     localStorage.setItem(PRESENCE_STORAGE_KEY, serialized);
     window.dispatchEvent(new CustomEvent(PRESENCE_UPDATED_EVENT));
   } catch {
@@ -835,12 +872,62 @@ export async function syncPresenceFromPlayFab(force = false): Promise<void> {
 }
 
 let cachedX1PresenceRaw: string | null = null;
-let cachedX1PresenceStore: {
-  players?: Record<
-    string,
-    { playerId?: string; lastSeenAt?: number; lastActiveAt?: number; nick?: string }
-  >;
-} | null = null;
+let cachedX1PresenceIndexMap: Map<string, PlayerPresenceRecord> | null = null;
+
+function getX1PresenceIndexMap(): Map<string, PlayerPresenceRecord> | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const x1Raw = localStorage.getItem("desafios-x1-lobby-state-v1");
+    if (!x1Raw) {
+      cachedX1PresenceRaw = null;
+      cachedX1PresenceIndexMap = null;
+      return null;
+    }
+    if (x1Raw === cachedX1PresenceRaw && cachedX1PresenceIndexMap) {
+      return cachedX1PresenceIndexMap;
+    }
+    const x1Store = JSON.parse(x1Raw) as {
+      players?: Record<
+        string,
+        { playerId?: string; lastSeenAt?: number; lastActiveAt?: number; nick?: string }
+      >;
+    };
+    const map = new Map<string, PlayerPresenceRecord>();
+    const put = (key: string | undefined | null, rec: PlayerPresenceRecord) => {
+      if (!key) return;
+      const cur = map.get(key);
+      if (!cur || rec.lastSeenAt > cur.lastSeenAt) {
+        map.set(key, rec);
+      }
+    };
+    for (const [k, x1Player] of Object.entries(x1Store?.players ?? {})) {
+      if (!x1Player || typeof x1Player.lastSeenAt !== "number") continue;
+      const x1Slug = x1Player.nick ? nickSlug(x1Player.nick) : "";
+      const rec: PlayerPresenceRecord = {
+        playerId: x1Player.playerId || k,
+        nick: x1Player.nick,
+        nickNormalized: x1Slug,
+        lastSeenAt: x1Player.lastSeenAt,
+        lastActiveAt: x1Player.lastActiveAt ?? x1Player.lastSeenAt,
+      };
+      put(k, rec);
+      put(k.toLowerCase(), rec);
+      if (x1Player.playerId) {
+        put(x1Player.playerId, rec);
+        put(x1Player.playerId.toLowerCase(), rec);
+      }
+      if (x1Slug) {
+        put(x1Slug, rec);
+        put(`pf_${x1Slug}`, rec);
+      }
+    }
+    cachedX1PresenceRaw = x1Raw;
+    cachedX1PresenceIndexMap = map;
+    return map;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Obtem os dados de presenca de um jogador, checando o storage local por ID, PlayFabId ou Nick,
@@ -870,64 +957,33 @@ export function getPlayerPresenceData(
     candidateKeys.add(`pf_${slugHint}`);
   }
 
-  // 1. Verificar presence store por chaves diretas e por varredura de alias
-  const store = loadPresenceStoreReadOnly();
+  // 1. Verificar presence store por indice O(1)
+  loadPresenceStoreReadOnly();
   let rec: PlayerPresenceRecord | undefined;
 
-  for (const k of candidateKeys) {
-    const candidate = store.players[k];
-    if (candidate && (!rec || candidate.lastSeenAt > rec.lastSeenAt)) {
-      rec = candidate;
-    }
-  }
-
-  if (!rec) {
-    for (const item of Object.values(store.players)) {
-      if (!item) continue;
-      const itemSlug = item.nickNormalized || (item.nick ? nickSlug(item.nick) : "");
-      if (
-        (cleanId && (item.playerId === cleanId || item.playfabId === cleanId)) ||
-        (hints?.playfabId && item.playfabId === hints.playfabId) ||
-        (slugHint && itemSlug === slugHint)
-      ) {
-        if (!rec || item.lastSeenAt > rec.lastSeenAt) {
-          rec = item;
-        }
+  if (cachedPresenceIndexMap) {
+    for (const k of candidateKeys) {
+      const candidate = cachedPresenceIndexMap.get(k);
+      if (candidate && (!rec || candidate.lastSeenAt > rec.lastSeenAt)) {
+        rec = candidate;
       }
     }
   }
 
-  // 2. Se nao encontrou ou dados estao desatualizados, verificar x1-lobby-state
-  if (typeof window !== "undefined") {
-    try {
-      const x1Raw = localStorage.getItem("desafios-x1-lobby-state-v1");
-      if (x1Raw) {
-        let x1Store = cachedX1PresenceRaw === x1Raw ? cachedX1PresenceStore : null;
-        if (!x1Store) {
-          x1Store = JSON.parse(x1Raw);
-          cachedX1PresenceRaw = x1Raw;
-          cachedX1PresenceStore = x1Store;
-        }
-        for (const [k, x1Player] of Object.entries(x1Store?.players ?? {})) {
-          if (!x1Player || typeof x1Player.lastSeenAt !== "number") continue;
-          const x1Slug = x1Player.nick ? nickSlug(x1Player.nick) : "";
-          const matches =
-            candidateKeys.has(k) ||
-            (x1Player.playerId && candidateKeys.has(x1Player.playerId)) ||
-            (slugHint && x1Slug === slugHint);
-          if (matches && (!rec || x1Player.lastSeenAt > rec.lastSeenAt)) {
-            rec = {
-              playerId: cleanId || x1Player.playerId || k,
-              nick: x1Player.nick ?? rec?.nick,
-              nickNormalized: x1Slug || slugHint,
-              lastSeenAt: x1Player.lastSeenAt,
-              lastActiveAt: x1Player.lastActiveAt ?? x1Player.lastSeenAt,
-            };
-          }
-        }
+  // 2. Se nao encontrou ou dados estao desatualizados, verificar x1-lobby-state por indice O(1)
+  const x1IndexMap = getX1PresenceIndexMap();
+  if (x1IndexMap) {
+    for (const k of candidateKeys) {
+      const x1Candidate = x1IndexMap.get(k);
+      if (x1Candidate && (!rec || x1Candidate.lastSeenAt > rec.lastSeenAt)) {
+        rec = {
+          playerId: cleanId || x1Candidate.playerId,
+          nick: x1Candidate.nick ?? rec?.nick,
+          nickNormalized: x1Candidate.nickNormalized || slugHint,
+          lastSeenAt: x1Candidate.lastSeenAt,
+          lastActiveAt: x1Candidate.lastActiveAt,
+        };
       }
-    } catch {
-      // ignore
     }
   }
 

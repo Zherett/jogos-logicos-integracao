@@ -1159,9 +1159,14 @@ export function getTop1ConsecutiveWeeks(profile?: PlayerProfile | null): number 
   return streak;
 }
 
+let cachedBaseMedalsCatalog: MedalDefinition[] | null = null;
+
 /** Merges the default catalog with custom medals defined by the administrator */
 export function getAllAvailableMedals(customMedals?: MedalDefinition[]): MedalDefinition[] {
-  const base = buildBaseMedalsCatalog();
+  if (!cachedBaseMedalsCatalog) {
+    cachedBaseMedalsCatalog = buildBaseMedalsCatalog();
+  }
+  const base = cachedBaseMedalsCatalog;
   if (!customMedals || customMedals.length === 0) return base;
   const map = new Map<string, MedalDefinition>();
   base.forEach((m) => map.set(m.id, m));
@@ -1213,6 +1218,9 @@ export interface PlayerStatsContext {
   enabledGames?: Partial<Record<GameId, boolean>>;
 }
 
+let cachedAdminEnabledGamesRaw: string | null = null;
+let cachedAdminEnabledGamesMap: Partial<Record<GameId, boolean>> = {};
+
 /**
  * Retorna o conjunto de jogos habilitados pelo Administrador na plataforma.
  * Jogos desabilitados (`enabledGames[id] === false`) não podem contar como
@@ -1226,21 +1234,29 @@ export function getEnabledGameIdsSet(
     try {
       const raw = window.localStorage.getItem("desafios-logica-admin-config-v1");
       if (raw) {
-        const parsed = JSON.parse(raw) as { enabledGames?: Partial<Record<GameId, boolean>> };
-        if (parsed?.enabledGames) {
-          map = { ...parsed.enabledGames };
+        if (raw === cachedAdminEnabledGamesRaw) {
+          map = cachedAdminEnabledGamesMap;
+        } else {
+          const parsed = JSON.parse(raw) as { enabledGames?: Partial<Record<GameId, boolean>> };
+          cachedAdminEnabledGamesRaw = raw;
+          cachedAdminEnabledGamesMap = parsed?.enabledGames ? { ...parsed.enabledGames } : {};
+          map = cachedAdminEnabledGamesMap;
         }
+      } else {
+        cachedAdminEnabledGamesRaw = null;
+        cachedAdminEnabledGamesMap = {};
       }
     } catch {
       /* ignore */
     }
   }
-  if (enabledGamesOverride) {
-    map = { ...map, ...enabledGamesOverride };
-  }
   const set = new Set<GameId>();
   for (const gId of ALL_GAME_IDS) {
-    if (map[gId] !== false) {
+    const val =
+      enabledGamesOverride && enabledGamesOverride[gId] !== undefined
+        ? enabledGamesOverride[gId]
+        : map[gId];
+    if (val !== false) {
       set.add(gId);
     }
   }

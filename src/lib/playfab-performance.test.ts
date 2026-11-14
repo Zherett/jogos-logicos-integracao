@@ -2,10 +2,15 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   fetchLeaderboard,
+  getAllRegisteredPlayers,
+  getLeaderboardSnapshotLocal,
   getPlayerPublicProfile,
   getStudentRosterCloudKey,
+  getTrashPlayers,
   syncSinglePlayerFromPlayFab,
 } from "./playfab.ts";
+import { getCachedMedalPioneers, invalidatePioneersCache } from "./medal-pioneers.ts";
+import { computePresenceSummary } from "./presence.ts";
 
 const SESSION_KEY = "desafios-playfab-session-v1";
 const REGISTRY_KEY = "desafios-playfab-registry-v1";
@@ -280,5 +285,69 @@ describe("Otimizações de Performance PlayFab (Perfil, Ranking e ADM)", () => {
     const alvoEntry = entries.find((e) => e.nick === "AlunoAlvo");
     assert.ok(alvoEntry, "AlunoAlvo deve constar no ranking");
     assert.equal(alvoEntry.value, 999);
+  });
+
+  it("processa 300 alunos no Ranking, Perfil, Medalhas e Lista de Alunos do ADM sem travar a thread (< 50ms em leituras repetidas)", () => {
+    const bulkRegistry: Record<string, unknown> = {};
+    for (let i = 1; i <= 300; i++) {
+      const slug = `aluno_escola_${i}`;
+      bulkRegistry[slug] = {
+        passwordHash: `hash_${i}`,
+        unlocked: ["logica", "operacoes", "fracoes"],
+        stats: [
+          { game_id: "logica", mode: "padrao", plays: 4, wins: 3, best_score: 120 + i, best_level: 3 },
+          { game_id: "operacoes", mode: "padrao", plays: 3, wins: 2, best_score: 90 + i, best_level: 2 },
+        ],
+        profile: {
+          id: `stu_${slug}`,
+          playfabId: `PF_${i}`,
+          nick: `Aluno${i}`,
+          nickNormalized: slug,
+          full_name: `ALUNO ESCOLA TESTE ${i}`,
+          school: "E.M. Prof. Raimundo",
+          grade: "5º ano",
+          turma: i % 2 === 0 ? "A" : "B",
+          birthdate: "2015-05-10",
+          xp: 200 + i * 5,
+          seasonXp: 200 + i * 5,
+          seasonId: 1,
+          rankedSeasonId: 1,
+          level: 3,
+          wins: 5,
+          matchesPlayed: 7,
+          tournamentPoints: i % 5 === 0 ? 35 : 0,
+          bestTournamentPoints: i % 5 === 0 ? 35 : 0,
+          pointsBalance: 150,
+          careerPoints: 150,
+          badges: [],
+          unlockedMedals: [{ medalId: "lvl_2", unlockedAt: "2026-11-01T12:00:00.000Z" }],
+        },
+      };
+    }
+    storage.setItem(REGISTRY_KEY, JSON.stringify(bulkRegistry));
+    invalidatePioneersCache();
+
+    // 1ª leitura (alinhamento inicial dos 300 alunos)
+    const initialPlayers = getAllRegisteredPlayers();
+    assert.equal(initialPlayers.length, 300);
+
+    // Leituras subsequentes (abrir Ranking, Perfil, Medalhas e aba de Alunos no ADM)
+    const t0 = performance.now();
+    const playersAgain = getAllRegisteredPlayers();
+    const trash = getTrashPlayers();
+    const lbSnap = getLeaderboardSnapshotLocal({ kind: "xp_season", stage: "TODAS" }, 20);
+    const pioneers = getCachedMedalPioneers(playersAgain);
+    const presence = computePresenceSummary(playersAgain);
+    const elapsedMs = performance.now() - t0;
+
+    assert.equal(playersAgain.length, 300);
+    assert.equal(trash.length, 0);
+    assert.equal(lbSnap.length, 20);
+    assert.ok(pioneers.lvl_2, "Deve identificar pioneiro da medalha lvl_2");
+    assert.equal(presence.total, 300);
+    assert.ok(
+      elapsedMs < 50,
+      `Operações combinadas para 300 alunos devem rodar em < 50ms (levou ${elapsedMs.toFixed(2)}ms)`,
+    );
   });
 });

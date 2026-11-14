@@ -15,6 +15,7 @@ import {
   loadStoredSession,
   syncStudentRosterFromPlayFab,
   loadRegistry,
+  loadRegistryReadOnly,
   saveRegistry,
   getStudentRosterCloudKey,
   type PlayerProfile,
@@ -943,7 +944,8 @@ function loadTournamentStore(now = new Date()): WeeklyTournamentStore {
 
   // Mescla dinamicamente jogadores registrados no catálogo PlayFab unificado com pontuação ativa
   try {
-    const reg = loadRegistry();
+    const reg = loadRegistryReadOnly();
+    const hasBaseRecords = Object.keys(baseRecords).length > 0;
     const players = Object.values(reg)
       .map((a) => a?.profile)
       .filter((p): p is PlayerProfile => Boolean(p));
@@ -955,12 +957,18 @@ function loadTournamentStore(now = new Date()): WeeklyTournamentStore {
         typeof p.bestTournamentPoints === "number" ? p.bestTournamentPoints : 0,
       );
 
-      const matched = findMatchingRecords(baseRecords, [
-        p.id,
-        p.nickNormalized,
-        p.nick,
-        p.playfabId,
-      ]);
+      if (!hasBaseRecords && pts === 0 && (p.dailyTournamentEntries ?? 0) === 0) {
+        continue;
+      }
+
+      const matched = hasBaseRecords
+        ? findMatchingRecords(baseRecords, [
+            p.id,
+            p.nickNormalized,
+            p.nick,
+            p.playfabId,
+          ])
+        : [];
 
       // Alunos abaixo do Nível 3 (requisito do Torneio) não podem ter registro no Torneio Semanal
       if ((p.level ?? 1) < TOURNAMENT_MIN_LEVEL) {
@@ -1120,6 +1128,64 @@ export function deductTournamentRecordPoints(
   }
 }
 
+let cachedTourLookupRaw: string | null = null;
+let cachedTourLookupRegRaw: string | null = null;
+let cachedTourLookupSeasonId: number | null = null;
+let cachedTourLookupMap: Map<string, TournamentPlayerRecord> | null = null;
+
+function isBetterTournamentRecord(
+  candidate: TournamentPlayerRecord,
+  existing?: TournamentPlayerRecord,
+): boolean {
+  if (!existing) return true;
+  const candPts = candidate.tournamentPoints ?? 0;
+  const exPts = existing.tournamentPoints ?? 0;
+  if (candPts !== exPts) return candPts > exPts;
+  return (candidate.bestScore ?? 0) > (existing.bestScore ?? 0);
+}
+
+function getTournamentLookupMap(): Map<string, TournamentPlayerRecord> {
+  const rawTour =
+    typeof window !== "undefined" ? window.localStorage.getItem(TOURNAMENT_STORAGE_KEY) : null;
+  const rawReg =
+    typeof window !== "undefined"
+      ? window.localStorage.getItem("desafios-playfab-registry-v1")
+      : null;
+  const currentSeasonId = loadAdminConfig().rankedSeasonId ?? 1;
+
+  if (
+    cachedTourLookupMap &&
+    rawTour === cachedTourLookupRaw &&
+    rawReg === cachedTourLookupRegRaw &&
+    currentSeasonId === cachedTourLookupSeasonId
+  ) {
+    return cachedTourLookupMap;
+  }
+
+  const store = loadTournamentStore();
+  const map = new Map<string, TournamentPlayerRecord>();
+  for (const [key, rec] of Object.entries(store.records)) {
+    const kLower = key.toLowerCase().trim();
+    const rId = (rec.playerId || "").toLowerCase().trim();
+    const rNick = (rec.nick || "").toLowerCase().trim();
+    if (kLower && isBetterTournamentRecord(rec, map.get(kLower))) {
+      map.set(kLower, rec);
+    }
+    if (rId && isBetterTournamentRecord(rec, map.get(rId))) {
+      map.set(rId, rec);
+    }
+    if (rNick && isBetterTournamentRecord(rec, map.get(rNick))) {
+      map.set(rNick, rec);
+    }
+  }
+
+  cachedTourLookupRaw = rawTour;
+  cachedTourLookupRegRaw = rawReg;
+  cachedTourLookupSeasonId = currentSeasonId;
+  cachedTourLookupMap = map;
+  return map;
+}
+
 /**
  * Recupera o registro da ranqueada de um jogador diretamente do armazenamento do Torneio Semanal.
  * Realiza varredura inteligente por ID, apelido ou apelido normalizado, garantindo sempre a maior pontuação.
@@ -1129,45 +1195,47 @@ export function getTournamentStoreRecord(
   nick?: string | null,
 ): TournamentPlayerRecord | null {
   if (!playerId && !nick) return null;
-  const store = loadTournamentStore();
   const cleanId = (playerId ?? "").toLowerCase().trim();
   const cleanNick = (nick ?? "").toLowerCase().trim();
+  const lookupMap = getTournamentLookupMap();
 
-  // Coleta todas as correspondências para este aluno
-  const matches: TournamentPlayerRecord[] = [];
-  for (const [key, rec] of Object.entries(store.records)) {
-    const kLower = key.toLowerCase().trim();
-    const rId = (rec.playerId || "").toLowerCase().trim();
-    const rNick = (rec.nick || "").toLowerCase().trim();
-    if (
-      (cleanId && (kLower === cleanId || rId === cleanId || rNick === cleanId)) ||
-      (cleanNick && (kLower === cleanNick || rNick === cleanNick || rId === cleanNick))
-    ) {
-      matches.push(rec);
+  const recById = cleanId ? lookupMap.get(cleanId) : undefined;
+  const recByNick = cleanNick ? lookupMap.get(cleanNick) : undefined;
+  let bestRec: TournamentPlayerRecord | null = null;
+  if (recById && recByNick) {
+    bestRec = isBetterTournamentRecord(recByNick, recById) ? recByNick : recById;
+  } else {
+    bestRec = recById ?? recByNick ?? null;
+  }
+
+  const reg = loadRegistryReadOnly();
+  const memAcc = (cleanId && reg[cleanId]) || (cleanNick && reg[cleanNick]);
+  if (memAcc?.profile) {
+    if ((memAcc.profile.level ?? 1) < TOURNAMENT_MIN_LEVEL) {
+      return null;
+    }
+    const memPts = Math.max(
+      typeof memAcc.profile.tournamentPoints === "number" ? memAcc.profile.tournamentPoints : 0,
+      typeof memAcc.profile.bestTournamentPoints === "number"
+        ? memAcc.profile.bestTournamentPoints
+        : 0,
+    );
+    if (bestRec && memPts > (bestRec.tournamentPoints ?? 0)) {
+      return { ...bestRec, tournamentPoints: memPts };
     }
   }
 
-  if (matches.length > 0) {
-    // Retorna sempre a entrada com a maior pontuação ranqueada
-    matches.sort(
-      (a, b) =>
-        (b.tournamentPoints ?? 0) - (a.tournamentPoints ?? 0) ||
-        (b.bestScore ?? 0) - (a.bestScore ?? 0),
-    );
-    return matches[0];
-  }
-
-  if (cleanId && store.records[cleanId]) return store.records[cleanId];
-  if (cleanNick && store.records[cleanNick]) return store.records[cleanNick];
-
-  return null;
+  return bestRec;
 }
 
 function saveTournamentStore(store: WeeklyTournamentStore) {
   if (typeof window === "undefined") return;
   store.updatedAt = Date.now();
   try {
-    window.localStorage.setItem(TOURNAMENT_STORAGE_KEY, JSON.stringify(store));
+    const serialized = JSON.stringify(store);
+    window.localStorage.setItem(TOURNAMENT_STORAGE_KEY, serialized);
+    cachedTourLookupRaw = null;
+    cachedTourLookupMap = null;
   } catch {
     /* ignore */
   }

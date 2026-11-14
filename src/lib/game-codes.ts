@@ -300,6 +300,9 @@ export function normalizeCode(raw: string): string {
   return raw.trim().toUpperCase().replace(/\s+/g, "");
 }
 
+let cachedAdminConfigRaw: string | null = null;
+let cachedAdminConfigObj: PlatformAdminConfig | null = null;
+
 export function loadAdminConfig(): PlatformAdminConfig {
   if (typeof window === "undefined") return { ...DEFAULT_ADMIN_CONFIG };
   try {
@@ -320,9 +323,15 @@ export function loadAdminConfig(): PlatformAdminConfig {
       }
     }
 
-    if (!raw) return { ...DEFAULT_ADMIN_CONFIG };
+    if (!raw) return { ...DEFAULT_ADMIN_CONFIG, enabledGames: { ...DEFAULT_ENABLED_GAMES } };
+    if (raw === cachedAdminConfigRaw && cachedAdminConfigObj) {
+      return {
+        ...cachedAdminConfigObj,
+        enabledGames: { ...cachedAdminConfigObj.enabledGames },
+      };
+    }
     const parsed = JSON.parse(raw) as Partial<PlatformAdminConfig>;
-    return {
+    const built: PlatformAdminConfig = {
       ...DEFAULT_ADMIN_CONFIG,
       ...parsed,
       requireCodeGate: typeof parsed.requireCodeGate === "boolean" ? parsed.requireCodeGate : false,
@@ -372,6 +381,12 @@ export function loadAdminConfig(): PlatformAdminConfig {
           ? Math.floor(parsed.dailyXpCap)
           : 1000,
     };
+    cachedAdminConfigRaw = raw;
+    cachedAdminConfigObj = built;
+    return {
+      ...built,
+      enabledGames: { ...built.enabledGames },
+    };
   } catch {
     return { ...DEFAULT_ADMIN_CONFIG };
   }
@@ -409,7 +424,10 @@ export function saveAdminConfig(config: PlatformAdminConfig): PlatformAdminConfi
   };
   if (typeof window !== "undefined") {
     try {
-      window.localStorage.setItem(ADMIN_CONFIG_KEY, JSON.stringify(normalized));
+      const serialized = JSON.stringify(normalized);
+      window.localStorage.setItem(ADMIN_CONFIG_KEY, serialized);
+      cachedAdminConfigRaw = serialized;
+      cachedAdminConfigObj = normalized;
       if (Array.isArray(config.specialEvents)) {
         saveSpecialEvents(config.specialEvents);
       }

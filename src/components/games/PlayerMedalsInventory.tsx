@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   Trophy,
   Award,
@@ -25,7 +25,7 @@ import { MEDAL_POINTS_REWARDS } from "@/lib/career-points";
 import { MedalIcon } from "./MedalIcon";
 import { MedalDetailModal } from "./MedalDetailModal";
 import { Input } from "@/components/ui/input";
-import { getAllRegisteredPlayers, type PlayerProfile, type GameStatRow } from "@/lib/playfab";
+import { loadRegistryReadOnly, type PlayerProfile, type GameStatRow } from "@/lib/playfab";
 import { getCachedMedalPioneers } from "@/lib/medal-pioneers";
 
 interface Props {
@@ -47,9 +47,14 @@ export function PlayerMedalsInventory({
   const [selectedCategory, setSelectedCategory] = useState<string>("ALL");
   const [selectedRarity, setSelectedRarity] = useState<string>("ALL");
   const [activeTab, setActiveTab] = useState<"vitrine" | "catalogo" | "eventos">("vitrine");
+  const [catalogVisibleLimit, setCatalogVisibleLimit] = useState<number>(24);
 
   // Selected medal for detail modal
   const [selectedMedal, setSelectedMedal] = useState<MedalDefinition | null>(null);
+
+  useEffect(() => {
+    setCatalogVisibleLimit(24);
+  }, [activeTab, search, selectedCategory, selectedRarity]);
 
   const allMedals = useMemo(() => getAllAvailableMedals(customMedals), [customMedals]);
   const eventMedalsList = useMemo(
@@ -68,7 +73,10 @@ export function PlayerMedalsInventory({
     try {
       const cached = getCachedMedalPioneers();
       if (cached && Object.keys(cached).length > 0) return cached;
-      const players = getAllRegisteredPlayers();
+      const reg = loadRegistryReadOnly();
+      const players = Object.values(reg)
+        .map((a) => a?.profile)
+        .filter((p): p is PlayerProfile => Boolean(p));
       return getCachedMedalPioneers(players) ?? {};
     } catch {
       return getCachedMedalPioneers() ?? {};
@@ -80,8 +88,10 @@ export function PlayerMedalsInventory({
     [unlockedMedals, allMedals],
   );
 
-  // Map each medal to its progress and unlock state
+  // Map each medal to its progress and unlock state (deferred until catalog/events tab or modal is opened)
+  const needsFullCatalogProgress = activeTab !== "vitrine" || Boolean(selectedMedal);
   const sortedMedals = useMemo(() => {
+    if (!needsFullCatalogProgress) return [];
     const medalsWithProgress = allMedals.map((m) => {
       const unlocked = unlockedMap.get(m.id) ?? null;
       const progress = calculateMedalProgress(m, profile, stats);
@@ -116,7 +126,7 @@ export function PlayerMedalsInventory({
 
       return a.medal.title.localeCompare(b.medal.title);
     });
-  }, [allMedals, unlockedMap, profile, stats]);
+  }, [needsFullCatalogProgress, allMedals, unlockedMap, profile, stats]);
 
   const filtered = sortedMedals.filter(({ medal: m }) => {
     if (activeTab === "eventos" && m.category !== "evento" && !m.eventId) return false;
@@ -382,7 +392,7 @@ export function PlayerMedalsInventory({
 
           {/* Grade Geral de Medalhas */}
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5 max-h-[48vh] overflow-y-auto pr-1">
-            {filtered.map(({ medal: m, unlocked, progress }) => {
+            {filtered.slice(0, catalogVisibleLimit).map(({ medal: m, unlocked, progress }) => {
               const isUnlocked = Boolean(unlocked);
               const isSecretLocked = Boolean(m.isSecret && !isUnlocked);
               const isSecretRevealed = Boolean(m.isSecret && isUnlocked);
@@ -517,6 +527,17 @@ export function PlayerMedalsInventory({
               );
             })}
           </div>
+          {filtered.length > catalogVisibleLimit && (
+            <div className="flex justify-center pt-1">
+              <button
+                type="button"
+                onClick={() => setCatalogVisibleLimit((prev) => prev + 24)}
+                className="rounded-xl border border-border bg-secondary/40 px-4 py-1.5 text-xs font-bold text-foreground hover:bg-secondary/70 transition-colors"
+              >
+                Mostrar mais medalhas (exibindo {Math.min(catalogVisibleLimit, filtered.length)} de {filtered.length})
+              </button>
+            </div>
+          )}
         </div>
       )}
 

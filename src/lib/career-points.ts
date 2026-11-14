@@ -319,6 +319,15 @@ export function checkLevelPromotionPoints(
   return { profile, pointsAwarded: totalAwarded };
 }
 
+let cachedBaseMedalRarityMap: Map<string, MedalRarity> | null = null;
+
+function getBaseMedalRarityMap(): Map<string, MedalRarity> {
+  if (!cachedBaseMedalRarityMap) {
+    cachedBaseMedalRarityMap = new Map(getAllAvailableMedals().map((m) => [m.id, m.rarity]));
+  }
+  return cachedBaseMedalRarityMap;
+}
+
 /**
  * Calcula a pontuação histórica retroativa para jogadores já existentes com base
  * nas medalhas desbloqueadas e no nível atual, evitando que comecem do zero.
@@ -327,7 +336,7 @@ export function calculateRetroactivePoints(profile: PlayerProfile): number {
   if (!profile) return 0;
   let sum = 0;
 
-  const catalogMap = new Map(getAllAvailableMedals().map((m) => [m.id, m.rarity]));
+  const catalogMap = getBaseMedalRarityMap();
 
   // 1. Pontos de medalhas já conquistadas
   if (Array.isArray(profile.unlockedMedals)) {
@@ -560,9 +569,8 @@ export function ensurePlayerCareerPointsInitialized(
       lvlList.push(l);
     }
     profile.achievedLevelsPoints = Array.from(new Set([...(profile.achievedLevelsPoints ?? []), ...lvlList]));
+    sanitizeInflatedCareerPoints(profile, options);
   }
-
-  sanitizeInflatedCareerPoints(profile, options);
 
   return profile;
 }

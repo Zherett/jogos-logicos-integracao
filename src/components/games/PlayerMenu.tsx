@@ -160,30 +160,38 @@ export function PlayerMenu({ onConfigChanged }: Props) {
   const age = profile ? ageFrom(profile.birthdate) : null;
   const stageInfo = profile ? stageFromBirthdate(profile.birthdate, new Date(), profile.school) : null;
   const bday = profile ? birthdayInfo(profile.birthdate) : null;
-  const effProg = profile
-    ? getEffectivePlayerProgression(
-        profile,
-        auth.stats,
-        auth.adminConfig.enabledGames,
-      )
-    : null;
+  const effProg = useMemo(
+    () =>
+      profile
+        ? getEffectivePlayerProgression(
+            profile,
+            auth.stats,
+            auth.adminConfig.enabledGames,
+          )
+        : null,
+    [profile, auth.stats, auth.adminConfig.enabledGames],
+  );
   const distinctGames = effProg ? effProg.distinctGames : 0;
   const matchesCount = effProg ? effProg.matchesPlayed : 0;
   const statsByGameMap = useMemo(
     () => aggregateStatsByGame(auth.stats, auth.adminConfig.enabledGames),
     [auth.stats, auth.adminConfig.enabledGames],
   );
-  const progress = effProg
-    ? levelProgress({
-        xp: effProg.xp,
-        matchesPlayed: effProg.matchesPlayed,
-        wins: effProg.wins,
-        distinctGames: effProg.distinctGames,
-        currentLevel: effProg.level,
-        stageProgress: effProg.stageProgress,
-        maxAvailableGames: effProg.maxAvailableGames,
-      })
-    : null;
+  const progress = useMemo(
+    () =>
+      effProg
+        ? levelProgress({
+            xp: effProg.xp,
+            matchesPlayed: effProg.matchesPlayed,
+            wins: effProg.wins,
+            distinctGames: effProg.distinctGames,
+            currentLevel: effProg.level,
+            stageProgress: effProg.stageProgress,
+            maxAvailableGames: effProg.maxAvailableGames,
+          })
+        : null,
+    [effProg],
+  );
   const dailyCap = auth.adminConfig.dailyXpCap ?? DEFAULT_DAILY_XP_CAP;
   const todayKey = getLocalDateKey();
   const isTodayRecord = profile && profile.dailyXpDate === todayKey;

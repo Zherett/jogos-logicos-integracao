@@ -19,6 +19,7 @@ export interface MedalPioneer {
 
 let cachedPioneersMap: Record<string, MedalPioneer> | null = null;
 let lastPioneersComputeAt = 0;
+let lastPioneersPlayersCount = -1;
 
 /**
  * Computa de forma pura e deterministica os primeiros alunos a conquistarem cada medalha.
@@ -77,12 +78,17 @@ export function computeMedalPioneers(players: PlayerProfile[]): Record<string, M
  */
 export function getCachedMedalPioneers(players?: PlayerProfile[]): Record<string, MedalPioneer> {
   const now = Date.now();
-  if (cachedPioneersMap && now - lastPioneersComputeAt < 15000 && (!players || players.length === 0)) {
+  if (
+    cachedPioneersMap &&
+    now - lastPioneersComputeAt < 60000 &&
+    (!players || players.length === 0 || players.length === lastPioneersPlayersCount)
+  ) {
     return cachedPioneersMap;
   }
   if (players && players.length > 0) {
     cachedPioneersMap = computeMedalPioneers(players);
     lastPioneersComputeAt = now;
+    lastPioneersPlayersCount = players.length;
     return cachedPioneersMap;
   }
   return cachedPioneersMap ?? {};
@@ -94,6 +100,7 @@ export function getCachedMedalPioneers(players?: PlayerProfile[]): Record<string
 export function invalidatePioneersCache(): void {
   cachedPioneersMap = null;
   lastPioneersComputeAt = 0;
+  lastPioneersPlayersCount = -1;
 }
 
 /**

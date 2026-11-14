@@ -1189,6 +1189,36 @@ function getCurrentWeekKey(now = new Date()): string {
 }
 
 const aligningPlayerKeys = new Set<string>();
+const alignedAccountSignatures = new Map<string, string>();
+
+function computeAccountAlignmentSignature(
+  acc: StoredAccount,
+  cfg: PlatformAdminConfig,
+  todayKey: string,
+  currentWeekKey: string,
+  tourPoints: number,
+  isCurrentActivePlayer: boolean,
+  options?: { skipPodiumCleanse?: boolean; skipMedalPrune?: boolean },
+): string {
+  const p = acc.profile;
+  const stats = Array.isArray(acc.stats) ? acc.stats : [];
+  let sumPlays = 0;
+  let sumWins = 0;
+  let sumBestScore = 0;
+  let sumBestLevel = 0;
+  let sumFlawless = 0;
+  for (let i = 0; i < stats.length; i++) {
+    const s = stats[i];
+    if (!s) continue;
+    sumPlays += s.plays ?? 0;
+    sumWins += s.wins ?? 0;
+    sumBestScore += s.best_score ?? 0;
+    sumBestLevel += s.best_level ?? 0;
+    sumFlawless += s.flawless_wins ?? 0;
+  }
+  const disabledGames = ALL_GAME_IDS.filter((g) => cfg.enabledGames?.[g] === false).join(",");
+  return `${p.id}|${p.nickNormalized}|${p.xp ?? 0}|${p.seasonXp ?? 0}|${p.level ?? 1}|${p.matchesPlayed ?? 0}|${p.totalMatches ?? 0}|${p.wins ?? 0}|${p.distinctGamesPlayed ?? 0}|${p.tournamentPoints ?? 0}|${p.bestTournamentPoints ?? 0}|${p.tournamentRankId ?? ""}|${p.rankedSeasonId ?? 1}|${p.seasonId ?? 1}|${p.dailyXpDate ?? ""}|${p.dailyPostCapDate ?? ""}|${p.weeklyX1WeekKey ?? ""}|${p.x1Wins ?? 0}|${p.x1Matches ?? 0}|${p.careerPoints ?? -1}|${p.pointsBalance ?? -1}|${p.birthdate ?? ""}|${p.school ?? ""}|${p.grade ?? ""}|${p.turma ?? ""}|${p.unlockedMedals?.length ?? 0}|${p.tournamentMedals?.length ?? 0}|${p.badges?.length ?? 0}|${stats.length}:${sumPlays}:${sumWins}:${sumBestScore}:${sumBestLevel}:${sumFlawless}|${cfg.seasonId}|${cfg.rankedSeasonId ?? 1}|${cfg.customMedals?.length ?? 0}|${disabledGames}|${todayKey}|${currentWeekKey}|${tourPoints}|${isCurrentActivePlayer ? (p.lastDailyLoginPointsDate ?? "") : "inactive"}|${options?.skipPodiumCleanse ? 1 : 0}:${options?.skipMedalPrune ? 1 : 0}`;
+}
 
 export function ensurePlayerSeasonAligned(
   acc: StoredAccount,
@@ -1202,6 +1232,41 @@ export function ensurePlayerSeasonAligned(
   }
   if (pKey) aligningPlayerKeys.add(pKey);
   try {
+  const activeSession = loadStoredSession();
+  const isCurrentActivePlayer = Boolean(
+    activeSession?.playerId &&
+      (acc.profile.nickNormalized === activeSession.playerId ||
+        acc.profile.id === activeSession.playerId ||
+        (activeSession.playfabId && acc.profile.playfabId === activeSession.playfabId)),
+  );
+  const todayKey = getLocalDateKey();
+  const currentWeekKey = getCurrentWeekKey();
+  const currentRankedSeason = cfg.rankedSeasonId ?? 1;
+  const playerRankedSeason = acc.profile.rankedSeasonId ?? 1;
+  const tourRec =
+    playerRankedSeason >= currentRankedSeason
+      ? getTournamentStoreRecord(acc.profile.id, acc.profile.nick) ||
+        (acc.profile.playfabId ? getTournamentStoreRecord(acc.profile.playfabId, acc.profile.nick) : null) ||
+        (acc.profile.nickNormalized ? getTournamentStoreRecord(acc.profile.nickNormalized, acc.profile.nickNormalized) : null)
+      : null;
+  const tourPoints =
+    typeof tourRec?.tournamentPoints === "number" ? Math.max(0, tourRec.tournamentPoints) : 0;
+
+  if (pKey && acc.passwordHash) {
+    const preSig = computeAccountAlignmentSignature(
+      acc,
+      cfg,
+      todayKey,
+      currentWeekKey,
+      tourPoints,
+      isCurrentActivePlayer,
+      options,
+    );
+    if (alignedAccountSignatures.get(pKey) === preSig) {
+      return acc;
+    }
+  }
+
   // Captura as medalhas que o aluno já possuía antes de qualquer filtragem/alinhamento
   // para impedir concessão duplicada de XP ou Pontos de Carreira na mesma função
   const preExistingMedalIds = new Set<string>(
@@ -1216,18 +1281,10 @@ export function ensurePlayerSeasonAligned(
   }
 
   // Concede login diário APENAS se este perfil for o jogador realmente autenticado na sessão local ativa
-  const activeSession = loadStoredSession();
-  const isCurrentActivePlayer = Boolean(
-    activeSession?.playerId &&
-      (acc.profile.nickNormalized === activeSession.playerId ||
-        acc.profile.id === activeSession.playerId ||
-        (activeSession.playfabId && acc.profile.playfabId === activeSession.playfabId)),
-  );
   if (isCurrentActivePlayer && !acc.profile.isAdmin && !isSpecialAdminAccount(acc.profile)) {
     checkAndApplyDailyLoginPoints(acc.profile);
   }
 
-  const todayKey = getLocalDateKey();
   if (acc.profile.dailyXpDate !== todayKey) {
     acc.profile.dailyXp = 0;
     acc.profile.dailyX1Xp = 0;
@@ -1239,14 +1296,10 @@ export function ensurePlayerSeasonAligned(
     acc.profile.dailyPostCapMatches = 0;
     acc.profile.dailyPostCapDate = todayKey;
   }
-  const currentWeekKey = getCurrentWeekKey();
   if (acc.profile.weeklyX1WeekKey && acc.profile.weeklyX1WeekKey !== currentWeekKey) {
     acc.profile.weeklyX1Wins = 0;
     acc.profile.weeklyX1WeekKey = currentWeekKey;
   }
-
-  const currentRankedSeason = cfg.rankedSeasonId ?? 1;
-  const playerRankedSeason = acc.profile.rankedSeasonId ?? 1;
 
   const currentSeasonId = cfg.rankedSeasonId ?? 1;
   const currentSeasonKey = `Season_${currentSeasonId}`;
@@ -1268,14 +1321,7 @@ export function ensurePlayerSeasonAligned(
   } else {
     acc.profile.rankedSeasonId = currentRankedSeason;
 
-    const tourRec =
-      getTournamentStoreRecord(acc.profile.id, acc.profile.nick) ||
-      (acc.profile.playfabId ? getTournamentStoreRecord(acc.profile.playfabId, acc.profile.nick) : null) ||
-      (acc.profile.nickNormalized ? getTournamentStoreRecord(acc.profile.nickNormalized, acc.profile.nickNormalized) : null);
-
     // Desacoplamento estrito: usa apenas tournamentPoints legítimos (nunca bestScore de jogo)
-    const tourPoints =
-      typeof tourRec?.tournamentPoints === "number" ? Math.max(0, tourRec.tournamentPoints) : 0;
     const profPoints =
       typeof acc.profile.tournamentPoints === "number" ? Math.max(0, acc.profile.tournamentPoints) : 0;
     const paidSpentToday = (acc.profile.dailyTournamentEntries ?? 0) > TOURNAMENT_DAILY_FREE_ENTRIES;
@@ -1703,6 +1749,7 @@ export function ensurePlayerSeasonAligned(
   }
 
   // Avalia e concede automaticamente medalhas legítimas que o aluno tem direito (ex: nível atualizado ou exploração)
+  let medalsChangedInFirstPass = false;
   if (!isAdminAcc) {
     const legitimatelyAwarded = evaluatePlayerMedals(
       {
@@ -1722,6 +1769,7 @@ export function ensurePlayerSeasonAligned(
       for (const m of legitimatelyAwarded) {
         if (!unlocked.some((u) => u.medalId === m.id)) {
           unlocked.push({ medalId: m.id, unlockedAt: nowIso });
+          medalsChangedInFirstPass = true;
           // Só concede XP e Pontos de Carreira se a medalha realmente NÃO existia antes do filtro
           if (!preExistingMedalIds.has(m.id)) {
             const extraXp = MEDAL_XP_REWARDS[m.rarity] ?? 10;
@@ -1748,12 +1796,15 @@ export function ensurePlayerSeasonAligned(
           count: 1,
         });
         acc.profile.unlockedMedals = unlocked;
+        medalsChangedInFirstPass = true;
       }
     }
   }
 
   // Inicializa e sanitiza pontos de carreira após reconciliar stats, nível e medalhas
+  const medalsBeforeCareerInit = acc.profile.unlockedMedals?.length ?? 0;
   ensurePlayerCareerPointsInitialized(acc.profile, { skipMedalPrune: options?.skipMedalPrune });
+  const medalsAfterCareerInit = acc.profile.unlockedMedals?.length ?? 0;
 
   // Sanitization: Players in Etapa 3 (15+ years old) cannot belong to elementary SEMED schools or classes.
   // If institution is "Nenhuma" or "Outro", grade and turma are always null.
@@ -1769,29 +1820,31 @@ export function ensurePlayerSeasonAligned(
   }
 
   // Ensure passive/cumulative medals (level, distinct games, total count, etc.) are awarded when criteria met
-  const earnedPassively = evaluatePlayerMedals(
-    {
-      profile: acc.profile,
-      stats: acc.stats,
-      todayXpEarned: acc.profile.dailyXp,
-      streakDays: acc.profile.streakDays,
-      weeklyX1Wins: acc.profile.weeklyX1Wins,
-      enabledGames: cfg.enabledGames,
-    },
-    allAvailable,
-  );
-  if (earnedPassively.length > 0) {
-    const currentUnlocked = [...(acc.profile.unlockedMedals ?? [])];
-    const nowIso = new Date().toISOString();
-    let updated = false;
-    for (const m of earnedPassively) {
-      if (!currentUnlocked.some((u) => u.medalId === m.id)) {
-        currentUnlocked.push({ medalId: m.id, unlockedAt: nowIso });
-        updated = true;
+  if (isAdminAcc || medalsChangedInFirstPass || medalsBeforeCareerInit !== medalsAfterCareerInit) {
+    const earnedPassively = evaluatePlayerMedals(
+      {
+        profile: acc.profile,
+        stats: acc.stats,
+        todayXpEarned: acc.profile.dailyXp,
+        streakDays: acc.profile.streakDays,
+        weeklyX1Wins: acc.profile.weeklyX1Wins,
+        enabledGames: cfg.enabledGames,
+      },
+      allAvailable,
+    );
+    if (earnedPassively.length > 0) {
+      const currentUnlocked = [...(acc.profile.unlockedMedals ?? [])];
+      const nowIso = new Date().toISOString();
+      let updated = false;
+      for (const m of earnedPassively) {
+        if (!currentUnlocked.some((u) => u.medalId === m.id)) {
+          currentUnlocked.push({ medalId: m.id, unlockedAt: nowIso });
+          updated = true;
+        }
       }
-    }
-    if (updated) {
-      acc.profile.unlockedMedals = currentUnlocked;
+      if (updated) {
+        acc.profile.unlockedMedals = currentUnlocked;
+      }
     }
   }
 
@@ -1817,6 +1870,20 @@ export function ensurePlayerSeasonAligned(
 
   acc.profile.totalMatches = acc.profile.matchesPlayed;
   acc.profile.stats = acc.stats;
+  if (pKey) {
+    alignedAccountSignatures.set(
+      pKey,
+      computeAccountAlignmentSignature(
+        acc,
+        cfg,
+        todayKey,
+        currentWeekKey,
+        tourPoints,
+        isCurrentActivePlayer,
+        options,
+      ),
+    );
+  }
   return acc;
   } finally {
     if (pKey) aligningPlayerKeys.delete(pKey);
@@ -5532,11 +5599,12 @@ export function getAllRegisteredPlayers(includeDeleted = false): PlayerProfile[]
 /** Returns all student profiles currently in the Admin Recycle Bin (trash). */
 export function getTrashPlayers(): PlayerProfile[] {
   const cfg = checkAndApplyScheduledReset();
-  const reg = loadRegistry();
+  const reg = loadRegistryReadOnly();
   const seen = new Set<string>();
   const list: PlayerProfile[] = [];
 
   for (const rawAcc of Object.values(reg)) {
+    if (!rawAcc?.profile?.deletedAt) continue;
     const p = ensurePlayerSeasonAligned(rawAcc, cfg).profile;
     if (!p.deletedAt) continue;
     const ident = (p.nickNormalized || p.nick || p.id).toLowerCase().trim();

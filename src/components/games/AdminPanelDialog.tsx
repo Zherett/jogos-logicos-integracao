@@ -3203,32 +3203,27 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                       }
 
                       const now = Date.now();
-                      const presenceSummary = computePresenceSummary(filtered, now);
+                      let onlineCount = 0;
+                      let idleCount = 0;
+                      let offlineCount = 0;
+                      const withPresence = filtered.map((st) => {
+                        const presenceStatus = getPlayerPresenceStatus(st, now);
+                        if (presenceStatus === "online") onlineCount++;
+                        else if (presenceStatus === "idle") idleCount++;
+                        else offlineCount++;
+                        return { st, presenceStatus };
+                      });
+                      const presenceSummary = {
+                        online: onlineCount,
+                        idle: idleCount,
+                        offline: offlineCount,
+                        total: filtered.length,
+                      };
                       const sortedFiltered = sortStudentsByPresenceAndLevel(
-                        filtered.map((st) => {
-                          const stEff = getEffectivePlayerProgression(
-                            st,
-                            st.stats ?? [],
-                            auth.adminConfig.enabledGames,
-                          );
-                          const stProg = levelProgress({
-                            xp: stEff.xp,
-                            matchesPlayed: stEff.matchesPlayed,
-                            wins: stEff.wins,
-                            distinctGames: stEff.distinctGames,
-                            currentLevel: stEff.level,
-                            stageProgress: stEff.stageProgress,
-                            maxAvailableGames: stEff.maxAvailableGames,
-                          });
-                          return {
-                            st,
-                            stProg,
-                            presenceStatus: getPlayerPresenceStatus(st, now),
-                          };
-                        }),
+                        withPresence,
                         (item) => ({
                           presenceStatus: item.presenceStatus,
-                          level: item.stProg.level,
+                          level: item.st.level ?? 1,
                           xp: item.st.xp,
                           nick: item.st.nick,
                           full_name: item.st.full_name,
@@ -3264,7 +3259,21 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                           </div>
 
                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-80 overflow-y-auto pr-1">
-                            {sortedFiltered.slice(0, adminStudentsVisibleLimit).map(({ st, stProg }) => {
+                            {sortedFiltered.slice(0, adminStudentsVisibleLimit).map(({ st }) => {
+                              const stEff = getEffectivePlayerProgression(
+                                st,
+                                st.stats ?? [],
+                                auth.adminConfig.enabledGames,
+                              );
+                              const stProg = levelProgress({
+                                xp: stEff.xp,
+                                matchesPlayed: stEff.matchesPlayed,
+                                wins: stEff.wins,
+                                distinctGames: stEff.distinctGames,
+                                currentLevel: stEff.level,
+                                stageProgress: stEff.stageProgress,
+                                maxAvailableGames: stEff.maxAvailableGames,
+                              });
 
                               return (
                                 <div
