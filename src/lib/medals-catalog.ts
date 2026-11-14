@@ -1174,12 +1174,13 @@ export function getAllAvailableMedals(customMedals?: MedalDefinition[]): MedalDe
   return Array.from(map.values());
 }
 
-/** Selects the up to 3 highest-rarity / most valuable medals to feature in profile highlights */
+/** Selects the up to `limit` (default 6) highest-rarity / most valuable medals to feature in profile highlights */
 export function getTopShowcaseMedals(
   unlockedMedals: PlayerUnlockedMedal[],
   allMedals = getAllAvailableMedals(),
+  limit = 6,
 ): MedalDefinition[] {
-  if (!unlockedMedals || unlockedMedals.length === 0) return [];
+  if (!unlockedMedals || unlockedMedals.length === 0 || limit <= 0) return [];
 
   const defMap = new Map<string, MedalDefinition>(allMedals.map((m) => [m.id, m]));
   const list: MedalDefinition[] = [];
@@ -1198,7 +1199,7 @@ export function getTopShowcaseMedals(
     return a.title.localeCompare(b.title);
   });
 
-  return list.slice(0, 3);
+  return list.slice(0, limit);
 }
 
 export interface PlayerStatsContext {

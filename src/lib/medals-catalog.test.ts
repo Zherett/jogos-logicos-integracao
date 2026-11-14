@@ -113,7 +113,7 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
     assert.ok(ids.includes("game_logica_flawless"));
   });
 
-  it("seleciona automaticamente as 3 medalhas mais raras para vitrine/destaque", () => {
+  it("seleciona automaticamente até 6 medalhas mais raras para vitrine/destaque (com suporte a limite customizado)", () => {
     const medalsList: MedalDefinition[] = [
       {
         id: "m_bronze",
@@ -153,18 +153,61 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
       },
     ];
 
+    const extraMedals: MedalDefinition[] = [
+      ...medalsList,
+      {
+        id: "m_prata",
+        title: "Medalha Prata",
+        description: "Prata",
+        rarity: "prata",
+        category: "meta",
+        iconName: "Award",
+        condition: { type: "total_medals_count", threshold: 5 },
+      },
+      {
+        id: "m_ouro_2",
+        title: "Ouro Z",
+        description: "Ouro Z",
+        rarity: "ouro",
+        category: "meta",
+        iconName: "Award",
+        condition: { type: "total_medals_count", threshold: 15 },
+      },
+      {
+        id: "m_platina_2",
+        title: "Platina Z",
+        description: "Platina Z",
+        rarity: "platina",
+        category: "meta",
+        iconName: "Award",
+        condition: { type: "total_medals_count", threshold: 30 },
+      },
+    ];
+
     const unlocked = [
       { medalId: "m_bronze", unlockedAt: "2026-10-31" },
+      { medalId: "m_prata", unlockedAt: "2026-10-31" },
       { medalId: "m_ouro", unlockedAt: "2026-10-31" },
+      { medalId: "m_ouro_2", unlockedAt: "2026-10-31" },
       { medalId: "m_platina", unlockedAt: "2026-10-31" },
+      { medalId: "m_platina_2", unlockedAt: "2026-10-31" },
       { medalId: "m_diamante", unlockedAt: "2026-10-31" },
     ];
 
-    const top3 = getTopShowcaseMedals(unlocked, medalsList);
+    const top6 = getTopShowcaseMedals(unlocked, extraMedals);
+    assert.equal(top6.length, 6);
+    assert.equal(top6[0].id, "m_diamante"); // peso 5
+    assert.equal(top6[1].id, "m_platina"); // peso 4 (A antes de B)
+    assert.equal(top6[2].id, "m_platina_2"); // peso 4
+    assert.equal(top6[3].id, "m_ouro"); // peso 3 (A antes de B)
+    assert.equal(top6[4].id, "m_ouro_2"); // peso 3
+    assert.equal(top6[5].id, "m_prata"); // peso 2
+
+    const top3 = getTopShowcaseMedals(unlocked, extraMedals, 3);
     assert.equal(top3.length, 3);
-    assert.equal(top3[0].id, "m_diamante"); // peso 5
-    assert.equal(top3[1].id, "m_platina"); // peso 4
-    assert.equal(top3[2].id, "m_ouro"); // peso 3
+    assert.equal(top3[0].id, "m_diamante");
+    assert.equal(top3[1].id, "m_platina");
+    assert.equal(top3[2].id, "m_platina_2");
   });
 
   it("garante que cada jogo registrado gera automaticamente 7 medalhas dedicadas", () => {

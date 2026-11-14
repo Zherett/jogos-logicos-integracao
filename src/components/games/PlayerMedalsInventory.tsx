@@ -216,7 +216,7 @@ export function PlayerMedalsInventory({
                 </p>
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 sm:gap-3">
                 {showcase.map((m, idx) => {
                   const rarity = RARITY_INFO[m.rarity];
                   const unlocked = unlockedMap.get(m.id);
@@ -227,7 +227,7 @@ export function PlayerMedalsInventory({
                     <div
                       key={m.id}
                       onClick={() => setSelectedMedal(m)}
-                      className={`relative flex flex-col items-center justify-center rounded-2xl border-2 p-3.5 text-center bg-card/90 cursor-pointer transition-all hover:scale-[1.03] active:scale-95 ${
+                      className={`relative aspect-square flex flex-col items-center justify-center rounded-2xl border-2 p-2.5 sm:p-3.5 text-center bg-card/90 cursor-pointer transition-all hover:scale-[1.03] active:scale-95 ${
                         isSecretRevealed
                           ? "border-emerald-400 ring-2 ring-emerald-400/80 shadow-[0_0_24px_rgba(34,197,94,0.85)] animate-pulse"
                           : rarity.neonBorderClass
@@ -240,12 +240,17 @@ export function PlayerMedalsInventory({
                       role="button"
                       tabIndex={0}
                     >
-                      <span className="absolute -top-2 left-3 rounded-full bg-primary px-2 py-0.5 text-[9px] font-black uppercase text-primary-foreground">
-                        #{idx + 1} Vitrine
+                      <span className="absolute -top-2 left-2.5 sm:left-3 rounded-full bg-primary px-1.5 sm:px-2 py-0.5 text-[9px] font-black uppercase text-primary-foreground">
+                        #{idx + 1}<span className="hidden sm:inline"> Vitrine</span>
                       </span>
                       {isSecretRevealed && (
-                        <span className="absolute -top-2 right-3 rounded-full bg-emerald-950/90 border border-emerald-400 px-2 py-0.5 text-[8px] font-black uppercase tracking-wider text-emerald-300 shadow-sm flex items-center gap-1 animate-pulse">
-                          <span>✨</span> Secreta
+                        <span
+                          className={`absolute -top-2 ${
+                            showStackBadge ? "right-5 sm:right-6" : "right-2.5 sm:right-3"
+                          } rounded-full bg-emerald-950/90 border border-emerald-400 px-1.5 sm:px-2 py-0.5 text-[8px] font-black uppercase tracking-wider text-emerald-300 shadow-sm flex items-center gap-0.5 animate-pulse`}
+                        >
+                          <span>✨</span>
+                          <span className="hidden sm:inline">Secreta</span>
                         </span>
                       )}
                       {showStackBadge && (
@@ -256,8 +261,8 @@ export function PlayerMedalsInventory({
                           {stackCount}
                         </span>
                       )}
-                      <div className={`mb-2 mt-1 ${isSecretRevealed ? "text-emerald-400" : rarity.textColor}`}>
-                        <MedalIcon name={m.iconName} className="h-8 w-8" />
+                      <div className={`mb-1.5 sm:mb-2 mt-1 ${isSecretRevealed ? "text-emerald-400" : rarity.textColor}`}>
+                        <MedalIcon name={m.iconName} className="h-7 w-7 sm:h-8 sm:w-8" />
                       </div>
                       <span
                         className={`rounded-full border px-2 py-0.5 text-[9px] font-black uppercase ${
@@ -268,12 +273,9 @@ export function PlayerMedalsInventory({
                       >
                         {rarity.label}
                       </span>
-                      <h4 className="mt-1 line-clamp-1 font-display text-xs font-black text-foreground">
+                      <h4 className="mt-1.5 line-clamp-2 font-display text-[11px] sm:text-xs font-black leading-tight text-foreground">
                         {m.title}
                       </h4>
-                      <p className="line-clamp-2 text-[10px] text-muted-foreground leading-tight mt-0.5">
-                        {m.description}
-                      </p>
                     </div>
                   );
                 })}
