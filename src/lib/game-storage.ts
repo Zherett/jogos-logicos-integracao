@@ -46,6 +46,7 @@ export const GAME_NAMES: Record<GameId, string> = {
 export interface GameStats {
   bestScore: number;
   bestLevel: number;
+  plays?: number;
 }
 
 export type AllStats = Record<GameId, GameStats>;
@@ -123,6 +124,7 @@ export function updateBest(id: GameId, score: number, level: number): AllStats {
     [id]: {
       bestScore: Math.max(cur[id]?.bestScore ?? 0, safeScore),
       bestLevel: Math.max(cur[id]?.bestLevel ?? 1, safeLevel),
+      plays: (cur[id]?.plays ?? 0) + 1,
     },
   };
   saveStats(next);

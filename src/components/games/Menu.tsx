@@ -631,6 +631,7 @@ export function Menu({
               onSelect(gameId);
             }}
             personalStats={stats[selectedGameForDetail.id] ?? { bestScore: 0, bestLevel: 1 }}
+            unlockedMedals={playerProfile?.unlockedMedals ?? []}
             stageRecord={getGameStageRecord(selectedGameForDetail.id, stageId, gameRecords)}
             stageName={playerProfile ? undefined : "1ª Etapa (5º ano)"}
             isGuest={!playerProfile}

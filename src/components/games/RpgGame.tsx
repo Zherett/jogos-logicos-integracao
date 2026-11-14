@@ -529,7 +529,19 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
               style={{ width: `${Math.max(0, 100 - blueShareRef.current)}%` }}
             />
 
-            <div className="relative z-10 flex items-center justify-between gap-2 sm:gap-4">
+            {/* Porcentagens nos cantos superiores da arena */}
+            <div className="pointer-events-none absolute top-3 left-3 z-20 flex h-11 w-11 sm:h-12 sm:w-12 items-center justify-center rounded-full border-2 border-sky-400/70 bg-sky-950/90 shadow-[0_0_14px_rgba(56,189,248,0.45)]">
+              <span className="font-display text-sm sm:text-base font-black text-sky-300">
+                {displayBlue}%
+              </span>
+            </div>
+            <div className="pointer-events-none absolute top-3 right-3 z-20 flex h-11 w-11 sm:h-12 sm:w-12 items-center justify-center rounded-full border-2 border-red-400/70 bg-red-950/90 shadow-[0_0_14px_rgba(248,113,113,0.45)]">
+              <span className="font-display text-sm sm:text-base font-black text-red-300">
+                {displayRed}%
+              </span>
+            </div>
+
+            <div className="relative z-10 flex items-center justify-between gap-2 sm:gap-4 pt-6 sm:pt-4">
               {/* LADO ESQUERDO: ROBÔ COLORIDO DE FORMAS GEOMÉTRICAS (JOGADOR) */}
               <div className="flex flex-col items-center shrink-0">
                 <div
@@ -546,25 +558,10 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
                 <span className="mt-1.5 font-display text-[11px] sm:text-xs font-extrabold text-sky-400">
                   ROBÔ PRISMA
                 </span>
-                <span className="font-mono text-[10px] font-bold text-sky-300/80">
-                  {displayBlue}% AZUL
-                </span>
               </div>
 
-              {/* BARRA CENTRAL DE DISPUTA DE PODER COM FAÍSCAS */}
-              <div className="flex-1 space-y-2">
-                <div className="flex items-center justify-between text-[11px] font-extrabold uppercase tracking-wider">
-                  <span className="text-sky-400 flex items-center gap-1">
-                    <Zap className="h-3.5 w-3.5" /> Poder Azul ({displayBlue}%)
-                  </span>
-                  <span className="hidden sm:inline text-amber-300">
-                    Encha 100% = Super Golpe (-{SUPER_HIT_DAMAGE} Vida)!
-                  </span>
-                  <span className="text-red-400 flex items-center gap-1">
-                    Poder Vermelho ({displayRed}%) <Flame className="h-3.5 w-3.5" />
-                  </span>
-                </div>
-
+              {/* BARRA CENTRAL DE DISPUTA DE PODER */}
+              <div className="flex-1">
                 {/* A Barra de Energia controlada em 60 FPS via ref direta (sem transition-all concorrente) */}
                 <div className="relative h-11 sm:h-13 w-full">
                   <div className="relative h-full w-full rounded-2xl border-2 border-white/20 bg-slate-950 shadow-[0_0_30px_rgba(0,0,0,0.9)] overflow-hidden">
@@ -595,22 +592,14 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
                     />
                   </div>
 
-                  {/* Faísca / Ponto de Choque Central acompanhando o percentual exato */}
+                  {/* Divisória Luminosa Central acompanhando o percentual exato */}
                   <div
                     ref={clashSparkRef}
                     className="pointer-events-none absolute top-1/2 -translate-x-1/2 -translate-y-1/2 z-20 will-change-[left]"
                     style={{ left: `${Math.max(2, Math.min(98, blueShareRef.current))}%` }}
                   >
-                    <div className="relative flex items-center justify-center">
-                      <div className="h-14 w-3 rounded-full bg-white/95 blur-[1px] shadow-[0_0_18px_#fff,0_0_28px_#facc15]" />
-                      <Sparkles className="absolute h-6 w-6 text-yellow-200" />
-                    </div>
+                    <div className="h-14 w-3 rounded-full bg-white/95 blur-[1px] shadow-[0_0_18px_#fff,0_0_28px_#facc15]" />
                   </div>
-                </div>
-
-                <div className="flex items-center justify-between text-[11px] text-slate-300">
-                  <span>← Se chegar a 0% você perde 1 escudo</span>
-                  <span>100% Azul = Golpe Triplo (-{SUPER_HIT_DAMAGE} HP) →</span>
                 </div>
               </div>
 
@@ -665,9 +654,6 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
                     ★ {boss.scoreMultiplier}x PONTOS
                   </span>
                 )}
-                <span className="font-mono text-[10px] font-bold text-red-300/80">
-                  {enemyHp} {enemyHp === 1 ? "GOLPE RESTANTE" : "GOLPES RESTANTES"}
-                </span>
               </div>
             </div>
           </div>
@@ -705,8 +691,9 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
                 </span>
               ) : (
                 <>
-                  Atalhos do teclado: <b>V</b> (ou Seta ←) para Verdadeiro • <b>F</b> (ou Seta →)
-                  para Falso
+                  Atalhos do teclado: <b>V</b> (ou Seta ←) para Verdadeiro • <b>F</b> (ou Seta →) para Falso
+                  <span className="mx-1.5">•</span>
+                  Dica: <b>0%</b> = −1 escudo • <b>100%</b> = Super Golpe (−{SUPER_HIT_DAMAGE} Vida)
                 </>
               )}
             </p>

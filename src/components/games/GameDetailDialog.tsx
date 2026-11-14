@@ -20,18 +20,21 @@ import {
   Target,
   ChevronDown,
   Lock,
+  Award,
 } from "lucide-react";
 import type { GameRegistration } from "@/lib/game-registry";
 import type { GameId } from "@/lib/game-storage";
 import type { StageGameRecord, RecordHolder } from "@/lib/game-records";
 import { getGameInstructions } from "@/lib/game-instructions";
+import { buildBaseMedalsCatalog } from "@/lib/medals-catalog";
 
 interface GameDetailDialogProps {
   game: GameRegistration | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onPlay: (gameId: GameId) => void;
-  personalStats: { bestScore: number; bestLevel: number };
+  personalStats: { bestScore: number; bestLevel: number; plays?: number };
+  unlockedMedals?: string[];
   stageRecord?: StageGameRecord | null;
   stageName?: string;
   isUnlocked?: boolean;
@@ -47,6 +50,7 @@ export function GameDetailDialog({
   onOpenChange,
   onPlay,
   personalStats,
+  unlockedMedals = [],
   stageRecord,
   stageName,
   isUnlocked = true,
@@ -66,6 +70,13 @@ export function GameDetailDialog({
   if (!game) return null;
 
   const instructions = getGameInstructions(game.id);
+  const gameMedals = buildBaseMedalsCatalog().filter(
+    (m) => m.gameId === game.id || m.condition.gameId === game.id,
+  );
+  const totalGameMedals = gameMedals.length;
+  const earnedGameMedals = gameMedals.filter((m) => unlockedMedals.includes(m.id)).length;
+  const remainingGameMedals = Math.max(0, totalGameMedals - earnedGameMedals);
+  const playsCount = personalStats.plays ?? 0;
 
   function handleStartPlay() {
     onOpenChange(false);
@@ -81,62 +92,94 @@ export function GameDetailDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[92vh] overflow-y-auto p-4 sm:p-6 rounded-3xl border-2 border-primary/30 shadow-2xl">
         <DialogHeader className="space-y-3 text-left">
-          {/* Topo: Ícone grande + Título + Subtítulo */}
-          <div className="flex items-center gap-3.5 sm:gap-4">
-            <div
-              className={`grid h-16 w-16 sm:h-20 sm:w-20 shrink-0 place-items-center rounded-2xl bg-gradient-to-br ${game.gradient} text-white shadow-lg ring-4 ring-primary/10`}
-            >
-              {React.isValidElement(game.icon)
-                ? React.cloneElement(game.icon as React.ReactElement<{ className?: string }>, {
-                    className: "h-9 w-9 sm:h-11 sm:w-11",
-                  })
-                : game.icon}
+          {/* Topo: Ícone grande + Título + Subtítulo + Medalhas do Jogo */}
+          <div className="flex flex-wrap items-start justify-between gap-3 pr-6">
+            <div className="flex items-center gap-3.5 sm:gap-4 min-w-0 flex-1">
+              <div
+                className={`grid h-16 w-16 sm:h-20 sm:w-20 shrink-0 place-items-center rounded-2xl bg-gradient-to-br ${game.gradient} text-white shadow-lg ring-4 ring-primary/10`}
+              >
+                {React.isValidElement(game.icon)
+                  ? React.cloneElement(game.icon as React.ReactElement<{ className?: string }>, {
+                      className: "h-9 w-9 sm:h-11 sm:w-11",
+                    })
+                  : game.icon}
+              </div>
+
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2 mb-1">
+                  <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 border border-primary/30 px-2.5 py-0.5 text-[10px] font-black uppercase tracking-wider text-primary">
+                    <Gamepad2 className="h-3 w-3" /> Desafio Educativo
+                  </span>
+                  {!isUnlocked && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 border border-amber-500/30 px-2.5 py-0.5 text-[10px] font-bold text-amber-600 dark:text-amber-400">
+                      <KeyRound className="h-3 w-3" /> Bloqueado por Código
+                    </span>
+                  )}
+                  {isLevelLocked && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 border border-amber-500/30 px-2.5 py-0.5 text-[10px] font-black uppercase text-amber-600 dark:text-amber-400">
+                      <Lock className="h-3 w-3" /> Requer Nível {requiredLevel}
+                    </span>
+                  )}
+                </div>
+                <DialogTitle className="font-display text-2xl sm:text-3xl font-black text-foreground tracking-tight">
+                  {game.title}
+                </DialogTitle>
+                <DialogDescription className="text-xs sm:text-sm text-muted-foreground font-medium line-clamp-2 mt-0.5">
+                  {game.subtitle}
+                </DialogDescription>
+              </div>
             </div>
 
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2 mb-1">
-                <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 border border-primary/30 px-2.5 py-0.5 text-[10px] font-black uppercase tracking-wider text-primary">
-                  <Gamepad2 className="h-3 w-3" /> Desafio Educativo
-                </span>
-                {!isUnlocked && (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 border border-amber-500/30 px-2.5 py-0.5 text-[10px] font-bold text-amber-600 dark:text-amber-400">
-                    <KeyRound className="h-3 w-3" /> Bloqueado por Código
-                  </span>
-                )}
-                {isLevelLocked && (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 border border-amber-500/30 px-2.5 py-0.5 text-[10px] font-black uppercase text-amber-600 dark:text-amber-400">
-                    <Lock className="h-3 w-3" /> Requer Nível {requiredLevel}
-                  </span>
-                )}
+            {/* Indicador não clicável: Medalhas do Jogo */}
+            <div className="shrink-0 rounded-2xl border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-right select-none">
+              <div className="flex items-center justify-end gap-1 text-[10px] font-black uppercase tracking-wider text-amber-600 dark:text-amber-400">
+                <Award className="h-3.5 w-3.5" /> Medalhas do Jogo
               </div>
-              <DialogTitle className="font-display text-2xl sm:text-3xl font-black text-foreground tracking-tight">
-                {game.title}
-              </DialogTitle>
-              <DialogDescription className="text-xs sm:text-sm text-muted-foreground font-medium line-clamp-2 mt-0.5">
-                {game.subtitle}
-              </DialogDescription>
+              <div className="mt-0.5 flex items-baseline justify-end gap-1.5">
+                <span className="font-display text-lg font-black text-foreground">
+                  {earnedGameMedals}
+                </span>
+                <span className="text-xs font-bold text-muted-foreground">
+                  / {totalGameMedals}
+                </span>
+              </div>
+              <div className="text-[10px] font-semibold text-muted-foreground">
+                {remainingGameMedals === 0
+                  ? "Todas conquistadas!"
+                  : `Faltam ${remainingGameMedals}`}
+              </div>
             </div>
           </div>
         </DialogHeader>
 
         <div className="space-y-4 pt-2">
-          {/* 1. Estatísticas: Recorde Pessoal x Recorde da Plataforma */}
+          {/* 1. Estatísticas: Recorde Pessoal (2 subcontainers) x Recorde da Plataforma */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-            {/* Seu Desempenho */}
-            <div className="rounded-2xl border bg-card p-3 shadow-2xs flex items-center justify-between gap-3">
-              <div className="space-y-0.5">
+            {/* Seu Desempenho + Partidas Jogadas */}
+            <div className="rounded-2xl border bg-card p-3 shadow-2xs grid grid-cols-2 divide-x divide-border gap-2">
+              <div className="space-y-0.5 pr-1">
                 <div className="flex items-center gap-1 text-[10px] font-black uppercase tracking-wider text-muted-foreground">
                   <User className="h-3.5 w-3.5 text-primary" /> Seu Desempenho
                 </div>
                 <div className="font-display text-lg font-black text-foreground flex items-center gap-1.5">
-                  <Star className="h-4 w-4 text-amber-500 fill-amber-500" />
-                  {personalStats.bestScore.toLocaleString("pt-BR")} pts
+                  <Star className="h-4 w-4 text-amber-500 fill-amber-500 shrink-0" />
+                  <span>{personalStats.bestScore.toLocaleString("pt-BR")} pts</span>
+                </div>
+                <div className="text-[11px] font-bold text-primary">
+                  Nível {personalStats.bestLevel}
                 </div>
               </div>
-              <div className="text-right">
-                <span className="inline-flex items-center gap-1 rounded-xl bg-primary/10 px-2.5 py-1 text-xs font-black text-primary border border-primary/20">
-                  Nível {personalStats.bestLevel}
-                </span>
+
+              <div className="space-y-0.5 pl-3 flex flex-col justify-center">
+                <div className="flex items-center gap-1 text-[10px] font-black uppercase tracking-wider text-muted-foreground">
+                  <Gamepad2 className="h-3.5 w-3.5 text-primary" /> Partidas
+                </div>
+                <div className="font-display text-lg font-black text-foreground">
+                  {playsCount}
+                </div>
+                <div className="text-[11px] font-medium text-muted-foreground">
+                  {playsCount === 1 ? "partida jogada" : "partidas jogadas"}
+                </div>
               </div>
             </div>
 
