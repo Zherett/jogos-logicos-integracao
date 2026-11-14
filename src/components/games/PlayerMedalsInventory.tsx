@@ -240,14 +240,14 @@ export function PlayerMedalsInventory({
                       role="button"
                       tabIndex={0}
                     >
-                      <span className="absolute -top-2 left-2.5 sm:left-3 rounded-full bg-primary px-1.5 sm:px-2 py-0.5 text-[9px] font-black uppercase text-primary-foreground">
+                      <span className="absolute -top-2.5 left-2.5 sm:left-3.5 rounded-full bg-primary px-2 sm:px-2.5 py-0.5 text-[9px] sm:text-[10px] font-black uppercase text-primary-foreground shadow-sm">
                         #{idx + 1}<span className="hidden sm:inline"> Vitrine</span>
                       </span>
                       {isSecretRevealed && (
                         <span
-                          className={`absolute -top-2 ${
-                            showStackBadge ? "right-5 sm:right-6" : "right-2.5 sm:right-3"
-                          } rounded-full bg-emerald-950/90 border border-emerald-400 px-1.5 sm:px-2 py-0.5 text-[8px] font-black uppercase tracking-wider text-emerald-300 shadow-sm flex items-center gap-0.5 animate-pulse`}
+                          className={`absolute -top-2.5 ${
+                            showStackBadge ? "right-5 sm:right-7" : "right-2.5 sm:right-3.5"
+                          } rounded-full bg-emerald-950/90 border border-emerald-400 px-2 sm:px-2.5 py-0.5 text-[8px] sm:text-[10px] font-black uppercase tracking-wider text-emerald-300 shadow-sm flex items-center gap-0.5 sm:gap-1 animate-pulse`}
                         >
                           <span>✨</span>
                           <span className="hidden sm:inline">Secreta</span>
@@ -255,17 +255,17 @@ export function PlayerMedalsInventory({
                       )}
                       {showStackBadge && (
                         <span
-                          className="absolute -top-2.5 -right-2.5 flex h-6 min-w-6 px-1.5 items-center justify-center rounded-full bg-gradient-to-br from-amber-400 to-amber-600 text-zinc-950 font-mono text-[11px] font-black border-2 border-background shadow-lg z-10"
+                          className="absolute -top-2.5 -right-2.5 flex h-6 min-w-6 sm:h-7 sm:min-w-7 px-1.5 items-center justify-center rounded-full bg-gradient-to-br from-amber-400 to-amber-600 text-zinc-950 font-mono text-[11px] sm:text-xs font-black border-2 border-background shadow-lg z-10"
                           title={`${stackCount}x medalha(s) conquistada(s)`}
                         >
                           {stackCount}
                         </span>
                       )}
-                      <div className={`mb-1.5 sm:mb-2 mt-1 ${isSecretRevealed ? "text-emerald-400" : rarity.textColor}`}>
-                        <MedalIcon name={m.iconName} className="h-7 w-7 sm:h-8 sm:w-8" />
+                      <div className={`mb-2.5 sm:mb-3.5 mt-1 ${isSecretRevealed ? "text-emerald-400" : rarity.textColor}`}>
+                        <MedalIcon name={m.iconName} className="h-12 w-12 sm:h-16 sm:w-16" />
                       </div>
                       <span
-                        className={`rounded-full border px-2 py-0.5 text-[9px] font-black uppercase ${
+                        className={`rounded-full border px-2.5 sm:px-3.5 py-0.5 sm:py-1 text-[10px] sm:text-xs font-black uppercase tracking-wide ${
                           isSecretRevealed
                             ? "border-emerald-400/80 bg-emerald-950/60 text-emerald-300"
                             : rarity.badgeBgClass
@@ -273,7 +273,7 @@ export function PlayerMedalsInventory({
                       >
                         {rarity.label}
                       </span>
-                      <h4 className="mt-1.5 line-clamp-2 font-display text-[11px] sm:text-xs font-black leading-tight text-foreground">
+                      <h4 className="mt-2 sm:mt-3 px-1 line-clamp-2 font-display text-[13px] sm:text-base font-black leading-snug text-foreground">
                         {m.title}
                       </h4>
                     </div>
