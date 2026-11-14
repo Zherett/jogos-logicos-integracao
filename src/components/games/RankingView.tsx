@@ -360,7 +360,7 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
   return (
     <div className="min-h-screen bg-background text-foreground flex flex-col">
       {/* Cabeçalho Fixo da Página de Ranking */}
-      <header className="sticky top-0 z-40 border-b bg-card/95 backdrop-blur-sm px-3 sm:px-6 py-3 shadow-xs">
+      <header className="sticky top-0 z-40 border-b bg-card px-3 sm:px-6 py-3 shadow-xs">
         <div className="mx-auto max-w-4xl flex flex-wrap items-center justify-between gap-2.5">
           <div className="flex items-center gap-2.5 min-w-0">
             <Link

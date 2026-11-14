@@ -532,6 +532,7 @@ export function purgeExpiredTrash(reg: Record<string, StoredAccount>): boolean {
 let inMemoryRegistry: Record<string, StoredAccount> = {};
 let cachedRegistryRaw: string | null = null;
 let cachedRegistryClean: Record<string, StoredAccount> | null = null;
+let cachedRegistryReadOnly: Record<string, StoredAccount> | null = null;
 let cachedTombstoneCount = -1;
 
 if (typeof window !== "undefined") {
@@ -539,58 +540,81 @@ if (typeof window !== "undefined") {
     if (!e.key || e.key === REGISTRY_KEY || e.key === TOMBSTONES_STORAGE_KEY) {
       cachedRegistryRaw = null;
       cachedRegistryClean = null;
+      cachedRegistryReadOnly = null;
       cachedTombstoneCount = -1;
     }
   });
 }
 
-export function loadRegistry(): Record<string, StoredAccount> {
+function parseAndCleanRegistry(): { reg: Record<string, StoredAccount>; raw: string; tombCount: number } | null {
+  const raw = window.localStorage.getItem(REGISTRY_KEY);
+  if (!raw) {
+    cachedRegistryRaw = null;
+    cachedRegistryClean = null;
+    cachedRegistryReadOnly = null;
+    cachedTombstoneCount = -1;
+    return null;
+  }
+  const tombCount = loadTombstones().size;
+  if (raw === cachedRegistryRaw && cachedRegistryReadOnly !== null && tombCount === cachedTombstoneCount) {
+    return { reg: cachedRegistryReadOnly, raw, tombCount };
+  }
+
+  const parsed = JSON.parse(raw) as Record<string, StoredAccount>;
+  let tombstoneCleaned = false;
+  for (const [key, acc] of Object.entries(parsed)) {
+    if (!acc || !acc.profile || !acc.profile.id) {
+      delete parsed[key];
+      tombstoneCleaned = true;
+      continue;
+    }
+    if (
+      isTombstoned(key) ||
+      isTombstoned(acc.profile.id) ||
+      isTombstoned(acc.profile.nickNormalized)
+    ) {
+      delete parsed[key];
+      tombstoneCleaned = true;
+    }
+  }
+  if (purgeExpiredTrash(parsed) || tombstoneCleaned) {
+    saveRegistry(parsed);
+    return { reg: parsed, raw: cachedRegistryRaw ?? raw, tombCount };
+  }
+  cachedRegistryRaw = raw;
+  cachedRegistryReadOnly = parsed;
+  cachedRegistryClean = parsed;
+  cachedTombstoneCount = tombCount;
+  return { reg: parsed, raw, tombCount };
+}
+
+/**
+ * Fast zero-clone registry read for read-only consumers (leaderboards, listings, profile inspect).
+ * Callers MUST NOT mutate the returned object.
+ */
+export function loadRegistryReadOnly(): Record<string, StoredAccount> {
   if (typeof window === "undefined") return inMemoryRegistry;
   try {
-    const raw = window.localStorage.getItem(REGISTRY_KEY);
-    if (!raw) {
-      cachedRegistryRaw = null;
-      cachedRegistryClean = null;
-      cachedTombstoneCount = -1;
-      return {};
-    }
-    const tombCount = loadTombstones().size;
-    if (
-      raw === cachedRegistryRaw &&
-      cachedRegistryClean !== null &&
-      tombCount === cachedTombstoneCount
-    ) {
-      return structuredClone(cachedRegistryClean);
-    }
-
-    const parsed = JSON.parse(raw) as Record<string, StoredAccount>;
-    let tombstoneCleaned = false;
-    for (const [key, acc] of Object.entries(parsed)) {
-      if (!acc || !acc.profile || !acc.profile.id) {
-        delete parsed[key];
-        tombstoneCleaned = true;
-        continue;
-      }
-      if (
-        isTombstoned(key) ||
-        isTombstoned(acc.profile.id) ||
-        isTombstoned(acc.profile.nickNormalized)
-      ) {
-        delete parsed[key];
-        tombstoneCleaned = true;
-      }
-    }
-    if (purgeExpiredTrash(parsed) || tombstoneCleaned) {
-      saveRegistry(parsed);
-    } else {
-      cachedRegistryRaw = raw;
-      cachedRegistryClean = structuredClone(parsed);
-      cachedTombstoneCount = tombCount;
-    }
-    return parsed;
+    return parseAndCleanRegistry()?.reg ?? {};
   } catch {
     cachedRegistryRaw = null;
     cachedRegistryClean = null;
+    cachedRegistryReadOnly = null;
+    cachedTombstoneCount = -1;
+    return {};
+  }
+}
+
+export function loadRegistry(): Record<string, StoredAccount> {
+  if (typeof window === "undefined") return inMemoryRegistry;
+  try {
+    const res = parseAndCleanRegistry();
+    if (!res) return {};
+    return structuredClone(res.reg);
+  } catch {
+    cachedRegistryRaw = null;
+    cachedRegistryClean = null;
+    cachedRegistryReadOnly = null;
     cachedTombstoneCount = -1;
     return {};
   }
@@ -605,11 +629,13 @@ export function saveRegistry(reg: Record<string, StoredAccount>) {
     const serialized = JSON.stringify(reg);
     window.localStorage.setItem(REGISTRY_KEY, serialized);
     cachedRegistryRaw = serialized;
-    cachedRegistryClean = structuredClone(reg);
-    cachedTombstoneCount = loadTombstones().size;
+    cachedRegistryClean = null;
+    cachedRegistryReadOnly = null;
+    cachedTombstoneCount = -1;
   } catch {
     cachedRegistryRaw = null;
     cachedRegistryClean = null;
+    cachedRegistryReadOnly = null;
   }
 }
 
@@ -5212,7 +5238,7 @@ function buildLeaderboardFromLocal(
   playfabStatByPlayer: Map<string, number>,
   persistHistory: boolean,
 ): LeaderboardEntry[] {
-  const reg = loadRegistry();
+  const reg = loadRegistryReadOnly();
   const localAccounts = Object.values(reg).map((acc) => ensurePlayerSeasonAligned(acc, cfg));
 
   const rows: Omit<LeaderboardEntry, "rank">[] = [];
@@ -5460,7 +5486,7 @@ export function getSchoolStandings(): {
   topStudent: string | null;
 }[] {
   const cfg = checkAndApplyScheduledReset();
-  const reg = loadRegistry();
+  const reg = loadRegistryReadOnly();
   const accounts = Object.values(reg).map((a) => ensurePlayerSeasonAligned(a, cfg));
 
   return SCHOOLS.map((s) => {
@@ -5483,7 +5509,7 @@ export function getSchoolStandings(): {
 /** Returns all registered players for the Admin Panel overview (excludes trash by default). */
 export function getAllRegisteredPlayers(includeDeleted = false): PlayerProfile[] {
   const cfg = checkAndApplyScheduledReset();
-  const reg = loadRegistry();
+  const reg = loadRegistryReadOnly();
   const seen = new Set<string>();
   const list: PlayerProfile[] = [];
 
@@ -6282,7 +6308,7 @@ export async function playfabRejectTurmaRequest(requestId: string): Promise<bool
  */
 export function getPlayerPublicProfile(identifier: string): PlayerProfile | null {
   const cfg = checkAndApplyScheduledReset();
-  const reg = loadRegistry();
+  const reg = loadRegistryReadOnly();
   const clean = identifier.trim().toLowerCase();
   const cleanStripped = clean.replace(/^stu_/, "");
   for (const acc of Object.values(reg)) {
@@ -6302,7 +6328,6 @@ export function getPlayerPublicProfile(identifier: string): PlayerProfile | null
       pNick.replace(/[^a-z0-9_]/g, "") === cleanStripped
     ) {
       const aligned = ensurePlayerSeasonAligned(acc, cfg);
-      saveRegistry(reg);
       return aligned.profile;
     }
   }
