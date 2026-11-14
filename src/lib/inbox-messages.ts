@@ -1591,3 +1591,108 @@ export function recordDeviceSecurityAlert(args: {
 
   return { studentMsg, adminMsg };
 }
+
+export interface InboxMediaToken {
+  prefix: "gif" | "img";
+  tagKey: string;
+  resolvedTagKey: string;
+  url?: string;
+  scale: number;
+}
+
+export type InboxBodySegment =
+  | { type: "text"; content: string }
+  | { type: "media-group"; items: InboxMediaToken[] };
+
+/**
+ * Retorna a largura de cada item na grade flex-wrap (gap-3 = 0.75rem) de acordo com a escala:
+ * - <= 40%: até 4 por linha
+ * - <= 60%: até 3 por linha
+ * - <= 80%: até 2 por linha
+ * - > 80% (100%): 1 por linha
+ */
+export function getMediaRowSlotWidth(scale: number): string {
+  if (scale <= 40) return "calc((100% - 2.25rem) / 4)";
+  if (scale <= 60) return "calc((100% - 1.5rem) / 3)";
+  if (scale <= 80) return "calc((100% - 0.75rem) / 2)";
+  return "100%";
+}
+
+/**
+ * Divide o corpo da mensagem em segmentos de texto e grupos de mídia consecutiva
+ * (separada apenas por espaços/quebras de linha), permitindo exibir múltiplas
+ * mídias lado a lado conforme a capacidade da linha definida pela escala.
+ */
+export function splitInboxBodySegments(
+  body: string,
+  options?: {
+    gifLinks?: Record<string, string>;
+    imageLinks?: Record<string, string>;
+    mediaScales?: Record<string, number>;
+  },
+): InboxBodySegment[] {
+  const gifLinks = options?.gifLinks;
+  const imageLinks = options?.imageLinks;
+  const mediaScales = options?.mediaScales;
+  const parts = body.split(/(\[(?:gif|img)\d*(?::\d+%?)?\])/gi);
+  const segments: InboxBodySegment[] = [];
+
+  for (const part of parts) {
+    const match = /^\[(gif|img)(\d*)(?::(\d+)%?)?\]$/i.exec(part.trim());
+    if (match) {
+      const prefix = match[1].toLowerCase() as "gif" | "img";
+      const tagNum = match[2];
+      const tagKey = tagNum ? `${prefix}${tagNum}`.toLowerCase() : prefix;
+      const resolvedTagKey =
+        prefix === "gif"
+          ? gifLinks?.[tagKey]
+            ? tagKey
+            : tagKey === "gif"
+              ? gifLinks?.["gif1"]
+                ? "gif1"
+                : Object.keys(gifLinks || {})[0] || tagKey
+              : tagKey
+          : imageLinks?.[tagKey]
+            ? tagKey
+            : tagKey === "img"
+              ? imageLinks?.["img1"]
+                ? "img1"
+                : Object.keys(imageLinks || {})[0] || tagKey
+              : tagKey;
+
+      const url = prefix === "gif" ? gifLinks?.[resolvedTagKey] : imageLinks?.[resolvedTagKey];
+      const inlineScale = match[3] ? Number(match[3]) : undefined;
+      const scale = Math.min(
+        100,
+        Math.max(10, mediaScales?.[resolvedTagKey] ?? mediaScales?.[tagKey] ?? inlineScale ?? 100),
+      );
+
+      const token: InboxMediaToken = { prefix, tagKey, resolvedTagKey, url, scale };
+      const last = segments[segments.length - 1];
+      if (last && last.type === "media-group") {
+        last.items.push(token);
+      } else {
+        segments.push({ type: "media-group", items: [token] });
+      }
+      continue;
+    }
+
+    // Ignora apenas espaços/quebras de linha entre tags de mídia consecutivas
+    if (!part.trim()) {
+      const last = segments[segments.length - 1];
+      if (last && last.type === "media-group") {
+        continue;
+      }
+      if (!part) continue;
+    }
+
+    const last = segments[segments.length - 1];
+    if (last && last.type === "text") {
+      last.content += part;
+    } else {
+      segments.push({ type: "text", content: part });
+    }
+  }
+
+  return segments;
+}

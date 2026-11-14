@@ -52,6 +52,8 @@ import {
   cancelInboxMessage,
   loadCanceledMessageIds,
   getMessageRewards,
+  splitInboxBodySegments,
+  getMediaRowSlotWidth,
   type SystemInboxMessage,
   type AdminBroadcastDraft,
   type InboxReward,
@@ -299,71 +301,53 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
           )?.nick || msg.recipientId)
         : "Aluno";
 
-    const parts = msg.body.split(/(\[(?:gif|img)\d*(?::\d+%?)?\])/gi);
+    const segments = splitInboxBodySegments(msg.body, {
+      gifLinks: msg.gifLinks,
+      imageLinks: msg.imageLinks,
+      mediaScales: msg.mediaScales,
+    });
 
     return (
       <div className="whitespace-pre-wrap text-sm text-foreground leading-relaxed space-y-3">
-        {parts.map((part, index) => {
-          const match = /^\[(gif|img)(\d*)(?::(\d+)%?)?\]$/i.exec(part.trim());
-          if (match) {
-            const prefix = match[1].toLowerCase();
-            const tagNum = match[2];
-            const tagKey = tagNum ? `${prefix}${tagNum}`.toLowerCase() : prefix;
-            const resolvedTagKey =
-              prefix === "gif"
-                ? msg.gifLinks?.[tagKey]
-                  ? tagKey
-                  : tagKey === "gif"
-                    ? msg.gifLinks?.["gif1"]
-                      ? "gif1"
-                      : Object.keys(msg.gifLinks || {})[0] || tagKey
-                    : tagKey
-                : msg.imageLinks?.[tagKey]
-                  ? tagKey
-                  : tagKey === "img"
-                    ? msg.imageLinks?.["img1"]
-                      ? "img1"
-                      : Object.keys(msg.imageLinks || {})[0] || tagKey
-                    : tagKey;
-            const url =
-              prefix === "gif"
-                ? msg.gifLinks?.[resolvedTagKey]
-                : msg.imageLinks?.[resolvedTagKey];
-
-            if (url) {
-              const inlineScale = match[3] ? Number(match[3]) : undefined;
-              const scale = Math.min(
-                100,
-                Math.max(10, msg.mediaScales?.[resolvedTagKey] ?? msg.mediaScales?.[tagKey] ?? inlineScale ?? 100)
-              );
-
-              return (
-                <div key={index} className="my-3 flex justify-center w-full">
-                  <img
-                    src={url}
-                    alt={prefix === "gif" ? "Animação GIF" : "Imagem da Mensagem"}
-                    style={{
-                      maxWidth: `${scale}%`,
-                      maxHeight: `${(20 * scale) / 100}rem`,
-                    }}
-                    className="w-auto object-contain rounded-xl"
-                    loading="lazy"
-                    onError={(e) => {
-                      (e.target as HTMLElement).style.display = "none";
-                    }}
-                  />
-                </div>
-              );
-            }
+        {segments.map((segment, index) => {
+          if (segment.type === "media-group") {
             return (
-              <span key={index} className="text-xs text-muted-foreground italic">
-                [{prefix.toUpperCase()}: Mídia não encontrada]
-              </span>
+              <div key={index} className="my-3 flex flex-wrap items-center justify-center gap-3 w-full">
+                {segment.items.map((item, mIdx) => {
+                  if (item.url) {
+                    return (
+                      <div
+                        key={mIdx}
+                        style={{ width: getMediaRowSlotWidth(item.scale) }}
+                        className="flex justify-center shrink-0"
+                      >
+                        <img
+                          src={item.url}
+                          alt={item.prefix === "gif" ? "Animação GIF" : "Imagem da Mensagem"}
+                          style={{
+                            maxHeight: `${(20 * item.scale) / 100}rem`,
+                          }}
+                          className="w-auto max-w-full object-contain rounded-xl"
+                          loading="lazy"
+                          onError={(e) => {
+                            (e.target as HTMLElement).style.display = "none";
+                          }}
+                        />
+                      </div>
+                    );
+                  }
+                  return (
+                    <span key={mIdx} className="text-xs text-muted-foreground italic">
+                      [{item.prefix.toUpperCase()}: Mídia não encontrada]
+                    </span>
+                  );
+                })}
+              </div>
             );
           }
 
           // Renderiza tags inline no texto
-          const subParts = part.split(/(\[(?:nick|aluno|game\d*|event\d*)\])/gi);
+          const subParts = segment.content.split(/(\[(?:nick|aluno|game\d*|event\d*)\])/gi);
           return (
             <span key={index}>
               {subParts.map((sub, sIdx) => {

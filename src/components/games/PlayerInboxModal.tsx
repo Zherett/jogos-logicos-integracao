@@ -25,6 +25,8 @@ import {
   getMessageRewards,
   deleteInboxMessageForPlayer,
   formatInboxMessageText,
+  splitInboxBodySegments,
+  getMediaRowSlotWidth,
   type SystemInboxMessage,
   type InboxReward,
 } from "@/lib/inbox-messages";
@@ -304,69 +306,46 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
     imageLinks?: Record<string, string>,
     msg?: SystemInboxMessage | null
   ) => {
-    // Divide texto pelas tags [gif], [gif1], [gif2], [img], [img1], [img2], com suporte a escala opcional [gif1:60%]
-    const parts = body.split(/(\[(?:gif|img)\d*(?::\d+%?)?\])/gi);
+    const segments = splitInboxBodySegments(body, {
+      gifLinks,
+      imageLinks,
+      mediaScales: msg?.mediaScales,
+    });
 
     return (
       <div className="whitespace-pre-wrap text-sm text-foreground leading-relaxed space-y-3">
-        {parts.map((part, index) => {
-          const match = /^\[(gif|img)(\d*)(?::(\d+)%?)?\]$/i.exec(part.trim());
-          if (match) {
-            const prefix = match[1].toLowerCase();
-            const tagNum = match[2];
-            const tagKey = tagNum ? `${prefix}${tagNum}`.toLowerCase() : prefix;
-            const resolvedTagKey =
-              prefix === "gif"
-                ? gifLinks?.[tagKey]
-                  ? tagKey
-                  : tagKey === "gif"
-                    ? gifLinks?.["gif1"]
-                      ? "gif1"
-                      : Object.keys(gifLinks || {})[0] || tagKey
-                    : tagKey
-                : imageLinks?.[tagKey]
-                  ? tagKey
-                  : tagKey === "img"
-                    ? imageLinks?.["img1"]
-                      ? "img1"
-                      : Object.keys(imageLinks || {})[0] || tagKey
-                    : tagKey;
-            const url =
-              prefix === "gif"
-                ? gifLinks?.[resolvedTagKey]
-                : imageLinks?.[resolvedTagKey];
-            const isGif = prefix === "gif";
+        {segments.map((segment, index) => {
+          if (segment.type === "media-group") {
+            const validItems = segment.items.filter((item) => Boolean(item.url));
+            if (validItems.length === 0) return null;
 
-            if (url) {
-              const inlineScale = match[3] ? Number(match[3]) : undefined;
-              const scale = Math.min(
-                100,
-                Math.max(10, msg?.mediaScales?.[resolvedTagKey] ?? msg?.mediaScales?.[tagKey] ?? inlineScale ?? 100)
-              );
-
-              return (
-                <div key={index} className="my-3 flex justify-center w-full">
-                  <img
-                    src={url}
-                    alt={isGif ? "GIF animado" : "Imagem"}
-                    style={{
-                      maxWidth: `${scale}%`,
-                      maxHeight: `${(20 * scale) / 100}rem`,
-                    }}
-                    className="w-auto object-contain rounded-xl"
-                    loading="lazy"
-                    decoding="async"
-                    onError={(e) => {
-                      (e.target as HTMLElement).style.display = "none";
-                    }}
-                  />
-                </div>
-              );
-            }
-            // Se a tag não tem link válido associado, oculta em vez de vazar a tag bruta no corpo
-            return null;
+            return (
+              <div key={index} className="my-3 flex flex-wrap items-center justify-center gap-3 w-full">
+                {validItems.map((item, mIdx) => (
+                  <div
+                    key={mIdx}
+                    style={{ width: getMediaRowSlotWidth(item.scale) }}
+                    className="flex justify-center shrink-0"
+                  >
+                    <img
+                      src={item.url}
+                      alt={item.prefix === "gif" ? "GIF animado" : "Imagem"}
+                      style={{
+                        maxHeight: `${(20 * item.scale) / 100}rem`,
+                      }}
+                      className="w-auto max-w-full object-contain rounded-xl"
+                      loading="lazy"
+                      decoding="async"
+                      onError={(e) => {
+                        (e.target as HTMLElement).style.display = "none";
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+            );
           }
-          return <span key={index}>{renderInlineTags(part, msg)}</span>;
+          return <span key={index}>{renderInlineTags(segment.content, msg)}</span>;
         })}
       </div>
     );

@@ -27,6 +27,8 @@ import {
   saveAllInboxMessages,
   isMessageEligibleForPlayer,
   getMessageRewards,
+  getMediaRowSlotWidth,
+  splitInboxBodySegments,
 } from "./inbox-messages.ts";
 import type { PlayerProfile } from "./playfab.ts";
 
@@ -363,6 +365,52 @@ describe("Sistema Completo de Caixa de Entrada e Correio (inbox-messages)", () =
     assert.ok(found);
     assert.equal(found?.mediaScales?.["gif1"], 60);
     assert.equal(found?.mediaScales?.["img1"], 40);
+  });
+
+  it("calcula largura de coluna por escala (4 por linha em 40%, 3 em 60%, 2 em 80%, 1 em 100%) e agrupa mídias consecutivas", () => {
+    assert.equal(getMediaRowSlotWidth(40), "calc((100% - 2.25rem) / 4)");
+    assert.equal(getMediaRowSlotWidth(60), "calc((100% - 1.5rem) / 3)");
+    assert.equal(getMediaRowSlotWidth(80), "calc((100% - 0.75rem) / 2)");
+    assert.equal(getMediaRowSlotWidth(100), "100%");
+
+    const segments = splitInboxBodySegments(
+      "Olá!\n[gif1]\n[img1]\n[gif2]\n[img2]\nTexto no meio\n[img3]",
+      {
+        gifLinks: {
+          gif1: "https://ex.com/1.gif",
+          gif2: "https://ex.com/2.gif",
+        },
+        imageLinks: {
+          img1: "https://ex.com/1.png",
+          img2: "https://ex.com/2.png",
+          img3: "https://ex.com/3.png",
+        },
+        mediaScales: {
+          gif1: 40,
+          img1: 40,
+          gif2: 40,
+          img2: 40,
+          img3: 80,
+        },
+      },
+    );
+
+    assert.equal(segments.length, 4);
+    assert.equal(segments[0].type, "text");
+    assert.equal(segments[1].type, "media-group");
+    if (segments[1].type === "media-group") {
+      assert.equal(segments[1].items.length, 4);
+      assert.deepEqual(
+        segments[1].items.map((i) => i.scale),
+        [40, 40, 40, 40],
+      );
+    }
+    assert.equal(segments[2].type, "text");
+    assert.equal(segments[3].type, "media-group");
+    if (segments[3].type === "media-group") {
+      assert.equal(segments[3].items.length, 1);
+      assert.equal(segments[3].items[0].scale, 80);
+    }
   });
 
   it("formatInboxMessageText substitui [nick] dinamicamente e [game] pelo nome do jogo", () => {
