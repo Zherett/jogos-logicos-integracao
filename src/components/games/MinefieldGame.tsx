@@ -68,6 +68,7 @@ export function MinefieldGame({ onExit, onStatsChange, isRanked }: Props) {
 
   const timerRef = useRef<number | null>(null);
   const opening = useRef<Set<string>>(new Set());
+  const answerLockRef = useRef(false);
 
   function clearTimer() {
     if (timerRef.current) { window.clearInterval(timerRef.current); timerRef.current = null; }
@@ -102,6 +103,7 @@ export function MinefieldGame({ onExit, onStatsChange, isRanked }: Props) {
 
   function startGame() {
     clearTimer();
+    answerLockRef.current = false;
     setBoard(buildBoard());
     setRevealed(new Set());
     opening.current = new Set();
@@ -146,6 +148,7 @@ export function MinefieldGame({ onExit, onStatsChange, isRanked }: Props) {
         window.setTimeout(() => setToast(null), 2400);
         nextTeam();
       } else {
+        answerLockRef.current = false;
         setOpenCard(card);
         setAnswered(null);
         setTimeLeft(answerSeconds);
@@ -161,6 +164,8 @@ export function MinefieldGame({ onExit, onStatsChange, isRanked }: Props) {
   }
 
   function handleTimeout() {
+    if (answerLockRef.current) return;
+    answerLockRef.current = true;
     const evalRes = evaluateTimeout();
     setAnswered({ chosen: "", ok: false });
     setWrong((w) => w + 1);
@@ -171,7 +176,8 @@ export function MinefieldGame({ onExit, onStatsChange, isRanked }: Props) {
   }
 
   function answer(option: string) {
-    if (!openCard || openCard.kind === "bonus" || answered) return;
+    if (answerLockRef.current || !openCard || openCard.kind === "bonus" || answered) return;
+    answerLockRef.current = true;
     clearTimer();
     const evalRes = evaluateQuestionAnswer(openCard, option);
     setAnswered({ chosen: option, ok: evalRes.isCorrect });
@@ -192,6 +198,7 @@ export function MinefieldGame({ onExit, onStatsChange, isRanked }: Props) {
 
   function closeCard() {
     clearTimer();
+    answerLockRef.current = false;
     setOpenCard(null);
     setAnswered(null);
     nextTeam();

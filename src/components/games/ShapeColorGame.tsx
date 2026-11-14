@@ -74,6 +74,7 @@ export function ShapeColorGame({ onExit, onStatsChange, isRanked }: Props) {
   const [qInLevel, setQInLevel] = useState(0);
   const [question, setQuestion] = useState<Question | null>(null);
   const prevModeRef = useRef<1 | 2 | 3 | undefined>(undefined);
+  const solveLockRef = useRef(false);
 
   // Per-question runtime state
   const [droppedIds, setDroppedIds] = useState<Set<string>>(new Set());              // mode 1
@@ -114,6 +115,7 @@ export function ShapeColorGame({ onExit, onStatsChange, isRanked }: Props) {
   }, [finished]);
 
   function loadNewQuestion(lvl: number, qi: number) {
+    solveLockRef.current = false;
     const q = generateQuestion(lvl, qi, prevModeRef.current);
     prevModeRef.current = q.mode;
     setQuestion(q);
@@ -124,6 +126,7 @@ export function ShapeColorGame({ onExit, onStatsChange, isRanked }: Props) {
   }
 
   function startGame() {
+    solveLockRef.current = false;
     setRunId((r) => r + 1);
     team.begin(teamConfig);
     setScore(0); setCorrect(0); setWrong(0);
@@ -159,6 +162,8 @@ export function ShapeColorGame({ onExit, onStatsChange, isRanked }: Props) {
 
   /** Awards the points for a fully solved question. */
   function solveQuestion() {
+    if (solveLockRef.current) return;
+    solveLockRef.current = true;
     const pts = level >= 4 ? POINTS_CORRECT_L4 : POINTS_CORRECT;
     setScore((s) => s + pts);
     setCorrect((c) => c + 1);
@@ -166,6 +171,7 @@ export function ShapeColorGame({ onExit, onStatsChange, isRanked }: Props) {
     advanceQuestion();
   }
   function registerWrong(slotId?: string) {
+    if (solveLockRef.current) return;
     playWrong();
     setScore((s) => Math.max(0, s - POINTS_WRONG));
     setWrong((w) => w + 1);
@@ -176,7 +182,7 @@ export function ShapeColorGame({ onExit, onStatsChange, isRanked }: Props) {
   }
 
   function handleMode1Drop(pieceId: string) {
-    if (!question || question.mode !== 1) return;
+    if (solveLockRef.current || !question || question.mode !== 1) return;
     if (droppedIds.has(pieceId)) return;
     const isTarget = question.targetIds.includes(pieceId);
     if (isTarget) {
@@ -191,7 +197,7 @@ export function ShapeColorGame({ onExit, onStatsChange, isRanked }: Props) {
   }
 
   function handleMode2Drop(slotId: string, pieceId: string) {
-    if (!question || question.mode !== 2) return;
+    if (solveLockRef.current || !question || question.mode !== 2) return;
     if (Object.values(placed).includes(pieceId)) return;
     const slot = question.slots.find((s) => s.id === slotId);
     const piece = question.pieces.find((p) => p.id === pieceId);

@@ -3,13 +3,13 @@ import { Check, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { GameHud } from "./GameHud";
 import { ResultPanel } from "./ResultPanel";
-import { StartScreen, OptionChip } from "./StartScreen";
+import { StartScreen } from "./StartScreen";
 import { Countdown } from "./Countdown";
 import { useRoundClock } from "@/lib/use-countdown";
 import { GameTopBar } from "./GameTopBar";
 import { BonusTimeToggle } from "./BonusTimeToggle";
 import { useTeamSession } from "@/lib/use-team-session";
-import { generateBalanced, type Question, type OpKind, ALL_OPS } from "@/lib/logic-questions";
+import { generateBalanced, type Question } from "@/lib/logic-questions";
 import { updateBest, saveLastMatch, loadLastMatch, type LastMatch } from "@/lib/game-storage";
 import { TeamSetup } from "./TeamSetup";
 import { TeamScoreBar, TeamResults } from "./TeamScoreBar";
@@ -22,7 +22,8 @@ const DURATION = 120;
 const LEVEL_UP_STREAK = 5;
 const MAX_LEVEL = 4;
 const POINTS_CORRECT = 10;
-const POINTS_WRONG = 5;
+const POINTS_WRONG = 10;
+const WRONG_STUN_MS = 1500;
 
 interface Props {
   onExit: () => void;
@@ -30,35 +31,8 @@ interface Props {
   isRanked?: boolean;
 }
 
-const OP_LABELS: Record<OpKind, string> = {
-  add: "Adição (+)",
-  sub: "Subtração (−)",
-  mul: "Multiplicação (×)",
-  div: "Divisão (÷)",
-};
-
 export function LogicGame({ onExit, onStatsChange, isRanked }: Props) {
   const [phase, setPhase] = useState<"setup" | "countdown" | "playing">("countdown");
-  const [ops, setOps] = useState<OpKind[]>(() => {
-    try {
-      const raw = localStorage.getItem("desafios_logica_ops");
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.includes("add") && parsed.includes("sub")) {
-          return parsed as OpKind[];
-        }
-      }
-    } catch {
-      /* ignore */
-    }
-    return [...ALL_OPS];
-  });
-
-  useEffect(() => {
-    if (isRanked) {
-      setOps([...ALL_OPS]);
-    }
-  }, [isRanked]);
   const [lastMatch, setLastMatch] = useState<LastMatch | null>(null);
   const [teamConfig, setTeamConfig] = useState<TeamConfig>(NORMAL_CONFIG);
   const team = useTeamSession();
@@ -110,18 +84,17 @@ export function LogicGame({ onExit, onStatsChange, isRanked }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [finished]);
 
-  function toggleOp(op: OpKind) {
-    setOps((cur) => (cur.includes(op) ? cur.filter((o) => o !== op) : [...cur, op]));
-  }
-
   function startGame() {
     setRunId((r) => r + 1);
     team.begin(teamConfig);
     recentTexts.current = [];
     recentAnswers.current = [];
+    lockRef.current = false;
+    setFeedback(null);
+    setShowLevelUp(null);
     setCorrect(0); setWrong(0); setLevel(1); setStreak(0);
     setFinished(false);
-    setQuestion(generateBalanced(1, [], [], ops));
+    setQuestion(generateBalanced(1, [], []));
     setPhase("playing");
     setRunning(true);
   }
@@ -142,7 +115,7 @@ export function LogicGame({ onExit, onStatsChange, isRanked }: Props) {
   const sessionEnd = useSessionEnd(team, backToSetup);
 
   function nextQuestion(currentLevel: number) {
-    const q = generateBalanced(currentLevel, recentTexts.current, recentAnswers.current, ops);
+    const q = generateBalanced(currentLevel, recentTexts.current, recentAnswers.current);
     recentTexts.current = [...recentTexts.current.slice(-15), q.text];
     recentAnswers.current = [...recentAnswers.current.slice(-15), q.answer];
     setQuestion(q);
@@ -191,7 +164,7 @@ export function LogicGame({ onExit, onStatsChange, isRanked }: Props) {
         setFeedback(null);
         nextQuestion(level);
         lockRef.current = false;
-      }, 500);
+      }, WRONG_STUN_MS);
     }
   }
 
@@ -208,10 +181,9 @@ export function LogicGame({ onExit, onStatsChange, isRanked }: Props) {
     return (
       <StartScreen
         title="Lógica Matemática"
-        description="Responda Verdadeiro ou Falso antes o tempo acabar. Acerto: +10 • Erro: −5"
+        description="Responda Verdadeiro ou Falso antes o tempo acabar. Acerto: +10 • Erro: −10"
         onStart={startGame}
         onExit={onExit}
-        disabled={ops.length === 0}
         lastMatch={lastMatch}
         sessionActive={team.activeSession}
         onFinishSession={sessionEnd.request}
@@ -221,27 +193,9 @@ export function LogicGame({ onExit, onStatsChange, isRanked }: Props) {
         <div className="mb-4">
           <TeamSetup value={teamConfig} onChange={setTeamConfig} locked={team.activeSession} />
         </div>
-        <div>
-          <div className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3 text-center">
-            Operações do jogo {isRanked && "• 🔒 Todas Ativas no Máximo (Torneio Ranqueado)"}
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            {ALL_OPS.map((op) => (
-              <OptionChip
-                key={op}
-                active={ops.includes(op)}
-                onClick={() => {
-                  if (!isRanked) toggleOp(op);
-                }}
-              >
-                {OP_LABELS[op]} {isRanked ? "🔒" : ""}
-              </OptionChip>
-            ))}
-          </div>
-          {ops.length === 0 && (
-            <p className="mt-3 text-center text-sm text-destructive">Selecione pelo menos uma operação.</p>
-          )}
-        </div>
+        <p className="text-center text-xs text-muted-foreground">
+          As operações matemáticas (+, −, ×, ÷) são liberadas e escalam automaticamente conforme você avança de nível.
+        </p>
       </StartScreen>
     );
   }

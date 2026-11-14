@@ -89,12 +89,38 @@ function comparison(): { text: string; value: boolean } {
   return { text: `${a} ${op} ${b}`, value: v };
 }
 
-function level3(_ops: OpKind[]): Question {
-  const left = comparison();
-  const right = comparison();
+export function getOpsForLevel(level: number): OpKind[] {
+  if (level <= 1) return ["add", "sub"];
+  if (level === 2) return ["add", "sub", "mul"];
+  if (level === 3) return ["add", "sub", "mul", "div"];
+  // Level 4+: all operations active with higher frequency of multiplication and division
+  return ["mul", "mul", "div", "div", "add", "sub"];
+}
+
+function level3(ops: OpKind[]): Question {
+  const variant = pick(["arithCompare", "arithAndCmp"]);
+  if (variant === "arithCompare") {
+    const left = simpleArith(ops);
+    const right = comparison();
+    const op = pick(["e", "ou"] as const);
+    const value = op === "e" ? left.value && right.value : left.value || right.value;
+    return { text: `${left.text} ${op} ${right.text}`, answer: value };
+  }
+  const l = arithOp(ops);
+  const target = l.value + pick([-2, -1, 0, 1, 2]);
+  const cmp = pick(["<", ">", "<=", ">=", "="] as const);
+  let lv = false;
+  switch (cmp) {
+    case "<": lv = l.value < target; break;
+    case ">": lv = l.value > target; break;
+    case "<=": lv = l.value <= target; break;
+    case ">=": lv = l.value >= target; break;
+    case "=": lv = l.value === target; break;
+  }
+  const right = simpleArith(ops);
   const op = pick(["e", "ou"] as const);
-  const value = op === "e" ? left.value && right.value : left.value || right.value;
-  return { text: `${left.text} ${op} ${right.text}`, answer: value };
+  const value = op === "e" ? lv && right.value : lv || right.value;
+  return { text: `${l.text} ${cmp} ${target} ${op} ${right.text}`, answer: value };
 }
 
 function level4(ops: OpKind[]): Question {
@@ -131,8 +157,8 @@ function level4(ops: OpKind[]): Question {
 
 const GENERATORS = [level1, level2, level3, level4];
 
-export function generateQuestion(level: number, recent: string[], ops: OpKind[]): Question {
-  const safeOps = ops.length ? ops : ["add"];
+export function generateQuestion(level: number, recent: string[], ops?: OpKind[]): Question {
+  const safeOps = ops && ops.length ? ops : getOpsForLevel(level);
   const idx = Math.min(GENERATORS.length, Math.max(1, level)) - 1;
   const gen = GENERATORS[idx];
   for (let i = 0; i < 20; i++) {
@@ -146,7 +172,7 @@ export function generateBalanced(
   level: number,
   recent: string[],
   recentAnswers: boolean[],
-  ops: OpKind[] = ALL_OPS,
+  ops?: OpKind[],
 ): Question {
   const last = recentAnswers.slice(-6);
   const trues = last.filter(Boolean).length;

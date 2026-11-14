@@ -71,7 +71,7 @@ export function CompleteLogicGame({ onExit, onStatsChange, isRanked }: Props) {
   const clock = useRoundClock(DURATION, running, () => {
     setRunning(false);
     setFinished(true);
-  }, BONUS_PER_CORRECT, 999);
+  }, BONUS_PER_CORRECT, MAX_BONUS);
 
   useEffect(() => {
     if (finished) {

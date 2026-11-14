@@ -5,6 +5,11 @@ export const BONUS_PER_CORRECT = 3;
 /** Hard cap of extra seconds per round (2:00 -> 2:30). */
 export const MAX_BONUS = 30;
 
+const getNowMs = () =>
+  typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+
 export function useCountdown(seconds: number, running: boolean, onEnd: () => void) {
   const [remaining, setRemaining] = useState(seconds);
   const endedRef = useRef(false);
@@ -16,9 +21,9 @@ export function useCountdown(seconds: number, running: boolean, onEnd: () => voi
     // Reset on each start
     setRemaining(seconds);
     endedRef.current = false;
-    const start = Date.now();
+    const start = getNowMs();
     const id = window.setInterval(() => {
-      const elapsed = (Date.now() - start) / 1000;
+      const elapsed = (getNowMs() - start) / 1000;
       const left = Math.max(0, seconds - elapsed);
       setRemaining(left);
       if (left <= 0 && !endedRef.current) {
@@ -61,9 +66,9 @@ export function useRoundClock(
     setBonus(0);
     setRemaining(seconds);
     endedRef.current = false;
-    const start = Date.now();
+    const start = getNowMs();
     const id = window.setInterval(() => {
-      const elapsed = (Date.now() - start) / 1000;
+      const elapsed = (getNowMs() - start) / 1000;
       const left = Math.max(0, seconds + bonusRef.current - elapsed);
       setRemaining(left);
       if (left <= 0 && !endedRef.current) {

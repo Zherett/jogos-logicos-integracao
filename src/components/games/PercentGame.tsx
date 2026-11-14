@@ -83,6 +83,7 @@ export function PercentGame({ onExit, onStatsChange, isRanked }: Props) {
   const [sliderMsg, setSliderMsg] = useState<string | null>(null);
 
   const timersRef = useRef<number[]>([]);
+  const lockRef = useRef(false);
   const modeRef = useRef<Mode>("porcentagem");
   modeRef.current = mode;
 
@@ -156,10 +157,12 @@ export function PercentGame({ onExit, onStatsChange, isRanked }: Props) {
     }
     setPicked(null);
     setFeedback(null);
+    lockRef.current = false;
   }
 
   function startGame() {
     clearTimers();
+    lockRef.current = false;
     team.begin(teamConfig);
     try { window.localStorage.setItem(MODE_KEY, mode); } catch { /* ignore */ }
     setCorrect(0); setWrong(0); setStreak(0); setBestStreak(0);
@@ -224,9 +227,10 @@ export function PercentGame({ onExit, onStatsChange, isRanked }: Props) {
   }
 
   function answer(opt: string) {
-    if (!running || picked || feedback) return;
+    if (lockRef.current || !running || picked || feedback) return;
     const q = mode === "fracoes" ? fracQuestion : question;
     if (!q || (q.kind !== "frac-id" && q.kind !== "bar" && q.kind !== "pie" && q.kind !== "word")) return;
+    lockRef.current = true;
     soundClick();
     setPicked(opt);
     register(opt === q.answer);
@@ -239,13 +243,15 @@ export function PercentGame({ onExit, onStatsChange, isRanked }: Props) {
   }
 
   function confirmBuild() {
-    if (!running || !question || question.kind !== "pie-build" || feedback) return;
+    if (lockRef.current || !running || !question || question.kind !== "pie-build" || feedback) return;
+    lockRef.current = true;
     const count = slices.filter(Boolean).length;
     register(count === question.target);
   }
 
   function validateSliders() {
-    if (!running || !question || question.kind !== "slider" || feedback) return;
+    if (lockRef.current || !running || !question || question.kind !== "slider" || feedback) return;
+    lockRef.current = true;
     const res = question.targets.map((t, i) => (sliderValues[i] ?? 0) === t);
     const misses = res.filter((r) => !r).length;
     setSliderResults(res);
@@ -265,7 +271,8 @@ export function PercentGame({ onExit, onStatsChange, isRanked }: Props) {
   }
 
   function confirmPizzas() {
-    if (!running || !fracQuestion || fracQuestion.kind !== "frac-build" || feedback) return;
+    if (lockRef.current || !running || !fracQuestion || fracQuestion.kind !== "frac-build" || feedback) return;
+    lockRef.current = true;
     const ok = fracQuestion.pizzas.every((spec, i) => (pizzas[i]?.filter(Boolean).length ?? -1) === spec.target);
     register(ok);
   }
