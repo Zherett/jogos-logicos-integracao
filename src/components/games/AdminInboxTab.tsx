@@ -901,6 +901,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
       body: draft.body,
       gifLinks: draft.gifLinks,
       imageLinks: draft.imageLinks,
+      mediaScales: draft.mediaScales,
       mentionedGameId: draft.mentionedGameId,
       mentionedEventId: draft.mentionedEventId,
       mentionedEventTitle: draft.mentionedEventTitle,
