@@ -25,6 +25,8 @@ import {
   Filter,
   Search,
   ArrowUpRight,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import {
   getPlayerScoreLedger,
@@ -130,8 +132,9 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteFeedback, setDeleteFeedback] = useState<string | null>(null);
 
-  // Estados para o Histórico de Pontuação & Auditoria (Score Ledger)
+  // Estados para o Histórico de Pontuação & Auditoria (Score Ledger — apenas ADM)
   const [showLedger, setShowLedger] = useState(false);
+  const [gamesExpanded, setGamesExpanded] = useState(false);
   const [ledgerFilterType, setLedgerFilterType] = useState<ScoreTransactionType | "all">("all");
   const [ledgerSearch, setLedgerSearch] = useState("");
   const [ledgerVersion, setLedgerVersion] = useState(0);
@@ -152,6 +155,8 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
       setDeleteStep(1);
       setConfirmNickInput("");
       setDeleteFeedback(null);
+      setShowLedger(false);
+      setGamesExpanded(false);
       if (found) {
         setSelfSchool(found.school || "Nenhuma");
         setSelfGrade(found.grade || RAIMUNDO_GRADES[0]);
@@ -200,7 +205,7 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
   }, [editBirthdate, editSchool, isEditing]);
 
   const ledgerEntries = useMemo(() => {
-    if (!profile) return [];
+    if (!profile || !auth.isAdmin || !showLedger) return [];
     const pId = profile.id || profile.nickNormalized || profile.nick;
     return getPlayerScoreLedger(
       pId,
@@ -211,13 +216,13 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
       },
       profile,
     );
-  }, [profile, ledgerFilterType, ledgerSearch, ledgerVersion]);
+  }, [profile, auth.isAdmin, showLedger, ledgerFilterType, ledgerSearch, ledgerVersion]);
 
   const ledgerBreakdown = useMemo(() => {
-    if (!profile) return null;
+    if (!profile || !auth.isAdmin || !showLedger) return null;
     const pId = profile.id || profile.nickNormalized || profile.nick;
     return calculateStudentScoreBreakdown(pId, profile);
-  }, [profile, ledgerVersion]);
+  }, [profile, auth.isAdmin, showLedger, ledgerVersion]);
 
   if (!profile) return null;
 
@@ -464,19 +469,21 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setShowLedger((prev) => !prev)}
-                className={`inline-flex items-center gap-1.5 rounded-xl border px-2.5 py-1 text-xs font-bold transition-all shadow-xs ${
-                  showLedger
-                    ? "bg-amber-500 text-white border-amber-600"
-                    : "border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 text-amber-600 dark:text-amber-400"
-                }`}
-                title="Exibir histórico completo de pontuações, medalhas e extrato de auditoria"
-              >
-                <FileText className="h-3.5 w-3.5" />
-                {showLedger ? "Fechar Extrato" : "Extrato & Auditoria"}
-              </button>
+              {auth.isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => setShowLedger((prev) => !prev)}
+                  className={`inline-flex items-center gap-1.5 rounded-xl border px-2.5 py-1 text-xs font-bold transition-all shadow-xs ${
+                    showLedger
+                      ? "bg-amber-500 text-white border-amber-600"
+                      : "border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 text-amber-600 dark:text-amber-400"
+                  }`}
+                  title="Exibir histórico completo de pontuações, medalhas e extrato de auditoria"
+                >
+                  <FileText className="h-3.5 w-3.5" />
+                  {showLedger ? "Fechar Extrato" : "Extrato & Auditoria"}
+                </button>
+              )}
               <div className="text-right">
                 <span className="rounded-lg bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 font-mono text-[11px] font-black text-amber-600 dark:text-amber-400">
                   {profile.careerPoints ?? 0} pts totais
@@ -488,8 +495,8 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
             </div>
           </div>
 
-          {/* Seção Extrato de Pontuação e Ledger de Auditoria */}
-          {showLedger && (
+          {/* Seção Extrato de Pontuação e Ledger de Auditoria (Exclusiva do ADM) */}
+          {auth.isAdmin && showLedger && (
             <div className="rounded-2xl border-2 border-amber-500/40 bg-card p-4 space-y-3.5 animate-in fade-in duration-200">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 pb-2.5">
                 <div className="flex items-center gap-2">
@@ -1008,8 +1015,8 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
             </div>
           </div>
 
-          {/* Requisitos e Missões para o Próximo Nível (Visível para ADM e Jogador) */}
-          {progress.nextRequirement ? (
+          {/* Requisitos e Missões para o Próximo Nível (Visível apenas para o próprio jogador ou ADM) */}
+          {(isMe || auth.isAdmin) && (progress.nextRequirement ? (
             <div className="rounded-2xl border bg-card p-4 space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span className="flex items-center gap-1.5 font-display text-xs font-black uppercase tracking-wider text-primary">
@@ -1099,19 +1106,19 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                 Este jogador já atingiu o Nível 10 (Lenda da Lógica) e cumpriu todos os requisitos da plataforma.
               </p>
             </div>
-          )}
+          ))}
 
-          {/* Histórico e Partidas Jogadas por Jogo */}
+          {/* Histórico e Partidas Jogadas por Jogo (Expansível) */}
           {(() => {
             const statsMap = aggregateStatsByGame(profile.stats ?? [], auth.adminConfig.enabledGames);
             return (
               <div className="rounded-2xl border bg-card p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 font-display text-sm font-black text-foreground">
-                    <Gamepad2 className="h-4 w-4 text-primary" />
-                    <span>Partidas Jogadas por Jogo</span>
-                  </div>
-                  <div className="flex items-center gap-1.5 flex-wrap">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <div className="flex items-center gap-2 font-display text-sm font-black text-foreground">
+                      <Gamepad2 className="h-4 w-4 text-primary" />
+                      <span>Partidas Jogadas por Jogo</span>
+                    </div>
                     <span className="rounded-full bg-primary/15 px-2 py-0.5 text-xs font-bold text-primary">
                       {matchesCount} partida{matchesCount === 1 ? "" : "s"} no total
                     </span>
@@ -1121,9 +1128,26 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                       </span>
                     )}
                   </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setGamesExpanded((prev) => !prev)}
+                    className="inline-flex items-center gap-1 font-display text-xs font-extrabold text-primary hover:underline"
+                  >
+                    {gamesExpanded ? (
+                      <>
+                        Recolher Lista <ChevronUp className="h-3.5 w-3.5" />
+                      </>
+                    ) : (
+                      <>
+                        Ver Lista de Jogos <ChevronDown className="h-3.5 w-3.5" />
+                      </>
+                    )}
+                  </button>
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {gamesExpanded && (
+                  <div className="border-t pt-3 grid grid-cols-1 sm:grid-cols-2 gap-2 animate-in fade-in-50 duration-200">
                   {ALL_GAME_IDS.map((gId) => {
                     const gName = GAME_NAMES[gId];
                     const statRow = statsMap.get(gId);
@@ -1174,7 +1198,8 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                       </div>
                     );
                   })}
-                </div>
+                  </div>
+                )}
               </div>
             );
           })()}

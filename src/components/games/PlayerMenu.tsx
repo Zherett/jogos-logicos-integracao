@@ -136,10 +136,10 @@ export function PlayerMenu({ onConfigChanged }: Props) {
   const [promoCodeOpen, setPromoCodeOpen] = useState(false);
   const [inboxCounts, setInboxCounts] = useState({ unreadCount: 0, unclaimedRewardsCount: 0, totalAlerts: 0 });
 
-  // Accordion collapsible states & 3D Card Flip state
+  // Accordion collapsible states
   const [levelExpanded, setLevelExpanded] = useState(false);
-  const [gamesExpanded, setGamesExpanded] = useState(true);
-  const [cardFlipped, setCardFlipped] = useState(false);
+  const [gamesExpanded, setGamesExpanded] = useState(false);
+  const [medalsExpanded, setMedalsExpanded] = useState(false);
 
   // Turma change request dialog state
   const [turmaModalOpen, setTurmaModalOpen] = useState(false);
@@ -207,7 +207,7 @@ export function PlayerMenu({ onConfigChanged }: Props) {
   // Retrieve player's official weekly tournament ranking position in their stage
   useEffect(() => {
     if (!profileOpen || !profile) return;
-    setCardFlipped(false);
+    setMedalsExpanded(false);
     setInitialSchool(profile.school || "Nenhuma");
     setInitialGrade(profile.grade || RAIMUNDO_GRADES[0]);
     setInitialTurma(profile.turma || "");
@@ -242,13 +242,13 @@ export function PlayerMenu({ onConfigChanged }: Props) {
     if (inboxOpen) {
       setPlayerCurrentActivity({ type: "inbox" });
     } else if (profileOpen) {
-      if (cardFlipped) {
+      if (medalsExpanded) {
         setPlayerCurrentActivity({ type: "medals" });
       } else {
         setPlayerCurrentActivity({ type: "profile" });
       }
     }
-  }, [inboxOpen, profileOpen, cardFlipped]);
+  }, [inboxOpen, profileOpen, medalsExpanded]);
   useEffect(() => {
     if (!profile) {
       setInboxCounts({ unreadCount: 0, unclaimedRewardsCount: 0, totalAlerts: 0 });
@@ -533,21 +533,8 @@ export function PlayerMenu({ onConfigChanged }: Props) {
 
           {profile && progress && (
             <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-              {/* CARTÃO UNIFICADO DO JOGADOR COM EFEITO DE GIRO 3D (FRENTE / VERSO) */}
-              <div className="w-full perspective-1000">
-                <div
-                  className={`relative w-full transition-transform duration-700 preserve-3d ${
-                    cardFlipped ? "rotate-y-180" : ""
-                  }`}
-                >
-                  {/* ══════════════════════════════════════════════════════════════════
-                      FRENTE DO CARTÃO (IDENTIDADE + NÍVEL & PROGRESSO UNIFICADOS)
-                     ══════════════════════════════════════════════════════════════════ */}
-                  <div
-                    className={`w-full rounded-3xl border bg-card p-4 sm:p-5 shadow-sm space-y-3.5 backface-hidden transition-all ${
-                      cardFlipped ? "pointer-events-none invisible absolute inset-0" : "relative"
-                    }`}
-                  >
+              {/* CARTÃO UNIFICADO DO JOGADOR */}
+              <div className="w-full rounded-3xl border bg-card p-4 sm:p-5 shadow-sm space-y-3.5">
                     {/* Topo: Ícone do Nível à esquerda e Dados Pessoais à direita no Mobile */}
                     <div className="flex flex-row items-center gap-3.5 sm:gap-4">
                       {/* Selo Grande do Nível */}
@@ -580,15 +567,16 @@ export function PlayerMenu({ onConfigChanged }: Props) {
                             )}
                           </div>
 
-                          {/* Botão Sutil de Giro no Topo */}
+                          {/* Botão Sutil de Medalhas no Topo */}
                           <button
                             type="button"
-                            onClick={() => setCardFlipped(true)}
-                            title="Girar para o Inventário de Medalhas"
+                            onClick={() => setMedalsExpanded((prev) => !prev)}
+                            title="Expandir Inventário de Medalhas"
                             className="shrink-0 flex items-center gap-1 rounded-xl border border-accent/40 bg-accent/10 hover:bg-accent/20 px-2 py-1 text-[10px] sm:text-[11px] font-extrabold text-accent transition-all active:scale-95"
                           >
-                            <RotateCw className="h-3 w-3" />
+                            <Award className="h-3 w-3" />
                             <span className="hidden sm:inline">Medalhas</span>
+                            {medalsExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
                           </button>
                         </div>
 
@@ -706,11 +694,11 @@ export function PlayerMenu({ onConfigChanged }: Props) {
                         >
                           {levelExpanded ? (
                             <>
-                              Ocultar Detalhes <ChevronUp className="h-3.5 w-3.5" />
+                              Ocultar Detalhes Diários & X1 <ChevronUp className="h-3.5 w-3.5" />
                             </>
                           ) : (
                             <>
-                              Ver Detalhes do Nível & Requisitos <ChevronDown className="h-3.5 w-3.5" />
+                              Ver Detalhes Diários & X1 <ChevronDown className="h-3.5 w-3.5" />
                             </>
                           )}
                         </button>
@@ -799,51 +787,51 @@ export function PlayerMenu({ onConfigChanged }: Props) {
                               </p>
                             </div>
                           </div>
+                        </div>
+                      )}
 
-                          {/* Requisitos para o Próximo Nível */}
-                          {!progress.isMaxLevel && progress.nextRequirement && (
-                            <div className="rounded-2xl border bg-background p-3 space-y-2">
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="flex items-center gap-1.5 font-display text-xs font-extrabold uppercase tracking-wider text-primary">
-                                  <Lock className="h-3.5 w-3.5" /> Requisitos para o Nível{" "}
-                                  {progress.nextRequirement.level} ({progress.nextRequirement.emoji}{" "}
-                                  {progress.nextRequirement.title})
-                                </span>
-                              </div>
+                      {/* Requisitos para o Próximo Nível (Sempre visível para o próprio jogador) */}
+                      {!progress.isMaxLevel && progress.nextRequirement && (
+                        <div className="rounded-2xl border bg-background p-3 space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="flex items-center gap-1.5 font-display text-xs font-extrabold uppercase tracking-wider text-primary">
+                              <Lock className="h-3.5 w-3.5" /> Requisitos para o Nível{" "}
+                              {progress.nextRequirement.level} ({progress.nextRequirement.emoji}{" "}
+                              {progress.nextRequirement.title})
+                            </span>
+                          </div>
 
-                              {progress.isLockedByMissions && (
-                                <div className="rounded-xl bg-accent/15 px-2.5 py-1.5 text-[11px] font-semibold text-foreground">
-                                  🔒 Você já tem o XP necessário! Conclua os requisitos pendentes abaixo para
-                                  destravar o Nível {progress.nextRequirement.level}.
-                                </div>
-                              )}
-
-                              <ul className="space-y-1.5 text-xs">
-                                {progress.checklist.map((item) => (
-                                  <li
-                                    key={item.key}
-                                    className="flex items-center justify-between gap-2 rounded-xl bg-secondary/40 px-2.5 py-1.5"
-                                  >
-                                    <span className="flex items-center gap-1.5 font-medium">
-                                      {item.met ? (
-                                        <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" />
-                                      ) : (
-                                        <Clock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                                      )}
-                                      {item.label}
-                                    </span>
-                                    <span
-                                      className={`font-display font-bold ${
-                                        item.met ? "text-success" : "text-muted-foreground"
-                                      }`}
-                                    >
-                                      {item.current} / {item.required}
-                                    </span>
-                                  </li>
-                                ))}
-                              </ul>
+                          {progress.isLockedByMissions && (
+                            <div className="rounded-xl bg-accent/15 px-2.5 py-1.5 text-[11px] font-semibold text-foreground">
+                              🔒 Você já tem o XP necessário! Conclua os requisitos pendentes abaixo para
+                              destravar o Nível {progress.nextRequirement.level}.
                             </div>
                           )}
+
+                          <ul className="space-y-1.5 text-xs">
+                            {progress.checklist.map((item) => (
+                              <li
+                                key={item.key}
+                                className="flex items-center justify-between gap-2 rounded-xl bg-secondary/40 px-2.5 py-1.5"
+                              >
+                                <span className="flex items-center gap-1.5 font-medium">
+                                  {item.met ? (
+                                    <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" />
+                                  ) : (
+                                    <Clock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                                  )}
+                                  {item.label}
+                                </span>
+                                <span
+                                  className={`font-display font-bold ${
+                                    item.met ? "text-success" : "text-muted-foreground"
+                                  }`}
+                                >
+                                  {item.current} / {item.required}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
                         </div>
                       )}
                     </div>
@@ -866,51 +854,34 @@ export function PlayerMenu({ onConfigChanged }: Props) {
                       </button>
                     )}
 
-                    {/* Botão de Giro Prominente para o Verso (Medalhas) */}
+                    {/* Botão Expansível para o Inventário de Medalhas */}
                     <button
                       type="button"
-                      onClick={() => setCardFlipped(true)}
-                      className="w-full flex items-center justify-center gap-2 rounded-2xl bg-primary/10 hover:bg-primary/20 border border-primary/30 py-3 px-4 font-display text-xs font-black text-primary transition-all active:scale-95 shadow-xs"
+                      onClick={() => setMedalsExpanded((prev) => !prev)}
+                      className="w-full flex items-center justify-between gap-2 rounded-2xl bg-primary/10 hover:bg-primary/20 border border-primary/30 py-3 px-4 font-display text-xs font-black text-primary transition-all active:scale-95 shadow-xs"
                     >
-                      <RotateCw className="h-4 w-4 text-primary" />
-                      <span>Ver Inventário de Medalhas (Girar Cartão)</span>
-                      <span className="rounded-full bg-primary px-2 py-0.5 text-[10px] text-primary-foreground font-extrabold">
-                        {profile.unlockedMedals?.length ?? 0} obtidas
-                      </span>
-                    </button>
-                  </div>
-
-                  {/* ══════════════════════════════════════════════════════════════════
-                      VERSO DO CARTÃO (INVENTÁRIO COMPLETO & CATÁLOGO DE MEDALHAS)
-                     ══════════════════════════════════════════════════════════════════ */}
-                  <div
-                    className={`w-full rounded-3xl border bg-card p-4 sm:p-5 shadow-sm space-y-4 backface-hidden rotate-y-180 transition-all ${
-                      !cardFlipped ? "pointer-events-none invisible absolute inset-0" : "relative"
-                    }`}
-                  >
-                    {/* Cabeçalho do Verso */}
-                    <div className="flex items-center justify-between pb-3 border-b border-border/60">
-                      <div className="flex items-center gap-2 font-display text-sm sm:text-base font-extrabold text-foreground">
-                        <Award className="h-5 w-5 text-accent" />
+                      <span className="flex items-center gap-2">
+                        <Award className="h-4 w-4 text-primary" />
                         <span>Inventário de Medalhas</span>
-                        <span className="rounded-full bg-accent/15 border border-accent/30 px-2 py-0.5 text-xs font-black text-accent">
+                        <span className="rounded-full bg-primary px-2 py-0.5 text-[10px] text-primary-foreground font-extrabold">
                           {profile.unlockedMedals?.length ?? 0} obtidas
                         </span>
-                      </div>
+                      </span>
+                      <span className="inline-flex items-center gap-1 text-[11px] font-extrabold">
+                        {medalsExpanded ? (
+                          <>
+                            Ocultar <ChevronUp className="h-4 w-4" />
+                          </>
+                        ) : (
+                          <>
+                            Expandir <ChevronDown className="h-4 w-4" />
+                          </>
+                        )}
+                      </span>
+                    </button>
 
-                      <button
-                        type="button"
-                        onClick={() => setCardFlipped(false)}
-                        className="inline-flex items-center gap-1.5 rounded-xl border border-primary/40 bg-primary/10 px-3 py-1.5 font-display text-xs font-black text-primary hover:bg-primary/20 transition-all active:scale-95"
-                      >
-                        <RotateCw className="h-3.5 w-3.5" />
-                        <span>Voltar ao Perfil</span>
-                      </button>
-                    </div>
-
-                    {/* Catálogo de Medalhas com Rolagem Interna Suave */}
-                    <div className="pt-1 max-h-[60vh] sm:max-h-[65vh] overflow-y-auto pr-1">
-                      {cardFlipped && (
+                    {medalsExpanded && (
+                      <div className="pt-2 border-t border-border/60 animate-in fade-in-50 duration-200">
                         <Suspense
                           fallback={
                             <div className="py-8 text-center text-xs font-semibold text-muted-foreground">
@@ -926,22 +897,8 @@ export function PlayerMenu({ onConfigChanged }: Props) {
                             isOwner={true}
                           />
                         </Suspense>
-                      )}
-                    </div>
-
-                    {/* Rodapé do Verso */}
-                    <div className="pt-2 border-t border-border/60">
-                      <button
-                        type="button"
-                        onClick={() => setCardFlipped(false)}
-                        className="w-full flex items-center justify-center gap-2 rounded-2xl bg-secondary hover:bg-secondary/80 border py-2.5 px-4 font-display text-xs font-black text-foreground transition-all active:scale-95"
-                      >
-                        <RotateCw className="h-4 w-4 text-muted-foreground" />
-                        <span>Voltar para a Frente do Cartão</span>
-                      </button>
-                    </div>
-                  </div>
-                </div>
+                      </div>
+                    )}
               </div>
 
               {/* Painel de Seleção Única de Escola, Série e Turma (Disponível APENAS se o jogador não selecionou na criação) */}
