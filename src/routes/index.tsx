@@ -42,7 +42,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Swords } from "lucide-react";
+import { Sparkles, Swords } from "lucide-react";
 import {
   heartbeatOnlinePlayer,
   getX1LobbySnapshot,
@@ -408,24 +408,35 @@ function Index() {
 
   return (
     <main className="mx-auto max-w-5xl px-3 sm:px-4 py-4 sm:py-6">
-      {/* Cabeçalho Unificado: Logos Institucionais à Esquerda (Empilhadas) e Controles à Direita */}
-      <div className="mb-4 flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex flex-col gap-1 shrink-0">
-          <img
-            src={integracaoPreto}
-            alt="Logo do Projeto INTEGRAÇÃO"
-            decoding="async"
-            className="h-6 sm:h-7 w-auto object-contain rounded-sm dark:brightness-110"
-          />
-          <img
-            src={semed}
-            alt="Logo da SEMED Coari"
-            decoding="async"
-            className="h-6 sm:h-7 w-auto object-contain rounded-sm dark:brightness-110"
-          />
+      {/* Cabeçalho Unificado: Logos à Esquerda, Título Central/Esquerda e Controles à Direita */}
+      <div className="mb-3 flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="flex flex-col gap-1 shrink-0">
+            <img
+              src={integracaoPreto}
+              alt="Logo do Projeto INTEGRAÇÃO"
+              decoding="async"
+              className="h-6 sm:h-7 w-auto object-contain rounded-sm dark:brightness-110"
+            />
+            <img
+              src={semed}
+              alt="Logo da SEMED Coari"
+              decoding="async"
+              className="h-6 sm:h-7 w-auto object-contain rounded-sm dark:brightness-110"
+            />
+          </div>
+
+          <div className="hidden sm:flex flex-col items-start min-w-0 border-l border-border/60 pl-3">
+            <span className="inline-flex items-center gap-1 rounded-full border bg-card px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-primary shadow-2xs">
+              <Sparkles className="h-2.5 w-2.5" /> Plataforma Educacional
+            </span>
+            <h1 className="font-display text-xl md:text-2xl font-extrabold leading-tight tracking-tight text-foreground truncate">
+              Desafios de <span className="text-primary">Lógica</span>
+            </h1>
+          </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           <PlayerMenu
             onConfigChanged={() => {
               refreshLocal();
@@ -433,6 +444,16 @@ function Index() {
             }}
           />
         </div>
+      </div>
+
+      {/* Título compacto visível apenas no mobile */}
+      <div className="sm:hidden mb-3 flex items-center justify-between gap-2">
+        <h1 className="font-display text-xl font-extrabold leading-tight tracking-tight text-foreground">
+          Desafios de <span className="text-primary">Lógica</span>
+        </h1>
+        <span className="inline-flex items-center gap-1 rounded-full border bg-card px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-primary">
+          <Sparkles className="h-2.5 w-2.5" /> Plataforma Educacional
+        </span>
       </div>
 
       {view === "menu" && showGate && (

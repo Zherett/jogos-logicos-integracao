@@ -181,21 +181,8 @@ export function Menu({
   };
 
   return (
-    <div className="space-y-5 sm:space-y-6">
-      {/* 1. Título e Subtítulo Compactos da Plataforma */}
-      <header className="text-center space-y-1">
-        <div className="inline-flex items-center gap-1.5 rounded-full border bg-card px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-primary shadow-2xs">
-          <Sparkles className="h-3 w-3" /> Plataforma Educacional
-        </div>
-        <h1 className="font-display text-3xl sm:text-5xl font-extrabold leading-none tracking-tight text-foreground">
-          Desafios de <span className="text-primary">Lógica</span>
-        </h1>
-        <p className="text-xs sm:text-sm text-muted-foreground max-w-lg mx-auto font-medium">
-          Jogos rápidos para treinar raciocínio lógico, matemática e coordenação motora. Escolha um desafio e comece!
-        </p>
-      </header>
-
-      {/* 2. Painel Retrátil Minimalista: Bônus Acumulados + Faixa de Eventos da Semana */}
+    <div className="space-y-4">
+      {/* 1. Painel Retrátil Minimalista: Bônus Acumulados + Faixa de Eventos da Semana */}
       {(cumulativeBonuses.hasActiveBonuses || activeEvents.length > 0) && (() => {
         const currentEv =
           activeEvents.length > 0 ? activeEvents[currentEventIndex % activeEvents.length] : null;
@@ -411,134 +398,138 @@ export function Menu({
         );
       })()}
 
-      {/* 3. Quadro de Avisos & Novidades (Sempre Aberto e em Destaque) */}
-      <NoticeBoard
-        slides={noticeSlides}
-        enabledDefaultNotices={enabledDefaultNotices}
-        hideAllDefaultNotices={hideAllDefaultNotices}
-        pauseNoticeBoard={pauseNoticeBoard}
-        weeklyGameName={weeklyGameName}
-        onSelectGame={(gameId) => {
-          const g = GAME_REGISTRY.find((item) => item.id === gameId);
-          if (g) {
-            setSelectedGameForDetail(g);
-          } else {
-            onSelect(gameId);
-          }
-        }}
-        onOpenWeeklyTournament={handleTournamentClick}
-        onOpenX1Arena={handleX1Click}
-      />
-
-      {/* 4. Modos Competitivos Especiais: Torneio Semanal (Nv 3+) & Arena X1 (Nv 5+, 07h–19h) com Cores Diferenciadas */}
-      {(tournamentEnabled || effectiveX1Enabled) && (
-        <div className="grid sm:grid-cols-2 gap-3.5 sm:gap-4">
-          {tournamentEnabled && (
-            <button
-              type="button"
-              onClick={handleTournamentClick}
-              className="group flex flex-col justify-between rounded-3xl border-2 border-sky-500/70 bg-gradient-to-br from-blue-950/80 via-slate-900/90 to-sky-950/60 p-4.5 sm:p-5 text-left shadow-[0_4px_25px_rgba(14,165,233,0.18)] transition-all hover:-translate-y-0.5 hover:shadow-[0_8px_30px_rgba(14,165,233,0.3)] hover:border-sky-400 cursor-pointer min-h-[160px]"
-            >
-              <div className="space-y-2">
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <span className="inline-flex items-center gap-1 rounded-full bg-sky-500/20 border border-sky-400/40 px-2.5 py-0.5 text-[10px] font-black uppercase text-sky-300">
-                    <Medal className="h-3 w-3" /> Nível {TOURNAMENT_MIN_LEVEL}+ • +100 XP Extra/Dia
-                  </span>
-                  {!playerProfile ? (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/20 border border-amber-400/50 px-2 py-0.5 text-[10px] font-extrabold text-amber-300">
-                      <Lock className="h-3 w-3" /> Requer Login
-                    </span>
-                  ) : !canTournament ? (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-slate-800/80 border border-slate-700 px-2 py-0.5 text-[10px] font-bold text-slate-400">
-                      <Lock className="h-3 w-3" /> Requer Nv. {TOURNAMENT_MIN_LEVEL}
-                    </span>
-                  ) : null}
-                </div>
-                <h2 className="font-display text-xl sm:text-2xl font-black flex items-center gap-2 text-white">
-                  🏆 Torneio Semanal Ranqueado
-                </h2>
-                <p className="text-xs text-slate-300 leading-snug">
-                  Jogo da semana: <b className="text-white">{weeklyGameName}</b>. Você tem{" "}
-                  <b className="text-white">10 entradas por dia</b> para subir de Rank e disputar o Top 5!
-                </p>
-              </div>
-
-              <div className="mt-3.5 inline-flex items-center gap-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 px-4 py-2 text-xs font-black text-white shadow-md shadow-sky-500/30 w-fit group-hover:scale-[1.02] transition-transform">
+      {/* 2. Linha Única Compacta (3 Colunas): Torneio à Esquerda + Quadro de Avisos no Meio + Arena X1 à Direita */}
+      <div
+        className={`grid grid-cols-1 gap-3 ${
+          tournamentEnabled && effectiveX1Enabled
+            ? "md:grid-cols-3"
+            : tournamentEnabled || effectiveX1Enabled
+              ? "md:grid-cols-2"
+              : ""
+        }`}
+      >
+        {tournamentEnabled && (
+          <button
+            type="button"
+            onClick={handleTournamentClick}
+            className="group flex flex-col justify-between rounded-3xl border-2 border-sky-500/70 bg-gradient-to-br from-blue-950/80 via-slate-900/90 to-sky-950/60 p-4 text-left shadow-[0_4px_25px_rgba(14,165,233,0.18)] transition-all hover:-translate-y-0.5 hover:shadow-[0_8px_30px_rgba(14,165,233,0.3)] hover:border-sky-400 cursor-pointer min-h-[152px]"
+          >
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between gap-1.5 flex-wrap">
+                <span className="inline-flex items-center gap-1 rounded-full bg-sky-500/20 border border-sky-400/40 px-2 py-0.5 text-[9px] font-black uppercase text-sky-300">
+                  <Medal className="h-2.5 w-2.5" /> Nv. {TOURNAMENT_MIN_LEVEL}+ • +100 XP/dia
+                </span>
                 {!playerProfile ? (
-                  <>
-                    <LogIn className="h-3.5 w-3.5" /> Entrar para Competir →
-                  </>
-                ) : canTournament ? (
-                  "Ver Top 5 & Jogar Ranqueada →"
-                ) : (
-                  `Bloqueado (Alcance o Nível ${TOURNAMENT_MIN_LEVEL})`
-                )}
+                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/20 border border-amber-400/50 px-2 py-0.5 text-[9px] font-extrabold text-amber-300">
+                    <Lock className="h-2.5 w-2.5" /> Login
+                  </span>
+                ) : !canTournament ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-slate-800/80 border border-slate-700 px-2 py-0.5 text-[9px] font-bold text-slate-400">
+                    <Lock className="h-2.5 w-2.5" /> Nv. {TOURNAMENT_MIN_LEVEL}
+                  </span>
+                ) : null}
               </div>
-            </button>
-          )}
+              <h2 className="font-display text-base sm:text-lg font-black flex items-center gap-1.5 text-white leading-tight">
+                🏆 Torneio Ranqueado
+              </h2>
+              <p className="text-xs text-slate-300 leading-snug line-clamp-2">
+                <b className="text-white">{weeklyGameName}</b> • <b className="text-white">10 entradas/dia</b> para disputar o Top 5!
+              </p>
+            </div>
 
-          {effectiveX1Enabled && (
-            <button
-              type="button"
-              onClick={handleX1Click}
-              disabled={effectiveX1ArenaClosed}
-              className={`group relative flex flex-col justify-between overflow-hidden rounded-3xl border-2 p-4.5 sm:p-5 text-left transition-all min-h-[160px] ${
-                effectiveX1ArenaClosed
-                  ? "border-destructive/60 bg-gradient-to-br from-red-950/70 via-slate-900/95 to-neutral-950/90 cursor-not-allowed opacity-90 shadow-none"
-                  : "border-orange-500/70 bg-gradient-to-br from-orange-950/80 via-slate-900/90 to-amber-950/60 shadow-[0_4px_25px_rgba(249,115,22,0.18)] hover:-translate-y-0.5 hover:shadow-[0_8px_30px_rgba(249,115,22,0.3)] hover:border-orange-400 cursor-pointer"
-              }`}
-            >
-              {/* Faixa Vermelha de Aviso quando a Arena for Fechada pela Coordenação */}
-              {effectiveX1ArenaClosed && (
-                <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-red-950/85 backdrop-blur-[2px] p-4 text-center border-2 border-destructive animate-in fade-in duration-200">
-                  <span className="rounded-full bg-destructive/30 px-3 py-1 font-mono text-xs font-black uppercase text-red-200 border border-destructive/50">
-                    ⛔ ARENA FECHADA PELA COORDENAÇÃO
-                  </span>
-                  <p className="mt-2 text-xs sm:text-sm font-extrabold text-white max-w-xs leading-snug">
-                    O modo de duelos X1 está temporariamente fechado pelo administrador.
-                  </p>
-                  <span className="mt-1 text-[11px] text-red-300 font-medium">Aguarde a reabertura para novos desafios.</span>
-                </div>
+            <div className="mt-2.5 inline-flex items-center gap-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 px-3 py-1.5 text-[11px] font-black text-white shadow-md shadow-sky-500/30 w-fit group-hover:scale-[1.02] transition-transform">
+              {!playerProfile ? (
+                <>
+                  <LogIn className="h-3 w-3" /> Entrar para Competir →
+                </>
+              ) : canTournament ? (
+                "Jogar Ranqueada →"
+              ) : (
+                `Bloqueado (Nv. ${TOURNAMENT_MIN_LEVEL})`
               )}
+            </div>
+          </button>
+        )}
 
-              <div className="space-y-2">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="inline-flex items-center gap-1 rounded-full bg-orange-500/20 border border-orange-400/40 px-2.5 py-0.5 text-[10px] font-black uppercase text-orange-300">
-                    <Swords className="h-3 w-3" /> Nível {X1_MIN_LEVEL}+ • +100 XP Extra/Dia
-                  </span>
-                  <span className="inline-flex items-center gap-1 rounded-full bg-black/40 border border-orange-500/30 px-2 py-0.5 text-[10px] font-bold text-orange-200">
-                    <Clock className="h-3 w-3 text-orange-400" /> {x1HoursLabel}
-                  </span>
-                </div>
-                <h2 className="font-display text-xl sm:text-2xl font-black flex items-center gap-2 text-white">
-                  ⚔️ Arena de Batalha X1 Online
-                </h2>
-                <p className="text-xs text-slate-300 leading-snug">
-                  Crie uma sala ou desafie colegas online no 1 vs 1 ao vivo com bônus diários de até <b className="text-white">+100 XP extras</b>.
+        <NoticeBoard
+          compact
+          slides={noticeSlides}
+          enabledDefaultNotices={enabledDefaultNotices}
+          hideAllDefaultNotices={hideAllDefaultNotices}
+          pauseNoticeBoard={pauseNoticeBoard}
+          weeklyGameName={weeklyGameName}
+          onSelectGame={(gameId) => {
+            const g = GAME_REGISTRY.find((item) => item.id === gameId);
+            if (g) {
+              setSelectedGameForDetail(g);
+            } else {
+              onSelect(gameId);
+            }
+          }}
+          onOpenWeeklyTournament={handleTournamentClick}
+          onOpenX1Arena={handleX1Click}
+        />
+
+        {effectiveX1Enabled && (
+          <button
+            type="button"
+            onClick={handleX1Click}
+            disabled={effectiveX1ArenaClosed}
+            className={`group relative flex flex-col justify-between overflow-hidden rounded-3xl border-2 p-4 text-left transition-all min-h-[152px] ${
+              effectiveX1ArenaClosed
+                ? "border-destructive/60 bg-gradient-to-br from-red-950/70 via-slate-900/95 to-neutral-950/90 cursor-not-allowed opacity-90 shadow-none"
+                : "border-orange-500/70 bg-gradient-to-br from-orange-950/80 via-slate-900/90 to-amber-950/60 shadow-[0_4px_25px_rgba(249,115,22,0.18)] hover:-translate-y-0.5 hover:shadow-[0_8px_30px_rgba(249,115,22,0.3)] hover:border-orange-400 cursor-pointer"
+            }`}
+          >
+            {/* Faixa Vermelha de Aviso quando a Arena for Fechada pela Coordenação */}
+            {effectiveX1ArenaClosed && (
+              <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-red-950/85 backdrop-blur-[2px] p-3 text-center border-2 border-destructive animate-in fade-in duration-200">
+                <span className="rounded-full bg-destructive/30 px-2.5 py-0.5 font-mono text-[10px] font-black uppercase text-red-200 border border-destructive/50">
+                  ⛔ ARENA FECHADA
+                </span>
+                <p className="mt-1.5 text-xs font-extrabold text-white leading-snug">
+                  Duelos X1 temporariamente fechados pelo ADM.
                 </p>
               </div>
+            )}
 
-              <div className="mt-3.5 inline-flex items-center gap-1.5 rounded-xl bg-orange-500 hover:bg-orange-400 px-4 py-2 text-xs font-black text-white shadow-md shadow-orange-500/30 w-fit group-hover:scale-[1.02] transition-transform">
-                {effectiveX1ArenaClosed ? (
-                  "Arena Fechada pela Coordenação"
-                ) : !playerProfile ? (
-                  <>
-                    <LogIn className="h-3.5 w-3.5" /> Entrar para Duelar →
-                  </>
-                ) : isAdminBypass && (!x1OpenNow || playerLevel < X1_MIN_LEVEL || x1ArenaClosed || !x1Enabled) ? (
-                  "🔓 Abrir Arena X1 (Modo ADM/Teste) →"
-                ) : playerLevel < X1_MIN_LEVEL ? (
-                  `Bloqueado (Alcance o Nível ${X1_MIN_LEVEL})`
-                ) : !x1OpenNow ? (
-                  `Fechada agora (Abre ${x1HoursLabel})`
-                ) : (
-                  "Abrir Arena X1 (1 vs 1) →"
-                )}
+            <div className="space-y-1.5">
+              <div className="flex flex-wrap items-center justify-between gap-1.5">
+                <span className="inline-flex items-center gap-1 rounded-full bg-orange-500/20 border border-orange-400/40 px-2 py-0.5 text-[9px] font-black uppercase text-orange-300">
+                  <Swords className="h-2.5 w-2.5" /> Nv. {X1_MIN_LEVEL}+ • +100 XP/dia
+                </span>
+                <span className="inline-flex items-center gap-1 rounded-full bg-black/40 border border-orange-500/30 px-2 py-0.5 text-[9px] font-bold text-orange-200">
+                  <Clock className="h-2.5 w-2.5 text-orange-400" /> {x1HoursLabel}
+                </span>
               </div>
-            </button>
-          )}
-        </div>
-      )}
+              <h2 className="font-display text-base sm:text-lg font-black flex items-center gap-1.5 text-white leading-tight">
+                ⚔️ Batalha X1 Online
+              </h2>
+              <p className="text-xs text-slate-300 leading-snug line-clamp-2">
+                Duelos <b className="text-white">1 vs 1 ao vivo</b> com bônus diário de até <b className="text-white">+100 XP</b>.
+              </p>
+            </div>
+
+            <div className="mt-2.5 inline-flex items-center gap-1.5 rounded-xl bg-orange-500 hover:bg-orange-400 px-3 py-1.5 text-[11px] font-black text-white shadow-md shadow-orange-500/30 w-fit group-hover:scale-[1.02] transition-transform">
+              {effectiveX1ArenaClosed ? (
+                "Arena Fechada"
+              ) : !playerProfile ? (
+                <>
+                  <LogIn className="h-3 w-3" /> Entrar para Duelar →
+                </>
+              ) : isAdminBypass && (!x1OpenNow || playerLevel < X1_MIN_LEVEL || x1ArenaClosed || !x1Enabled) ? (
+                "🔓 Arena X1 (ADM) →"
+              ) : playerLevel < X1_MIN_LEVEL ? (
+                `Bloqueado (Nv. ${X1_MIN_LEVEL})`
+              ) : !x1OpenNow ? (
+                `Abre ${x1HoursLabel}`
+              ) : (
+                "Abrir Arena X1 →"
+              )}
+            </div>
+          </button>
+        )}
+      </div>
 
       {/* 5. Grade de Jogos em 4 Colunas (Alinhada: 2 Jogos sob Torneio Ranqueado e 2 sob Arena X1) */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
