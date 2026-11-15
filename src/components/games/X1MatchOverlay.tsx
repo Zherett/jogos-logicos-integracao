@@ -21,7 +21,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { ShapeSvg } from "./ShapeSvg";
 import { RobotAvatar, type RobotAvatarPose } from "./RobotAvatar";
-import { GAME_NAMES, saveLastMatch, updateBest } from "@/lib/game-storage";
+import { GAME_NAMES, saveLastMatch } from "@/lib/game-storage";
 import { usePlayerAuth } from "@/lib/player-auth";
 import { type ClashQuestion } from "@/lib/rpg-content";
 import { resolvePlayerAvatar } from "@/lib/avatar";
@@ -50,7 +50,7 @@ import {
 
 interface Props {
   initialRoom: X1Room;
-  onExitX1: () => void;
+  onExitX1: (returnToArena?: boolean) => void;
 }
 
 export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
@@ -275,10 +275,9 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
     const isDraw = room.winnerId === "draw";
     const finalScore = Math.max(me.score, wonX1 ? me.score + 40 : me.score);
 
-    updateBest(room.gameId, finalScore, 2);
     saveLastMatch(room.gameId, {
       score: finalScore,
-      level: 2,
+      level: 1,
       correct: me.correct,
       wrong: me.wrong,
       won: wonX1,
@@ -292,7 +291,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
         won: wonX1,
         isDraw,
         score: finalScore,
-        level: 2,
+        level: 1,
         correct: me.correct,
         wrong: me.wrong,
       });
@@ -659,28 +658,28 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
           <span>Esta sala será encerrada automaticamente em <b>{autoCloseRem}s</b> (limite de 1 min).</span>
         </div>
 
-        {/* Ações: Encerrar Partida ou Voltar */}
+        {/* Ações: Voltar para o Menu Principal ou Voltar para a Arena X1 */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
           <Button
             size="lg"
             variant="outline"
             onClick={() => {
               closeX1Room(room.code);
-              onExitX1();
+              onExitX1(false);
             }}
             className="h-12 rounded-2xl font-bold"
           >
-            <LogOut className="mr-2 h-4 w-4" /> Encerrar Partida
+            <LogOut className="mr-2 h-4 w-4" /> Menu Principal
           </Button>
           <Button
             size="lg"
             onClick={() => {
               closeX1Room(room.code);
-              onExitX1();
+              onExitX1(true);
             }}
             className="h-12 rounded-2xl font-display text-base font-extrabold"
           >
-            <RotateCcw className="mr-2 h-4 w-4" /> Voltar para o Menu
+            <RotateCcw className="mr-2 h-4 w-4" /> Voltar para a Arena X1
           </Button>
         </div>
       </div>

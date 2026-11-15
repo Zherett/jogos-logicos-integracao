@@ -34,7 +34,7 @@ const LOBBY_SHARED_GROUP_ID = "X1_LOBBY_SEMED_V2";
 export const X1_MATCH_DURATION_SEC = 90;
 export const X1_RPG_MATCH_DURATION_SEC = 300; // 5 minutos máximo na Batalha de Robôs
 export const X1_MINADO_MATCH_DURATION_SEC = 0; // Campo Minado sem tempo limite total
-export const X1_MATCH_DISCONNECT_TIMEOUT_MS = 25_000; // 25s sem pulso na partida -> W.O.
+export const X1_MATCH_DISCONNECT_TIMEOUT_MS = 45_000; // 45s sem pulso na partida -> W.O.
 export const X1_ROBOT_INITIAL_HP = 5; // 5 Vidas na Batalha dos Robôs
 export { X1_SUPPORTED_GAME_IDS, sanitizeX1AvailableGames, sanitizeX1MinadoGridSize, type X1MinadoGridSize };
 
@@ -62,6 +62,8 @@ export interface X1OnlinePlayer {
   stage?: AgeStageId;
   lastSeenAt: number; // epoch ms
   lastActiveAt?: number; // epoch ms
+  /** Timestamp local de quando o pulso deste jogador foi observado/recebido (imune a skew de relógio) */
+  receivedAt?: number;
   inRoomCode?: string | null;
 }
 
@@ -1042,19 +1044,28 @@ function getRoomStatusRank(status: X1RoomStatus): number {
  * Mescla de forma determinística e livre de conflito (CRDT) o estado local e remoto de uma sala X1.
  * Garante imunidade contra diferenças de relógio (clock skew) entre celulares/computadores diferentes.
  */
+const localOppObservedAt = new Map<string, number>();
+
+function markOpponentObserved(code: string, playerId: string | undefined, at: number) {
+  if (!playerId) return;
+  localOppObservedAt.set(`${code}:${playerId}`, at);
+}
+
 export function mergeX1RoomStates(local: X1Room | undefined, remote: X1Room, now = Date.now()): X1Room {
   if (!local) {
     const copy: X1Room = structuredClone(remote);
     if (copy.status === "countdown") {
-      // Normaliza a contagem regressiva para o relógio deste aparelho se houver skew
+      // Ancora a contagem regressiva no relógio local ao receber a sala pela primeira vez
       const rem = (copy.countdownEndsAt ?? 0) - now;
-      if (rem <= 0 || rem > (X1_COUNTDOWN_DURATION_SEC + 2) * 1000) {
+      if (rem <= 0 || rem > (X1_COUNTDOWN_DURATION_SEC + 1) * 1000) {
         copy.countdownEndsAt = now + X1_COUNTDOWN_DURATION_SEC * 1000;
       }
     } else if (copy.status === "playing") {
       if (!copy.startedAt || Math.abs(now - copy.startedAt) > (copy.durationSec + 15) * 1000) {
         copy.startedAt = now;
       }
+      markOpponentObserved(copy.code, copy.host.playerId, now);
+      markOpponentObserved(copy.code, copy.guest?.playerId, now);
     }
     return copy;
   }
@@ -1066,15 +1077,13 @@ export function mergeX1RoomStates(local: X1Room | undefined, remote: X1Room, now
   if (remoteRank > localRank) {
     const merged: X1Room = structuredClone(remote);
     if (local.status === "waiting" && merged.status === "countdown") {
-      // Anfitrião acabou de receber a entrada do Desafiante: garante os 10s sincronizados no relógio local
-      const rem = (merged.countdownEndsAt ?? 0) - now;
-      if (rem < 4_000 || rem > (X1_COUNTDOWN_DURATION_SEC + 2) * 1000) {
-        merged.countdownEndsAt = now + X1_COUNTDOWN_DURATION_SEC * 1000;
-      }
+      // Anfitrião acabou de receber a entrada do Desafiante: inicia os 10s sincronizados no relógio local
+      merged.countdownEndsAt = now + X1_COUNTDOWN_DURATION_SEC * 1000;
     } else if (local.status !== "playing" && merged.status === "playing") {
-      if (!merged.startedAt || Math.abs(now - merged.startedAt) > 3_000) {
-        merged.startedAt = now;
-      }
+      // Ancora o início da partida no relógio local para que ambos contem a mesma duração relativa
+      merged.startedAt = now;
+      markOpponentObserved(merged.code, merged.host.playerId, now);
+      markOpponentObserved(merged.code, merged.guest?.playerId, now);
     } else if (merged.status === "finished") {
       recordX1MatchFinished(merged);
     }
@@ -1100,6 +1109,18 @@ export function mergeX1RoomStates(local: X1Room | undefined, remote: X1Room, now
   const remoteIsNewer = remoteRev > localRev || (remoteRev === localRev && remoteTime > localTime);
   const base: X1Room = structuredClone(remoteIsNewer ? remote : local);
   base.revision = Math.max(localRev, remoteRev);
+
+  // Registra observação local sempre que o estado remoto traz qualquer pulso ou atualização de jogador
+  if ((remote.host.lastSeenAt ?? 0) > (local.host.lastSeenAt ?? 0) || remote.host.updatedAt > local.host.updatedAt) {
+    markOpponentObserved(remote.code, remote.host.playerId, now);
+  }
+  if (
+    remote.guest &&
+    ((remote.guest.lastSeenAt ?? 0) > (local.guest?.lastSeenAt ?? 0) ||
+      remote.guest.updatedAt > (local.guest?.updatedAt ?? 0))
+  ) {
+    markOpponentObserved(remote.code, remote.guest.playerId, now);
+  }
 
   // Preserva o countdownEndsAt e startedAt locais para evitar saltos de relógio na mesma fase
   if (local.status === "countdown" && local.countdownEndsAt) {
@@ -1635,14 +1656,18 @@ async function runSyncX1WithPlayFabCloud(activeRoomCode?: string | null): Promis
       }
 
       for (const [id, p] of Object.entries(remoteStore.players ?? {})) {
-        if (now - p.lastSeenAt <= 10 * 60_000) {
+        // Tolera diferença de relógio entre dispositivos (até 24h) e ancora `receivedAt` no relógio local
+        if (Math.abs(now - p.lastSeenAt) <= 24 * 60 * 60_000) {
           const local = store.players[id];
           if (!local || p.lastSeenAt > local.lastSeenAt) {
-            store.players[id] = p;
+            store.players[id] = {
+              ...p,
+              receivedAt: now,
+            };
             recordPlayerHeartbeat(p.playerId || id, {
               nick: p.nick,
-              lastSeenAt: p.lastSeenAt,
-              lastActiveAt: p.lastActiveAt ?? p.lastSeenAt,
+              lastSeenAt: now,
+              lastActiveAt: now,
             });
             changed = true;
           }
@@ -1947,15 +1972,28 @@ export function heartbeatOnlinePlayer(player: {
 
 export function getX1LobbySnapshot(currentPlayerId?: string, currentPlayerNick?: string) {
   const store = loadStore();
+  const now = Date.now();
   const myNick = currentPlayerNick ?? (currentPlayerId ? store.players[currentPlayerId]?.nick : undefined);
 
   const activeMatches = Object.values(store.rooms)
-    .filter((r) => r.status === "playing" || r.status === "countdown")
+    .filter((r) => {
+      if (r.status !== "playing" && r.status !== "countdown") return false;
+      // Ignora salas antigas/abandonadas para não ocultar jogadores online como em partida
+      if (r.status === "countdown" && now - r.createdAt > 5 * 60_000) return false;
+      if (r.status === "playing") {
+        const refStart = r.startedAt ?? r.createdAt;
+        const maxMs = r.durationSec > 0 ? (r.durationSec + 120) * 1000 : 30 * 60_000;
+        if (now - refStart > maxMs) return false;
+      }
+      return true;
+    })
     .sort((a, b) => b.createdAt - a.createdAt);
 
   const onlinePlayers = Object.values(store.players)
     .filter((p) => {
-      if (Date.now() - p.lastSeenAt > 60_000) return false;
+      // Usa `receivedAt` (ancorado no relógio local) quando disponível para evitar ocultar jogadores por skew de relógio
+      const seenRef = p.receivedAt ?? p.lastSeenAt;
+      if (now - seenRef > 120_000) return false;
       const meetsLevelOrBypass =
         p.level >= 5 ||
         isAdminOrTestAccount({ id: p.playerId, nick: p.nick, full_name: p.fullName });
@@ -2817,7 +2855,8 @@ export function forfeitX1Match(
 }
 
 /**
- * Atualiza o heartbeat do jogador dentro da partida ativa para detectar desconexão real.
+ * Atualiza o heartbeat do jogador dentro da partida ativa e sincroniza com a nuvem
+ * para evitar falsos W.O.s entre dispositivos.
  */
 export function touchX1MatchHeartbeat(code: string, playerId: string): X1Room | null {
   const clean = code.trim().toUpperCase();
@@ -2828,20 +2867,24 @@ export function touchX1MatchHeartbeat(code: string, playerId: string): X1Room | 
   const now = Date.now();
   if (room.host.playerId === playerId) {
     room.host.lastSeenAt = now;
+    room.host.updatedAt = Math.max(room.host.updatedAt, now);
   } else if (room.guest?.playerId === playerId) {
     room.guest.lastSeenAt = now;
+    room.guest.updatedAt = Math.max(room.guest.updatedAt, now);
   } else {
     return room;
   }
 
+  room.revision = (room.revision ?? 1) + 1;
   store.rooms[clean] = room;
-  saveStore(store, false);
+  saveStore(store);
+  void pushRoomToPlayFab(room);
   return room;
 }
 
 /**
  * Verifica se o oponente ficou sem pulso acima de `timeoutMs` durante a partida;
- * em caso positivo, declara vitória por W.O. ao jogador ativo.
+ * usa timestamp de observação local para ser imune a diferença de relógio entre dispositivos.
  */
 export function forfeitX1DisconnectedOpponent(
   code: string,
@@ -2853,11 +2896,19 @@ export function forfeitX1DisconnectedOpponent(
   const room = store.rooms[clean];
   if (!room || !room.guest || room.status !== "playing") return null;
 
+  const now = Date.now();
+  // Nunca declara W.O. antes da partida completar pelo menos `timeoutMs` reais no relógio local
+  const matchElapsed = room.startedAt ? now - room.startedAt : 0;
+  if (matchElapsed < timeoutMs) return null;
+
   const isHost = room.host.playerId === myPlayerId;
   const opp = isHost ? room.guest : room.host;
-  const oppSeenAt = opp.lastSeenAt ?? opp.updatedAt ?? room.startedAt ?? room.createdAt;
-  const now = Date.now();
-  if (now - oppSeenAt < timeoutMs) return null;
+  const observedAt =
+    localOppObservedAt.get(`${clean}:${opp.playerId}`) ??
+    room.startedAt ??
+    now;
+
+  if (now - observedAt < timeoutMs) return null;
 
   return forfeitX1Match(clean, opp.playerId);
 }

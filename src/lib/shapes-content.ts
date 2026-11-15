@@ -167,11 +167,14 @@ function genMode3(qInLevel: number, pool: Shape[] = SHAPES): Mode3Question {
   return { mode: 3, slots, pieces: shuffle([...correctPieces, ...extras]) };
 }
 
-/* ---------- Mode 4: dual color separation (left: azul, right: amarelo) ---------- */
-function genMode4(qInLevel: number): Mode4Question {
+/* ---------- Mode 4: dual color separation (varying color pair each round) ---------- */
+function genMode4(qInLevel: number, prevColors?: readonly [ColorName, ColorName]): Mode4Question {
   const count = qInLevel <= 1 ? 8 : qInLevel <= 3 ? 12 : 16;
-  const leftColor: ColorName = "azul";
-  const rightColor: ColorName = "amarelo";
+  const available = prevColors
+    ? COLORS.filter((c) => c !== prevColors[0] && c !== prevColors[1])
+    : COLORS;
+  const pool = available.length >= 2 ? available : COLORS;
+  const [leftColor, rightColor] = shuffle([...pool]).slice(0, 2) as [ColorName, ColorName];
   const others = COLORS.filter((c) => c !== leftColor && c !== rightColor);
   const leftCount = Math.max(2, Math.min(4, 2 + ri(2)));
   const rightCount = Math.max(2, Math.min(4, 2 + ri(2)));
@@ -195,18 +198,23 @@ function genMode4(qInLevel: number): Mode4Question {
 
 /**
  * Level → mode mapping:
- *   1 → 1 cor, 2 → 2 cores simultâneas (azul e amarelo),
+ *   1 → 1 cor, 2 → 2 cores simultâneas (variando a cada rodada),
  *   3 → formas, 4 → forma + tamanho,
  *   5+ → formas avançadas (pentágono, losango, hexágono, trapézio, triângulos)
  */
-export function generateQuestion(level: number, qInLevel: number, prevMode?: 1 | 2 | 3 | 4): Question {
+export function generateQuestion(
+  level: number,
+  qInLevel: number,
+  prevMode?: 1 | 2 | 3 | 4,
+  prevMode4Colors?: readonly [ColorName, ColorName],
+): Question {
   if (level >= 5) {
     const pool = ADVANCED_SHAPES;
     const mode: 2 | 3 = prevMode === 2 ? 3 : prevMode === 3 ? 2 : (ri(2) + 2) as 2 | 3;
     return mode === 2 ? genMode2(qInLevel, pool) : genMode3(qInLevel, pool);
   }
   if (level === 1) return genMode1(qInLevel);
-  if (level === 2) return genMode4(qInLevel);
+  if (level === 2) return genMode4(qInLevel, prevMode4Colors);
   if (level === 3) return genMode2(qInLevel);
   return genMode3(qInLevel);
 }

@@ -2,11 +2,12 @@ import { GAME_NAMES, type GameId } from "./game-storage.ts";
 
 export type EventBonusType = "dobro_xp" | "xp_1_5x" | "aumentar_limite_diario" | "personalizado";
 
-export type EventScope = "todos" | "modo_ranqueado" | GameId;
+export type EventScope = "todos" | "modo_ranqueado" | "modo_x1" | GameId;
 
 export function formatEventScopeText(scope: EventScope): string {
   if (scope === "todos") return "Todos os Jogos";
   if (scope === "modo_ranqueado") return "Apenas Modo Ranqueado";
+  if (scope === "modo_x1") return "Apenas Modo X1";
   return GAME_NAMES[scope as GameId] ?? scope;
 }
 

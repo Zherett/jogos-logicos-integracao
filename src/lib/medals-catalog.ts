@@ -1307,6 +1307,8 @@ export interface PlayerStatsContext {
   streakDays?: number;
   weeklyX1Wins?: number;
   enabledGames?: Partial<Record<GameId, boolean>>;
+  /** IDs de eventos explicitamente voltados ao Modo X1 */
+  x1EventIds?: Set<string>;
 }
 
 let cachedAdminEnabledGamesRaw: string | null = null;
@@ -1388,6 +1390,7 @@ export function aggregateStatsByGame(
   const map = new Map<GameId, GameStatRow & { flawless_wins: number }>();
   for (const row of stats) {
     if (!row || !row.game_id) continue;
+    if (row.mode === "x1_online") continue;
     if (!enabledSet.has(row.game_id)) continue;
     const hasActivity =
       (row.plays ?? 0) > 0 ||
@@ -1467,6 +1470,7 @@ export function getDistinctFlawlessGames(
 
   if (
     lastMatch &&
+    lastMatch.mode !== "x1_online" &&
     enabledSet.has(lastMatch.gameId) &&
     isFlawlessMatch(lastMatch, 30)
   ) {
@@ -1529,9 +1533,10 @@ export function getDistinctGamesPlayed(
     }
   }
 
-  // 3. Última partida
+  // 3. Última partida (ignora duelos X1 online para não contar como jogo solo explorado)
   if (
     lastMatch &&
+    lastMatch.mode !== "x1_online" &&
     lastMatch.gameId &&
     enabledSet.has(lastMatch.gameId)
   ) {
@@ -1759,6 +1764,25 @@ export function getEffectivePlayerProgression(
   };
 }
 
+export function isX1ExclusiveMedal(
+  medal: MedalDefinition,
+  x1EventIds?: Set<string>,
+): boolean {
+  if (
+    medal.condition.type === "x1_wins_total" ||
+    medal.condition.type === "x1_wins_weekly"
+  ) {
+    return true;
+  }
+  if (medal.eventRequirement?.type === "event_x1_wins") {
+    return true;
+  }
+  if (medal.eventId && x1EventIds?.has(medal.eventId)) {
+    return true;
+  }
+  return false;
+}
+
 /**
  * Evaluates all unlocked medals for a player and returns newly awarded medals.
  */
@@ -1773,6 +1797,10 @@ export function evaluatePlayerMedals(
       .filter(Boolean),
   );
   const newlyAwarded: MedalDefinition[] = [];
+  const isX1Match = ctx.lastMatch?.mode === "x1_online";
+  const medalsToEvaluate = isX1Match
+    ? allMedals.filter((m) => isX1ExclusiveMedal(m, ctx.x1EventIds))
+    : allMedals;
 
   const p = ctx.profile;
   const enabledSet = getEnabledGameIdsSet(ctx.enabledGames);
@@ -1835,7 +1863,7 @@ export function evaluatePlayerMedals(
   });
   const effectiveWeeklyX1Wins = Math.max(ctx.weeklyX1Wins ?? 0, p.weeklyX1Wins ?? 0);
 
-  for (const medal of allMedals) {
+  for (const medal of medalsToEvaluate) {
     if (existingSet.has(medal.id)) continue;
     const cond = medal.condition;
     let earned = false;

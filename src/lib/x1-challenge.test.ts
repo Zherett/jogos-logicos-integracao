@@ -9,6 +9,7 @@ import {
   computeScoreRaceBlueShare,
   createX1Room,
   finishX1RoomByTimeout,
+  forfeitX1DisconnectedOpponent,
   forfeitX1Match,
   generateDeterministicRobotClashQuestion,
   generateRoomCode,
@@ -28,6 +29,9 @@ import {
   saveX1MatchHistory,
   startX1MatchAfterCountdown,
   timeoutX1MinadoTurnSelection,
+  touchX1MatchHeartbeat,
+  X1_COUNTDOWN_DURATION_SEC,
+  X1_MATCH_DISCONNECT_TIMEOUT_MS,
   X1_MINADO_TURN_SELECT_TIMEOUT_SEC,
   X1_ROBOT_INITIAL_HP,
   type X1Room,
@@ -660,5 +664,39 @@ describe("Arena de Desafio X1 Online (1v1 Versus Mode)", () => {
     const fallbackRight = resolvePlayerAvatar(undefined, 99, "right");
     assert.ok(fallbackLeft.headShape);
     assert.notEqual(fallbackLeft.primaryColor, fallbackRight.primaryColor);
+  });
+
+  it("não declara W.O. falso logo após iniciar partida mesmo com relógio dessincronizado e ancora relógio na transição", () => {
+    const r = createX1Room({
+      host: { playerId: "h_sync", nick: "HostSync", school: "SEMED", level: 7 },
+      gameId: "logica",
+    });
+    const joined = joinX1Room({
+      code: r.code,
+      guest: { playerId: "g_sync", nick: "GuestSync", school: "SEMED", level: 7 },
+    });
+    assert.ok(joined.room);
+
+    // Simula diferença de relógio de 1 minuto no guest durante a transição waiting -> countdown
+    const localNow = Date.now();
+    const skewedRemote = structuredClone(joined.room!);
+    skewedRemote.countdownEndsAt = localNow - 50_000;
+    const hostCountdown = mergeX1RoomStates(r, skewedRemote, localNow);
+    assert.equal(hostCountdown.status, "countdown");
+    assert.ok(
+      Math.abs((hostCountdown.countdownEndsAt ?? 0) - (localNow + X1_COUNTDOWN_DURATION_SEC * 1000)) <= 50,
+    );
+
+    const started = startX1MatchAfterCountdown(r.code)!;
+    assert.equal(started.status, "playing");
+
+    // Mesmo que opp.lastSeenAt esteja atrasado, não pode dar W.O. antes de X1_MATCH_DISCONNECT_TIMEOUT_MS reais
+    const earlyWo = forfeitX1DisconnectedOpponent(r.code, "h_sync", X1_MATCH_DISCONNECT_TIMEOUT_MS);
+    assert.equal(earlyWo, null);
+
+    // Heartbeat de partida incrementa revision e atualiza lastSeenAt
+    const prevRev = started.revision ?? 1;
+    const touched = touchX1MatchHeartbeat(r.code, "g_sync")!;
+    assert.ok((touched.revision ?? 0) > prevRev);
   });
 });

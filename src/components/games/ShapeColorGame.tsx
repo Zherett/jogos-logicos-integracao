@@ -30,6 +30,7 @@ import { ShapeSvg } from "./ShapeSvg";
 import {
   generateQuestion,
   SIZE_LABEL,
+  type ColorName,
   type Piece,
   type Question,
   type SizeIdx,
@@ -74,6 +75,7 @@ export function ShapeColorGame({ onExit, onStatsChange, isRanked }: Props) {
   const [qInLevel, setQInLevel] = useState(0);
   const [question, setQuestion] = useState<Question | null>(null);
   const prevModeRef = useRef<1 | 2 | 3 | 4 | undefined>(undefined);
+  const prevMode4ColorsRef = useRef<readonly [ColorName, ColorName] | undefined>(undefined);
   const solveLockRef = useRef(false);
 
   // Per-question runtime state
@@ -116,8 +118,11 @@ export function ShapeColorGame({ onExit, onStatsChange, isRanked }: Props) {
 
   function loadNewQuestion(lvl: number, qi: number) {
     solveLockRef.current = false;
-    const q = generateQuestion(lvl, qi, prevModeRef.current);
+    const q = generateQuestion(lvl, qi, prevModeRef.current, prevMode4ColorsRef.current);
     prevModeRef.current = q.mode;
+    if (q.mode === 4) {
+      prevMode4ColorsRef.current = [q.leftColor, q.rightColor];
+    }
     setQuestion(q);
     setDroppedIds(new Set());
     setPlaced({});
@@ -133,6 +138,7 @@ export function ShapeColorGame({ onExit, onStatsChange, isRanked }: Props) {
     setLevel(startLevel); setQInLevel(0);
     setFinished(false);
     prevModeRef.current = undefined;
+    prevMode4ColorsRef.current = undefined;
     loadNewQuestion(startLevel, 0);
     setPhase("playing");
     setRunning(true);
@@ -664,8 +670,14 @@ function Mode4View({ q, droppedIds, flashSlot }: {
           Separe as duas cores simultaneamente
         </div>
         <div className="mt-1 font-display text-lg sm:text-xl font-bold">
-          Esquerda: <span className="text-blue-500 uppercase">{q.leftColor}</span> • Direita:{" "}
-          <span className="text-yellow-500 uppercase">{q.rightColor}</span>
+          Esquerda:{" "}
+          <span className="uppercase" style={{ color: textColorFor(q.leftColor) }}>
+            {q.leftColor}
+          </span>{" "}
+          • Direita:{" "}
+          <span className="uppercase" style={{ color: textColorFor(q.rightColor) }}>
+            {q.rightColor}
+          </span>
         </div>
       </div>
 
@@ -920,4 +932,10 @@ function colorFor(name: string) {
     branco: "#ffffff", marrom: "#78350f",
   };
   return map[name] ?? "#3b82f6";
+}
+
+function textColorFor(name: string) {
+  if (name === "branco" || name === "preto") return "#94a3b8";
+  if (name === "marrom") return "#d97706";
+  return colorFor(name);
 }

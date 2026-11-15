@@ -2062,4 +2062,129 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
     const searchByManual = filterMedalsByQuery(allWithCustom, "manual");
     assert.ok(searchByManual.some((m) => m.id === "custom_adm_platina_123"));
   });
+
+  it("no modo X1 (x1_online), libera exclusivamente medalhas do X1 e eventos voltados ao X1", () => {
+    const profileX1: PlayerProfile = {
+      id: "p_x1_only",
+      nick: "DuelistaX1",
+      nickNormalized: "duelistax1",
+      full_name: "DUELISTA X1",
+      school: "SEMED",
+      grade: null,
+      birthdate: "2012-05-10",
+      xp: 200,
+      seasonXp: 200,
+      level: 5,
+      wins: 1,
+      x1Wins: 1,
+      weeklyX1Wins: 1,
+      matchesPlayed: 1,
+      distinctGamesPlayed: 0,
+      badges: [],
+      seasonId: 1,
+      unlockedMedals: [],
+      eventProgress: {
+        ev_geral: {
+          cycleKey: "2026-11",
+          matchesCount: 5,
+          matchesByGame: { logica: 5 },
+          xpEarned: 100,
+          xpByGame: { logica: 100 },
+          bestScoreByGame: { logica: 80 },
+          bestLevelByGame: { logica: 3 },
+          flawlessCount: 1,
+          x1Wins: 1,
+          maxCombo: 5,
+          dailyCapDaysCount: 0,
+          teamMatchesCount: 0,
+          distinctGamesPlayed: ["logica"],
+        },
+        ev_x1: {
+          cycleKey: "2026-11",
+          matchesCount: 1,
+          matchesByGame: { logica: 1 },
+          xpEarned: 50,
+          xpByGame: { logica: 50 },
+          bestScoreByGame: { logica: 80 },
+          bestLevelByGame: { logica: 1 },
+          flawlessCount: 0,
+          x1Wins: 1,
+          maxCombo: 3,
+          dailyCapDaysCount: 0,
+          teamMatchesCount: 0,
+          distinctGamesPlayed: [],
+        },
+      },
+    };
+
+    const x1Stats: GameStatRow[] = [
+      {
+        player_id: "p_x1_only",
+        game_id: "logica",
+        mode: "x1_online",
+        plays: 1,
+        wins: 1,
+        flawless_wins: 1,
+        best_score: 120,
+        best_level: 3,
+        updated_at: "2026-11-14T12:00:00Z",
+      },
+    ];
+
+    const customEventCommon: MedalDefinition = {
+      id: "custom_ev_common_matches",
+      title: "Evento Geral 1 partida",
+      description: "Medalha de evento comum.",
+      rarity: "bronze",
+      category: "evento",
+      iconName: "Award",
+      condition: { type: "manual_event" },
+      eventId: "ev_geral",
+      eventRequirement: { type: "event_matches", threshold: 1 },
+      isCustom: true,
+    };
+
+    const customEventX1: MedalDefinition = {
+      id: "custom_ev_x1_win",
+      title: "Campeão Evento X1",
+      description: "Vença 1 duelo X1 no evento.",
+      rarity: "prata",
+      category: "evento",
+      iconName: "Swords",
+      condition: { type: "manual_event" },
+      eventId: "ev_x1",
+      eventRequirement: { type: "event_x1_wins", threshold: 1 },
+      isCustom: true,
+    };
+
+    const allWithEvents = getAllAvailableMedals([customEventCommon, customEventX1]);
+    const awarded = evaluatePlayerMedals(
+      {
+        profile: profileX1,
+        stats: x1Stats,
+        lastMatch: {
+          gameId: "logica",
+          score: 120,
+          level: 1,
+          correct: 5,
+          wrong: 0,
+          mode: "x1_online",
+        },
+        weeklyX1Wins: 1,
+        x1EventIds: new Set(["ev_x1"]),
+      },
+      allWithEvents,
+      new Date("2026-11-14T12:00:00Z"),
+    );
+
+    const ids = awarded.map((m) => m.id);
+    // Deve liberar apenas medalhas voltadas ao X1
+    assert.ok(ids.includes("x1_wins_1"));
+    assert.ok(ids.includes("custom_ev_x1_win"));
+    // Jamais deve liberar medalhas padrão de jogos ou eventos gerais
+    assert.ok(!ids.includes("game_logica_lvl_2"));
+    assert.ok(!ids.includes("game_logica_flawless"));
+    assert.ok(!ids.includes("explore_1_game"));
+    assert.ok(!ids.includes("custom_ev_common_matches"));
+  });
 });

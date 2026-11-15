@@ -91,6 +91,7 @@ import {
   getTop1ConsecutiveWeeks,
   isFlawlessMatch,
   isMedalPreservedOnBetaEnd,
+  isX1ExclusiveMedal,
   MEDAL_XP_REWARDS,
   type PlayerUnlockedMedal,
   type MedalDefinition,
@@ -4905,6 +4906,8 @@ export async function playfabRecordMatch(args: {
     lastMatchScore: safeScore,
   });
 
+  const allMedals = getAllAvailableMedals(cfg.customMedals);
+
   // Atualiza progresso dos eventos ativos para obtenção de medalhas especiais de evento
   const nowObj = new Date();
   const allActiveEvents = [
@@ -4912,11 +4915,29 @@ export async function playfabRecordMatch(args: {
     ...getActiveRecurringEvents(cfg.recurringEvents ?? loadRecurringEvents(), nowObj),
   ];
 
+  // Identifica eventos explicitamente voltados ao Modo X1 (escopo "modo_x1" ou medalha com requisito "event_x1_wins")
+  const x1EventIds = new Set<string>();
+  for (const ev of allActiveEvents) {
+    if (ev.scope === "modo_x1") {
+      x1EventIds.add(ev.id);
+    }
+  }
+  for (const m of allMedals) {
+    if (m.eventId && m.eventRequirement?.type === "event_x1_wins") {
+      x1EventIds.add(m.eventId);
+    }
+  }
+
   if (allActiveEvents.length > 0) {
     if (!acc.profile.eventProgress) {
       acc.profile.eventProgress = {};
     }
     for (const ev of allActiveEvents) {
+      // No Modo X1, apenas eventos explicitamente voltados ao X1 podem receber progresso
+      if (mode === "x1_online" && !x1EventIds.has(ev.id)) {
+        continue;
+      }
+
       const cycleKey = getEventCycleKey(ev, nowObj);
       let evProg = acc.profile.eventProgress[ev.id];
       if (!evProg || evProg.cycleKey !== cycleKey) {
@@ -4939,9 +4960,11 @@ export async function playfabRecordMatch(args: {
       }
 
       const inScope =
-        ev.scope === "todos" ||
-        (ev.scope === "modo_ranqueado" && mode === "torneio_semanal") ||
-        (ev.scope !== "modo_ranqueado" && ev.scope === args.gameId);
+        mode === "x1_online"
+          ? x1EventIds.has(ev.id)
+          : ev.scope === "todos" ||
+            (ev.scope === "modo_ranqueado" && mode === "torneio_semanal") ||
+            (ev.scope !== "modo_ranqueado" && ev.scope !== "modo_x1" && ev.scope === args.gameId);
       if (inScope) {
         evProg.matchesCount = (evProg.matchesCount ?? 0) + 1;
         evProg.matchesByGame = evProg.matchesByGame ?? {};
@@ -4956,7 +4979,7 @@ export async function playfabRecordMatch(args: {
         evProg.bestLevelByGame = evProg.bestLevelByGame ?? {};
         evProg.bestLevelByGame[args.gameId] = Math.max(evProg.bestLevelByGame[args.gameId] ?? 1, safeLevel);
 
-        if (flawless) {
+        if (flawless && mode !== "x1_online") {
           evProg.flawlessCount = (evProg.flawlessCount ?? 0) + 1;
         }
         if (mode === "x1_online" && won) {
@@ -4971,23 +4994,29 @@ export async function playfabRecordMatch(args: {
         if (!evProg.distinctGamesPlayed) {
           evProg.distinctGamesPlayed = [];
         }
-        if (!evProg.distinctGamesPlayed.includes(args.gameId)) {
+        if (mode !== "x1_online" && !evProg.distinctGamesPlayed.includes(args.gameId)) {
           evProg.distinctGamesPlayed.push(args.gameId);
         }
       }
 
-      // Verifica meta de bater o limite diário de XP
-      const currentDailyXp = acc.profile.dailyXp ?? 0;
-      const effectiveCap = cfg.dailyXpCap ?? 1000;
-      if (currentDailyXp >= effectiveCap && evProg.lastDailyCapDate !== todayKey) {
-        evProg.lastDailyCapDate = todayKey;
-        evProg.dailyCapDaysCount = (evProg.dailyCapDaysCount ?? 0) + 1;
+      // Verifica meta de bater o limite diário de XP (apenas fora do Modo X1)
+      if (mode !== "x1_online") {
+        const currentDailyXp = acc.profile.dailyXp ?? 0;
+        const effectiveCap = cfg.dailyXpCap ?? 1000;
+        if (currentDailyXp >= effectiveCap && evProg.lastDailyCapDate !== todayKey) {
+          evProg.lastDailyCapDate = todayKey;
+          evProg.dailyCapDaysCount = (evProg.dailyCapDaysCount ?? 0) + 1;
+        }
       }
     }
   }
 
   // Evaluate new medals at the end of the match using the exact final wrong/correct/score counts
-  const allMedals = getAllAvailableMedals(cfg.customMedals);
+  // No Modo X1, avalia exclusivamente medalhas voltadas ao X1 (nativas do X1 ou eventos X1)
+  const medalsForMode =
+    mode === "x1_online"
+      ? allMedals.filter((m) => isX1ExclusiveMedal(m, x1EventIds))
+      : allMedals;
   const newlyAwarded = evaluatePlayerMedals(
     {
       profile: acc.profile,
@@ -5004,8 +5033,9 @@ export async function playfabRecordMatch(args: {
       streakDays: acc.profile.streakDays,
       weeklyX1Wins: acc.profile.weeklyX1Wins,
       enabledGames: cfg.enabledGames,
+      x1EventIds,
     },
-    allMedals,
+    medalsForMode,
   );
 
   if (newlyAwarded.length > 0) {

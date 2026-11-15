@@ -595,10 +595,13 @@ function Index() {
         >
           <X1MatchOverlay
             initialRoom={activeX1Room}
-            onExitX1={() => {
+            onExitX1={(returnToArena) => {
               setActiveX1Room(null);
               setView("menu");
               refreshLocal();
+              if (returnToArena) {
+                setX1Open(true);
+              }
             }}
           />
         </Suspense>
