@@ -1082,6 +1082,9 @@ export function mergeX1RoomStates(local: X1Room | undefined, remote: X1Room, now
     } else if (local.status !== "playing" && merged.status === "playing") {
       // Ancora o início da partida no relógio local para que ambos contem a mesma duração relativa
       merged.startedAt = now;
+      if (merged.minadoState) {
+        merged.minadoState.turnStartedAt = now;
+      }
       markOpponentObserved(merged.code, merged.host.playerId, now);
       markOpponentObserved(merged.code, merged.guest?.playerId, now);
     } else if (merged.status === "finished") {
@@ -1309,12 +1312,14 @@ export function mergeX1RoomStates(local: X1Room | undefined, remote: X1Room, now
       base.guest.lastSeenAt =
         Math.max(local.guest.lastSeenAt ?? 0, remote.guest.lastSeenAt ?? 0) || undefined;
 
-      // Protege turnStartedAt e cronômetro de 20s contra clock skew entre aparelhos
-      if (
-        !base.minadoState.turnStartedAt ||
-        base.minadoState.turnStartedAt > now + 2_000
-      ) {
+      // Ancora turnStartedAt e cronômetro de 20s no relógio local para evitar drift (ex.: 24s vs 19s)
+      const turnChanged =
+        base.minadoState.currentTurnPlayerId !== local.minadoState.currentTurnPlayerId ||
+        Object.keys(base.minadoState.revealed).length !== Object.keys(local.minadoState.revealed).length;
+      if (turnChanged || !local.minadoState.turnStartedAt) {
         base.minadoState.turnStartedAt = now;
+      } else {
+        base.minadoState.turnStartedAt = local.minadoState.turnStartedAt;
       }
 
       const activeQ = base.minadoState.activeQuestion;
@@ -1323,10 +1328,7 @@ export function mergeX1RoomStates(local: X1Room | undefined, remote: X1Room, now
         if (localQ && localQ.cardId === activeQ.cardId && localQ.expiresAt) {
           activeQ.expiresAt = localQ.expiresAt;
         } else {
-          const rem = activeQ.expiresAt - now;
-          if (rem <= 0 || rem > 22_000) {
-            activeQ.expiresAt = now + 20_000;
-          }
+          activeQ.expiresAt = now + 20_000;
         }
       }
 
@@ -2875,7 +2877,7 @@ export function touchX1MatchHeartbeat(code: string, playerId: string): X1Room | 
     return room;
   }
 
-  room.revision = (room.revision ?? 1) + 1;
+  // Não incrementa `revision` em pulsos de presença para não sobrescrever jogadas/respostas recentes na mesclagem
   store.rooms[clean] = room;
   saveStore(store);
   void pushRoomToPlayFab(room);

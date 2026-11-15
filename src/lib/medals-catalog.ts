@@ -70,6 +70,12 @@ export interface MedalCondition {
     | "game_match_count"
     | "x1_wins_total"
     | "x1_wins_weekly"
+    | "x1_matches_total"
+    | "x1_win_streak"
+    | "x1_same_school_wins"
+    | "x1_other_school_wins"
+    | "x1_comeback_after_losses"
+    | "completed_games_medals"
     | "distinct_games"
     | "distinct_flawless_games"
     | "distinct_specialist_games"
@@ -415,19 +421,132 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
     });
   }
 
-  // 4. Arena X1: Vitórias Gerais (1 a 10 vitórias = 10 medalhas)
-  for (let w = 1; w <= 10; w++) {
-    const rarity: MedalRarity = w <= 3 ? "bronze" : w <= 7 ? "prata" : "ouro";
+  // 4. Arena X1: Participação (1, 10, 20, 30, 50, 100, 300 partidas)
+  const x1MatchMilestones: Array<{ count: number; rarity: MedalRarity; title: string }> = [
+    { count: 1, rarity: "bronze", title: "Primeiro X1 Disputado" },
+    { count: 10, rarity: "bronze", title: "Duelista Constante (10 X1)" },
+    { count: 20, rarity: "prata", title: "Veterano de Arena (20 X1)" },
+    { count: 30, rarity: "ouro", title: "Combatente Assíduo (30 X1)" },
+    { count: 50, rarity: "platina", title: "Gladiador Incansável (50 X1)" },
+    { count: 100, rarity: "diamante", title: "Centurião da Arena (100 X1)" },
+    { count: 300, rarity: "heroi", title: "Lenda Imortal da Arena (300 X1)" },
+  ];
+  for (const m of x1MatchMilestones) {
     medals.push({
-      id: `x1_wins_${w}`,
-      title: w === 1 ? "Primeira Vitória no X1" : `Gladiador X1 (${w} Vitórias)`,
-      description: `Vença ${w} ${w === 1 ? "partida" : "partidas"} na Arena de Desafio X1 Online.`,
-      rarity,
+      id: `x1_matches_${m.count}`,
+      title: m.title,
+      description:
+        m.count === 1
+          ? "Dispute sua primeira partida na Arena de Desafio X1 Online."
+          : `Dispute ${m.count} partidas na Arena de Desafio X1 Online.`,
+      rarity: m.rarity,
       category: "x1_vitorias",
       iconName: "Swords",
-      condition: { type: "x1_wins_total", threshold: w },
+      condition: { type: "x1_matches_total", threshold: m.count },
     });
   }
+
+  // 4b. Arena X1: Vitórias Gerais (1, 3, 5, 10, 20, 40, 60, 100 vitórias)
+  const x1WinMilestones: Array<{ count: number; rarity: MedalRarity; title: string }> = [
+    { count: 1, rarity: "bronze", title: "Primeira Vitória no X1" },
+    { count: 3, rarity: "bronze", title: "Gladiador X1 (3 Vitórias)" },
+    { count: 5, rarity: "prata", title: "Guerreiro X1 (5 Vitórias)" },
+    { count: 10, rarity: "prata", title: "Campeão X1 (10 Vitórias)" },
+    { count: 20, rarity: "ouro", title: "Conquistador X1 (20 Vitórias)" },
+    { count: 40, rarity: "platina", title: "Soberano X1 (40 Vitórias)" },
+    { count: 60, rarity: "diamante", title: "Imperador X1 (60 Vitórias)" },
+    { count: 100, rarity: "heroi", title: "Herói Supremo do X1 (100 Vitórias)" },
+  ];
+  for (const m of x1WinMilestones) {
+    medals.push({
+      id: `x1_wins_${m.count}`,
+      title: m.title,
+      description: `Vença ${m.count} ${m.count === 1 ? "partida" : "partidas"} na Arena de Desafio X1 Online.`,
+      rarity: m.rarity,
+      category: "x1_vitorias",
+      iconName: "Swords",
+      condition: { type: "x1_wins_total", threshold: m.count },
+    });
+  }
+
+  // 4c. Arena X1: Sequências de Vitórias (2, 5, 8, 12, 20 vitórias seguidas)
+  const x1StreakMilestones: Array<{ count: number; rarity: MedalRarity; title: string }> = [
+    { count: 2, rarity: "prata", title: "Dupla Imbatível no X1" },
+    { count: 5, rarity: "ouro", title: "Sequência Dourada (5 X1 Seguidos)" },
+    { count: 8, rarity: "platina", title: "Imparável na Arena (8 X1 Seguidos)" },
+    { count: 12, rarity: "diamante", title: "Domínio Absoluto (12 X1 Seguidos)" },
+    { count: 20, rarity: "heroi", title: "Invencível na Arena (20 X1 Seguidos)" },
+  ];
+  for (const m of x1StreakMilestones) {
+    medals.push({
+      id: `x1_streak_${m.count}`,
+      title: m.title,
+      description: `Vença ${m.count} partidas seguidas na Arena de Desafio X1 Online.`,
+      rarity: m.rarity,
+      category: "x1_vitorias",
+      iconName: "Flame",
+      condition: { type: "x1_win_streak", threshold: m.count },
+    });
+  }
+
+  // 4d. Arena X1: Vitórias contra Mesma Escola (1, 5, 10) e Outra Escola (1, 5, 10)
+  const x1SameSchoolMilestones: Array<{ count: number; rarity: MedalRarity; title: string }> = [
+    { count: 1, rarity: "bronze", title: "Rivalidade Escolar (1 Vitória)" },
+    { count: 5, rarity: "prata", title: "Destaque da Escola (5 Vitórias)" },
+    { count: 10, rarity: "ouro", title: "Líder da Escola no X1 (10 Vitórias)" },
+  ];
+  for (const m of x1SameSchoolMilestones) {
+    medals.push({
+      id: `x1_same_school_${m.count}`,
+      title: m.title,
+      description: `Vença ${m.count} ${m.count === 1 ? "partida" : "partidas"} no X1 contra jogadores da mesma escola.`,
+      rarity: m.rarity,
+      category: "x1_vitorias",
+      iconName: "Shield",
+      condition: { type: "x1_same_school_wins", threshold: m.count },
+    });
+  }
+
+  const x1OtherSchoolMilestones: Array<{ count: number; rarity: MedalRarity; title: string }> = [
+    { count: 1, rarity: "prata", title: "Desafiante Interescolar (1 Vitória)" },
+    { count: 5, rarity: "ouro", title: "Embaixador da Escola (5 Vitórias)" },
+    { count: 10, rarity: "platina", title: "Campeão Interescolar (10 Vitórias)" },
+  ];
+  for (const m of x1OtherSchoolMilestones) {
+    medals.push({
+      id: `x1_other_school_${m.count}`,
+      title: m.title,
+      description: `Vença ${m.count} ${m.count === 1 ? "partida" : "partidas"} no X1 contra jogadores de outras escolas.`,
+      rarity: m.rarity,
+      category: "x1_vitorias",
+      iconName: "Trophy",
+      condition: { type: "x1_other_school_wins", threshold: m.count },
+    });
+  }
+
+  // 4e. Arena X1: Secretas de Virada (perder 3 ou 5 seguidas e vencer a próxima)
+  medals.push(
+    {
+      id: "x1_secret_comeback_3",
+      title: "Fênix da Arena",
+      description: "Perca 3 partidas seguidas no X1 e vença a próxima.",
+      rarity: "ouro",
+      category: "secreta",
+      iconName: "Sparkles",
+      secret: true,
+      condition: { type: "x1_comeback_after_losses", threshold: 3 },
+    },
+    {
+      id: "x1_secret_comeback_5",
+      title: "Virada Lendária",
+      description: "Perca 5 partidas seguidas no X1 e vença a próxima.",
+      rarity: "platina",
+      category: "secreta",
+      iconName: "Crown",
+      secret: true,
+      condition: { type: "x1_comeback_after_losses", threshold: 5 },
+    },
+  );
 
   // 5. Arena X1: Desafios Semanais (5, 10, 15 vitórias na semana)
   medals.push(
@@ -489,6 +608,33 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
       category: "exploracao",
       iconName: "Trophy",
       condition: { type: "distinct_games", threshold: 10 },
+    },
+    {
+      id: "complete_1_game",
+      title: "Colecionador Completo (1 Jogo)",
+      description: "Conquiste todas as medalhas base de pelo menos 1 jogo da plataforma.",
+      rarity: "platina",
+      category: "exploracao",
+      iconName: "Award",
+      condition: { type: "completed_games_medals", threshold: 1 },
+    },
+    {
+      id: "complete_2_games",
+      title: "Colecionador Mestre (2 Jogos)",
+      description: "Conquiste todas as medalhas base de pelo menos 2 jogos diferentes.",
+      rarity: "diamante",
+      category: "exploracao",
+      iconName: "Gem",
+      condition: { type: "completed_games_medals", threshold: 2 },
+    },
+    {
+      id: "complete_10_games",
+      title: "Herói da Plataforma (10 Jogos)",
+      description: "Conquiste todas as medalhas base de pelo menos 10 jogos diferentes.",
+      rarity: "heroi",
+      category: "exploracao",
+      iconName: "Crown",
+      condition: { type: "completed_games_medals", threshold: 10 },
     },
   );
 
@@ -1264,6 +1410,42 @@ export function getGameMedalsProgress(
   };
 }
 
+export function getX1MedalsProgress(
+  unlockedMedals: Array<string | PlayerUnlockedMedal> = [],
+  customMedals?: MedalDefinition[],
+  events: Array<EventScopeMedalLink & { id?: string; scope?: string }> = [],
+): GameMedalsProgress {
+  const allMedals = getAllAvailableMedals(customMedals);
+  const x1EventIds = new Set<string>();
+  for (const ev of events) {
+    if (ev.id && ev.scope === "modo_x1") x1EventIds.add(ev.id);
+  }
+  for (const m of allMedals) {
+    if (m.eventId && m.eventRequirement?.type === "event_x1_wins") {
+      x1EventIds.add(m.eventId);
+    }
+  }
+
+  const medals = allMedals.filter((m) => isX1ExclusiveMedal(m, x1EventIds));
+  const unlockedSet = new Set<string>();
+  for (const entry of unlockedMedals) {
+    if (typeof entry === "string") {
+      if (entry) unlockedSet.add(entry);
+    } else if (entry?.medalId) {
+      unlockedSet.add(entry.medalId);
+    }
+  }
+
+  const earned = medals.filter((m) => unlockedSet.has(m.id)).length;
+  const total = medals.length;
+  return {
+    total,
+    earned,
+    remaining: Math.max(0, total - earned),
+    medals,
+  };
+}
+
 /** Selects the up to `limit` (default 6) highest-rarity / most valuable medals to feature in profile highlights */
 export function getTopShowcaseMedals(
   unlockedMedals: PlayerUnlockedMedal[],
@@ -1770,7 +1952,12 @@ export function isX1ExclusiveMedal(
 ): boolean {
   if (
     medal.condition.type === "x1_wins_total" ||
-    medal.condition.type === "x1_wins_weekly"
+    medal.condition.type === "x1_wins_weekly" ||
+    medal.condition.type === "x1_matches_total" ||
+    medal.condition.type === "x1_win_streak" ||
+    medal.condition.type === "x1_same_school_wins" ||
+    medal.condition.type === "x1_other_school_wins" ||
+    medal.condition.type === "x1_comeback_after_losses"
   ) {
     return true;
   }
@@ -1781,6 +1968,23 @@ export function isX1ExclusiveMedal(
     return true;
   }
   return false;
+}
+
+export function countCompletedBaseGames(
+  unlockedSet: Set<string>,
+  enabledSet: Set<GameId>,
+  allMedals: MedalDefinition[],
+): number {
+  let completed = 0;
+  for (const gId of enabledSet) {
+    const gameBaseMedals = allMedals.filter(
+      (m) => !m.isCustom && !m.eventId && (m.gameId === gId || m.condition.gameId === gId),
+    );
+    if (gameBaseMedals.length > 0 && gameBaseMedals.every((m) => unlockedSet.has(m.id))) {
+      completed += 1;
+    }
+  }
+  return completed;
 }
 
 /**
@@ -1916,6 +2120,38 @@ export function evaluatePlayerMedals(
       case "x1_wins_weekly":
         if (effectiveWeeklyX1Wins >= (cond.threshold ?? 5)) earned = true;
         break;
+
+      case "x1_matches_total":
+        if ((p.x1Matches ?? 0) >= (cond.threshold ?? 1)) earned = true;
+        break;
+
+      case "x1_win_streak":
+        if (Math.max(p.x1BestWinStreak ?? 0, p.x1WinStreak ?? 0) >= (cond.threshold ?? 2)) earned = true;
+        break;
+
+      case "x1_same_school_wins":
+        if ((p.x1SameSchoolWins ?? 0) >= (cond.threshold ?? 1)) earned = true;
+        break;
+
+      case "x1_other_school_wins":
+        if ((p.x1OtherSchoolWins ?? 0) >= (cond.threshold ?? 1)) earned = true;
+        break;
+
+      case "x1_comeback_after_losses":
+        if ((cond.threshold ?? 3) >= 5) {
+          if (p.x1Comeback5Unlocked) earned = true;
+        } else if (p.x1Comeback3Unlocked || p.x1Comeback5Unlocked) {
+          earned = true;
+        }
+        break;
+
+      case "completed_games_medals": {
+        const effectiveUnlocked = new Set(existingSet);
+        for (const awarded of newlyAwarded) effectiveUnlocked.add(awarded.id);
+        const completedCount = countCompletedBaseGames(effectiveUnlocked, enabledSet, allMedals);
+        if (completedCount >= (cond.threshold ?? 1)) earned = true;
+        break;
+      }
 
       case "distinct_games":
         if (distinctGames >= (cond.threshold ?? 3)) earned = true;
@@ -2295,6 +2531,69 @@ export function calculateMedalProgress(
       return {
         percent: pct,
         progressText: `${cur} de ${target} vitórias no X1 nesta semana`,
+      };
+    }
+    case "x1_matches_total": {
+      const cur = profile.x1Matches ?? 0;
+      const target = cond.threshold ?? 1;
+      const pct = Math.min(100, Math.round((cur / target) * 100));
+      return {
+        percent: pct,
+        progressText: `${cur} de ${target} partidas disputadas no X1`,
+      };
+    }
+    case "x1_win_streak": {
+      const cur = Math.max(profile.x1BestWinStreak ?? 0, profile.x1WinStreak ?? 0);
+      const target = cond.threshold ?? 2;
+      const pct = Math.min(100, Math.round((cur / target) * 100));
+      return {
+        percent: pct,
+        progressText: `Melhor sequência: ${cur} de ${target} vitórias seguidas no X1`,
+      };
+    }
+    case "x1_same_school_wins": {
+      const cur = profile.x1SameSchoolWins ?? 0;
+      const target = cond.threshold ?? 1;
+      const pct = Math.min(100, Math.round((cur / target) * 100));
+      return {
+        percent: pct,
+        progressText: `${cur} de ${target} vitórias contra colegas da mesma escola`,
+      };
+    }
+    case "x1_other_school_wins": {
+      const cur = profile.x1OtherSchoolWins ?? 0;
+      const target = cond.threshold ?? 1;
+      const pct = Math.min(100, Math.round((cur / target) * 100));
+      return {
+        percent: pct,
+        progressText: `${cur} de ${target} vitórias contra jogadores de outras escolas`,
+      };
+    }
+    case "x1_comeback_after_losses": {
+      const target = cond.threshold ?? 3;
+      const unlocked = target >= 5 ? Boolean(profile.x1Comeback5Unlocked) : Boolean(profile.x1Comeback3Unlocked || profile.x1Comeback5Unlocked);
+      const curLoss = profile.x1LossStreak ?? 0;
+      return {
+        percent: unlocked ? 100 : Math.min(95, Math.round((curLoss / target) * 100)),
+        progressText: unlocked
+          ? "Virada épica concluída!"
+          : `${Math.min(curLoss, target)}/${target} derrotas seguidas (vença a próxima!)`,
+      };
+    }
+    case "completed_games_medals": {
+      const target = cond.threshold ?? 1;
+      const enabledSet = getEnabledGameIdsSet(enabledGamesOverride);
+      const unlockedSet = new Set(
+        (profile.unlockedMedals ?? [])
+          .map((m: any) => (typeof m === "string" ? m : (m?.medalId ?? m?.id ?? "")))
+          .filter(Boolean),
+      );
+      const allM = getAllAvailableMedals();
+      const cur = countCompletedBaseGames(unlockedSet, enabledSet, allM);
+      const pct = Math.min(100, Math.round((cur / target) * 100));
+      return {
+        percent: pct,
+        progressText: `${cur} de ${target} jogos com todas as medalhas base conquistadas`,
       };
     }
     case "distinct_games": {

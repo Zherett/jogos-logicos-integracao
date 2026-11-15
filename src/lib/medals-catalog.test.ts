@@ -14,6 +14,7 @@ import {
   getDistinctGamesPlayed,
   getEffectivePlayerProgression,
   getGameMedalsProgress,
+  getX1MedalsProgress,
   getPlayerStreakDays,
   getTopShowcaseMedals,
   isFlawlessMatch,
@@ -52,10 +53,10 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
     const flawlessMedals = catalog.filter((m) => m.category === "jogo_perfeito");
     assert.equal(flawlessMedals.length, ALL_GAME_IDS.length);
 
-    // Valida medalhas de X1 (10 vitórias totais + 3 semanais)
+    // Valida medalhas de X1 (7 participação + 8 vitórias + 5 sequência + 6 escola = 26, + 3 semanais)
     const x1Total = catalog.filter((m) => m.category === "x1_vitorias");
     const x1Weekly = catalog.filter((m) => m.category === "x1_semanal");
-    assert.equal(x1Total.length, 10);
+    assert.equal(x1Total.length, 26);
     assert.equal(x1Weekly.length, 3);
   });
 
@@ -2186,5 +2187,109 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
     assert.ok(!ids.includes("game_logica_flawless"));
     assert.ok(!ids.includes("explore_1_game"));
     assert.ok(!ids.includes("custom_ev_common_matches"));
+  });
+
+  it("desbloqueia novas medalhas X1 (participação, vitórias reajustadas, sequência, escola e virada) e medalhas de completar jogos", () => {
+    const profileRichX1: PlayerProfile = {
+      id: "p_x1_rich",
+      nick: "MestreX1",
+      nickNormalized: "mestrex1",
+      full_name: "MESTRE X1",
+      school: "Escola A",
+      grade: null,
+      birthdate: "2012-05-10",
+      xp: 500,
+      seasonXp: 500,
+      level: 5,
+      wins: 100,
+      x1Matches: 300,
+      x1Wins: 100,
+      x1BestWinStreak: 20,
+      x1SameSchoolWins: 10,
+      x1OtherSchoolWins: 10,
+      x1Comeback3Unlocked: true,
+      x1Comeback5Unlocked: true,
+      weeklyX1Wins: 15,
+      matchesPlayed: 300,
+      distinctGamesPlayed: 0,
+      badges: [],
+      seasonId: 1,
+      unlockedMedals: [],
+    };
+
+    const awardedX1 = evaluatePlayerMedals({
+      profile: profileRichX1,
+      stats: [],
+      lastMatch: {
+        gameId: "logica",
+        score: 100,
+        level: 1,
+        correct: 5,
+        wrong: 0,
+        mode: "x1_online",
+      },
+      weeklyX1Wins: 15,
+    });
+    const x1Ids = awardedX1.map((m) => m.id);
+    for (const expectedId of [
+      "x1_matches_1",
+      "x1_matches_10",
+      "x1_matches_20",
+      "x1_matches_30",
+      "x1_matches_50",
+      "x1_matches_100",
+      "x1_matches_300",
+      "x1_wins_1",
+      "x1_wins_3",
+      "x1_wins_5",
+      "x1_wins_10",
+      "x1_wins_20",
+      "x1_wins_40",
+      "x1_wins_60",
+      "x1_wins_100",
+      "x1_streak_2",
+      "x1_streak_5",
+      "x1_streak_8",
+      "x1_streak_12",
+      "x1_streak_20",
+      "x1_same_school_1",
+      "x1_same_school_5",
+      "x1_same_school_10",
+      "x1_other_school_1",
+      "x1_other_school_5",
+      "x1_other_school_10",
+      "x1_secret_comeback_3",
+      "x1_secret_comeback_5",
+    ]) {
+      assert.ok(x1Ids.includes(expectedId), `faltou medalha X1 ${expectedId}`);
+    }
+    assert.ok(!x1Ids.includes("complete_1_game"));
+
+    // Testa medalhas de completar todas as medalhas base de 1, 2 e 10 jogos
+    const allBase = getAllAvailableMedals();
+    const baseMedalsFor = (gId: string) =>
+      allBase.filter((m) => !m.isCustom && !m.eventId && (m.gameId === gId || m.condition.gameId === gId));
+
+    const tenGames = ALL_GAME_IDS.slice(0, 10);
+    const unlocked10 = tenGames.flatMap((g) => baseMedalsFor(g).map((m) => ({ medalId: m.id, unlockedAt: "2026-11-15T00:00:00Z" })));
+    const awardedComplete = evaluatePlayerMedals({
+      profile: {
+        ...profileRichX1,
+        unlockedMedals: unlocked10,
+      },
+      stats: [],
+    });
+    const completeIds = awardedComplete.map((m) => m.id);
+    assert.ok(completeIds.includes("complete_1_game"));
+    assert.ok(completeIds.includes("complete_2_games"));
+    assert.ok(completeIds.includes("complete_10_games"));
+
+    // Testa progresso de medalhas do X1 (conquistadas x existentes)
+    const x1Progress = getX1MedalsProgress(
+      [{ medalId: "x1_wins_1", unlockedAt: "2026-11-15T00:00:00Z" }, "x1_matches_1"],
+    );
+    assert.equal(x1Progress.total, 31);
+    assert.equal(x1Progress.earned, 2);
+    assert.equal(x1Progress.remaining, 29);
   });
 });

@@ -80,7 +80,9 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
   const [guestPose, setGuestPose] = useState<RobotAvatarPose>("idle");
   const [banner, setBanner] = useState<string | null>(null);
   const [minadoFeedback, setMinadoFeedback] = useState<string | null>(null);
+  const [flippingCardId, setFlippingCardId] = useState<string | null>(null);
   const rewardSavedRef = useRef(false);
+  const finishedCloseAtRef = useRef<number | null>(null);
   const [myQuestionIdx, setMyQuestionIdx] = useState(() => me.currentQuestionIdx ?? 0);
   const [confirmForfeitOpen, setConfirmForfeitOpen] = useState(false);
 
@@ -251,20 +253,28 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
     myId,
   ]);
 
-  // Auto-close countdown (1 minute) on finished screen
+  // Auto-close countdown (1 minute anchored locally) on finished screen
   useEffect(() => {
-    if (room.status !== "finished") return;
+    if (room.status !== "finished") {
+      finishedCloseAtRef.current = null;
+      return;
+    }
+    if (!finishedCloseAtRef.current) {
+      finishedCloseAtRef.current = Date.now() + 60_000;
+    }
 
     const autoCloseTimer = window.setInterval(() => {
-      const autoCloseAt = room.autoCloseAt ?? (Date.now() + 60_000);
-      if (Date.now() >= autoCloseAt) {
+      const now = Date.now();
+      setNowTick(now);
+      const closeAt = finishedCloseAtRef.current ?? (now + 60_000);
+      if (now >= closeAt) {
         closeX1Room(room.code);
-        onExitX1();
+        onExitX1(true);
       }
     }, 1000);
 
     return () => window.clearInterval(autoCloseTimer);
-  }, [room.status, room.autoCloseAt, room.code, onExitX1]);
+  }, [room.status, room.code, onExitX1]);
 
   // Save XP / victory / defeat / draw in profile when match finishes
   useEffect(() => {
@@ -294,6 +304,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
         level: 1,
         correct: me.correct,
         wrong: me.wrong,
+        opponentSchool: opponent?.school ?? "",
       });
     }
   }, [room.status, room.winnerId, room.gameId, myId, me.score, me.correct, me.wrong, auth]);
@@ -404,34 +415,41 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
     [room.status, room.questionList, room.code, myQuestionIdx, myId, me.score, me.correct, me.wrong, stunned],
   );
 
-  // Campo Minado card click handler
+  // Campo Minado card click handler (com animação suave de virar a carta)
   const handleMinadoCardClick = (cardIdx: number) => {
     if (room.status !== "playing" || !room.minadoState) return;
     if (room.minadoState.currentTurnPlayerId !== myId) return;
     if (room.minadoState.activeQuestion && !room.minadoState.activeQuestion.answered) return;
+    if (flippingCardId) return;
 
     const card = room.minadoState.board[cardIdx];
     if (!card || room.minadoState.revealed[card.id]) return;
 
-    const res = openX1MinadoCard({
-      code: room.code,
-      playerId: myId,
-      cardId: card.id,
-    });
-    if (!res.room) return;
-    setRoom({ ...res.room });
+    setFlippingCardId(card.id);
+    playTone(520, 0.08, "triangle");
 
-    if (card.kind === "bonus") {
-      if (card.points > 0) {
-        playCorrect();
-        setMinadoFeedback(`🎁 Bônus Encontrado! +${card.points} pontos.`);
-        window.setTimeout(() => setMinadoFeedback(null), 2000);
-      } else {
-        playWrong();
-        setMinadoFeedback(`💥 MINA ATIVADA! ${card.points} pontos.`);
-        window.setTimeout(() => setMinadoFeedback(null), 2000);
+    window.setTimeout(() => {
+      setFlippingCardId(null);
+      const res = openX1MinadoCard({
+        code: room.code,
+        playerId: myId,
+        cardId: card.id,
+      });
+      if (!res.room) return;
+      setRoom({ ...res.room });
+
+      if (card.kind === "bonus") {
+        if (card.points > 0) {
+          playCorrect();
+          setMinadoFeedback(`🎁 Bônus Encontrado! +${card.points} pontos.`);
+          window.setTimeout(() => setMinadoFeedback(null), 2000);
+        } else {
+          playWrong();
+          setMinadoFeedback(`💥 MINA ATIVADA! ${card.points} pontos.`);
+          window.setTimeout(() => setMinadoFeedback(null), 2000);
+        }
       }
-    }
+    }, 320);
   };
 
   // Campo Minado question answer handler
@@ -568,8 +586,8 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
   if (room.status === "finished") {
     const iWon = room.winnerId === myId;
     const isDraw = room.winnerId === "draw";
-    const autoCloseAt = room.autoCloseAt ?? (Date.now() + 60_000);
-    const autoCloseRem = Math.max(0, Math.ceil((autoCloseAt - Date.now()) / 1000));
+    const autoCloseAt = finishedCloseAtRef.current ?? (nowTick + 60_000);
+    const autoCloseRem = Math.max(0, Math.ceil((autoCloseAt - nowTick) / 1000));
 
     return (
       <div className="mx-auto max-w-2xl rounded-3xl border-2 bg-card p-6 sm:p-8 shadow-2xl space-y-6 animate-pop-in">
@@ -790,69 +808,70 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
           </div>
         )}
 
-        {/* MODAL / OVERLAY DA QUESTÃO DE 20S */}
-        {isQActive && activeQ && (
+        {/* MODAL / OVERLAY DA QUESTÃO DE 20S (APENAS PARA QUEM ESTÁ RESPONDENDO) */}
+        {isQActive && activeQ && isMyTurn && (
           <div className="rounded-3xl border-2 border-primary/50 bg-gradient-to-b from-primary/10 via-card to-card p-5 sm:p-6 shadow-xl space-y-4 animate-pop-in">
-            {isMyTurn ? (
-              <>
-                <div className="flex items-center justify-between gap-2 border-b pb-3">
-                  <div className="flex items-center gap-2">
-                    <span className="rounded-full bg-primary/20 px-2.5 py-0.5 text-xs font-black text-primary">
-                      DESAFIO DE 20 SEGUNDOS
-                    </span>
-                    <span className="text-xs text-muted-foreground">Vale +5 pts (erro: −3 pts)</span>
-                  </div>
-                  <div className="flex items-center gap-1 font-mono text-sm font-black text-amber-500">
-                    <Clock className="h-4 w-4" /> {qSecsLeft}s
-                  </div>
-                </div>
-
-                <div className="py-2 text-center space-y-2">
-                  {activeQ.shape && (
-                    <div className="my-2 grid place-items-center">
-                      <ShapeSvg shape={activeQ.shape} color="azul" size={2} />
-                    </div>
-                  )}
-                  <p className="font-display text-lg sm:text-xl font-extrabold text-foreground">
-                    {activeQ.prompt || activeQ.question}
-                  </p>
-                  {activeQ.expr && (
-                    <p className="font-mono text-2xl sm:text-3xl font-black text-primary">
-                      {activeQ.expr}
-                    </p>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-2 gap-3 pt-2">
-                  {activeQ.options.map((opt) => (
-                    <Button
-                      key={opt}
-                      type="button"
-                      size="lg"
-                      onClick={() => handleMinadoAnswer(opt)}
-                      className="h-14 rounded-2xl font-display text-base font-extrabold hover:scale-[1.02] transition-transform"
-                    >
-                      {opt}
-                    </Button>
-                  ))}
-                </div>
-              </>
-            ) : (
-              <div className="py-6 text-center space-y-3">
-                <Shield className="h-12 w-12 text-primary mx-auto animate-pulse" />
-                <h3 className="font-display text-lg sm:text-xl font-black text-foreground">
-                  🛡️ Oponente resolvendo desafio... [{qSecsLeft}s restantes]
-                </h3>
-                <p className="text-xs text-muted-foreground max-w-sm mx-auto">
-                  A questão está visível apenas para o oponente neste turno. Aguarde a resposta dele!
-                </p>
+            <div className="flex items-center justify-between gap-2 border-b pb-3">
+              <div className="flex items-center gap-2">
+                <span className="rounded-full bg-primary/20 px-2.5 py-0.5 text-xs font-black text-primary">
+                  DESAFIO DE 20 SEGUNDOS
+                </span>
+                <span className="text-xs text-muted-foreground">Vale +5 pts (erro: −3 pts)</span>
               </div>
-            )}
+              <div className="flex items-center gap-1 font-mono text-sm font-black text-amber-500">
+                <Clock className="h-4 w-4" /> {qSecsLeft}s
+              </div>
+            </div>
+
+            <div className="py-2 text-center space-y-2">
+              {activeQ.shape && (
+                <div className="my-2 grid place-items-center">
+                  <ShapeSvg shape={activeQ.shape} color="azul" size={2} />
+                </div>
+              )}
+              <p className="font-display text-lg sm:text-xl font-extrabold text-foreground">
+                {activeQ.prompt || activeQ.question}
+              </p>
+              {activeQ.expr && (
+                <p className="font-mono text-2xl sm:text-3xl font-black text-primary">
+                  {activeQ.expr}
+                </p>
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 pt-2">
+              {activeQ.options.map((opt) => (
+                <Button
+                  key={opt}
+                  type="button"
+                  size="lg"
+                  onClick={() => handleMinadoAnswer(opt)}
+                  className="h-14 rounded-2xl font-display text-base font-extrabold hover:scale-[1.02] transition-transform"
+                >
+                  {opt}
+                </Button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* FAIXA COMPACTA PARA QUEM AGUARDA (MANTÉM O TABULEIRO VISÍVEL ABAIXO) */}
+        {isQActive && activeQ && !isMyTurn && (
+          <div className="flex items-center justify-between gap-3 rounded-2xl border border-primary/35 bg-primary/10 px-4 py-2.5 text-xs sm:text-sm font-bold text-foreground">
+            <div className="flex items-center gap-2 min-w-0">
+              <Shield className="h-4 w-4 text-primary shrink-0 animate-pulse" />
+              <span className="truncate">
+                {opponent?.nick ?? "Oponente"} está resolvendo um desafio... Acompanhe no tabuleiro abaixo.
+              </span>
+            </div>
+            <span className="inline-flex items-center gap-1 rounded-full bg-background/80 px-2.5 py-0.5 font-mono text-xs font-black text-amber-500 shrink-0">
+              <Clock className="h-3.5 w-3.5" /> {qSecsLeft}s
+            </span>
           </div>
         )}
 
         {/* GRADE DINÂMICA DO CAMPO MINADO (4x4, 6x6 OU 8x8) */}
-        {!isQActive && (
+        {(!isQActive || !isMyTurn) && (
           <div className={`grid ${gridColsClass} gap-1.5 sm:gap-2.5 py-2`}>
             {mState.board.map((card, idx) => {
               const rev = mState.revealed[card.id];
@@ -901,16 +920,19 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
                 );
               }
 
+              const isFlipping = flippingCardId === card.id;
               return (
                 <button
                   key={card.id}
                   type="button"
-                  disabled={!isMyTurn}
+                  disabled={!isMyTurn || isQActive || flippingCardId !== null}
                   onClick={() => handleMinadoCardClick(idx)}
                   className={`${cardSizeClass} border-2 flex flex-col items-center justify-center text-center transition-all ${
-                    isMyTurn
-                      ? "border-primary/50 bg-gradient-to-br from-secondary/80 to-card hover:border-primary hover:scale-[1.03] hover:shadow-lg cursor-pointer"
-                      : "border-border bg-secondary/30 opacity-70 cursor-not-allowed"
+                    isFlipping
+                      ? "animate-card-flip border-primary bg-primary/20 shadow-lg"
+                      : isMyTurn && !isQActive
+                        ? "border-primary/50 bg-gradient-to-br from-secondary/80 to-card hover:border-primary hover:scale-[1.03] hover:shadow-lg cursor-pointer"
+                        : "border-border bg-secondary/30 opacity-70 cursor-not-allowed"
                   }`}
                 >
                   <HelpCircle className={gridSize === 8 ? "h-4 w-4 text-primary/70" : "h-5 w-5 sm:h-6 sm:w-6 text-primary/70"} />

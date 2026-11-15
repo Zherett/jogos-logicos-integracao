@@ -14,6 +14,7 @@ import {
   Zap,
   Lock,
   Clock,
+  Award,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -21,6 +22,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ALL_GAME_IDS, GAME_NAMES, type GameId } from "@/lib/game-storage";
 import { usePlayerAuth } from "@/lib/player-auth";
+import {
+  getX1MedalsProgress,
+  type PlayerUnlockedMedal,
+} from "@/lib/medals-catalog";
+import { loadAdminConfig } from "@/lib/game-codes";
+import { loadSpecialEvents, loadRecurringEvents } from "@/lib/custom-events";
 import {
   ageFrom,
   getAgeStageInfo,
@@ -445,9 +452,37 @@ export function X1ArenaDialog({
     >
       <DialogContent className="max-h-[92vh] overflow-y-auto rounded-3xl sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 font-display text-2xl font-extrabold">
-            <Swords className="h-6 w-6 text-accent" /> Arena de Desafio X1 (1 vs 1)
-          </DialogTitle>
+          <div className="flex flex-wrap items-start justify-between gap-3 pr-6">
+            <DialogTitle className="flex items-center gap-2 font-display text-2xl font-extrabold">
+              <Swords className="h-6 w-6 text-accent" /> Arena de Desafio X1 (1 vs 1)
+            </DialogTitle>
+            {(() => {
+              const cfg = loadAdminConfig();
+              const activeEvs = [...loadSpecialEvents(), ...loadRecurringEvents()];
+              const unlocked = (profile.unlockedMedals ?? []) as Array<string | PlayerUnlockedMedal>;
+              const x1Prog = getX1MedalsProgress(unlocked, cfg.customMedals, activeEvs);
+              return (
+                <div className="shrink-0 rounded-2xl border border-amber-500/30 bg-amber-500/5 px-3 py-1.5 text-right select-none">
+                  <div className="flex items-center justify-end gap-1 text-[10px] font-black uppercase tracking-wider text-amber-600 dark:text-amber-400">
+                    <Award className="h-3.5 w-3.5" /> Medalhas do X1
+                  </div>
+                  <div className="mt-0.5 flex items-baseline justify-end gap-1.5">
+                    <span className="font-display text-base font-black text-foreground">
+                      {x1Prog.earned}
+                    </span>
+                    <span className="text-xs font-bold text-muted-foreground">
+                      / {x1Prog.total}
+                    </span>
+                  </div>
+                  <div className="text-[10px] font-semibold text-muted-foreground">
+                    {x1Prog.remaining === 0
+                      ? "Todas conquistadas!"
+                      : `Faltam ${x1Prog.remaining}`}
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
         </DialogHeader>
 
         {/* Modalidades Disponíveis na Arena X1 */}
@@ -773,6 +808,32 @@ export function X1ArenaDialog({
                     </span>
                   </div>
 
+                  {/* Seletor do jogo usado ao clicar em Desafiar */}
+                  <div className="space-y-1.5 rounded-xl bg-secondary/35 p-2.5 border border-border/60">
+                    <div className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                      Jogo do Desafio: <span className="text-foreground">{GAME_NAMES[selectedGame]}</span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {allowedX1Games.map((id) => {
+                        const active = selectedGame === id;
+                        return (
+                          <button
+                            key={id}
+                            type="button"
+                            onClick={() => setSelectedGame(id)}
+                            className={`rounded-lg px-2.5 py-1 text-xs font-bold transition-all border ${
+                              active
+                                ? "border-primary bg-primary text-primary-foreground shadow-sm"
+                                : "border-border bg-background text-muted-foreground hover:text-foreground hover:bg-secondary/60"
+                            }`}
+                          >
+                            {GAME_NAMES[id]}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
                   <div className="min-h-[160px] flex flex-col justify-center">
                     {otherOnlinePlayers.length === 0 ? (
                       <div className="rounded-xl bg-secondary/40 p-6 text-center text-xs text-muted-foreground">
@@ -805,7 +866,7 @@ export function X1ArenaDialog({
                               onClick={() => handleCreateRoom(p.playerId, p.nick)}
                               className="rounded-xl font-bold shrink-0"
                             >
-                              <Swords className="mr-1.5 h-3.5 w-3.5 text-accent" /> Desafiar
+                              <Swords className="mr-1.5 h-3.5 w-3.5 text-accent" /> Desafiar ({GAME_NAMES[selectedGame]})
                             </Button>
                           </div>
                         ))}

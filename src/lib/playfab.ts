@@ -238,6 +238,13 @@ export interface PlayerProfile {
   x1Losses?: number;
   x1Draws?: number;
   x1Matches?: number;
+  x1WinStreak?: number;
+  x1BestWinStreak?: number;
+  x1LossStreak?: number;
+  x1Comeback3Unlocked?: boolean;
+  x1Comeback5Unlocked?: boolean;
+  x1SameSchoolWins?: number;
+  x1OtherSchoolWins?: number;
   weeklyX1Wins?: number;
   weeklyX1WeekKey?: string;
   avatar?: PlayerAvatarConfig;
@@ -3493,6 +3500,34 @@ export async function syncStudentRosterFromPlayFab(
             })(),
             wins: Math.max(parsed.wins ?? 0, existing?.profile.wins ?? 0, udProf?.wins ?? 0),
             x1Wins: Math.max(parsed.x1Wins ?? 0, existing?.profile.x1Wins ?? 0, udProf?.x1Wins ?? 0),
+            x1Matches: Math.max(parsed.x1Matches ?? 0, existing?.profile.x1Matches ?? 0, udProf?.x1Matches ?? 0),
+            x1WinStreak: Math.max(parsed.x1WinStreak ?? 0, existing?.profile.x1WinStreak ?? 0, udProf?.x1WinStreak ?? 0),
+            x1BestWinStreak: Math.max(
+              parsed.x1BestWinStreak ?? 0,
+              existing?.profile.x1BestWinStreak ?? 0,
+              udProf?.x1BestWinStreak ?? 0,
+            ),
+            x1LossStreak: parsed.x1LossStreak ?? existing?.profile.x1LossStreak ?? udProf?.x1LossStreak ?? 0,
+            x1Comeback3Unlocked: Boolean(
+              parsed.x1Comeback3Unlocked ||
+                existing?.profile.x1Comeback3Unlocked ||
+                udProf?.x1Comeback3Unlocked,
+            ),
+            x1Comeback5Unlocked: Boolean(
+              parsed.x1Comeback5Unlocked ||
+                existing?.profile.x1Comeback5Unlocked ||
+                udProf?.x1Comeback5Unlocked,
+            ),
+            x1SameSchoolWins: Math.max(
+              parsed.x1SameSchoolWins ?? 0,
+              existing?.profile.x1SameSchoolWins ?? 0,
+              udProf?.x1SameSchoolWins ?? 0,
+            ),
+            x1OtherSchoolWins: Math.max(
+              parsed.x1OtherSchoolWins ?? 0,
+              existing?.profile.x1OtherSchoolWins ?? 0,
+              udProf?.x1OtherSchoolWins ?? 0,
+            ),
             weeklyX1Wins: Math.max(
               parsed.weeklyX1Wins ?? 0,
               existing?.profile.weeklyX1Wins ?? 0,
@@ -4615,6 +4650,7 @@ export async function playfabRecordMatch(args: {
   tournamentPoints?: number;
   tournamentRankId?: string;
   isDraw?: boolean;
+  opponentSchool?: string;
 }): Promise<StoredAccount | null> {
   const cfg = checkAndApplyScheduledReset();
   const session = loadStoredSession();
@@ -4700,6 +4736,27 @@ export async function playfabRecordMatch(args: {
     acc.profile.x1Matches = (acc.profile.x1Matches ?? 0) + 1;
     if (won) {
       acc.profile.x1Wins = (acc.profile.x1Wins ?? 0) + 1;
+      const nextStreak = (acc.profile.x1WinStreak ?? 0) + 1;
+      acc.profile.x1WinStreak = nextStreak;
+      acc.profile.x1BestWinStreak = Math.max(acc.profile.x1BestWinStreak ?? 0, nextStreak);
+
+      // Verifica medalhas secretas de virada após 3 ou 5 derrotas seguidas no X1
+      const prevLosses = acc.profile.x1LossStreak ?? 0;
+      if (prevLosses >= 3) acc.profile.x1Comeback3Unlocked = true;
+      if (prevLosses >= 5) acc.profile.x1Comeback5Unlocked = true;
+      acc.profile.x1LossStreak = 0;
+
+      // Vitórias contra mesma escola vs outra escola
+      const mySchool = (acc.profile.school ?? "").trim().toLowerCase();
+      const oppSchool = (args.opponentSchool ?? "").trim().toLowerCase();
+      if (mySchool && oppSchool) {
+        if (mySchool === oppSchool) {
+          acc.profile.x1SameSchoolWins = (acc.profile.x1SameSchoolWins ?? 0) + 1;
+        } else {
+          acc.profile.x1OtherSchoolWins = (acc.profile.x1OtherSchoolWins ?? 0) + 1;
+        }
+      }
+
       if (acc.profile.weeklyX1WeekKey !== currentWeekKey) {
         acc.profile.weeklyX1Wins = 1;
         acc.profile.weeklyX1WeekKey = currentWeekKey;
@@ -4708,8 +4765,12 @@ export async function playfabRecordMatch(args: {
       }
     } else if (args.isDraw) {
       acc.profile.x1Draws = (acc.profile.x1Draws ?? 0) + 1;
+      acc.profile.x1WinStreak = 0;
+      acc.profile.x1LossStreak = 0;
     } else {
       acc.profile.x1Losses = (acc.profile.x1Losses ?? 0) + 1;
+      acc.profile.x1WinStreak = 0;
+      acc.profile.x1LossStreak = (acc.profile.x1LossStreak ?? 0) + 1;
     }
     const x1CapRes = applyDailyXpCap({
       rawEarnedXp: won ? 25 : 10,

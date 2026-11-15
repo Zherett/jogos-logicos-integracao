@@ -694,9 +694,10 @@ describe("Arena de Desafio X1 Online (1v1 Versus Mode)", () => {
     const earlyWo = forfeitX1DisconnectedOpponent(r.code, "h_sync", X1_MATCH_DISCONNECT_TIMEOUT_MS);
     assert.equal(earlyWo, null);
 
-    // Heartbeat de partida incrementa revision e atualiza lastSeenAt
+    // Heartbeat de partida atualiza lastSeenAt sem incrementar revision (evita sobrescrever respostas)
     const prevRev = started.revision ?? 1;
     const touched = touchX1MatchHeartbeat(r.code, "g_sync")!;
-    assert.ok((touched.revision ?? 0) > prevRev);
+    assert.equal(touched.revision ?? 1, prevRev);
+    assert.ok((touched.guest?.lastSeenAt ?? 0) > 0);
   });
 });
