@@ -88,6 +88,26 @@ export interface ResetHistoryEntry {
   reason?: string;
 }
 
+export type X1MinadoGridSize = 4 | 6 | 8;
+
+export const X1_SUPPORTED_GAME_IDS: readonly GameId[] = [
+  "rpg",
+  "logica",
+  "porcentagem",
+  "minado",
+] as const;
+
+export function sanitizeX1AvailableGames(games?: readonly GameId[] | null): GameId[] {
+  const allowed = new Set<GameId>(X1_SUPPORTED_GAME_IDS);
+  const filtered = (games ?? []).filter((g): g is GameId => allowed.has(g));
+  return filtered.length > 0 ? Array.from(new Set(filtered)) : [...X1_SUPPORTED_GAME_IDS];
+}
+
+export function sanitizeX1MinadoGridSize(size?: number | null): X1MinadoGridSize {
+  if (size === 4 || size === 6 || size === 8) return size;
+  return 6;
+}
+
 export interface PlatformNoticeSlide {
   id: string;
   title: string;
@@ -163,10 +183,12 @@ export interface PlatformAdminConfig {
   x1CloseHour: number;
   /** When true, ADM forces Arena X1 open regardless of the clock hour. */
   x1ForceOpen: boolean;
-  /** 1 to 3 games available for X1 Arena battles (default: 3 games with rotation). */
+  /** Games available for X1 Arena battles (strictly restricted to X1_SUPPORTED_GAME_IDS). */
   x1AvailableGames?: GameId[];
   /** Rotation interval in minutes for X1 Arena games (default: 10). */
   x1RotationMinutes?: number;
+  /** Campo Minado X1 grid size (4 = 4x4, 6 = 6x6 default, 8 = 8x8). */
+  x1MinadoGridSize?: 4 | 6 | 8;
   /** Whether the Weekly Ranked Tournament is enabled (Level 3+). */
   tournamentEnabled: boolean;
   /** Optional ADM override for the Weekly Tournament game (`null` = automatic weekly rotation). */
@@ -277,6 +299,7 @@ export const DEFAULT_ADMIN_CONFIG: PlatformAdminConfig = {
   x1ForceOpen: false,
   x1AvailableGames: ["rpg", "logica", "porcentagem", "minado"],
   x1RotationMinutes: 10,
+  x1MinadoGridSize: 6,
   tournamentEnabled: true,
   tournamentGameOverride: null,
   dailyXpCap: 1000,

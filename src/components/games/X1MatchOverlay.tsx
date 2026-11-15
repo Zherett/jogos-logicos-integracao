@@ -20,15 +20,19 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ShapeSvg } from "./ShapeSvg";
+import { RobotAvatar, type RobotAvatarPose } from "./RobotAvatar";
 import { GAME_NAMES, saveLastMatch, updateBest } from "@/lib/game-storage";
 import { usePlayerAuth } from "@/lib/player-auth";
 import { type ClashQuestion } from "@/lib/rpg-content";
+import { resolvePlayerAvatar } from "@/lib/avatar";
+import { getX1ArenaTheme } from "@/lib/x1-arenas";
 import { playCorrect, playTone, playWrong } from "@/lib/sound";
 import {
   X1_MINADO_TURN_SELECT_TIMEOUT_SEC,
   answerX1MinadoQuestion,
   closeX1Room,
   finishX1RoomByTimeout,
+  forfeitX1DisconnectedOpponent,
   forfeitX1Match,
   generateDeterministicRobotClashQuestion,
   getX1Room,
@@ -39,6 +43,7 @@ import {
   syncX1WithPlayFabCloud,
   timeoutX1MinadoQuestion,
   timeoutX1MinadoTurnSelection,
+  touchX1MatchHeartbeat,
   updateX1PlayerProgress,
   type X1Room,
 } from "@/lib/x1-challenge";
@@ -61,23 +66,33 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
   const me = isHost ? room.host : (room.guest ?? room.host);
   const opponent = isHost ? room.guest : room.host;
 
-  const [secondsLeft, setSecondsLeft] = useState(initialRoom.durationSec);
+  const [secondsLeft, setSecondsLeft] = useState(
+    initialRoom.durationSec <= 0 ? 0 : initialRoom.durationSec,
+  );
   const [nowTick, setNowTick] = useState(() => Date.now());
   const [question, setQuestion] = useState<ClashQuestion>(() =>
     generateDeterministicRobotClashQuestion(initialRoom.seed, me.correct + me.wrong),
   );
   const [stunned, setStunned] = useState(false);
+  const [answerCooling, setAnswerCooling] = useState(false);
+  const answerLockRef = useRef(false);
+  const [hostPose, setHostPose] = useState<RobotAvatarPose>("idle");
+  const [guestPose, setGuestPose] = useState<RobotAvatarPose>("idle");
   const [banner, setBanner] = useState<string | null>(null);
   const [minadoFeedback, setMinadoFeedback] = useState<string | null>(null);
   const rewardSavedRef = useRef(false);
   const [myQuestionIdx, setMyQuestionIdx] = useState(() => me.currentQuestionIdx ?? 0);
   const [confirmForfeitOpen, setConfirmForfeitOpen] = useState(false);
 
+  const arenaTheme = getX1ArenaTheme(room.seed);
+  const hostAvatar = resolvePlayerAvatar(room.host.avatar, room.seed, "left");
+  const guestAvatar = resolvePlayerAvatar(room.guest?.avatar, room.seed, "right");
+
   // Cleanup imediato por desistência ao recarregar ou fechar a aba durante partida ativa
   useEffect(() => {
     const handleBeforeUnload = () => {
       if (room.status === "playing" || room.status === "countdown") {
-        forfeitX1Match(room.code, myId);
+        forfeitX1Match(room.code, myId, true);
       }
     };
     window.addEventListener("beforeunload", handleBeforeUnload);
@@ -86,6 +101,18 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
       window.removeEventListener("beforeunload", handleBeforeUnload);
       window.removeEventListener("pagehide", handleBeforeUnload);
     };
+  }, [room.status, room.code, myId]);
+
+  // Heartbeat contínuo na partida para detectar desconexão real do oponente
+  useEffect(() => {
+    if (room.status !== "playing") return;
+    touchX1MatchHeartbeat(room.code, myId);
+    const hb = window.setInterval(() => {
+      touchX1MatchHeartbeat(room.code, myId);
+      const wo = forfeitX1DisconnectedOpponent(room.code, myId);
+      if (wo) setRoom({ ...wo });
+    }, 5000);
+    return () => window.clearInterval(hb);
   }, [room.status, room.code, myId]);
 
   const handleRequestExit = () => {
@@ -136,7 +163,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
     return () => window.clearInterval(interval);
   }, [room.status, room.code, room.countdownEndsAt]);
 
-  // Main match timer
+  // Main match timer (decrescente quando durationSec > 0; crescente sem limite no Campo Minado)
   useEffect(() => {
     if (room.status !== "playing") return;
 
@@ -144,7 +171,13 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
       const now = Date.now();
       setNowTick(now);
       const start = room.startedAt ?? room.createdAt;
-      const elapsed = Math.floor((now - start) / 1000);
+      const elapsed = Math.max(0, Math.floor((now - start) / 1000));
+
+      if (room.durationSec <= 0) {
+        setSecondsLeft(elapsed);
+        return;
+      }
+
       const rem = Math.max(0, room.durationSec - elapsed);
       setSecondsLeft(rem);
 
@@ -266,18 +299,47 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
     }
   }, [room.status, room.winnerId, room.gameId, myId, me.score, me.correct, me.wrong, auth]);
 
-  // Robot battle answer handler
+  // Robot battle answer handler com trava anti-duplo-clique
   const handleRobotAnswer = useCallback(
     (chosen: boolean) => {
-      if (room.status !== "playing" || stunned) return;
+      if (room.status !== "playing" || stunned || answerCooling || answerLockRef.current) return;
+      answerLockRef.current = true;
+      setAnswerCooling(true);
+
       const isCorrect = chosen === question.answer;
 
       if (!isCorrect) {
         playWrong();
         setStunned(true);
-        window.setTimeout(() => setStunned(false), 800);
+        if (isHost) {
+          setHostPose("hit");
+          setGuestPose("attack");
+        } else {
+          setGuestPose("hit");
+          setHostPose("attack");
+        }
+        window.setTimeout(() => {
+          setStunned(false);
+          setAnswerCooling(false);
+          answerLockRef.current = false;
+          setHostPose("idle");
+          setGuestPose("idle");
+        }, 800);
       } else {
         playCorrect();
+        if (isHost) {
+          setHostPose("attack");
+          setGuestPose("hit");
+        } else {
+          setGuestPose("attack");
+          setHostPose("hit");
+        }
+        window.setTimeout(() => {
+          setAnswerCooling(false);
+          answerLockRef.current = false;
+          setHostPose("idle");
+          setGuestPose("idle");
+        }, 380);
       }
 
       const res = submitX1RobotClashAnswer({
@@ -298,7 +360,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
       const nextQ = generateDeterministicRobotClashQuestion(room.seed, nextStep);
       setQuestion(nextQ);
     },
-    [room.status, room.code, room.seed, stunned, question, myId, me.correct, me.wrong],
+    [room.status, room.code, room.seed, stunned, answerCooling, question, myId, isHost, me.correct, me.wrong],
   );
 
   // Score-race deterministic question answer handler (Logica / Porcentagem)
@@ -630,6 +692,18 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
   // ==========================================
   if (room.gameId === "minado" && room.minadoState) {
     const mState = room.minadoState;
+    const gridSize =
+      mState.gridSize ??
+      room.minadoGridSize ??
+      (mState.board.length >= 64 ? 8 : mState.board.length >= 36 ? 6 : 4);
+    const gridColsClass =
+      gridSize === 8 ? "grid-cols-8" : gridSize === 6 ? "grid-cols-6" : "grid-cols-4";
+    const cardSizeClass =
+      gridSize === 8
+        ? "h-11 sm:h-14 rounded-xl p-1"
+        : gridSize === 6
+          ? "h-14 sm:h-16 rounded-xl p-1.5"
+          : "h-20 sm:h-24 rounded-2xl p-2";
     const isMyTurn = mState.currentTurnPlayerId === myId;
     const activeQ = mState.activeQuestion;
     const isQActive = Boolean(activeQ && !activeQ.answered);
@@ -645,10 +719,13 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
       : 0;
 
     return (
-      <div className="mx-auto max-w-3xl rounded-3xl border-2 bg-card p-4 sm:p-6 shadow-xl space-y-4">
+      <div className={`mx-auto max-w-3xl rounded-3xl border-2 p-4 sm:p-6 shadow-xl space-y-4 ${arenaTheme.containerClass}`}>
         {/* Header Superior com Pontuação e Vez */}
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border bg-secondary/40 px-4 py-2.5">
+        <div className={`flex flex-wrap items-center justify-between gap-2 rounded-2xl border px-4 py-2.5 ${arenaTheme.headerClass}`}>
           <div className="flex items-center gap-2 flex-wrap">
+            <span className="rounded-full bg-background/60 px-2.5 py-0.5 text-[10px] font-extrabold border">
+              {arenaTheme.badgeText} • {gridSize}×{gridSize}
+            </span>
             <span className="rounded-xl bg-sky-500/15 px-3 py-1 font-display text-xs font-extrabold text-sky-500">
               🔵 {room.host.nick}: {room.host.score} pts ({room.host.wrong} erros)
             </span>
@@ -659,8 +736,11 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
           </div>
 
           <div className="flex items-center gap-3">
-            <span className="inline-flex items-center gap-1 rounded-full bg-card px-3 py-1 font-mono text-xs font-extrabold border">
-              <Timer className="h-3.5 w-3.5 text-accent" /> {mins}:{secs}
+            <span
+              title="Tempo decorrido da partida (sem limite)"
+              className="inline-flex items-center gap-1 rounded-full bg-card px-3 py-1 font-mono text-xs font-extrabold border"
+            >
+              <Timer className="h-3.5 w-3.5 text-emerald-500" /> {mins}:{secs}
             </span>
             <Button
               type="button"
@@ -772,9 +852,9 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
           </div>
         )}
 
-        {/* GRADE DO CAMPO MINADO (4x4 = 16 CARTAS) */}
+        {/* GRADE DINÂMICA DO CAMPO MINADO (4x4, 6x6 OU 8x8) */}
         {!isQActive && (
-          <div className="grid grid-cols-4 gap-2.5 sm:gap-3.5 py-2">
+          <div className={`grid ${gridColsClass} gap-1.5 sm:gap-2.5 py-2`}>
             {mState.board.map((card, idx) => {
               const rev = mState.revealed[card.id];
               const isRevealed = Boolean(rev);
@@ -787,7 +867,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
                 return (
                   <div
                     key={card.id}
-                    className={`h-20 sm:h-24 rounded-2xl border-2 flex flex-col items-center justify-center p-2 text-center transition-all ${
+                    className={`${cardSizeClass} border-2 flex flex-col items-center justify-center text-center transition-all ${
                       isMine
                         ? "border-destructive bg-destructive/15 text-destructive"
                         : isBonus
@@ -797,25 +877,27 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
                   >
                     {isMine ? (
                       <>
-                        <Bomb className="h-6 w-6 sm:h-7 sm:w-7 animate-bounce" />
-                        <span className="font-mono text-xs font-extrabold mt-1">{card.points} pts</span>
+                        <Bomb className={gridSize === 8 ? "h-4 w-4" : "h-5 w-5 sm:h-6 sm:w-6 animate-bounce"} />
+                        <span className="font-mono text-[10px] sm:text-xs font-extrabold">{card.points}</span>
                       </>
                     ) : isBonus ? (
                       <>
-                        <Gift className="h-6 w-6 sm:h-7 sm:w-7" />
-                        <span className="font-mono text-xs font-extrabold mt-1">+{card.points} pts</span>
+                        <Gift className={gridSize === 8 ? "h-4 w-4" : "h-5 w-5 sm:h-6 sm:w-6"} />
+                        <span className="font-mono text-[10px] sm:text-xs font-extrabold">+{card.points}</span>
                       </>
                     ) : (
                       <>
-                        <Check className="h-5 w-5 sm:h-6 sm:w-6" />
-                        <span className="font-mono text-[11px] font-extrabold mt-1 truncate max-w-full">
+                        <Check className={gridSize === 8 ? "h-4 w-4" : "h-5 w-5"} />
+                        <span className="font-mono text-[9px] sm:text-[11px] font-extrabold truncate max-w-full">
                           {rev.resultText}
                         </span>
                       </>
                     )}
-                    <span className="text-[9px] font-bold opacity-75">
-                      {isHostRevealed ? "🔵 Azul" : "🔴 Vermelho"}
-                    </span>
+                    {gridSize < 8 && (
+                      <span className="text-[9px] font-bold opacity-75">
+                        {isHostRevealed ? "🔵" : "🔴"}
+                      </span>
+                    )}
                   </div>
                 );
               }
@@ -826,15 +908,15 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
                   type="button"
                   disabled={!isMyTurn}
                   onClick={() => handleMinadoCardClick(idx)}
-                  className={`h-20 sm:h-24 rounded-2xl border-2 flex flex-col items-center justify-center p-2 text-center transition-all ${
+                  className={`${cardSizeClass} border-2 flex flex-col items-center justify-center text-center transition-all ${
                     isMyTurn
                       ? "border-primary/50 bg-gradient-to-br from-secondary/80 to-card hover:border-primary hover:scale-[1.03] hover:shadow-lg cursor-pointer"
                       : "border-border bg-secondary/30 opacity-70 cursor-not-allowed"
                   }`}
                 >
-                  <HelpCircle className="h-6 w-6 sm:h-7 sm:w-7 text-primary/70" />
-                  <span className="text-[10px] font-bold text-muted-foreground mt-1">
-                    Carta #{idx + 1}
+                  <HelpCircle className={gridSize === 8 ? "h-4 w-4 text-primary/70" : "h-5 w-5 sm:h-6 sm:w-6 text-primary/70"} />
+                  <span className="text-[9px] sm:text-[10px] font-bold text-muted-foreground mt-0.5">
+                    {card.label ?? `#${idx + 1}`}
                   </span>
                 </button>
               );
@@ -851,10 +933,13 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
   // ==========================================
   if (room.gameId === "rpg") {
     return (
-      <div className="rounded-3xl border-2 bg-card p-4 sm:p-6 shadow-xl space-y-5">
+      <div className={`rounded-3xl border-2 p-4 sm:p-6 shadow-xl space-y-5 ${arenaTheme.containerClass}`}>
         {/* Top Header */}
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border bg-secondary/40 px-4 py-3">
-          <div className="flex items-center gap-2">
+        <div className={`flex flex-wrap items-center justify-between gap-2 rounded-2xl border px-4 py-3 ${arenaTheme.headerClass}`}>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="rounded-full bg-background/60 px-2.5 py-0.5 text-[10px] font-extrabold border">
+              {arenaTheme.badgeText}
+            </span>
             <span className="rounded-xl bg-sky-500/15 px-3 py-1 font-display text-xs font-extrabold text-sky-500">
               🔵 {room.host.nick} ({room.host.hp}/5 HP)
             </span>
@@ -929,18 +1014,47 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
           <p className="font-display text-2xl sm:text-3xl font-extrabold">{question.text}</p>
         </div>
 
-        {/* Barra de Cabo de Guerra com Faíscas */}
-        <div className="rounded-3xl border-2 bg-slate-950 p-5 text-white space-y-3">
-          <div className="flex items-center justify-between text-xs font-extrabold">
-            <span className="text-sky-400 flex items-center gap-1">
-              <Zap className="h-4 w-4" /> {room.host.nick}: {room.host.hp}/5 Vidas ({room.blueShare}%)
-            </span>
-            <span className="text-red-400 flex items-center gap-1">
-              {room.guest?.nick}: {room.guest?.hp}/5 Vidas ({redShare}%) <Flame className="h-4 w-4" />
-            </span>
+        {/* Arena de Robôs + Barra de Cabo de Guerra com Faíscas */}
+        <div
+          className={`rounded-3xl border-2 p-4 sm:p-5 text-white space-y-4 ${arenaTheme.arenaBgClass} ${arenaTheme.accentGlowClass}`}
+          style={{ backgroundImage: arenaTheme.gridOverlayStyle }}
+        >
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex flex-col items-center gap-1">
+              <RobotAvatar
+                avatar={hostAvatar}
+                side="left"
+                pose={hostPose}
+                className="h-16 w-16 sm:h-20 sm:w-20"
+              />
+              <span className="text-[11px] font-extrabold text-sky-300">
+                {room.host.nick} ({room.blueShare}%)
+              </span>
+            </div>
+
+            <div className="flex flex-col items-center text-center gap-1">
+              <span className="rounded-full bg-white/10 px-3 py-0.5 text-[10px] font-black tracking-wider uppercase">
+                {arenaTheme.name}
+              </span>
+              <span className="font-display text-xs text-white/75">
+                {room.host.hp}/5 HP ⚡ {room.guest?.hp ?? 5}/5 HP
+              </span>
+            </div>
+
+            <div className="flex flex-col items-center gap-1">
+              <RobotAvatar
+                avatar={guestAvatar}
+                side="right"
+                pose={guestPose}
+                className="h-16 w-16 sm:h-20 sm:w-20"
+              />
+              <span className="text-[11px] font-extrabold text-red-300">
+                {room.guest?.nick ?? "Oponente"} ({redShare}%)
+              </span>
+            </div>
           </div>
 
-          <div className="relative h-12 w-full rounded-2xl border-2 border-white/20 bg-slate-900 overflow-visible">
+          <div className="relative h-12 w-full rounded-2xl border-2 border-white/20 bg-slate-900/90 overflow-visible">
             <div
               className="absolute inset-y-0 left-0 rounded-l-xl bg-gradient-to-r from-blue-600 via-sky-500 to-cyan-300 shadow-[0_0_20px_rgba(56,189,248,0.8)] transition-[width] duration-150 ease-out"
               style={{ width: `${room.blueShare}%` }}
@@ -954,7 +1068,10 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
               style={{ left: `${Math.max(4, Math.min(96, room.blueShare))}%` }}
             >
               <div className="relative flex items-center justify-center">
-                <div className="h-14 w-5 rounded-full bg-white blur-[2px] animate-pulse shadow-[0_0_24px_#fff,0_0_40px_#facc15]" />
+                <div
+                  className="h-14 w-5 rounded-full bg-white blur-[2px] animate-pulse"
+                  style={{ boxShadow: `0 0 24px #fff, 0 0 40px ${arenaTheme.sparkColorHex}` }}
+                />
                 <Sparkles className="absolute h-8 w-8 text-yellow-200 animate-bounce" />
               </div>
             </div>
@@ -966,7 +1083,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
           <Button
             type="button"
             size="lg"
-            disabled={stunned}
+            disabled={stunned || answerCooling}
             onClick={() => handleRobotAnswer(true)}
             className="h-16 sm:h-20 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-display text-xl sm:text-2xl font-extrabold shadow-lg"
           >
@@ -975,7 +1092,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
           <Button
             type="button"
             size="lg"
-            disabled={stunned}
+            disabled={stunned || answerCooling}
             onClick={() => handleRobotAnswer(false)}
             className="h-16 sm:h-20 rounded-2xl bg-rose-600 hover:bg-rose-500 text-white font-display text-xl sm:text-2xl font-extrabold shadow-lg"
           >
@@ -998,10 +1115,13 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
     : (room.host.currentQuestionIdx ?? 0);
 
   return (
-    <div className="mx-auto max-w-3xl rounded-3xl border-2 bg-card p-4 sm:p-6 shadow-xl space-y-4">
+    <div className={`mx-auto max-w-3xl rounded-3xl border-2 p-4 sm:p-6 shadow-xl space-y-4 ${arenaTheme.containerClass}`}>
       {/* Top Header */}
-      <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border bg-secondary/40 px-4 py-2.5">
+      <div className={`flex flex-wrap items-center justify-between gap-2 rounded-2xl border px-4 py-2.5 ${arenaTheme.headerClass}`}>
         <div className="flex items-center gap-2 flex-wrap">
+          <span className="rounded-full bg-background/60 px-2.5 py-0.5 text-[10px] font-extrabold border">
+            {arenaTheme.badgeText}
+          </span>
           <span className="rounded-xl bg-sky-500/15 px-3 py-1 font-display text-xs font-extrabold text-sky-500">
             🔵 {room.host.nick}: {room.host.score} pts (Q{Math.min(totalQ, (room.host.currentQuestionIdx ?? 0) + 1)}/{totalQ})
           </span>

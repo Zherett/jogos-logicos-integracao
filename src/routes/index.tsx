@@ -46,6 +46,7 @@ import { Sparkles, Swords } from "lucide-react";
 import {
   heartbeatOnlinePlayer,
   getX1LobbySnapshot,
+  getX1Room,
   joinX1RoomAsync,
   rejectX1Invite,
   subscribeX1Updates,
@@ -268,13 +269,44 @@ function Index() {
         inRoomCode: activeX1Room?.code ?? null,
         lastActiveAt: getLocalUserLastActiveAt(),
       });
-      void syncX1WithPlayFabCloud(activeX1Room?.code ?? null);
+      // Evita polling redundante com o X1MatchOverlay durante partida ativa
+      if (!activeX1Room?.code) {
+        void syncX1WithPlayFabCloud(null);
+      }
     };
     pulse();
     const id = window.setInterval(pulse, activeX1Room?.code ? 5000 : 25000);
     return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.profile?.id, activeX1Room?.code, view, x1Open]);
+
+  // Persiste e restaura sala X1 ativa em caso de F5 acidental
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (activeX1Room?.code && (activeX1Room.status === "countdown" || activeX1Room.status === "playing")) {
+      window.sessionStorage.setItem("desafios-active-x1-room-code", activeX1Room.code);
+    } else if (!activeX1Room) {
+      window.sessionStorage.removeItem("desafios-active-x1-room-code");
+    }
+  }, [activeX1Room?.code, activeX1Room?.status]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !auth.profile || activeX1Room) return;
+    const savedCode = window.sessionStorage.getItem("desafios-active-x1-room-code");
+    if (!savedCode) return;
+    const existing = getX1Room(savedCode);
+    const myId = auth.profile.id;
+    if (
+      existing &&
+      (existing.status === "countdown" || existing.status === "playing") &&
+      (existing.host.playerId === myId || existing.guest?.playerId === myId)
+    ) {
+      setActiveX1Room(existing);
+      setView(existing.gameId);
+    } else {
+      window.sessionStorage.removeItem("desafios-active-x1-room-code");
+    }
+  }, [auth.profile?.id, activeX1Room]);
 
   // Monitor incoming X1 challenge invites in real-time
   useEffect(() => {
@@ -692,6 +724,7 @@ function Index() {
                         nick: auth.profile.nick,
                         school: auth.profile.school,
                         level: auth.profile.level,
+                        avatar: auth.profile.avatar,
                       },
                     });
                     if (res.room) {

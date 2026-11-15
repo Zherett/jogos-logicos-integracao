@@ -19,6 +19,7 @@ import {
   type ResetHistoryEntry,
 } from "./game-codes.ts";
 import { computeSeasonDates } from "./season-cycle.ts";
+import type { PlayerAvatarConfig } from "./avatar.ts";
 import {
   adjustXpForGameMode,
   advanceLevelStageOnMatch,
@@ -238,6 +239,7 @@ export interface PlayerProfile {
   x1Matches?: number;
   weeklyX1Wins?: number;
   weeklyX1WeekKey?: string;
+  avatar?: PlayerAvatarConfig;
   matchesPlayed: number;
   totalMatches?: number;
   totalPlays?: number;

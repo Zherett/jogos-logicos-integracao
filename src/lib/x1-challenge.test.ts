@@ -2,15 +2,18 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   applyX1RobotBattleAnswer,
+  buildX1Board,
   cancelAllWaitingRoomsForHost,
   cancelWaitingX1Room,
   clearX1MatchHistory,
   computeScoreRaceBlueShare,
   createX1Room,
+  finishX1RoomByTimeout,
   forfeitX1Match,
   generateDeterministicRobotClashQuestion,
   generateRoomCode,
   getActiveRotatedX1Game,
+  getX1DurationForGame,
   getX1LobbySnapshot,
   getX1Room,
   heartbeatOnlinePlayer,
@@ -21,6 +24,7 @@ import {
   mergeX1RoomStates,
   recordX1MatchFinished,
   resolveX1Winner,
+  sanitizeX1AvailableGames,
   saveX1MatchHistory,
   startX1MatchAfterCountdown,
   timeoutX1MinadoTurnSelection,
@@ -28,6 +32,8 @@ import {
   X1_ROBOT_INITIAL_HP,
   type X1Room,
 } from "./x1-challenge.ts";
+import { resolvePlayerAvatar } from "./avatar.ts";
+import { getX1ArenaTheme } from "./x1-arenas.ts";
 import { isAdminOrTestAccount } from "./player-profile.ts";
 
 function makeSampleRoom(): X1Room {
@@ -387,15 +393,23 @@ describe("Arena de Desafio X1 Online (1v1 Versus Mode)", () => {
     assert.equal(mergedStarted.startedAt, now);
   });
 
-  it("gera questionList determinística para qualquer jogo de corrida habilitado pelo ADM (ex: operacoes, sequencias, binario)", () => {
+  it("normaliza jogos fora dos 4 suportados no X1 para rpg e gera questionList para logica e porcentagem", () => {
     for (const gid of ["operacoes", "sequencias", "binario"] as const) {
       const r = createX1Room({
         host: { playerId: "h_extra", nick: "HostExtra", school: "SEMED", level: 7 },
+        gameId: gid as never,
+      });
+      assert.equal(r.gameId, "rpg");
+    }
+
+    for (const gid of ["logica", "porcentagem"] as const) {
+      const r = createX1Room({
+        host: { playerId: `h_${gid}`, nick: `Host_${gid}`, school: "SEMED", level: 7 },
         gameId: gid,
       });
       const joined = joinX1Room({
         code: r.code,
-        guest: { playerId: "g_extra", nick: "GuestExtra", school: "SEMED", level: 7 },
+        guest: { playerId: `g_${gid}`, nick: `Guest_${gid}`, school: "SEMED", level: 7 },
       });
       assert.equal(joined.error, null);
       assert.ok(joined.room?.questionList);
@@ -415,18 +429,8 @@ describe("Arena de Desafio X1 Online (1v1 Versus Mode)", () => {
     assert.ok(snap.myInvites.some((i) => i.roomCode === r.code));
   });
 
-  it("gera questões determinísticas específicas para todos os jogos do catálogo e Batalha de Robôs", () => {
-    const allRaceGames = [
-      "logica",
-      "porcentagem",
-      "variaveis",
-      "cartesiano",
-      "formas",
-      "robogrid",
-      "memoria",
-      "spacequest",
-      "completar",
-    ] as const;
+  it("gera questões determinísticas específicas para Lógica, Porcentagem e Batalha de Robôs", () => {
+    const allRaceGames = ["logica", "porcentagem"] as const;
 
     for (const gid of allRaceGames) {
       const r = createX1Room({
@@ -572,5 +576,89 @@ describe("Arena de Desafio X1 Online (1v1 Versus Mode)", () => {
     room.guest!.updatedAt = 1_005_000; // Guest terminou 5s depois
 
     assert.equal(resolveX1Winner(room), "host_1");
+  });
+
+  it("restringe X1 apenas aos 4 jogos permitidos e define durações corretas (Minado sem limite, Lógica/Porcentagem 90s, RPG 5min)", () => {
+    const sanitized = sanitizeX1AvailableGames(["memoria", "spacequest", "rpg", "minado", "cartesiano"]);
+    assert.deepEqual(sanitized, ["rpg", "minado"]);
+
+    assert.equal(getX1DurationForGame("minado"), 0);
+    assert.equal(getX1DurationForGame("logica"), 90);
+    assert.equal(getX1DurationForGame("porcentagem"), 90);
+    assert.equal(getX1DurationForGame("rpg"), 300);
+
+    const minadoRoom = createX1Room({
+      host: { playerId: "h_dur", nick: "HostDur", school: "SEMED", level: 5 },
+      gameId: "minado",
+    });
+    assert.equal(minadoRoom.durationSec, 0);
+    // Campo Minado não deve encerrar via finishX1RoomByTimeout
+    const afterTimeout = finishX1RoomByTimeout(minadoRoom.code);
+    assert.equal(afterTimeout?.status, "waiting");
+  });
+
+  it("gera tabuleiros de Campo Minado 4x4 (16), 6x6 padrão (36) e 8x8 (64)", () => {
+    assert.equal(buildX1Board(1234, 4).length, 16);
+    assert.equal(buildX1Board(1234, 6).length, 36);
+    assert.equal(buildX1Board(1234, 8).length, 64);
+
+    const created = createX1Room({
+      host: { playerId: "h_6x6", nick: "Host6", school: "SEMED", level: 5 },
+      gameId: "minado",
+    });
+    joinX1Room({
+      code: created.code,
+      guest: { playerId: "g_6x6", nick: "Guest6", school: "SEMED", level: 5 },
+    });
+    const room6 = getX1Room(created.code)!;
+    assert.equal(room6.minadoState?.gridSize, 6);
+    assert.equal(room6.minadoState?.board.length, 36);
+  });
+
+  it("converge deterministicamente o merge do RPG mesmo com Super Hit concorrente", () => {
+    const base = makeSampleRoom();
+    base.rpgEvents = [];
+
+    // Host acerta 3 vezes seguidas (+18, +18, +18 => 50 -> 68 -> 86 -> Super Hit 55, guest HP 5->4->3->0)
+    let hostView = structuredClone(base);
+    hostView = applyX1RobotBattleAnswer({ room: hostView, role: "host", isCorrect: true }).room;
+    hostView = applyX1RobotBattleAnswer({ room: hostView, role: "host", isCorrect: true }).room;
+    hostView = applyX1RobotBattleAnswer({ room: hostView, role: "host", isCorrect: true }).room;
+
+    // Guest respondeu simultaneamente antes de receber as respostas do host
+    let guestView = structuredClone(base);
+    guestView = applyX1RobotBattleAnswer({ room: guestView, role: "guest", isCorrect: true }).room;
+
+    const mergedFromHost = mergeX1RoomStates(hostView, guestView);
+    const mergedFromGuest = mergeX1RoomStates(guestView, hostView);
+
+    assert.equal(mergedFromHost.blueShare, mergedFromGuest.blueShare);
+    assert.equal(mergedFromHost.host.hp, mergedFromGuest.host.hp);
+    assert.equal(mergedFromHost.guest?.hp, mergedFromGuest.guest?.hp);
+    assert.equal(mergedFromHost.status, mergedFromGuest.status);
+  });
+
+  it("gera temas de arena determinísticos pela seed e preserva avatar personalizado com fallback", () => {
+    const t1 = getX1ArenaTheme(42);
+    const t2 = getX1ArenaTheme(42);
+    assert.equal(t1.id, t2.id);
+
+    const customAvatar = {
+      chassisId: "titan" as const,
+      headShape: "star" as const,
+      visorId: "laser" as const,
+      primaryColor: "#9333ea",
+      accentColor: "#facc15",
+      accessoryId: "wings" as const,
+      emblemId: "crown" as const,
+    };
+    const resolvedCustom = resolvePlayerAvatar(customAvatar, 99, "left");
+    assert.equal(resolvedCustom.headShape, "star");
+    assert.equal(resolvedCustom.primaryColor, "#9333ea");
+
+    const fallbackLeft = resolvePlayerAvatar(undefined, 99, "left");
+    const fallbackRight = resolvePlayerAvatar(undefined, 99, "right");
+    assert.ok(fallbackLeft.headShape);
+    assert.notEqual(fallbackLeft.primaryColor, fallbackRight.primaryColor);
   });
 });

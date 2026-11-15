@@ -59,6 +59,12 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { ALL_GAME_IDS, GAME_NAMES, type GameId } from "@/lib/game-storage";
 import {
+  sanitizeX1AvailableGames,
+  sanitizeX1MinadoGridSize,
+  X1_SUPPORTED_GAME_IDS,
+  type X1MinadoGridSize,
+} from "@/lib/game-codes";
+import {
   DEFAULT_ENABLED_GAMES,
   DEFAULT_GAME_CODES,
   DEFAULT_MASTER_CODE,
@@ -838,9 +844,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
   }
 
   async function handleToggleX1Game(id: GameId) {
-    const cur: GameId[] = (draft.x1AvailableGames && draft.x1AvailableGames.length > 0)
-      ? draft.x1AvailableGames
-      : ["rpg", "logica", "porcentagem", "minado"];
+    if (!X1_SUPPORTED_GAME_IDS.includes(id)) return;
+    const cur = sanitizeX1AvailableGames(draft.x1AvailableGames);
     const isSelected = cur.includes(id);
     let nextGames: GameId[];
     if (isSelected) {
@@ -850,7 +855,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
       }
       nextGames = cur.filter((g) => g !== id);
     } else {
-      nextGames = [...cur, id];
+      nextGames = sanitizeX1AvailableGames([...cur, id]);
     }
     const updated: PlatformAdminConfig = {
       ...draft,
@@ -864,6 +869,18 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
         ? `🚫 "${GAME_NAMES[id]}" desmarcado da Arena X1!`
         : `⚔️ "${GAME_NAMES[id]}" ativado na Arena X1!`,
     );
+  }
+
+  async function handleSelectX1MinadoGridSize(size: X1MinadoGridSize) {
+    const safe = sanitizeX1MinadoGridSize(size);
+    const updated: PlatformAdminConfig = {
+      ...draft,
+      x1MinadoGridSize: safe,
+    };
+    setDraft(updated);
+    await auth.updateAdminConfig(updated);
+    onConfigSaved?.();
+    flashCloudResult(`💣 Tabuleiro do Campo Minado X1 definido para ${safe}×${safe}!`);
   }
 
   async function handleSaveX1Hour(which: "open" | "close", valStr: string) {
@@ -1896,10 +1913,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                   </div>
 
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 pt-2">
-                    {ALL_GAME_IDS.map((id) => {
-                      const cur = (draft.x1AvailableGames && draft.x1AvailableGames.length > 0)
-                        ? draft.x1AvailableGames
-                        : ["rpg", "logica", "porcentagem", "minado"];
+                    {X1_SUPPORTED_GAME_IDS.map((id) => {
+                      const cur = sanitizeX1AvailableGames(draft.x1AvailableGames);
                       const selected = cur.includes(id);
                       return (
                         <button
@@ -1919,6 +1934,43 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                         </button>
                       );
                     })}
+                  </div>
+
+                  {/* Tamanho do Tabuleiro do Campo Minado X1 */}
+                  <div className="pt-3 border-t space-y-2">
+                    <div>
+                      <h5 className="font-display text-xs font-bold text-foreground">
+                        Tamanho do Tabuleiro — Campo Minado X1
+                      </h5>
+                      <p className="text-[11px] text-muted-foreground">
+                        Padrão: 6×6 (36 cartas). Partidas sem tempo limite total, com cronômetro progressivo.
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      {([
+                        { size: 4 as const, label: "4×4", sub: "16 cartas • Rápido" },
+                        { size: 6 as const, label: "6×6 (Padrão)", sub: "36 cartas • Equilibrado" },
+                        { size: 8 as const, label: "8×8", sub: "64 cartas • Completo" },
+                      ]).map((opt) => {
+                        const currentSize = sanitizeX1MinadoGridSize(draft.x1MinadoGridSize);
+                        const active = currentSize === opt.size;
+                        return (
+                          <button
+                            key={opt.size}
+                            type="button"
+                            onClick={() => void handleSelectX1MinadoGridSize(opt.size)}
+                            className={`rounded-xl border p-2.5 text-left transition-all ${
+                              active
+                                ? "border-primary bg-primary/15 text-primary ring-1 ring-primary"
+                                : "border-border bg-background hover:bg-secondary/50 text-muted-foreground"
+                            }`}
+                          >
+                            <div className="font-display text-xs font-extrabold">{opt.label}</div>
+                            <div className="text-[10px] opacity-85">{opt.sub}</div>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
 
                   <Button

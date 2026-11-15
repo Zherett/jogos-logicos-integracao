@@ -43,6 +43,8 @@ import {
   joinX1Room,
   joinX1RoomAsync,
   rejectX1Invite,
+  sanitizeX1AvailableGames,
+  sanitizeX1MinadoGridSize,
   subscribeX1Updates,
   syncX1WithPlayFabCloud,
   type X1Room,
@@ -67,7 +69,7 @@ export function X1ArenaDialog({
   const profile = auth.profile;
 
   const [tab, setTab] = useState<LobbyTab>("online");
-  const allowedX1Games = (auth.adminConfig.x1AvailableGames ?? ["rpg", "logica", "porcentagem", "minado"]).filter(
+  const allowedX1Games = sanitizeX1AvailableGames(auth.adminConfig.x1AvailableGames).filter(
     (id) => auth.adminConfig.enabledGames[id] !== false,
   );
   const [selectedGame, setSelectedGame] = useState<GameId>(allowedX1Games[0] ?? "rpg");
@@ -371,8 +373,10 @@ export function X1ArenaDialog({
         level: profile.level,
         age: ageFrom(profile.birthdate),
         stage: myStage.id,
+        avatar: profile.avatar,
       },
       gameId: selectedGame,
+      minadoGridSize: sanitizeX1MinadoGridSize(auth.adminConfig.x1MinadoGridSize),
       inviteTargetPlayerId,
       inviteTargetNick,
     });
@@ -392,6 +396,7 @@ export function X1ArenaDialog({
           nick: profile.nick,
           school: profile.school,
           level: profile.level,
+          avatar: profile.avatar,
         },
       });
       if (res.error || !res.room) {
