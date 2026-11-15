@@ -725,9 +725,17 @@ export async function callPlayFabClient<T>(
 /* --------------------- Scheduled Reset Engine (ADM) ---------------------- */
 
 /** Checks if the ADM scheduled a ranking reset whose timestamp has arrived,
- *  and executes it automatically if due. */
-export function checkAndApplyScheduledReset(): PlatformAdminConfig {
+ *  and executes it automatically if due.
+ *  When PlayFab is configured, refuses to run on stale local/default config before
+ *  the authoritative ADM config has been synced from PlayFab. */
+export function checkAndApplyScheduledReset(options?: {
+  fromCloudSync?: boolean;
+}): PlatformAdminConfig {
   let cfg = loadAdminConfig();
+
+  if (isPlayFabConfigured() && !hasSyncedAdminConfigFromCloud && !options?.fromCloudSync) {
+    return cfg;
+  }
 
   // 1. Encerramento automático agendado da Temporada Geral de Atividades (BETA / 60 dias)
   const targetEnd = cfg.seasonEndAt || cfg.scheduledResetAt;
@@ -954,6 +962,7 @@ let cachedViewerTicketTime = 0;
 let inFlightViewerTicketPromise: Promise<string | null> | null = null;
 let inFlightConfigSyncPromise: Promise<PlatformAdminConfig> | null = null;
 let lastAdminCloudSyncError: string | null = null;
+let hasSyncedAdminConfigFromCloud = false;
 
 /** Último erro ao publicar a configuração do ADM na nuvem (null = sucesso). */
 export function getLastAdminCloudSyncError(): string | null {
@@ -1097,8 +1106,8 @@ export async function syncAdminConfigFromPlayFab(sessionTicket?: string): Promis
   if (inFlightConfigSyncPromise && !sessionTicket) return inFlightConfigSyncPromise;
 
   const run = async (): Promise<PlatformAdminConfig> => {
-    const localCfg = checkAndApplyScheduledReset();
-    if (!isPlayFabConfigured()) return localCfg;
+    const localCfg = loadAdminConfig();
+    if (!isPlayFabConfigured()) return checkAndApplyScheduledReset({ fromCloudSync: true });
 
     // 1. Sessão do próprio aluno; 2. ticket de visitante (cacheado por dispositivo).
     const candidates: Array<() => Promise<string | null>> = [
@@ -1115,16 +1124,18 @@ export async function syncAdminConfigFromPlayFab(sessionTicket?: string): Promis
           if (i === 1) clearViewerTicket(); // ticket expirado: renova no próximo acesso
           continue;
         }
-        if (!raw) return localCfg; // ADM ainda não publicou nada
+        hasSyncedAdminConfigFromCloud = true;
+        if (!raw) return checkAndApplyScheduledReset({ fromCloudSync: true }); // ADM ainda não publicou nada
         const remote = JSON.parse(raw) as Partial<PlatformAdminConfig>;
         storeCachedRemoteConfig(raw);
-        return applyRemoteConfig(localCfg, remote);
+        applyRemoteConfig(localCfg, remote);
+        return checkAndApplyScheduledReset({ fromCloudSync: true });
       } catch {
         /* tenta o próximo caminho */
       }
     }
 
-    // Sem conexão / bloqueio temporário: usa a última configuração recebida do ADM.
+    // Sem conexão / bloqueio temporário: usa a última configuração recebida do ADM sem disparar reset prematuro.
     const cached = loadCachedRemoteConfig();
     return cached ? applyRemoteConfig(localCfg, cached) : localCfg;
   };
@@ -1170,6 +1181,7 @@ export async function pushAdminConfigToPlayFab(config: PlatformAdminConfig): Pro
     lastAdminCloudSyncError = res.error;
   } else {
     lastAdminCloudSyncError = null;
+    hasSyncedAdminConfigFromCloud = true;
     storeCachedRemoteConfig(raw);
     // Espelha também no SharedGroup em segundo plano
     if (ticket) {

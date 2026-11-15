@@ -787,4 +787,31 @@ describe("Torneio Semanal Ranqueado (Nível 3+) e Regras da Arena X1 (Nível 5+,
       95,
     );
   });
+
+  it("checkAndApplyScheduledReset ignora data local vencida enquanto o PlayFab não sincronizar a verdade do ADM", async () => {
+    const { checkAndApplyScheduledReset } = await import("./playfab.ts");
+    const { DEFAULT_ADMIN_CONFIG, saveAdminConfig, loadAdminConfig } = await import("./game-codes.ts");
+    if (typeof window === "undefined") return;
+
+    const prevRaw = window.localStorage.getItem("desafios-admin-config-v1");
+    try {
+      saveAdminConfig({
+        ...DEFAULT_ADMIN_CONFIG,
+        playfabTitleId: "186F63",
+        rankedSeasonId: 1,
+        rankedSeasonEndAt: "2020-01-01T00:00:00.000Z", // data vencida no cache local
+      });
+
+      // Sem sync prévio do PlayFab neste ciclo de sessão, não deve executar reset local prematuro
+      const after = checkAndApplyScheduledReset();
+      assert.equal(after.rankedSeasonId, 1);
+      assert.equal(loadAdminConfig().rankedSeasonId, 1);
+    } finally {
+      if (prevRaw !== null) {
+        window.localStorage.setItem("desafios-admin-config-v1", prevRaw);
+      } else {
+        window.localStorage.removeItem("desafios-admin-config-v1");
+      }
+    }
+  });
 });

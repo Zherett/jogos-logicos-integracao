@@ -863,7 +863,16 @@ export async function finalizeRankedSeasonAndAwardMedalsViaInbox(
       }
 
       try {
-        await grantPlayerTournamentMedal(tourMedal);
+        const activeSession = loadStoredSession();
+        const sessionPid = activeSession?.playerId?.toLowerCase().trim();
+        const isCurrentSessionWinner = Boolean(
+          sessionPid &&
+            (sessionPid === row.playerId.toLowerCase().trim() ||
+              (row.nick && sessionPid === row.nick.toLowerCase().trim())),
+        );
+        if (isCurrentSessionWinner) {
+          await grantPlayerTournamentMedal(tourMedal);
+        }
       } catch {
         /* ignore */
       }

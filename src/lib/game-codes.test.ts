@@ -126,4 +126,9 @@ describe("Liberação Inicial de Jogos e Controle de Bloqueio com SEMED26", () =
     assert.equal(updated.adminOnlyGames?.spacequest, false);
     assert.equal(updated.adminOnlyGames?.rpg, true);
   });
+
+  it("não define datas de encerramento vencidas no DEFAULT_ADMIN_CONFIG antes do sync com o ADM", () => {
+    assert.equal(DEFAULT_ADMIN_CONFIG.activitySeasonEndAt, null);
+    assert.equal(DEFAULT_ADMIN_CONFIG.rankedSeasonEndAt, null);
+  });
 });
