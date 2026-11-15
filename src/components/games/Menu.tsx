@@ -412,7 +412,7 @@ export function Menu({
           <button
             type="button"
             onClick={handleTournamentClick}
-            className="group flex flex-col justify-between rounded-3xl border-2 border-sky-500/70 bg-gradient-to-br from-blue-950/80 via-slate-900/90 to-sky-950/60 p-4 text-left shadow-[0_4px_25px_rgba(14,165,233,0.18)] transition-all hover:-translate-y-0.5 hover:shadow-[0_8px_30px_rgba(14,165,233,0.3)] hover:border-sky-400 cursor-pointer min-h-[152px]"
+            className="group flex flex-col justify-between rounded-3xl border-2 border-sky-500/70 bg-gradient-to-br from-blue-950/80 via-slate-900/90 to-sky-950/60 p-4 text-left shadow-[0_4px_25px_rgba(14,165,233,0.18)] transition-all hover:-translate-y-0.5 hover:shadow-[0_8px_30px_rgba(14,165,233,0.3)] hover:border-sky-400 cursor-pointer min-h-[188px] md:h-[188px]"
           >
             <div className="space-y-1.5">
               <div className="flex items-center justify-between gap-1.5 flex-wrap">
@@ -475,7 +475,7 @@ export function Menu({
             type="button"
             onClick={handleX1Click}
             disabled={effectiveX1ArenaClosed}
-            className={`group relative flex flex-col justify-between overflow-hidden rounded-3xl border-2 p-4 text-left transition-all min-h-[152px] ${
+            className={`group relative flex flex-col justify-between overflow-hidden rounded-3xl border-2 p-4 text-left transition-all min-h-[188px] md:h-[188px] ${
               effectiveX1ArenaClosed
                 ? "border-destructive/60 bg-gradient-to-br from-red-950/70 via-slate-900/95 to-neutral-950/90 cursor-not-allowed opacity-90 shadow-none"
                 : "border-orange-500/70 bg-gradient-to-br from-orange-950/80 via-slate-900/90 to-amber-950/60 shadow-[0_4px_25px_rgba(249,115,22,0.18)] hover:-translate-y-0.5 hover:shadow-[0_8px_30px_rgba(249,115,22,0.3)] hover:border-orange-400 cursor-pointer"

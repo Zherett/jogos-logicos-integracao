@@ -147,7 +147,7 @@ export const NoticeBoard: React.FC<NoticeBoardProps> = ({
     <>
       <div
         className={`relative overflow-hidden rounded-3xl border-2 border-primary/40 bg-gradient-to-r from-primary/10 via-card to-amber-500/10 shadow-md transition-all hover:border-primary/60 hover:shadow-lg ${
-          compact ? "p-4 flex flex-col justify-between h-full min-h-[152px]" : "p-4 sm:p-5"
+          compact ? "p-4 flex flex-col justify-between h-full min-h-[188px] md:h-[188px]" : "p-4 sm:p-5"
         } ${className}`}
         onMouseEnter={() => setIsPaused(true)}
         onMouseLeave={() => setIsPaused(false)}
@@ -237,7 +237,7 @@ export const NoticeBoard: React.FC<NoticeBoardProps> = ({
           {/* Área de Ação / Medalha / Botão de Acesso Rápido */}
           <div
             className={`shrink-0 flex flex-wrap items-center gap-2 ${
-              compact ? "w-full justify-start pt-1" : "w-full md:w-auto justify-end pt-1 md:pt-0 min-h-[44px]"
+              compact ? "w-full justify-start pt-1 min-h-[34px]" : "w-full md:w-auto justify-end pt-1 md:pt-0 min-h-[44px]"
             }`}
           >
             {/* Medalha Vinculada ao Evento (Clicável para Inspeção) */}
