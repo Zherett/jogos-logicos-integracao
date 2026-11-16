@@ -71,8 +71,6 @@ export function PlayerMedalsInventory({
 
   const pioneers = useMemo(() => {
     try {
-      const cached = getCachedMedalPioneers();
-      if (cached && Object.keys(cached).length > 0) return cached;
       const reg = loadRegistryReadOnly();
       const players = Object.values(reg)
         .map((a) => a?.profile)
@@ -81,7 +79,7 @@ export function PlayerMedalsInventory({
     } catch {
       return getCachedMedalPioneers() ?? {};
     }
-  }, []);
+  }, [unlockedMedals, profile?.id, profile?.xp]);
 
   const showcase = useMemo(
     () => getTopShowcaseMedals(unlockedMedals ?? [], allMedals),
@@ -551,6 +549,7 @@ export function PlayerMedalsInventory({
         }}
         medal={selectedMedal}
         unlockedInfo={selectedMedalEntry?.unlocked}
+        pioneer={selectedMedal ? (pioneers[selectedMedal.id] ?? null) : null}
         progressText={selectedMedalEntry?.progress.progressText}
         percentComplete={selectedMedalEntry?.progress.percent}
       />

@@ -937,6 +937,7 @@ export function executeRankedSeasonReset(options?: {
     acc.updatedAt = nowIso;
   }
   saveRegistry(reg);
+  invalidatePioneersCache();
 
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("desafios:weekly-tournament-updated"));
@@ -973,6 +974,7 @@ export async function restoreRankedSeasonToOne(options?: {
     }
   }
   saveRegistry(reg);
+  invalidatePioneersCache();
   alignedAccountSignatures.clear();
 
   const cleanedHistory = (cfg.resetHistory ?? []).filter(
@@ -2194,6 +2196,7 @@ export async function playfabSignUp(data: SignUpData): Promise<{
     const aligned = ensurePlayerSeasonAligned(existingByPerson, cfg);
     reg[aligned.profile.nickNormalized] = aligned;
     saveRegistry(reg);
+  invalidatePioneersCache();
     saveStoredSession({
       playerId: aligned.profile.nickNormalized,
       playfabId: aligned.profile.playfabId,
@@ -2340,6 +2343,7 @@ export async function playfabSignUp(data: SignUpData): Promise<{
 
   reg[slug] = account;
   saveRegistry(reg);
+  invalidatePioneersCache();
   saveStoredSession({ playerId: slug, sessionTicket, playfabId, activeSessionId: newActiveSessionId });
   clearLocalStats();
   clearUnlocked();
@@ -2436,6 +2440,7 @@ export async function playfabSignIn(
       };
       reg[adminKey] = adminAcc;
       saveRegistry(reg);
+  invalidatePioneersCache();
     } else {
       adminAcc.profile.isAdmin = true;
     }
@@ -2530,6 +2535,7 @@ export async function playfabSignIn(
 
         reg[account.profile.nickNormalized] = account;
         saveRegistry(reg);
+  invalidatePioneersCache();
         saveStoredSession({
           playerId: account.profile.nickNormalized,
           sessionTicket: res.data.SessionTicket,
@@ -2595,6 +2601,7 @@ export async function playfabSignIn(
 
       reg[account.profile.nickNormalized] = account;
       saveRegistry(reg);
+  invalidatePioneersCache();
       saveStoredSession({
         playerId: account.profile.nickNormalized,
         sessionTicket: nickCustomRes.data.SessionTicket,
@@ -2648,6 +2655,7 @@ export async function playfabSignIn(
 
       reg[account.profile.nickNormalized] = account;
       saveRegistry(reg);
+  invalidatePioneersCache();
       saveStoredSession({
         playerId: account.profile.nickNormalized,
         sessionTicket: customRes.data.SessionTicket,
@@ -2731,6 +2739,7 @@ export async function playfabSignIn(
 
   reg[aligned.profile.nickNormalized] = aligned;
   saveRegistry(reg);
+  invalidatePioneersCache();
   saveStoredSession({ playerId: aligned.profile.nickNormalized, activeSessionId: newActiveSessionId });
   syncLocalBrowserFromAccount(aligned);
   return {
@@ -2794,6 +2803,7 @@ export async function playfabRecoverByNameAndBirthdate(
       checkAndApplyDailyLoginPoints(account.profile);
       reg[account.profile.nickNormalized] = account;
       saveRegistry(reg);
+  invalidatePioneersCache();
       saveStoredSession({
         playerId: account.profile.nickNormalized,
         sessionTicket: customRes.data.SessionTicket,
@@ -2843,6 +2853,7 @@ export async function playfabRecoverByNameAndBirthdate(
 
   reg[aligned.profile.nickNormalized] = aligned;
   saveRegistry(reg);
+  invalidatePioneersCache();
   saveStoredSession({ playerId: aligned.profile.nickNormalized, activeSessionId: newActiveSessionId });
   syncLocalBrowserFromAccount(aligned);
 
@@ -4087,6 +4098,7 @@ export async function syncStudentRosterFromPlayFab(
 
     if (updated) {
       saveRegistry(reg);
+      invalidatePioneersCache();
     }
     lastRosterSyncCompletedAt = Date.now();
   } catch {
@@ -4137,6 +4149,7 @@ export function syncAllPasswordsWithBirthdate(): number {
   }
   if (updatedCount > 0) {
     saveRegistry(reg);
+  invalidatePioneersCache();
   }
   return updatedCount;
 }
@@ -4481,6 +4494,7 @@ export async function savePlayerProfile(profile: PlayerProfile): Promise<PlayerP
     reg[slug] = acc;
     if (pId) reg[pId] = acc;
     saveRegistry(reg);
+  invalidatePioneersCache();
     syncLocalBrowserFromAccount(acc);
     const session = loadStoredSession();
     if (session?.sessionTicket && isPlayFabConfigured()) {
@@ -4664,6 +4678,7 @@ export async function updateStudentProfileByAdmin(args: {
   acc.updatedAt = new Date().toISOString();
   reg[acc.profile.nickNormalized] = acc;
   saveRegistry(reg);
+  invalidatePioneersCache();
 
   // Sync to PlayFab SharedGroupData
   try {
@@ -4703,6 +4718,7 @@ export async function playfabUnlockGames(games: GameId[]): Promise<GameId[]> {
   acc.updatedAt = new Date().toISOString();
   reg[session.playerId] = acc;
   saveRegistry(reg);
+  invalidatePioneersCache();
   saveUnlocked(acc.unlocked);
 
   await pushProfileToPlayFab(acc, session.sessionTicket);
@@ -5336,6 +5352,7 @@ export async function playfabRecordMatch(args: {
 
   reg[session.playerId] = acc;
   saveRegistry(reg);
+  invalidatePioneersCache();
 
   // Sync with Azure PlayFab Statistics & UserData
   if (session.sessionTicket && isPlayFabConfigured()) {
@@ -5827,6 +5844,7 @@ export async function moveStudentToTrash(
     reg[pId] = targetAcc;
   }
   saveRegistry(reg);
+  invalidatePioneersCache();
 
   // Remove student from game records
   try {
@@ -5919,6 +5937,7 @@ export async function restoreStudentFromTrash(
     reg[pId] = targetAcc;
   }
   saveRegistry(reg);
+  invalidatePioneersCache();
 
   // Reseed records with restored student's scores
   try {
@@ -5994,6 +6013,7 @@ export async function permanentlyDeleteStudent(
     }
   }
   saveRegistry(reg);
+  invalidatePioneersCache();
 
   // 3. Remove dos recordes de jogos
   try {
@@ -6090,6 +6110,7 @@ export async function emptyStudentTrash(): Promise<{ success: boolean; count: nu
 
   if (count > 0) {
     saveRegistry(reg);
+  invalidatePioneersCache();
   }
 
   if (isPlayFabConfigured() && keysToRemoveFromCloud.length > 0) {
@@ -6183,6 +6204,7 @@ export async function grantPlayerTournamentMedal(
   acc.updatedAt = new Date().toISOString();
   reg[session.playerId] = acc;
   saveRegistry(reg);
+  invalidatePioneersCache();
   await pushProfileToPlayFab(acc, session.sessionTicket);
   return acc.profile;
 }
@@ -6270,6 +6292,7 @@ export async function grantPlayerMedalManually(
   reg[acc.profile.nickNormalized] = acc;
   if (acc.profile.id) reg[acc.profile.id] = acc;
   saveRegistry(reg);
+  invalidatePioneersCache();
 
   const session = loadStoredSession();
   if (
@@ -6355,6 +6378,7 @@ export async function deductPaidTournamentPoints(
   acc.profile.dailyTournamentEntries = (acc.profile.dailyTournamentEntries ?? 0) + 1;
   acc.updatedAt = new Date().toISOString();
   saveRegistry(reg);
+  invalidatePioneersCache();
   deductTournamentRecordPoints(acc.profile.id, newPoints, acc.profile.nick);
 
   const session = loadStoredSession();
@@ -6384,6 +6408,7 @@ export async function playfabSetInitialTurma(turma: TurmaCode): Promise<PlayerPr
   acc.updatedAt = new Date().toISOString();
   reg[session.playerId] = acc;
   saveRegistry(reg);
+  invalidatePioneersCache();
   syncLocalBrowserFromAccount(acc);
   await pushProfileToPlayFab(acc, session.sessionTicket);
   return acc.profile;
@@ -6455,6 +6480,7 @@ export async function playfabCompleteInitialSchoolSetup(args: {
   acc.updatedAt = new Date().toISOString();
   reg[session.playerId] = acc;
   saveRegistry(reg);
+  invalidatePioneersCache();
   syncLocalBrowserFromAccount(acc);
   await pushProfileToPlayFab(acc, session.sessionTicket);
 
@@ -6477,6 +6503,7 @@ export async function playfabRequestTurmaChange(
   acc.updatedAt = new Date().toISOString();
   reg[session.playerId] = acc;
   saveRegistry(reg);
+  invalidatePioneersCache();
   syncLocalBrowserFromAccount(acc);
 
   createTurmaChangeRequest({
@@ -6508,6 +6535,7 @@ export async function playfabApproveTurmaRequest(requestId: string): Promise<boo
       acc.updatedAt = new Date().toISOString();
       reg[key] = acc;
       saveRegistry(reg);
+  invalidatePioneersCache();
       break;
     }
   }
@@ -6529,6 +6557,7 @@ export async function playfabRejectTurmaRequest(requestId: string): Promise<bool
       acc.updatedAt = new Date().toISOString();
       reg[key] = acc;
       saveRegistry(reg);
+  invalidatePioneersCache();
       break;
     }
   }
@@ -6707,6 +6736,7 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
           cfg,
         );
         saveRegistry(reg);
+        invalidatePioneersCache();
         return reg[targetKey].profile;
       }
     }
@@ -7088,6 +7118,7 @@ export async function runRetroactiveMedalsAudit(
   }
 
   saveRegistry(reg);
+  invalidatePioneersCache();
 
   // Limpa notificações administrativas de medalhas de torneio atribuídas prematuramente
   if (Array.isArray(cfg.adminMedalNotifications)) {
@@ -7339,6 +7370,7 @@ export async function runGlobalStudentsIntegrityAudit(
 
   if (updatedStudentsCount > 0) {
     saveRegistry(reg);
+  invalidatePioneersCache();
   }
 
   // Envia as atualizações em lote para a nuvem PlayFab se houver alterações

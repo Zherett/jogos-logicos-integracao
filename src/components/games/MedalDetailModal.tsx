@@ -13,11 +13,13 @@ import {
   type PlayerUnlockedMedal,
 } from "@/lib/medals-catalog";
 import { MEDAL_POINTS_REWARDS } from "@/lib/career-points";
-import { getCachedMedalPioneers, formatPioneerLabel } from "@/lib/medal-pioneers";
+import { getCachedMedalPioneers, formatPioneerLabel, type MedalPioneer } from "@/lib/medal-pioneers";
+import { loadRegistryReadOnly, type PlayerProfile } from "@/lib/playfab";
 
 interface Props {
   medal: MedalDefinition | null;
   unlockedInfo?: PlayerUnlockedMedal | null;
+  pioneer?: MedalPioneer | null;
   progressText?: string;
   percentComplete?: number;
   open: boolean;
@@ -27,6 +29,7 @@ interface Props {
 export function MedalDetailModal({
   medal,
   unlockedInfo,
+  pioneer: pioneerProp,
   progressText,
   percentComplete = 0,
   open,
@@ -41,8 +44,20 @@ export function MedalDetailModal({
   const stackCount = unlockedInfo?.count ?? 1;
   const showStackBadge = isUnlocked && (medal.isStackable || stackCount > 1);
 
-  const pioneers = getCachedMedalPioneers();
-  const pioneer = medal ? pioneers[medal.id] : null;
+  let pioneer: MedalPioneer | null = pioneerProp ?? null;
+  if (pioneerProp === undefined && medal) {
+    try {
+      const reg = loadRegistryReadOnly();
+      const players = Object.values(reg)
+        .map((a) => a?.profile)
+        .filter((p): p is PlayerProfile => Boolean(p));
+      const pioneers = getCachedMedalPioneers(players);
+      pioneer = pioneers[medal.id] ?? null;
+    } catch {
+      const pioneers = getCachedMedalPioneers();
+      pioneer = pioneers[medal.id] ?? null;
+    }
+  }
   const pioneerInfo = formatPioneerLabel(pioneer);
 
   let formattedDate: string | null = null;

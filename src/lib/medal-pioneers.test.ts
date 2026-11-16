@@ -1,6 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { computeMedalPioneers, formatPioneerLabel } from "./medal-pioneers.ts";
+import {
+  computeMedalPioneers,
+  formatPioneerLabel,
+  getCachedMedalPioneers,
+  invalidatePioneersCache,
+} from "./medal-pioneers.ts";
 import type { PlayerProfile } from "./playfab.ts";
 
 function createMockPlayer(data: Partial<PlayerProfile>): PlayerProfile {
@@ -140,5 +145,30 @@ describe("Detecção de Pioneiros de Medalhas (medal-pioneers)", () => {
     assert.equal(filledLabel.hasPioneer, true);
     assert.ok(filledLabel.description.includes("JOÃO SILVA"));
     assert.ok(filledLabel.description.includes("Ursulina Souza"));
+  });
+
+  it("recalcula o cache automaticamente quando um aluno conquista nova medalha mesmo mantendo o mesmo total de alunos", () => {
+    invalidatePioneersCache();
+    const student = createMockPlayer({
+      id: "s1",
+      nick: "aluno_1",
+      full_name: "ALUNO UM",
+      unlockedMedals: [{ medalId: "lvl_2", unlockedAt: "2026-11-16T09:00:00.000Z" }],
+    });
+
+    const first = getCachedMedalPioneers([student]);
+    assert.ok(first["lvl_2"]);
+    assert.equal(first["complete_1_game"], undefined);
+
+    const updatedStudent = {
+      ...student,
+      unlockedMedals: [
+        ...(student.unlockedMedals ?? []),
+        { medalId: "complete_1_game", unlockedAt: "2026-11-16T10:43:00.000Z" },
+      ],
+    };
+
+    const second = getCachedMedalPioneers([updatedStudent]);
+    assert.equal(second["complete_1_game"]?.studentNick, "aluno_1");
   });
 });
