@@ -261,8 +261,10 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
   // Estado para o modal de pré-visualização fiel da mensagem enviada
   const [previewMessage, setPreviewMessage] = useState<SystemInboxMessage | null>(null);
 
-  // Estado para confirmação de cancelamento de envio
+  // Estado para confirmação de cancelamento/exclusão de envio (único ou em lote)
   const [cancelingMsg, setCancelingMsg] = useState<SystemInboxMessage | null>(null);
+  const [selectedHistoryMsgIds, setSelectedHistoryMsgIds] = useState<Set<string>>(() => new Set());
+  const [batchCancelingMsgs, setBatchCancelingMsgs] = useState<SystemInboxMessage[]>([]);
   const [isCanceling, setIsCanceling] = useState(false);
 
   // Controle de sincronização e atualização de leitores do histórico
@@ -493,13 +495,45 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
     };
   }, []);
 
-  // Cancela o envio da mensagem selecionada no histórico ADM e remove da caixa de entrada de todos os alunos
+  const toggleHistoryMsgSelection = (msgId: string) => {
+    setSelectedHistoryMsgIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(msgId)) {
+        next.delete(msgId);
+      } else {
+        next.add(msgId);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAllHistory = () => {
+    setSelectedHistoryMsgIds((prev) => {
+      if (sortedSentHistory.length > 0 && sortedSentHistory.every((m) => prev.has(m.id))) {
+        return new Set();
+      }
+      return new Set(sortedSentHistory.map((m) => m.id));
+    });
+  };
+
+  // Cancela/apaga uma ou várias mensagens selecionadas no histórico ADM e remove da caixa de entrada de todos os alunos
   const handleConfirmCancelMessage = async () => {
-    if (!cancelingMsg) return;
+    const targets = batchCancelingMsgs.length > 0 ? batchCancelingMsgs : cancelingMsg ? [cancelingMsg] : [];
+    if (targets.length === 0) return;
+
     setIsCanceling(true);
     try {
-      const res = cancelInboxMessage(cancelingMsg.id);
-      if (res.success) {
+      let canceledCount = 0;
+      const canceledTargetIds = new Set<string>();
+      for (const target of targets) {
+        const res = cancelInboxMessage(target.id);
+        if (res.success) {
+          canceledCount += 1;
+          canceledTargetIds.add(target.id);
+        }
+      }
+
+      if (canceledCount > 0) {
         // Sincroniza imediatamente com PlayFab Cloud através de PlatformAdminConfig
         const allMsgs = loadAllInboxMessages();
         const canceledIds = Array.from(loadCanceledMessageIds());
@@ -514,18 +548,31 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
         }
 
         refreshHistory();
-        if (readersModalMsg?.id === cancelingMsg.id) {
+        setSelectedHistoryMsgIds((prev) => {
+          const next = new Set(prev);
+          canceledTargetIds.forEach((id) => next.delete(id));
+          return next;
+        });
+        if (readersModalMsg && canceledTargetIds.has(readersModalMsg.id)) {
           setReadersModalMsg(null);
         }
-        onBroadcastSent?.(
-          `🚫 O envio da mensagem "${cancelingMsg.title}" foi cancelado com sucesso. Ela foi removida da caixa de correio de todos os alunos.`
-        );
+
+        if (targets.length === 1) {
+          onBroadcastSent?.(
+            `🚫 O envio da mensagem "${targets[0].title}" foi cancelado com sucesso. Ela foi removida da caixa de correio de todos os alunos.`
+          );
+        } else {
+          onBroadcastSent?.(
+            `🚫 ${canceledCount} mensagem(ns) selecionada(s) foram apagadas e removidas da caixa de correio de todos os alunos.`
+          );
+        }
       }
     } catch (err) {
-      console.error("Erro ao cancelar envio da mensagem:", err);
+      console.error("Erro ao cancelar envio da(s) mensagem(ns):", err);
     } finally {
       setIsCanceling(false);
       setCancelingMsg(null);
+      setBatchCancelingMsgs([]);
     }
   };
 
@@ -2324,7 +2371,42 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                   Histórico de Mensagens Transmitidas ({sentHistory.length})
                 </h3>
               </div>
-              <div className="flex items-center gap-1.5">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {sortedSentHistory.length > 0 && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={toggleSelectAllHistory}
+                    className="h-7 rounded-xl text-[11px] font-bold gap-1.5 cursor-pointer bg-secondary/50 hover:bg-secondary border-border/80"
+                    title="Marcar ou desmarcar todas as mensagens do histórico"
+                  >
+                    {sortedSentHistory.every((m) => selectedHistoryMsgIds.has(m.id)) ? (
+                      <>
+                        <CheckSquare className="h-3.5 w-3.5 text-primary" /> Desmarcar Todas
+                      </>
+                    ) : (
+                      <>
+                        <Square className="h-3.5 w-3.5 text-muted-foreground" /> Selecionar Todas
+                      </>
+                    )}
+                  </Button>
+                )}
+                {selectedHistoryMsgIds.size > 0 && (
+                  <Button
+                    type="button"
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => {
+                      const chosen = sortedSentHistory.filter((m) => selectedHistoryMsgIds.has(m.id));
+                      if (chosen.length > 0) setBatchCancelingMsgs(chosen);
+                    }}
+                    className="h-7 rounded-xl text-[11px] font-bold gap-1.5 cursor-pointer shadow-xs"
+                    title="Apagar todas as mensagens marcadas e remover da caixa de entrada dos alunos"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" /> Apagar Selecionadas ({selectedHistoryMsgIds.size})
+                  </Button>
+                )}
                 <Button
                   type="button"
                   variant="outline"
@@ -2382,36 +2464,58 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                       ? Math.round((stats.readCount / stats.totalTargeted) * 100)
                       : 0;
 
+                  const isSelected = selectedHistoryMsgIds.has(msg.id);
+
                   return (
                     <div
                       key={msg.id}
-                      className="flex flex-col gap-2 rounded-2xl border bg-secondary/25 p-3.5 text-xs transition-colors hover:bg-secondary/40"
+                      className={`flex flex-col gap-2 rounded-2xl border p-3.5 text-xs transition-colors ${
+                        isSelected
+                          ? "border-primary/60 bg-primary/5"
+                          : "bg-secondary/25 hover:bg-secondary/40"
+                      }`}
                     >
-                      <div
-                        className="flex items-start justify-between gap-2 cursor-pointer group"
-                        onClick={() => setPreviewMessage(msg)}
-                        title="Clique para visualizar o conteúdo completo desta mensagem"
-                      >
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="font-display font-bold text-foreground group-hover:text-primary transition-colors truncate text-sm">
-                              {msg.title}
-                            </span>
-                            {msg.reward && (
-                              <span className="rounded-full bg-amber-500/20 text-amber-600 dark:text-amber-400 text-[10px] font-bold px-2 py-0.5 shrink-0">
-                                🎁 Recompensa
-                              </span>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                          <button
+                            type="button"
+                            onClick={() => toggleHistoryMsgSelection(msg.id)}
+                            className="mt-0.5 shrink-0 text-muted-foreground hover:text-primary transition-colors cursor-pointer"
+                            aria-label={isSelected ? `Desmarcar mensagem ${msg.title}` : `Marcar mensagem ${msg.title}`}
+                            title={isSelected ? "Desmarcar para exclusão" : "Marcar para apagar"}
+                          >
+                            {isSelected ? (
+                              <CheckSquare className="h-4 w-4 text-primary" />
+                            ) : (
+                              <Square className="h-4 w-4" />
                             )}
-                          </div>
-                          <div className="text-[10px] text-muted-foreground truncate mt-0.5">
-                            {formattedDate} • Destinatários:{" "}
-                            {msg.recipientId === "ALL"
-                              ? msg.recipientFilter?.school
-                                ? `Escola: ${msg.recipientFilter.school}`
-                                : msg.recipientFilter?.stage
-                                  ? `Etapa: ${msg.recipientFilter.stage}`
-                                  : "Todos os Alunos"
-                              : `Aluno: ${msg.recipientId}`}
+                          </button>
+
+                          <div
+                            className="min-w-0 flex-1 cursor-pointer group"
+                            onClick={() => setPreviewMessage(msg)}
+                            title="Clique para visualizar o conteúdo completo desta mensagem"
+                          >
+                            <div className="flex items-center gap-2">
+                              <span className="font-display font-bold text-foreground group-hover:text-primary transition-colors truncate text-sm">
+                                {msg.title}
+                              </span>
+                              {msg.reward && (
+                                <span className="rounded-full bg-amber-500/20 text-amber-600 dark:text-amber-400 text-[10px] font-bold px-2 py-0.5 shrink-0">
+                                  🎁 Recompensa
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[10px] text-muted-foreground truncate mt-0.5">
+                              {formattedDate} • Destinatários:{" "}
+                              {msg.recipientId === "ALL"
+                                ? msg.recipientFilter?.school
+                                  ? `Escola: ${msg.recipientFilter.school}`
+                                  : msg.recipientFilter?.stage
+                                    ? `Etapa: ${msg.recipientFilter.stage}`
+                                    : "Todos os Alunos"
+                                : `Aluno: ${msg.recipientId}`}
+                            </div>
                           </div>
                         </div>
 
@@ -3682,35 +3786,60 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
         </DialogContent>
       </Dialog>
 
-      {/* MODAL DE CONFIRMAÇÃO DE CANCELAMENTO DE ENVIO */}
+      {/* MODAL DE CONFIRMAÇÃO DE CANCELAMENTO/EXCLUSÃO DE ENVIO */}
       <Dialog
-        open={Boolean(cancelingMsg)}
+        open={Boolean(cancelingMsg) || batchCancelingMsgs.length > 0}
         onOpenChange={(isOpen) => {
-          if (!isOpen && !isCanceling) setCancelingMsg(null);
+          if (!isOpen && !isCanceling) {
+            setCancelingMsg(null);
+            setBatchCancelingMsgs([]);
+          }
         }}
       >
         <DialogContent className="max-w-md rounded-3xl p-6">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-base font-bold text-destructive">
               <AlertCircle className="h-5 w-5" />
-              Cancelar Envio da Mensagem
+              {batchCancelingMsgs.length > 1
+                ? `Apagar ${batchCancelingMsgs.length} Mensagens Selecionadas`
+                : "Cancelar Envio da Mensagem"}
             </DialogTitle>
           </DialogHeader>
 
-          {cancelingMsg && (
+          {(cancelingMsg || batchCancelingMsgs.length > 0) && (
             <div className="space-y-4 py-2 text-xs">
-              <p className="text-muted-foreground leading-relaxed">
-                Tem certeza de que deseja cancelar o envio do comunicado{" "}
-                <strong className="text-foreground font-semibold">"{cancelingMsg.title}"</strong>?
-              </p>
+              {batchCancelingMsgs.length > 1 ? (
+                <div className="space-y-2">
+                  <p className="text-muted-foreground leading-relaxed">
+                    Tem certeza de que deseja apagar as{" "}
+                    <strong className="text-foreground font-semibold">{batchCancelingMsgs.length} mensagens</strong>{" "}
+                    selecionadas?
+                  </p>
+                  <ul className="max-h-28 overflow-y-auto rounded-xl border bg-secondary/30 p-2.5 space-y-1 text-[11px] text-foreground">
+                    {batchCancelingMsgs.map((m) => (
+                      <li key={m.id} className="truncate">
+                        • {m.title}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <p className="text-muted-foreground leading-relaxed">
+                  Tem certeza de que deseja cancelar o envio do comunicado{" "}
+                  <strong className="text-foreground font-semibold">
+                    "{(batchCancelingMsgs[0] ?? cancelingMsg)?.title}"
+                  </strong>
+                  ?
+                </p>
+              )}
 
               <div className="rounded-2xl border border-destructive/20 bg-destructive/5 p-3.5 space-y-1.5 text-destructive text-[11px]">
                 <p className="font-bold flex items-center gap-1.5">
-                  ⚠️ Efeitos imediatos do cancelamento:
+                  ⚠️ Efeitos imediatos da exclusão:
                 </p>
                 <ul className="list-disc list-inside space-y-1 text-muted-foreground">
                   <li>
-                    A mensagem será <strong className="text-foreground">removida imediatamente</strong> da caixa de entrada de todos os jogadores.
+                    A(s) mensagem(ns) serão <strong className="text-foreground">removidas imediatamente</strong> da caixa de entrada de todos os jogadores.
                   </li>
                   <li>
                     Alunos que ainda não leram não terão mais acesso ao comunicado.
@@ -3726,7 +3855,10 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => setCancelingMsg(null)}
+                  onClick={() => {
+                    setCancelingMsg(null);
+                    setBatchCancelingMsgs([]);
+                  }}
                   disabled={isCanceling}
                   className="h-9 rounded-xl font-bold text-xs cursor-pointer"
                 >
@@ -3742,11 +3874,14 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                 >
                   {isCanceling ? (
                     <>
-                      <RefreshCw className="h-3.5 w-3.5 animate-spin" /> Cancelando...
+                      <RefreshCw className="h-3.5 w-3.5 animate-spin" /> Apagando...
                     </>
                   ) : (
                     <>
-                      <Trash2 className="h-3.5 w-3.5" /> Confirmar e Cancelar Envio
+                      <Trash2 className="h-3.5 w-3.5" />{" "}
+                      {batchCancelingMsgs.length > 1
+                        ? `Confirmar e Apagar (${batchCancelingMsgs.length})`
+                        : "Confirmar e Cancelar Envio"}
                     </>
                   )}
                 </Button>
