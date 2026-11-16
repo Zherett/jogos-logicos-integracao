@@ -814,4 +814,33 @@ describe("Torneio Semanal Ranqueado (Nível 3+) e Regras da Arena X1 (Nível 5+,
       }
     }
   });
+
+  it("checkAndApplyScheduledReset não reseta automaticamente quando autoRenewSeason está desativado", async () => {
+    const { checkAndApplyScheduledReset } = await import("./playfab.ts");
+    const { DEFAULT_ADMIN_CONFIG, saveAdminConfig, loadAdminConfig } = await import("./game-codes.ts");
+    if (typeof window === "undefined") return;
+
+    const prevRaw = window.localStorage.getItem("desafios-admin-config-v1");
+    try {
+      saveAdminConfig({
+        ...DEFAULT_ADMIN_CONFIG,
+        playfabTitleId: "",
+        autoRenewSeason: false,
+        rankedSeasonId: 1,
+        rankedSeasonEndAt: "2020-01-01T00:00:00.000Z",
+        seasonEndAt: "2020-01-01T00:00:00.000Z",
+      });
+
+      const after = checkAndApplyScheduledReset({ fromCloudSync: true });
+      assert.equal(after.rankedSeasonId, 1);
+      assert.equal(after.seasonId, 1);
+      assert.equal(loadAdminConfig().rankedSeasonId, 1);
+    } finally {
+      if (prevRaw !== null) {
+        window.localStorage.setItem("desafios-admin-config-v1", prevRaw);
+      } else {
+        window.localStorage.removeItem("desafios-admin-config-v1");
+      }
+    }
+  });
 });

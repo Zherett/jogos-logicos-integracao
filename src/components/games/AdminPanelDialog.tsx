@@ -88,6 +88,7 @@ import {
 import {
   getAllRegisteredPlayers,
   getTrashPlayers,
+  restoreRankedSeasonToOne,
   moveStudentToTrash,
   restoreStudentFromTrash,
   permanentlyDeleteStudent,
@@ -606,7 +607,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
     refreshRoster();
 
     setScheduleClearXp(auth.adminConfig.scheduledResetClearXp);
-    setAutoRenewSeason(auth.adminConfig.autoRenewSeason !== false);
+    setAutoRenewSeason(auth.adminConfig.autoRenewSeason === true);
     setSeasonDurationDays(auth.adminConfig.seasonDurationDays || 14);
     setX1OpenInput(String(auth.adminConfig.x1OpenHour ?? 7));
     setX1CloseInput(String(auth.adminConfig.x1CloseHour ?? 19));
@@ -621,11 +622,11 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
     );
     const actStart = auth.adminConfig.activitySeasonStartAt
       ? new Date(auth.adminConfig.activitySeasonStartAt)
-      : new Date("2026-11-01T00:00:00.000Z");
+      : new Date(2026, 10, 1, 0, 0, 0, 0);
     setActivityStartInput(toDatetimeLocalString(actStart));
     const actEnd = auth.adminConfig.activitySeasonEndAt
       ? new Date(auth.adminConfig.activitySeasonEndAt)
-      : new Date("2026-11-15T23:59:59.999Z");
+      : new Date(2026, 10, 15, 23, 59, 59, 999);
     setActivityEndInput(toDatetimeLocalString(actEnd));
 
     // Initialize Ranked Season states
@@ -635,11 +636,11 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
     );
     const rnkStart = auth.adminConfig.rankedSeasonStartAt
       ? new Date(auth.adminConfig.rankedSeasonStartAt)
-      : new Date("2026-11-01T00:00:00.000Z");
+      : new Date(2026, 10, 1, 0, 0, 0, 0);
     setRankedStartInput(toDatetimeLocalString(rnkStart));
     const rnkEnd = auth.adminConfig.rankedSeasonEndAt
       ? new Date(auth.adminConfig.rankedSeasonEndAt)
-      : new Date("2026-11-15T23:59:59.999Z");
+      : new Date(2026, 10, 15, 23, 59, 59, 999);
     setRankedEndInput(toDatetimeLocalString(rnkEnd));
 
     const sStart = auth.adminConfig.seasonStartAt
@@ -1064,6 +1065,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
     const end = parseDatetimeLocal(activityEndInput);
     const updated: PlatformAdminConfig = {
       ...draft,
+      autoRenewSeason,
       activitySeasonName: activitySeasonName.trim() || draft.activitySeasonName,
       activitySeasonStartAt: start.toISOString(),
       activitySeasonEndAt: end ? end.toISOString() : null,
@@ -1120,6 +1122,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
     const end = parseDatetimeLocal(rankedEndInput);
     const updated: PlatformAdminConfig = {
       ...draft,
+      autoRenewSeason,
       rankedSeasonName: rankedSeasonName.trim() || draft.rankedSeasonName,
       rankedSeasonStartAt: start.toISOString(),
       rankedSeasonEndAt: end ? end.toISOString() : null,
@@ -1128,6 +1131,25 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
     setDraft(updated);
     await auth.updateAdminConfig(updated);
     flashSaved("Configurações da Temporada de Ranqueada salvas com sucesso!");
+  };
+
+  const restoreRankedSeasonOneAction = async () => {
+    const restored = await restoreRankedSeasonToOne({ extendDays: 7 });
+    setDraft(restored);
+    setAutoRenewSeason(false);
+    setRankedSeasonName(restored.rankedSeasonName || "Temporada 1 Ranqueada • SEMED Coari");
+    if (restored.rankedSeasonStartAt) {
+      setRankedStartInput(toDatetimeLocalString(new Date(restored.rankedSeasonStartAt)));
+    }
+    if (restored.rankedSeasonEndAt) {
+      setRankedEndInput(toDatetimeLocalString(new Date(restored.rankedSeasonEndAt)));
+    }
+    if (restored.rankedSeasonDurationDays) {
+      setRankedDurationDays(restored.rankedSeasonDurationDays);
+    }
+    await auth.refresh();
+    onConfigSaved?.();
+    flashSaved("Temporada #1 Ranqueada restaurada (+7 dias) e auto-renovação desativada no PlayFab!");
   };
 
   const executeRankedResetAction = async () => {
@@ -4066,6 +4088,22 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                       </div>
                     </div>
 
+                    {/* Controle de Renovação Automática */}
+                    <div className="flex items-center justify-between gap-3 rounded-2xl border bg-secondary/20 p-3">
+                      <div className="space-y-0.5">
+                        <div className="text-xs font-bold text-foreground">
+                          Renovação Automática ao fim do prazo
+                        </div>
+                        <p className="text-[11px] text-muted-foreground">
+                          Quando desativado (recomendado), a temporada NÃO reseta sozinha ao atingir a data final; apenas o ADM inicia a próxima temporada manualmente.
+                        </p>
+                      </div>
+                      <Switch
+                        checked={autoRenewSeason}
+                        onCheckedChange={(checked) => setAutoRenewSeason(Boolean(checked))}
+                      />
+                    </div>
+
                     {/* Botão Salvar Configurações da Ranqueada */}
                     <Button
                       type="button"
@@ -4074,6 +4112,25 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                     >
                       <Save className="h-4 w-4" /> Salvar Configurações da Temporada de Ranqueada
                     </Button>
+
+                    {(draft.rankedSeasonId ?? 1) > 1 && (
+                      <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3.5 space-y-2">
+                        <div className="text-xs font-bold text-amber-700 dark:text-amber-300">
+                          A Ranqueada avançou para a Temporada #{draft.rankedSeasonId}. Precisa voltar para a Temporada #1?
+                        </div>
+                        <p className="text-[11px] text-muted-foreground">
+                          Restaura a Temporada #1 Ranqueada no PlayFab com +7 dias a partir de hoje, desativa a renovação automática e reconcilia as patentes dos alunos a partir da nuvem.
+                        </p>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={restoreRankedSeasonOneAction}
+                          className="w-full rounded-xl font-display font-bold text-xs border-amber-500/50 text-amber-700 dark:text-amber-300 hover:bg-amber-500/20 cursor-pointer"
+                        >
+                          <RotateCcw className="h-3.5 w-3.5 mr-1.5" /> Restaurar Temporada #1 (+7 dias) e Reconciliar Patentes
+                        </Button>
+                      </div>
+                    )}
                   </div>
 
                   {/* Reset Imediato de Ranqueada */}

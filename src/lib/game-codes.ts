@@ -141,7 +141,7 @@ export interface PlatformAdminConfig {
   seasonEndAt?: string | null;
   /** Duração em dias configurada para a temporada (padrão: 14 dias; opções: 7, 14, 30 ou número customizado). */
   seasonDurationDays?: number;
-  /** Se ativado (padrão: true), encerra a temporada no término e cria automaticamente a Temporada N+1. */
+  /** Se ativado (true), encerra a temporada no término e cria automaticamente a Temporada N+1. Padrão: false (somente reset manual pelo ADM). */
   autoRenewSeason?: boolean;
   /** ISO timestamp of the last ranking reset. */
   lastResetAt: string;
@@ -271,7 +271,7 @@ export const DEFAULT_ADMIN_CONFIG: PlatformAdminConfig = {
   seasonStartAt: "2026-01-01T00:00:00.000Z",
   seasonEndAt: null,
   seasonDurationDays: 14,
-  autoRenewSeason: true,
+  autoRenewSeason: false,
   lastResetAt: "2026-01-01T00:00:00.000Z",
   scheduledResetAt: null,
   scheduledResetClearXp: false,

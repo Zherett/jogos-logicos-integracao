@@ -18,7 +18,7 @@ import {
   type PlatformAdminConfig,
   type ResetHistoryEntry,
 } from "./game-codes.ts";
-import { computeSeasonDates } from "./season-cycle.ts";
+import { computeSeasonDates, extendSeasonDate } from "./season-cycle.ts";
 import type { PlayerAvatarConfig } from "./avatar.ts";
 import {
   adjustXpForGameMode,
@@ -737,6 +737,11 @@ export function checkAndApplyScheduledReset(options?: {
     return cfg;
   }
 
+  // Só executa resets automáticos quando o ADM ativou explicitamente autoRenewSeason === true
+  if (cfg.autoRenewSeason !== true) {
+    return cfg;
+  }
+
   // 1. Encerramento automático agendado da Temporada Geral de Atividades (BETA / 60 dias)
   const targetEnd = cfg.seasonEndAt || cfg.scheduledResetAt;
   if (targetEnd) {
@@ -939,6 +944,60 @@ export function executeRankedSeasonReset(options?: {
   }
 
   return nextConfig;
+}
+
+/**
+ * Restaura a Temporada de Ranqueada para a Temporada #1 (com +7 dias padrão e auto-renovação desativada)
+ * para reverter um reset automático prematuro e preservar/reconciliar as patentes dos alunos a partir do PlayFab.
+ */
+export async function restoreRankedSeasonToOne(options?: {
+  extendDays?: number;
+}): Promise<PlatformAdminConfig> {
+  const cfg = loadAdminConfig();
+  const extendDays = Math.max(1, options?.extendDays ?? 7);
+  const now = new Date();
+  const nextEnd = extendSeasonDate(now, extendDays);
+  const start = new Date(2026, 10, 1, 0, 0, 0, 0);
+  const totalDays = Math.max(
+    1,
+    Math.round((nextEnd.getTime() - start.getTime()) / (24 * 60 * 60 * 1000)),
+  );
+
+  const reg = loadRegistry();
+  const nowIso = now.toISOString();
+  for (const key of Object.keys(reg)) {
+    const acc = reg[key];
+    if ((acc.profile.rankedSeasonId ?? 1) > 1) {
+      acc.profile.rankedSeasonId = 1;
+      acc.updatedAt = nowIso;
+    }
+  }
+  saveRegistry(reg);
+  alignedAccountSignatures.clear();
+
+  const cleanedHistory = (cfg.resetHistory ?? []).filter(
+    (entry) => !(entry.id.startsWith("rst_rnk_") && entry.seasonId === 1),
+  );
+
+  const nextConfig: PlatformAdminConfig = {
+    ...cfg,
+    autoRenewSeason: false,
+    rankedSeasonId: 1,
+    rankedSeasonName: "Temporada 1 Ranqueada • SEMED Coari",
+    rankedSeasonStartAt: start.toISOString(),
+    rankedSeasonEndAt: nextEnd.toISOString(),
+    rankedSeasonDurationDays: totalDays,
+    resetHistory: cleanedHistory,
+  };
+
+  const pushed = await pushAdminConfigToPlayFab(nextConfig);
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("desafios:weekly-tournament-updated"));
+    window.dispatchEvent(new CustomEvent("desafios:profile-updated"));
+  }
+
+  return pushed;
 }
 
 /* --------------------- Sync Admin Config with PlayFab --------------------- */
