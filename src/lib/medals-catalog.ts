@@ -94,6 +94,7 @@ export interface MedalCondition {
     | "beta_tester_heroi"
     | "daily_post_cap_matches"
     | "total_matches_played"
+    | "streak_medal_count"
     | "top5_weeks_count"
     | "top1_consecutive_weeks"
     | "manual_event"
@@ -101,6 +102,7 @@ export interface MedalCondition {
   threshold?: number;
   gameId?: GameId;
   targetRank?: number; // 1, 2, 3
+  targetMedalId?: string;
 }
 
 export interface MedalDefinition {
@@ -689,6 +691,7 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
       rarity: "bronze",
       category: "atividade",
       iconName: "Clock",
+      isStackable: true,
       condition: { type: "streak_days", threshold: 3 },
     },
     {
@@ -698,6 +701,7 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
       rarity: "prata",
       category: "atividade",
       iconName: "Flame",
+      isStackable: true,
       condition: { type: "streak_days", threshold: 5 },
     },
     {
@@ -707,6 +711,7 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
       rarity: "ouro",
       category: "atividade",
       iconName: "Rocket",
+      isStackable: true,
       condition: { type: "streak_days", threshold: 7 },
     },
   );
@@ -1014,7 +1019,39 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
       isSecret: true,
     },
 
-    // 16. Novas Medalhas Secretas de Maestria Multijogos
+    // 16. Medalhas Secretas - Trilogia da Constância Diária (3x Dia 3, 5x Dia 5, 7x Dia 7)
+    {
+      id: "secret_streak_day3_x3",
+      title: "Tríade do Hábito",
+      description: "Segredo de disciplina revelado: conquistou a recompensa do 3º dia por 3 vezes!",
+      rarity: "prata",
+      category: "secreta",
+      iconName: "Clock",
+      condition: { type: "streak_medal_count", targetMedalId: "streak_3_days", threshold: 3 },
+      isSecret: true,
+    },
+    {
+      id: "secret_streak_day5_x5",
+      title: "Pilar da Disciplina",
+      description: "Segredo de foco revelado: conquistou a recompensa do 5º dia por 5 vezes!",
+      rarity: "ouro",
+      category: "secreta",
+      iconName: "Flame",
+      condition: { type: "streak_medal_count", targetMedalId: "streak_5_days", threshold: 5 },
+      isSecret: true,
+    },
+    {
+      id: "secret_streak_day7_x7",
+      title: "Guardião da Constância",
+      description: "Segredo supremo revelado: completou o ciclo de 7 dias consecutivos por 7 vezes!",
+      rarity: "platina",
+      category: "secreta",
+      iconName: "Crown",
+      condition: { type: "streak_medal_count", targetMedalId: "streak_7_days", threshold: 7 },
+      isSecret: true,
+    },
+
+    // 17. Novas Medalhas Secretas de Maestria Multijogos
     {
       id: "secret_specialist_10_games",
       title: "Especialista Absoluto",
@@ -2182,6 +2219,24 @@ export function evaluatePlayerMedals(
         if (effectiveStreakDays >= (cond.threshold ?? 3)) earned = true;
         break;
 
+      case "streak_medal_count": {
+        const targetId = cond.targetMedalId;
+        const requiredCount = cond.threshold ?? 3;
+        if (targetId && Array.isArray(p.unlockedMedals)) {
+          const found = p.unlockedMedals.find((m: any) =>
+            (typeof m === "string" ? m : (m?.medalId ?? m?.id)) === targetId,
+          );
+          if (found) {
+            const count =
+              typeof found === "object" && typeof (found as any).count === "number"
+                ? (found as any).count
+                : 1;
+            if (count >= requiredCount) earned = true;
+          }
+        }
+        break;
+      }
+
       case "tournament_rank":
         if (
           cond.targetRank &&
@@ -2676,6 +2731,27 @@ export function calculateMedalProgress(
       return {
         percent: pct,
         progressText: `${cur} de ${target} dias consecutivos ativos`,
+      };
+    }
+    case "streak_medal_count": {
+      const targetId = cond.targetMedalId;
+      const target = cond.threshold ?? 3;
+      let cur = 0;
+      if (targetId && Array.isArray(profile.unlockedMedals)) {
+        const found = profile.unlockedMedals.find((m: any) =>
+          (typeof m === "string" ? m : (m?.medalId ?? m?.id)) === targetId,
+        );
+        if (found) {
+          cur =
+            typeof found === "object" && typeof (found as any).count === "number"
+              ? (found as any).count
+              : 1;
+        }
+      }
+      const pct = Math.min(100, Math.round((cur / target) * 100));
+      return {
+        percent: pct,
+        progressText: `${cur} de ${target} conquistas acumuladas`,
       };
     }
     case "tournament_rank": {

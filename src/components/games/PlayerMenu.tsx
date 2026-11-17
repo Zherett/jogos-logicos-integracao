@@ -25,13 +25,18 @@ import {
   Mail,
   Swords,
   Ticket,
+  Calendar,
 } from "lucide-react";
+import { canAccessDailyRewardsPreview, getCurrentCycleDay } from "@/lib/daily-rewards";
 import { canAccessPromoCodeRedeem } from "@/lib/promo-codes";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const PromoCodeRedeemDialog = lazy(() =>
   import("./PromoCodeRedeemDialog").then((m) => ({ default: m.PromoCodeRedeemDialog })),
+);
+const DailyRewardsModal = lazy(() =>
+  import("./DailyRewardsModal").then((m) => ({ default: m.DailyRewardsModal })),
 );
 const PlayerAuthDialog = lazy(() =>
   import("./PlayerAuthDialog").then((m) => ({ default: m.PlayerAuthDialog })),
@@ -134,6 +139,7 @@ export function PlayerMenu({ onConfigChanged }: Props) {
   const [profileOpen, setProfileOpen] = useState(false);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [promoCodeOpen, setPromoCodeOpen] = useState(false);
+  const [dailyRewardsOpen, setDailyRewardsOpen] = useState(false);
   const [inboxCounts, setInboxCounts] = useState({ unreadCount: 0, unclaimedRewardsCount: 0, totalAlerts: 0 });
 
   // Accordion collapsible states
@@ -203,6 +209,8 @@ export function PlayerMenu({ onConfigChanged }: Props) {
     : 0;
   const dailyPercent = Math.min(100, Math.round((dailyXp / Math.max(1, dailyCap)) * 100));
   const isDailyCapped = dailyXp >= dailyCap;
+  const showDailyRewards = canAccessDailyRewardsPreview(profile, auth.isAdmin);
+  const currentCycleDay = getCurrentCycleDay(profile?.streakDays);
 
   // Retrieve player's official weekly tournament ranking position in their stage
   useEffect(() => {
@@ -417,6 +425,25 @@ export function PlayerMenu({ onConfigChanged }: Props) {
           <span className="hidden font-display text-xs font-bold uppercase sm:inline">Ranking</span>
         </Link>
 
+        {/* Recompensa Diária Progressiva (Oculto para Alunos, visível apenas para ADM / Testes) */}
+        {showDailyRewards && (
+          <button
+            type="button"
+            onClick={() => setDailyRewardsOpen(true)}
+            className="flex h-11 items-center gap-1.5 rounded-2xl border border-amber-500/40 bg-gradient-to-r from-amber-500/10 to-amber-500/5 px-3 text-foreground shadow-sm transition-all hover:bg-amber-500/20 active:scale-95 cursor-pointer"
+            aria-label="Abrir Recompensas Diárias"
+            title={`Trilha de Recompensas Diárias (Dia ${currentCycleDay} do Ciclo - Prévia ADM)`}
+          >
+            <span className="font-mono text-xs font-black text-amber-600 dark:text-amber-400">
+              {currentCycleDay}
+            </span>
+            <Calendar className="h-5 w-5 text-amber-500" />
+            <span className="hidden font-display text-xs font-bold uppercase sm:inline">
+              Recompensas
+            </span>
+          </button>
+        )}
+
         {/* Caixa de Entrada e Correio do Aluno */}
         {profile && (
           <button
@@ -501,6 +528,15 @@ export function PlayerMenu({ onConfigChanged }: Props) {
             onRewardClaimed={() => {
               auth.refresh();
             }}
+          />
+        </Suspense>
+      )}
+      {dailyRewardsOpen && (
+        <Suspense fallback={null}>
+          <DailyRewardsModal
+            open={dailyRewardsOpen}
+            onOpenChange={setDailyRewardsOpen}
+            profile={profile}
           />
         </Suspense>
       )}
