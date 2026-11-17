@@ -500,6 +500,10 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
     return counts;
   }, [registeredStudents, auth.stats, auth.profile?.id]);
 
+  const totalAllGamesPlays = useMemo(() => {
+    return Object.values(gameStatsSummary).reduce((sum, item) => sum + (item?.totalPlays ?? 0), 0);
+  }, [gameStatsSummary]);
+
   // Pioneiros de medalhas (primeiro aluno da rede a conquistar cada medalha)
   const pioneersMap = useMemo(() => {
     return getCachedMedalPioneers(registeredStudents);
@@ -1650,6 +1654,16 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                 </div>
 
                 <div className="space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-primary/25 bg-primary/5 px-4 py-2.5">
+                    <div className="flex items-center gap-2 text-xs font-bold text-foreground">
+                      <span>🎮</span>
+                      <span>Total de Partidas Jogadas (Todos os Jogos)</span>
+                    </div>
+                    <span className="rounded-full bg-primary px-3 py-0.5 font-display text-xs font-black text-primary-foreground shadow-2xs">
+                      {totalAllGamesPlays.toLocaleString("pt-BR")} partida{totalAllGamesPlays === 1 ? "" : "s"}
+                    </span>
+                  </div>
+
                   <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold uppercase tracking-wider text-muted-foreground px-1">
                     <div className="flex items-center gap-2">
                       <span>Jogo (Ativar / Desativar)</span>

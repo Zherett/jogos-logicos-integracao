@@ -19,6 +19,7 @@ import {
   Rocket,
   Target,
   LogIn,
+  Gamepad2,
 } from "lucide-react";
 import type { AllStats, GameId } from "@/lib/game-storage";
 import { GAME_NAMES } from "@/lib/game-storage";
@@ -139,6 +140,7 @@ export function Menu({
   const [currentEventIndex, setCurrentEventIndex] = useState(0);
   const [eventsPanelOpen, setEventsPanelOpen] = useState(false);
   const [selectedGameForDetail, setSelectedGameForDetail] = useState<GameRegistration | null>(null);
+  const [activeHomeTab, setActiveHomeTab] = useState<"jogos" | "novidades">("jogos");
 
   useEffect(() => {
     const update = () => {
@@ -154,14 +156,14 @@ export function Menu({
     };
   }, []);
 
-  // Auto-avanço sutil quando há múltiplos eventos ativos
+  // Auto-avanço sutil apenas quando a aba Novidades estiver aberta e houver múltiplos eventos
   useEffect(() => {
-    if (activeEvents.length <= 1) return;
+    if (activeHomeTab !== "novidades" || activeEvents.length <= 1) return;
     const timer = window.setInterval(() => {
       setCurrentEventIndex((prev) => (prev + 1) % activeEvents.length);
     }, 8000);
     return () => window.clearInterval(timer);
-  }, [activeEvents.length]);
+  }, [activeHomeTab, activeEvents.length]);
 
   const handleTournamentClick = () => {
     if (!playerProfile) {
@@ -182,6 +184,49 @@ export function Menu({
 
   return (
     <div className="space-y-4">
+      {/* Navegação em Abas da Página Inicial: Jogos (padrão) vs Novidades e Outros */}
+      <div
+        role="tablist"
+        aria-label="Seções da página inicial"
+        className="grid grid-cols-2 items-center rounded-full border border-border/70 bg-card/70 p-1.5 shadow-2xs backdrop-blur-sm"
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeHomeTab === "jogos"}
+          onClick={() => setActiveHomeTab("jogos")}
+          className={`flex items-center justify-center gap-2 rounded-full px-4 py-2 text-xs sm:text-sm font-extrabold transition-all cursor-pointer ${
+            activeHomeTab === "jogos"
+              ? "bg-primary text-primary-foreground shadow-md"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <Gamepad2 className="h-4 w-4" />
+          <span>Jogos</span>
+        </button>
+
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeHomeTab === "novidades"}
+          onClick={() => setActiveHomeTab("novidades")}
+          className={`flex items-center justify-center gap-2 rounded-full px-4 py-2 text-xs sm:text-sm font-extrabold transition-all cursor-pointer ${
+            activeHomeTab === "novidades"
+              ? "bg-primary text-primary-foreground shadow-md"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <Sparkles className="h-4 w-4" />
+          <span>Novidades e Outros</span>
+          {(cumulativeBonuses.hasActiveBonuses || activeEvents.length > 0) && activeHomeTab !== "novidades" && (
+            <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" aria-hidden="true" />
+          )}
+        </button>
+      </div>
+
+      {/* Aba 2: Novidades e Outros (Eventos, Torneio Ranqueado, Quadro de Avisos e Arena X1) */}
+      {activeHomeTab === "novidades" && (
+        <div className="space-y-4">
       {/* 1. Painel Retrátil Minimalista: Bônus Acumulados + Faixa de Eventos da Semana */}
       {(cumulativeBonuses.hasActiveBonuses || activeEvents.length > 0) && (() => {
         const currentEv =
@@ -530,8 +575,11 @@ export function Menu({
           </button>
         )}
       </div>
+        </div>
+      )}
 
-      {/* 5. Grade de Jogos em 4 Colunas (Alinhada: 2 Jogos sob Torneio Ranqueado e 2 sob Arena X1) */}
+      {/* Aba 1: Jogos (Somente a grade de jogos e botão opcional de código) */}
+      {activeHomeTab === "jogos" && (
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
         {visible.map((g) => {
           const isLocked = requireCodeGate && !unlocked.includes(g.id);
@@ -603,6 +651,7 @@ export function Menu({
           </button>
         )}
       </div>
+      )}
 
       <p className="text-center text-xs text-muted-foreground font-medium pt-2">
         Idealizado para alunos do 5º ao 9º ano • Funciona no celular, tablet e computador. Projeto INTEGRAÇÃO — SEMED-COARI.
