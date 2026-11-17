@@ -215,7 +215,12 @@ export function PlayerMenu({ onConfigChanged }: Props) {
   const dailyPercent = Math.min(100, Math.round((dailyXp / Math.max(1, dailyCap)) * 100));
   const isDailyCapped = dailyXp >= dailyCap;
   const showDailyRewards = canAccessDailyRewardsPreview(profile, auth.isAdmin);
-  const currentCycleDay = getCurrentCycleDay(profile?.streakDays);
+  const isTodayCheckInClaimed = profile?.lastDailyLoginPointsDate === todayKey;
+  const totalCheckInsCount = Math.max(
+    Array.isArray(profile?.activeDates) ? profile.activeDates.length : 0,
+    isTodayCheckInClaimed ? 1 : 0,
+  );
+  const currentCycleDay = getCurrentCycleDay(totalCheckInsCount, isTodayCheckInClaimed);
 
   // Retrieve player's official weekly tournament ranking position in their stage
   useEffect(() => {
@@ -538,6 +543,8 @@ export function PlayerMenu({ onConfigChanged }: Props) {
             open={dailyRewardsOpen}
             onOpenChange={setDailyRewardsOpen}
             profile={profile}
+            stats={auth.stats}
+            adminConfig={auth.adminConfig}
           />
         </Suspense>
       )}

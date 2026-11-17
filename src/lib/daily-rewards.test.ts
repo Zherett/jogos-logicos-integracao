@@ -2,14 +2,17 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   DAILY_REWARDS_SCHEDULE,
-  getCurrentCycleDay,
+  DAILY_STREAK_BONUS_CAP,
+  DAILY_STREAK_BONUS_STEP,
+  getCumulativeCheckInDay,
   getCompletedCyclesCount,
+  getStreakBonusPoints,
   getDayStatus,
   canAccessDailyRewardsPreview,
 } from "./daily-rewards.ts";
 import { evaluatePlayerMedals, getAllAvailableMedals } from "./medals-catalog.ts";
 
-describe("Sistema de Recompensa Diária Progressiva (7 Dias)", () => {
+describe("Sistema de Recompensa Diária Progressiva (Check-in Acumulativo + Ofensiva)", () => {
   it("contém exatamente 7 dias com escala progressiva correta de pontos e XP", () => {
     assert.equal(DAILY_REWARDS_SCHEDULE.length, 7);
 
@@ -39,16 +42,41 @@ describe("Sistema de Recompensa Diária Progressiva (7 Dias)", () => {
     assert.equal(DAILY_REWARDS_SCHEDULE[6].chestReward?.enabled, true);
   });
 
-  it("calcula corretamente o dia atual do ciclo (1 a 7)", () => {
-    assert.equal(getCurrentCycleDay(0), 1);
-    assert.equal(getCurrentCycleDay(1), 1);
-    assert.equal(getCurrentCycleDay(2), 2);
-    assert.equal(getCurrentCycleDay(3), 3);
-    assert.equal(getCurrentCycleDay(6), 6);
-    assert.equal(getCurrentCycleDay(7), 7);
-    assert.equal(getCurrentCycleDay(8), 1); // Novo ciclo
-    assert.equal(getCurrentCycleDay(14), 7); // Fim do 2º ciclo
-    assert.equal(getCurrentCycleDay(15), 1); // 3º ciclo
+  it("calcula corretamente o passo acumulativo de check-in (1 a 7) sem perder avanço ao faltar", () => {
+    // 0 coletas -> Dia 1 disponível
+    assert.equal(getCumulativeCheckInDay(0, false), 1);
+    // Acabou de coletar o Dia 1 hoje -> mantém Dia 1 marcado como coletado hoje
+    assert.equal(getCumulativeCheckInDay(1, true), 1);
+    // Entrou outro dia (amanhã ou daqui a 3 dias) com 1 coleta acumulada -> Dia 2 disponível
+    assert.equal(getCumulativeCheckInDay(1, false), 2);
+    // 6 coletas acumuladas, próximo dia -> Dia 7 disponível
+    assert.equal(getCumulativeCheckInDay(6, false), 7);
+    // Coletou o Dia 7 hoje -> mantém Dia 7 exibido
+    assert.equal(getCumulativeCheckInDay(7, true), 7);
+    // 7 coletas acumuladas, entrou em um novo dia -> reinicia ciclo no Dia 1
+    assert.equal(getCumulativeCheckInDay(7, false), 1);
+    assert.equal(getCumulativeCheckInDay(8, false), 2);
+  });
+
+  it("calcula o bônus extra de ofensiva (+5 pts por dia seguido) com teto máximo de 100 pontos", () => {
+    assert.equal(DAILY_STREAK_BONUS_STEP, 5);
+    assert.equal(DAILY_STREAK_BONUS_CAP, 100);
+
+    // 1º dia (ou retorno após falta): +0 pts
+    assert.equal(getStreakBonusPoints(0), 0);
+    assert.equal(getStreakBonusPoints(1), 0);
+    // 2º dia seguido: +5 pts
+    assert.equal(getStreakBonusPoints(2), 5);
+    // 3º dia seguido: +10 pts
+    assert.equal(getStreakBonusPoints(3), 10);
+    // 4º dia seguido: +15 pts
+    assert.equal(getStreakBonusPoints(4), 15);
+    // 7º dia seguido: +30 pts
+    assert.equal(getStreakBonusPoints(7), 30);
+    // 21º dia seguido: atinge exatamente o teto de 100 pts
+    assert.equal(getStreakBonusPoints(21), 100);
+    // 30º dia seguido: permanece travado no teto de 100 pts
+    assert.equal(getStreakBonusPoints(30), 100);
   });
 
   it("calcula ciclos completos concluídos", () => {
@@ -61,33 +89,24 @@ describe("Sistema de Recompensa Diária Progressiva (7 Dias)", () => {
   });
 
   it("determina o status visual correto de cada dia", () => {
-    // No Dia 3, sem ter coletado hoje:
-    // Dia 1 e 2 = collected
-    // Dia 3 = today
-    // Dia 4..7 = locked
     assert.equal(getDayStatus(1, 3, false), "collected");
     assert.equal(getDayStatus(2, 3, false), "collected");
     assert.equal(getDayStatus(3, 3, false), "today");
     assert.equal(getDayStatus(4, 3, false), "locked");
     assert.equal(getDayStatus(7, 3, false), "locked");
 
-    // Se o Dia 3 já foi resgatado hoje:
     assert.equal(getDayStatus(3, 3, true), "collected");
   });
 
   it("controla permissão de acesso garantindo que alunos comuns fiquem bloqueados", () => {
-    // Aluno comum
     const student = { id: "p1", nick: "aluno_joao", nickNormalized: "aluno_joao", isAdmin: false };
     assert.equal(canAccessDailyRewardsPreview(student, false), false);
 
-    // Flag isAdmin do auth
     assert.equal(canAccessDailyRewardsPreview(student, true), true);
 
-    // Conta com profile.isAdmin
     const adminProfile = { id: "p2", nick: "admin_master", nickNormalized: "admin_master", isAdmin: true };
     assert.equal(canAccessDailyRewardsPreview(adminProfile, false), true);
 
-    // Contas de teste da equipe (zheret, etc)
     const devProfile = { id: "p3", nick: "Zheret", nickNormalized: "zheret", isAdmin: false };
     assert.equal(canAccessDailyRewardsPreview(devProfile, false), true);
   });
@@ -110,7 +129,6 @@ describe("Sistema de Recompensa Diária Progressiva (7 Dias)", () => {
     assert.equal(m5.isSecret, true);
     assert.equal(m7.isSecret, true);
 
-    // Jogador com 2 coletas do dia 3 (não desbloqueia ainda)
     const profNotYet = {
       id: "p1",
       nick: "teste",
@@ -119,7 +137,6 @@ describe("Sistema de Recompensa Diária Progressiva (7 Dias)", () => {
     const eval1 = evaluatePlayerMedals({ profile: profNotYet as any, stats: [] });
     assert.equal(eval1.some((m: any) => m.id === "secret_streak_day3_x3"), false);
 
-    // Jogador que atingiu 3 coletas do dia 3 (desbloqueia Tríade do Hábito)
     const profReady = {
       id: "p1",
       nick: "teste",
@@ -128,7 +145,6 @@ describe("Sistema de Recompensa Diária Progressiva (7 Dias)", () => {
     const eval2 = evaluatePlayerMedals({ profile: profReady as any, stats: [] });
     assert.equal(eval2.some((m: any) => m.id === "secret_streak_day3_x3"), true);
 
-    // Jogador que atingiu 7 coletas do dia 7 (desbloqueia Guardião da Constância)
     const profEpic = {
       id: "p1",
       nick: "teste",

@@ -1,6 +1,12 @@
 import type { PlayerProfile } from "./playfab.ts";
 import { isSpecialAdminAccount } from "./playfab.ts";
 
+/** Incremento de pontos por dia seguido na ofensiva (a partir do 2º dia consecutivo) */
+export const DAILY_STREAK_BONUS_STEP = 5;
+
+/** Teto máximo diário do bônus extra de ofensiva */
+export const DAILY_STREAK_BONUS_CAP = 100;
+
 /** Configuração de um dia específico na trilha de 7 dias */
 export interface DailyRewardTier {
   day: number;
@@ -73,22 +79,55 @@ export const DAILY_REWARDS_SCHEDULE: readonly DailyRewardTier[] = [
 ] as const;
 
 /**
- * Retorna o dia do ciclo atual (1 a 7) baseado na sequência de atividade do jogador.
- * Ciclos completados reiniciam no dia 1 automaticamente:
- * Ex: 1 dia = Dia 1, 7 dias = Dia 7, 8 dias = Dia 1 do próximo ciclo.
+ * Calcula o bônus extra de pontos por ofensiva de dias consecutivos:
+ * - 1º dia (ou retorno após falta): 0 pts
+ * - 2º dia seguido: +5 pts
+ * - 3º dia seguido: +10 pts
+ * - ... até o teto máximo de 100 pts (21+ dias seguidos).
  */
-export function getCurrentCycleDay(streakDays?: number): number {
-  const safeStreak = Math.max(1, Math.floor(streakDays ?? 1));
-  const modulo = safeStreak % 7;
-  return modulo === 0 ? 7 : modulo;
+export function getStreakBonusPoints(consecutiveDays?: number): number {
+  const safeDays = Math.max(1, Math.floor(consecutiveDays ?? 1));
+  const rawBonus = (safeDays - 1) * DAILY_STREAK_BONUS_STEP;
+  return Math.min(DAILY_STREAK_BONUS_CAP, Math.max(0, rawBonus));
 }
 
 /**
- * Retorna quantos ciclos completos de 7 dias o jogador já concluiu.
+ * Calcula o dia atual (1 a 7) na trilha de Check-in Acumulativo.
+ * O progresso nunca regride ao faltar um dia:
+ * - Se ainda não coletou hoje, retorna o próximo passo disponível (totalCheckIns % 7 + 1).
+ * - Se já coletou hoje, mantém exibindo o passo recém-coletado.
  */
-export function getCompletedCyclesCount(streakDays?: number): number {
-  const safeStreak = Math.max(0, Math.floor(streakDays ?? 0));
-  return Math.floor(safeStreak / 7);
+export function getCumulativeCheckInDay(
+  totalCheckIns?: number,
+  isTodayClaimed = false,
+): number {
+  const count = Math.max(0, Math.floor(totalCheckIns ?? 0));
+  if (count === 0) return 1;
+  if (isTodayClaimed) {
+    const mod = count % 7;
+    return mod === 0 ? 7 : mod;
+  }
+  return (count % 7) + 1;
+}
+
+/**
+ * Retorna quantos ciclos completos de 7 check-ins o jogador já concluiu.
+ */
+export function getCompletedCyclesCount(totalCheckIns?: number): number {
+  const safeCount = Math.max(0, Math.floor(totalCheckIns ?? 0));
+  return Math.floor(safeCount / 7);
+}
+
+/**
+ * Helper legado/compatível que resolve o passo atual do ciclo a partir do perfil.
+ * Usa `activeDates.length` como contagem acumulativa de dias enquanto o campo
+ * dedicado de check-in não estiver ativo em produção.
+ */
+export function getCurrentCycleDay(
+  streakOrCount?: number,
+  isTodayClaimed = false,
+): number {
+  return getCumulativeCheckInDay(streakOrCount, isTodayClaimed);
 }
 
 /** Estado de exibição de um dia na lista do modal */
@@ -97,7 +136,8 @@ export type DailyRewardDayStatus = "collected" | "today" | "locked";
 /**
  * Calcula o status de cada um dos 7 dias para visualização na UI.
  *
- * @param currentDay Dia ativo no ciclo (1 a 7)
+ * @param day Dia na tabela (1 a 7)
+ * @param currentDay Passo ativo no ciclo acumulativo (1 a 7)
  * @param isTodayClaimed Se a recompensa do dia de hoje já foi resgatada
  */
 export function getDayStatus(
