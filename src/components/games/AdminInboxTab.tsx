@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { Fragment, useState, useMemo, useEffect, useRef } from "react";
 import {
   Mail,
   Send,
@@ -54,6 +54,7 @@ import {
   getMessageRewards,
   splitInboxBodySegments,
   getMediaRowSlotWidth,
+  parseInboxBoldSegments,
   type SystemInboxMessage,
   type AdminBroadcastDraft,
   type InboxReward,
@@ -406,7 +407,20 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                     </strong>
                   );
                 }
-                return <span key={sIdx}>{sub}</span>;
+                const boldParts = parseInboxBoldSegments(sub);
+                return (
+                  <span key={sIdx}>
+                    {boldParts.map((bp, bIdx) =>
+                      bp.bold ? (
+                        <strong key={bIdx} className="font-extrabold text-foreground">
+                          {bp.text}
+                        </strong>
+                      ) : (
+                        <Fragment key={bIdx}>{bp.text}</Fragment>
+                      ),
+                    )}
+                  </span>
+                );
               })}
             </span>
           );
@@ -1750,6 +1764,32 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                     size="sm"
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => {
+                      const el = bodyTextareaRef.current;
+                      if (el && el.selectionStart !== el.selectionEnd) {
+                        const start = el.selectionStart;
+                        const end = el.selectionEnd;
+                        const selected = body.slice(start, end);
+                        const next = `${body.slice(0, start)}*${selected}*${body.slice(end)}`;
+                        setBody(next);
+                        requestAnimationFrame(() => {
+                          el.focus();
+                          el.setSelectionRange(start + 1, end + 1);
+                        });
+                      } else {
+                        insertTagIntoTextarea(el, body, setBody, "*texto*");
+                      }
+                    }}
+                    className="h-7 rounded-xl text-[11px] font-bold cursor-pointer"
+                    title="Deixa o texto selecionado em negrito (*texto*) sem exibir os asteriscos ao enviar"
+                  >
+                    + *Negrito*
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
                       const nextTag = detectedTags.games.length === 0 ? "[game1]" : `[game${detectedTags.games.length + 1}]`;
                       insertTagIntoTextarea(bodyTextareaRef.current, body, setBody, nextTag);
                     }}
@@ -2665,6 +2705,32 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                     title="Insere a tag [nick] exatamente na posição do cursor"
                   >
                     + Inserir [nick]
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      const el = bodyTextareaRef.current;
+                      if (el && el.selectionStart !== el.selectionEnd) {
+                        const start = el.selectionStart;
+                        const end = el.selectionEnd;
+                        const selected = body.slice(start, end);
+                        const next = `${body.slice(0, start)}*${selected}*${body.slice(end)}`;
+                        setBody(next);
+                        requestAnimationFrame(() => {
+                          el.focus();
+                          el.setSelectionRange(start + 1, end + 1);
+                        });
+                      } else {
+                        insertTagIntoTextarea(el, body, setBody, "*texto*");
+                      }
+                    }}
+                    className="h-7 rounded-xl text-[11px] font-bold cursor-pointer"
+                    title="Deixa o texto selecionado em negrito (*texto*) sem exibir os asteriscos ao enviar"
+                  >
+                    + *Negrito*
                   </Button>
                   <Button
                     type="button"

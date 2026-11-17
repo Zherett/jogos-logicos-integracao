@@ -24,12 +24,12 @@ function makePlayer(overrides: Partial<PlayerProfile>): PlayerProfile {
 }
 
 describe("Jornal Dinâmico (newspaper)", () => {
-  it("vira a edição diariamente exatamente às 20h00", () => {
-    const before20 = new Date(2026, 10, 17, 19, 59, 0);
-    const at20 = new Date(2026, 10, 17, 20, 0, 0);
+  it("vira a edição diariamente exatamente às 07h00 da manhã", () => {
+    const before07 = new Date(2026, 10, 17, 6, 59, 0);
+    const at07 = new Date(2026, 10, 17, 7, 0, 0);
 
-    assert.equal(getNewspaperEditionKey(before20), "2026-11-17");
-    assert.equal(getNewspaperEditionKey(at20), "2026-11-18");
+    assert.equal(getNewspaperEditionKey(before07), "2026-11-16");
+    assert.equal(getNewspaperEditionKey(at07), "2026-11-17");
   });
 
   it("gera card interativo de Top 3 Nível & XP e destaca o líder", () => {

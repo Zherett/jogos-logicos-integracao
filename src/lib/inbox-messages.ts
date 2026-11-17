@@ -1696,3 +1696,45 @@ export function splitInboxBodySegments(
 
   return segments;
 }
+
+export interface InboxInlineTextSegment {
+  text: string;
+  bold: boolean;
+}
+
+/**
+ * Interpreta trechos entre asteriscos (*texto* ou **texto**) como negrito (estilo WhatsApp),
+ * removendo os asteriscos de marcação. Asteriscos soltos sem par na mesma linha são preservados.
+ */
+export function parseInboxBoldSegments(text: string): InboxInlineTextSegment[] {
+  if (!text) return [];
+  const regex = /\*\*([^*\n]+?)\*\*|\*([^*\n]+?)\*/g;
+  const result: InboxInlineTextSegment[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      result.push({ text: text.slice(lastIndex, match.index), bold: false });
+    }
+    const inner = match[1] ?? match[2] ?? "";
+    if (inner.length > 0) {
+      result.push({ text: inner, bold: true });
+    }
+    lastIndex = regex.lastIndex;
+  }
+
+  if (lastIndex < text.length) {
+    result.push({ text: text.slice(lastIndex), bold: false });
+  }
+
+  return result;
+}
+
+/**
+ * Remove os asteriscos de marcação de negrito para pré-visualizações em texto simples.
+ */
+export function stripInboxBoldMarkers(text: string): string {
+  if (!text) return "";
+  return text.replace(/\*\*([^*\n]+?)\*\*|\*([^*\n]+?)\*/g, "$1$2");
+}

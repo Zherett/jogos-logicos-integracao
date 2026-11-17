@@ -32,14 +32,13 @@ export interface NewsArticle {
 }
 
 /**
- * Retorna a chave da edição diária do jornal, com virada programada para as 20h00.
- * Antes das 20h00 usa a edição que começou ontem às 20h00 (data de hoje);
- * a partir das 20h00 já gera a edição do dia seguinte.
+ * Retorna a chave da edição diária do jornal, com virada programada para as 07h00 da manhã.
+ * Antes das 07h00 usa a edição do dia anterior; a partir das 07h00 já vale a edição do dia atual.
  */
 export function getNewspaperEditionKey(now = new Date()): string {
   const d = new Date(now.getTime());
-  if (d.getHours() >= 20) {
-    d.setDate(d.getDate() + 1);
+  if (d.getHours() < 7) {
+    d.setDate(d.getDate() - 1);
   }
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -109,7 +108,7 @@ export function generateNewspaperArticles(input: GenerateNewspaperInput): NewsAr
       {
         id: `empty_${editionKey}`,
         kind: "destaque",
-        badge: "📰 EDIÇÃO DAS 20H",
+        badge: "📰 EDIÇÃO DAS 07H",
         headline: "Jornal Integração pronto para novas conquistas!",
         summary:
           "Jogue partidas, conquiste medalhas raras e suba no ranking para aparecer nas manchetes da rede SEMED Coari.",

@@ -29,6 +29,8 @@ import {
   getMessageRewards,
   getMediaRowSlotWidth,
   splitInboxBodySegments,
+  parseInboxBoldSegments,
+  stripInboxBoldMarkers,
 } from "./inbox-messages.ts";
 import type { PlayerProfile } from "./playfab.ts";
 
@@ -1012,5 +1014,21 @@ describe("Sistema Completo de Caixa de Entrada e Correio (inbox-messages)", () =
     const afterMsgs = getInboxMessagesForPlayer(claimRes.profile);
     const afterFound = afterMsgs.find((m) => m.id === msg.id);
     assert.equal(getMessageRewards(afterFound).every((r) => r.claimed), true);
+  });
+
+  it("interpreta *texto* (estilo WhatsApp) em negrito removendo asteriscos e preservando asterisco solto", () => {
+    const segs = parseInboxBoldSegments("O torneio encerra dia *22/11* às *20h*! Atenção: 2 * 3 = 6.");
+    assert.deepEqual(segs, [
+      { text: "O torneio encerra dia ", bold: false },
+      { text: "22/11", bold: true },
+      { text: " às ", bold: false },
+      { text: "20h", bold: true },
+      { text: "! Atenção: 2 * 3 = 6.", bold: false },
+    ]);
+
+    assert.equal(
+      stripInboxBoldMarkers("Olá! Confira *dia 22/11* e **urgente**."),
+      "Olá! Confira dia 22/11 e urgente.",
+    );
   });
 });

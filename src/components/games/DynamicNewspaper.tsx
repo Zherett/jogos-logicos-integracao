@@ -60,7 +60,24 @@ const TONE_STYLES: Record<
   },
 };
 
-const SLIDE_INTERVAL_MS = 10_000;
+const SLIDE_INTERVAL_MS = 15_000;
+
+function renderHighlightedHeadline(headline: string, featuredNick?: string) {
+  if (!featuredNick) return headline;
+  const idx = headline.indexOf(featuredNick);
+  if (idx === -1) return headline;
+  const before = headline.slice(0, idx);
+  const after = headline.slice(idx + featuredNick.length);
+  return (
+    <>
+      {before}
+      <span className="inline-block rounded-lg border border-amber-300/40 bg-amber-400/15 px-1.5 py-0.5 text-amber-300 shadow-2xs">
+        {featuredNick}
+      </span>
+      {after}
+    </>
+  );
+}
 
 export function DynamicNewspaper() {
   const [refreshTick, setRefreshTick] = useState(0);
@@ -158,7 +175,7 @@ export function DynamicNewspaper() {
               Jornal Integração
             </h2>
             <p className="text-[10px] font-semibold text-slate-300">
-              Edição das 20h • {editionKey.split("-").reverse().join("/")}
+              Edição das 07h • {editionKey.split("-").reverse().join("/")}
             </p>
           </div>
         </div>
@@ -232,7 +249,7 @@ export function DynamicNewspaper() {
 
                 <div className="space-y-1">
                   <h3 className="font-display text-base sm:text-xl font-black text-white leading-snug">
-                    {article.headline}
+                    {renderHighlightedHeadline(article.headline, article.featuredPlayer?.nick)}
                   </h3>
                   <p className="text-xs sm:text-sm text-slate-200/90 leading-relaxed">
                     {article.summary}

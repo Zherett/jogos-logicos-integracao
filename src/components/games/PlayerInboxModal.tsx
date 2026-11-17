@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { Fragment, useState, useMemo, useEffect } from "react";
 import {
   Mail,
   Gift,
@@ -27,6 +27,8 @@ import {
   formatInboxMessageText,
   splitInboxBodySegments,
   getMediaRowSlotWidth,
+  parseInboxBoldSegments,
+  stripInboxBoldMarkers,
   type SystemInboxMessage,
   type InboxReward,
 } from "@/lib/inbox-messages";
@@ -295,7 +297,20 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
           </strong>
         );
       }
-      return <span key={sIdx}>{sub}</span>;
+      const boldParts = parseInboxBoldSegments(sub);
+      return (
+        <span key={sIdx}>
+          {boldParts.map((bp, bIdx) =>
+            bp.bold ? (
+              <strong key={bIdx} className="font-extrabold text-foreground">
+                {bp.text}
+              </strong>
+            ) : (
+              <Fragment key={bIdx}>{bp.text}</Fragment>
+            ),
+          )}
+        </span>
+      );
     });
   };
 
@@ -502,9 +517,11 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                                   : "text-slate-500 dark:text-zinc-400"
                               }`}
                             >
-                              {formatText(msg.body, msg, true)
-                                .replace(/\[gif\d*(?::\d+%?)?\]/gi, " [GIF] ")
-                                .replace(/\[img\d*(?::\d+%?)?\]/gi, " [IMAGEM] ")
+                              {stripInboxBoldMarkers(
+                                formatText(msg.body, msg, true)
+                                  .replace(/\[gif\d*(?::\d+%?)?\]/gi, " [GIF] ")
+                                  .replace(/\[img\d*(?::\d+%?)?\]/gi, " [IMAGEM] "),
+                              )
                                 .replace(/\s{2,}/g, " ")
                                 .trim()}
                             </p>
