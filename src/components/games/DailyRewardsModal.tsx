@@ -111,8 +111,8 @@ export function DailyRewardsModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[95vw] max-w-2xl max-h-[90vh] overflow-y-auto rounded-3xl p-5 sm:p-6 shadow-2xl border-2 border-amber-500/40 bg-card">
-        <DialogHeader className="pb-3 border-b border-border/60">
+      <DialogContent className="w-[95vw] max-w-2xl h-[90vh] max-h-[90vh] flex flex-col overflow-hidden rounded-3xl p-5 sm:p-6 shadow-2xl border-2 border-amber-500/40 bg-card">
+        <DialogHeader className="shrink-0 pb-3 border-b border-border/60">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-0.5 text-xs font-black uppercase text-amber-600 dark:text-amber-400">
               <Calendar className="h-3.5 w-3.5" /> Central Diária
@@ -202,6 +202,7 @@ export function DailyRewardsModal({
           </div>
         </DialogHeader>
 
+        <div className="flex-1 overflow-y-auto pr-1">
         {activeTab === "recompensas" ? (
           <div className="space-y-3">
             {/* Resumo de Check-in e Ofensiva */}
@@ -455,11 +456,13 @@ export function DailyRewardsModal({
             <div className="space-y-2.5 py-1">
               {weeklyMissions.map((mission, idx) => {
                 const pct = Math.min(100, Math.round((mission.current / Math.max(1, mission.target)) * 100));
+                const isRankedMission =
+                  mission.type === "weekly_ranked_ranks" || mission.type === "weekly_ranked_matches";
                 return (
                   <div
                     key={mission.id}
                     className={`rounded-2xl border p-3.5 transition-all space-y-2 ${
-                      mission.type === "weekly_ranked_ranks"
+                      isRankedMission
                         ? "border-amber-500/50 bg-gradient-to-r from-amber-500/10 via-primary/5 to-transparent"
                         : "border-border/70 bg-secondary/20"
                     }`}
@@ -473,7 +476,7 @@ export function DailyRewardsModal({
                           <span className="font-display text-sm font-bold text-foreground">
                             {mission.title}
                           </span>
-                          {mission.type === "weekly_ranked_ranks" && (
+                          {isRankedMission && (
                             <span className="rounded-full bg-amber-500/20 border border-amber-500/40 px-2 py-0.5 text-[10px] font-black uppercase text-amber-600 dark:text-amber-400">
                               🏆 Ranqueada
                             </span>
@@ -505,7 +508,7 @@ export function DailyRewardsModal({
                       <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
                         <div
                           className={`h-full rounded-full transition-all ${
-                            mission.type === "weekly_ranked_ranks" ? "bg-amber-500" : "bg-primary"
+                            isRankedMission ? "bg-amber-500" : "bg-primary"
                           }`}
                           style={{ width: `${pct}%` }}
                         />
@@ -517,6 +520,7 @@ export function DailyRewardsModal({
             </div>
           </div>
         )}
+        </div>
       </DialogContent>
     </Dialog>
   );

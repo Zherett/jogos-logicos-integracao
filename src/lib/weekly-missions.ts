@@ -1,13 +1,14 @@
 import { ALL_GAME_IDS, type GameId } from "./game-storage.ts";
 import type { AdminConfig } from "./game-codes.ts";
 import type { PlayerProfile } from "./playfab.ts";
-import { getWeekInfo } from "./weekly-tournament.ts";
+import { getTournamentRank, getWeekInfo, TOURNAMENT_RANKS } from "./weekly-tournament.ts";
 
 export type WeeklyMissionType =
   | "weekly_matches"
   | "weekly_distinct_games"
   | "weekly_xp"
   | "weekly_ranked_ranks"
+  | "weekly_ranked_matches"
   | "weekly_daily_missions";
 
 export interface WeeklyMission {
@@ -23,6 +24,70 @@ export interface WeeklyMission {
 }
 
 export const WEEKLY_MISSIONS_COUNT = 4;
+
+/**
+ * Avalia o rank atual do jogador no Torneio Semanal e retorna a missão ranqueada
+ * balanceada (apenas para jogadores de Nível 4+):
+ * - Rank máximo (Mestre / 0 ranks restantes): missão apenas de jogar partidas ranqueadas.
+ * - Rank muito alto (Diamante): no máximo 1 rank.
+ * - Rank médio (Ouro / Platina): no máximo 2 ranks.
+ * - Rank baixo (Bronze / Prata): até 3 ranks (2 no Nível 4–6, 3 no Nível 7–10).
+ */
+export function resolveRankedWeeklyMission(args: {
+  level: number;
+  weekKey: string;
+  tournamentPoints?: number;
+  tournamentRankId?: string;
+}): WeeklyMission {
+  const safeLevel = Math.max(4, Math.floor(args.level));
+  const pointsRank = getTournamentRank(args.tournamentPoints ?? 0).currentRank;
+  const pointsIdx = TOURNAMENT_RANKS.findIndex((r) => r.id === pointsRank.id);
+  const idIdx = args.tournamentRankId
+    ? TOURNAMENT_RANKS.findIndex((r) => r.id === args.tournamentRankId)
+    : -1;
+  const currentIdx = Math.max(0, pointsIdx, idIdx);
+  const currentRank = TOURNAMENT_RANKS[currentIdx] ?? TOURNAMENT_RANKS[0];
+  const remainingRanks = Math.max(0, TOURNAMENT_RANKS.length - 1 - currentIdx);
+
+  if (remainingRanks === 0) {
+    const matchTarget = safeLevel >= 7 ? 10 : 8;
+    const reward = safeLevel >= 7 ? 200 : 150;
+    return {
+      id: `wm_${args.weekKey}_ranked_matches`,
+      type: "weekly_ranked_matches",
+      title: "Presença no Topo",
+      description: `Você já alcançou o rank máximo (${currentRank.name})! Dispute ${matchTarget} partidas ranqueadas nesta semana.`,
+      target: matchTarget,
+      current: 0,
+      rewardPoints: reward,
+      rewardXp: reward,
+      minLevelRequired: safeLevel >= 7 ? 7 : 4,
+    };
+  }
+
+  const desiredByLevel = safeLevel >= 7 ? 3 : 2;
+  const maxByTier =
+    currentRank.tier === "diamante"
+      ? 1
+      : currentRank.tier === "ouro" || currentRank.tier === "platina"
+        ? 2
+        : 3;
+
+  const targetRanks = Math.max(1, Math.min(desiredByLevel, maxByTier, remainingRanks));
+  const reward = safeLevel >= 7 ? 200 : 150;
+
+  return {
+    id: `wm_${args.weekKey}_ranks`,
+    type: "weekly_ranked_ranks",
+    title: safeLevel >= 7 ? "Ascensão Suprema" : "Escalador Ranqueado",
+    description: `Suba ${targetRanks} ${targetRanks === 1 ? "rank" : "ranks"} nas partidas ranqueadas nesta semana.`,
+    target: targetRanks,
+    current: 0,
+    rewardPoints: reward,
+    rewardXp: reward,
+    minLevelRequired: safeLevel >= 7 ? 7 : 4,
+  };
+}
 
 /**
  * Retorna os IDs de jogos elegíveis para o jogador respeitando:
@@ -182,17 +247,12 @@ export function generateWeeklyMissions(args: {
         minLevelRequired: 4,
       },
       rotatingMission,
-      {
-        id: `wm_${weekKey}_ranks`,
-        type: "weekly_ranked_ranks",
-        title: "Escalador Ranqueado",
-        description: "Suba 2 ranks nas partidas ranqueadas nesta semana.",
-        target: 2,
-        current: 0,
-        rewardPoints: 150,
-        rewardXp: 150,
-        minLevelRequired: 4,
-      },
+      resolveRankedWeeklyMission({
+        level,
+        weekKey,
+        tournamentPoints: args.profile?.tournamentPoints,
+        tournamentRankId: args.profile?.tournamentRankId,
+      }),
     ];
   }
 
@@ -247,16 +307,11 @@ export function generateWeeklyMissions(args: {
       minLevelRequired: 7,
     },
     rotatingHighMission,
-    {
-      id: `wm_${weekKey}_ranks`,
-      type: "weekly_ranked_ranks",
-      title: "Ascensão Suprema",
-      description: "Suba 3 ranks nas partidas ranqueadas nesta semana.",
-      target: 3,
-      current: 0,
-      rewardPoints: 200,
-      rewardXp: 200,
-      minLevelRequired: 7,
-    },
+    resolveRankedWeeklyMission({
+      level,
+      weekKey,
+      tournamentPoints: args.profile?.tournamentPoints,
+      tournamentRankId: args.profile?.tournamentRankId,
+    }),
   ];
 }

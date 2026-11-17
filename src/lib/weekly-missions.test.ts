@@ -74,4 +74,47 @@ describe("Sistema de Missões Semanais (4 Missões + Faixas de Nível + Ciclo Se
 
     assert.notEqual(mSunday[0].id, mMonday[0].id);
   });
+
+  it("balanceia a missão ranqueada conforme o rank atual do jogador (baixo, médio, alto e máximo)", () => {
+    // Rank baixo (Bronze I): até 3 ranks no Nível 7-10 e 2 no Nível 4-6
+    const bronzeNv8 = generateWeeklyMissions({
+      profile: { id: "p1", level: 8, tournamentPoints: 0, tournamentRankId: "bronze_1" },
+      weekKey: "2026-W47",
+      weekIndex: 10,
+    });
+    const rBronze = bronzeNv8.find((m) => m.type === "weekly_ranked_ranks");
+    assert.ok(rBronze);
+    assert.equal(rBronze.target, 3);
+
+    // Rank médio (Ouro II): no máximo 2 ranks mesmo no Nível 7-10
+    const ouroNv8 = generateWeeklyMissions({
+      profile: { id: "p1", level: 8, tournamentPoints: 320, tournamentRankId: "ouro_2" },
+      weekKey: "2026-W47",
+      weekIndex: 10,
+    });
+    const rOuro = ouroNv8.find((m) => m.type === "weekly_ranked_ranks");
+    assert.ok(rOuro);
+    assert.equal(rOuro.target, 2);
+
+    // Rank muito alto (Diamante III): no máximo 1 rank
+    const diamanteNv8 = generateWeeklyMissions({
+      profile: { id: "p1", level: 8, tournamentRankId: "diamante_3" },
+      weekKey: "2026-W47",
+      weekIndex: 10,
+    });
+    const rDiamante = diamanteNv8.find((m) => m.type === "weekly_ranked_ranks");
+    assert.ok(rDiamante);
+    assert.equal(rDiamante.target, 1);
+
+    // Rank máximo (Mestre): vira missão apenas de jogar partidas ranqueadas
+    const mestreNv8 = generateWeeklyMissions({
+      profile: { id: "p1", level: 8, tournamentRankId: "mestre" },
+      weekKey: "2026-W47",
+      weekIndex: 10,
+    });
+    assert.equal(mestreNv8.some((m) => m.type === "weekly_ranked_ranks"), false);
+    const rMestre = mestreNv8.find((m) => m.type === "weekly_ranked_matches");
+    assert.ok(rMestre);
+    assert.equal(rMestre.target, 10);
+  });
 });
