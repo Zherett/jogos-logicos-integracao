@@ -26,9 +26,11 @@ import {
   Swords,
   Ticket,
   Calendar,
+  Backpack,
 } from "lucide-react";
 import { canAccessDailyRewardsPreview, getCurrentCycleDay } from "@/lib/daily-rewards";
 import { canAccessPromoCodeRedeem } from "@/lib/promo-codes";
+import { loadSpecialEvents, loadRecurringEvents } from "@/lib/custom-events";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
@@ -37,6 +39,9 @@ const PromoCodeRedeemDialog = lazy(() =>
 );
 const DailyRewardsModal = lazy(() =>
   import("./DailyRewardsModal").then((m) => ({ default: m.DailyRewardsModal })),
+);
+const PlayerItemsInventory = lazy(() =>
+  import("./PlayerItemsInventory").then((m) => ({ default: m.PlayerItemsInventory })),
 );
 const PlayerAuthDialog = lazy(() =>
   import("./PlayerAuthDialog").then((m) => ({ default: m.PlayerAuthDialog })),
@@ -59,6 +64,7 @@ import {
   aggregateStatsByGame,
   getDistinctGamesPlayed,
   getEffectivePlayerProgression,
+  getGameMedalsProgress,
 } from "@/lib/medals-catalog";
 import {
   getInboxCountsForPlayer,
@@ -142,10 +148,9 @@ export function PlayerMenu({ onConfigChanged }: Props) {
   const [dailyRewardsOpen, setDailyRewardsOpen] = useState(false);
   const [inboxCounts, setInboxCounts] = useState({ unreadCount: 0, unclaimedRewardsCount: 0, totalAlerts: 0 });
 
-  // Accordion collapsible states
+  // Accordion collapsible & profile tab states
   const [levelExpanded, setLevelExpanded] = useState(false);
-  const [gamesExpanded, setGamesExpanded] = useState(false);
-  const [medalsExpanded, setMedalsExpanded] = useState(false);
+  const [profileTab, setProfileTab] = useState<"perfil" | "medalhas" | "inventario">("perfil");
 
   // Turma change request dialog state
   const [turmaModalOpen, setTurmaModalOpen] = useState(false);
@@ -215,7 +220,7 @@ export function PlayerMenu({ onConfigChanged }: Props) {
   // Retrieve player's official weekly tournament ranking position in their stage
   useEffect(() => {
     if (!profileOpen || !profile) return;
-    setMedalsExpanded(false);
+    setProfileTab("perfil");
     setInitialSchool(profile.school || "Nenhuma");
     setInitialGrade(profile.grade || RAIMUNDO_GRADES[0]);
     setInitialTurma(profile.turma || "");
@@ -417,12 +422,11 @@ export function PlayerMenu({ onConfigChanged }: Props) {
         {/* Ranking Page Link */}
         <Link
           to="/ranking"
-          className="flex h-11 items-center gap-1.5 rounded-2xl border bg-card px-3 text-foreground shadow-sm transition-all hover:bg-secondary active:scale-95"
+          className="grid h-11 w-11 place-items-center rounded-2xl border bg-card text-foreground shadow-sm transition-all hover:bg-secondary active:scale-95"
           aria-label="Abrir Ranking"
           title="Ranking da Temporada (Por Etapa, Geral e Torneio)"
         >
           <Trophy className="h-5 w-5 text-amber-500" />
-          <span className="hidden font-display text-xs font-bold uppercase sm:inline">Ranking</span>
         </Link>
 
         {/* Recompensa Diária Progressiva (Oculto para Alunos, visível apenas para ADM / Testes) */}
@@ -430,16 +434,15 @@ export function PlayerMenu({ onConfigChanged }: Props) {
           <button
             type="button"
             onClick={() => setDailyRewardsOpen(true)}
-            className="flex h-11 items-center gap-1.5 rounded-2xl border border-amber-500/40 bg-gradient-to-r from-amber-500/10 to-amber-500/5 px-3 text-foreground shadow-sm transition-all hover:bg-amber-500/20 active:scale-95 cursor-pointer"
+            className="grid h-11 w-11 place-items-center rounded-2xl border border-amber-500/40 bg-gradient-to-r from-amber-500/10 to-amber-500/5 text-foreground shadow-sm transition-all hover:bg-amber-500/20 active:scale-95 cursor-pointer"
             aria-label="Abrir Recompensas Diárias"
             title={`Trilha de Recompensas Diárias (Dia ${currentCycleDay} do Ciclo - Prévia ADM)`}
           >
-            <span className="font-mono text-xs font-black text-amber-600 dark:text-amber-400">
-              {currentCycleDay}
-            </span>
-            <Calendar className="h-5 w-5 text-amber-500" />
-            <span className="hidden font-display text-xs font-bold uppercase sm:inline">
-              Recompensas
+            <span className="flex items-center justify-center gap-0.5">
+              <span className="font-mono text-[11px] font-black text-amber-600 dark:text-amber-400 leading-none">
+                {currentCycleDay}
+              </span>
+              <Calendar className="h-4 w-4 text-amber-500" />
             </span>
           </button>
         )}
@@ -449,12 +452,11 @@ export function PlayerMenu({ onConfigChanged }: Props) {
           <button
             type="button"
             onClick={() => setInboxOpen(true)}
-            className="relative flex h-11 items-center gap-1.5 rounded-2xl border bg-card px-3 text-foreground shadow-sm transition-all hover:bg-secondary active:scale-95"
+            className="relative grid h-11 w-11 place-items-center rounded-2xl border bg-card text-foreground shadow-sm transition-all hover:bg-secondary active:scale-95"
             aria-label="Abrir Caixa de Entrada"
             title="Caixa de Entrada & Correio (Comunicados e Recompensas)"
           >
             <Mail className="h-5 w-5 text-amber-500" />
-            <span className="hidden font-display text-xs font-bold uppercase sm:inline">Correio</span>
             {inboxCounts.unclaimedRewardsCount > 0 ? (
               <span className="absolute -top-1.5 -right-1.5 grid h-5 w-5 place-items-center rounded-full bg-amber-500 text-[10px] font-black text-zinc-950 shadow-md animate-bounce">
                 🎁
@@ -471,12 +473,11 @@ export function PlayerMenu({ onConfigChanged }: Props) {
         {auth.isAdmin && (
           <Link
             to="/admin"
-            className="flex h-11 items-center gap-1.5 rounded-2xl border border-primary/50 bg-primary/10 text-primary px-3 shadow-sm transition-all hover:bg-primary/20 active:scale-95 cursor-pointer"
+            className="grid h-11 w-11 place-items-center rounded-2xl border border-primary/50 bg-primary/10 text-primary shadow-sm transition-all hover:bg-primary/20 active:scale-95 cursor-pointer"
             aria-label="Painel do Administrador"
             title="Abrir Painel do Administrador em tela cheia rápida"
           >
-            <ShieldCheck className="h-4 w-4" />
-            <span className="font-display text-xs font-bold uppercase">ADM</span>
+            <ShieldCheck className="h-5 w-5" />
           </Link>
         )}
 
@@ -552,6 +553,64 @@ export function PlayerMenu({ onConfigChanged }: Props) {
 
           {profile && progress && (
             <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+              {/* Navegação em Abas do Perfil (Estilo Página Inicial) */}
+              <div
+                role="tablist"
+                aria-label="Seções do perfil"
+                className={`grid items-center rounded-full border border-border/70 bg-card/70 p-1.5 shadow-2xs backdrop-blur-sm ${
+                  showDailyRewards ? "grid-cols-3" : "grid-cols-2"
+                }`}
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={profileTab === "perfil"}
+                  onClick={() => setProfileTab("perfil")}
+                  className={`flex items-center justify-center gap-2 rounded-full px-4 py-2 text-xs sm:text-sm font-extrabold transition-all cursor-pointer ${
+                    profileTab === "perfil"
+                      ? "bg-primary text-primary-foreground shadow-md"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  <User className="h-4 w-4" />
+                  <span>Perfil</span>
+                </button>
+
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={profileTab === "medalhas"}
+                  onClick={() => setProfileTab("medalhas")}
+                  className={`flex items-center justify-center gap-2 rounded-full px-4 py-2 text-xs sm:text-sm font-extrabold transition-all cursor-pointer ${
+                    profileTab === "medalhas"
+                      ? "bg-primary text-primary-foreground shadow-md"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  <Award className="h-4 w-4" />
+                  <span>Medalhas</span>
+                </button>
+
+                {showDailyRewards && (
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={profileTab === "inventario"}
+                    onClick={() => setProfileTab("inventario")}
+                    className={`flex items-center justify-center gap-2 rounded-full px-4 py-2 text-xs sm:text-sm font-extrabold transition-all cursor-pointer ${
+                      profileTab === "inventario"
+                        ? "bg-primary text-primary-foreground shadow-md"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    <Backpack className="h-4 w-4" />
+                    <span>Inventário</span>
+                  </button>
+                )}
+              </div>
+
+              {profileTab === "perfil" && (
+                <div className="space-y-4">
               {/* CARTÃO UNIFICADO DO JOGADOR */}
               <div className="w-full rounded-3xl border bg-card p-4 sm:p-5 shadow-sm space-y-3.5">
                     {/* Topo: Ícone do Nível à esquerda e Dados Pessoais à direita no Mobile */}
@@ -646,6 +705,13 @@ export function PlayerMenu({ onConfigChanged }: Props) {
                       </span>
 
                       <span
+                        title="Pontuação acumulada em partidas, medalhas e desafios."
+                        className="inline-flex items-center rounded-full bg-amber-500/15 border border-amber-500/30 px-2.5 py-0.5 text-[10.5px] sm:text-[11px] font-extrabold text-amber-600 dark:text-amber-400"
+                      >
+                        🪙 {profile.careerPoints ?? profile.pointsBalance ?? 0} Pontos
+                      </span>
+
+                      <span
                         title="Sua colocação oficial na temporada atual do Torneio Semanal da sua Etapa."
                         className="inline-flex items-center rounded-full bg-primary/15 border border-primary/30 px-2.5 py-0.5 text-[10.5px] sm:text-[11px] font-extrabold text-primary"
                       >
@@ -659,31 +725,6 @@ export function PlayerMenu({ onConfigChanged }: Props) {
                         ⏳ Solicitação para mudar para a <b>Turma {profile.pendingTurmaRequest}</b> enviada ao Administrador.
                       </p>
                     )}
-
-                    {/* Carteira e Pontos de Conquista do Aluno */}
-                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border-2 border-amber-500/30 bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent p-3">
-                      <div className="flex items-center gap-2">
-                        <span className="grid h-8 w-8 place-items-center rounded-xl bg-amber-500/20 text-base">
-                          🪙
-                        </span>
-                        <div>
-                          <div className="text-xs font-black text-foreground">
-                            {profile.pointsBalance ?? 0} Pontos Conquistados
-                          </div>
-                          <div className="text-[10px] text-muted-foreground font-medium">
-                            Pontuação acumulada em partidas e desafios
-                          </div>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <span className="rounded-lg bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 font-mono text-[11px] font-black text-amber-600 dark:text-amber-400">
-                          {profile.careerPoints ?? 0} pts totais
-                        </span>
-                        <div className="text-[9px] text-muted-foreground">
-                          Hall da Fama
-                        </div>
-                      </div>
-                    </div>
 
                     {/* Divisória Interna Elegante para a Seção de Nível e Requisitos */}
                     <div className="border-t border-border/60 pt-3 space-y-2.5">
@@ -872,52 +913,6 @@ export function PlayerMenu({ onConfigChanged }: Props) {
                         </span>
                       </button>
                     )}
-
-                    {/* Botão Expansível para o Inventário de Medalhas */}
-                    <button
-                      type="button"
-                      onClick={() => setMedalsExpanded((prev) => !prev)}
-                      className="w-full flex items-center justify-between gap-2 rounded-2xl bg-primary/10 hover:bg-primary/20 border border-primary/30 py-3 px-4 font-display text-xs font-black text-primary transition-all active:scale-95 shadow-xs"
-                    >
-                      <span className="flex items-center gap-2">
-                        <Award className="h-4 w-4 text-primary" />
-                        <span>Inventário de Medalhas</span>
-                        <span className="rounded-full bg-primary px-2 py-0.5 text-[10px] text-primary-foreground font-extrabold">
-                          {profile.unlockedMedals?.length ?? 0} obtidas
-                        </span>
-                      </span>
-                      <span className="inline-flex items-center gap-1 text-[11px] font-extrabold">
-                        {medalsExpanded ? (
-                          <>
-                            Ocultar <ChevronUp className="h-4 w-4" />
-                          </>
-                        ) : (
-                          <>
-                            Expandir <ChevronDown className="h-4 w-4" />
-                          </>
-                        )}
-                      </span>
-                    </button>
-
-                    {medalsExpanded && (
-                      <div className="pt-2 border-t border-border/60 animate-in fade-in-50 duration-200">
-                        <Suspense
-                          fallback={
-                            <div className="py-8 text-center text-xs font-semibold text-muted-foreground">
-                              Carregando medalhas...
-                            </div>
-                          }
-                        >
-                          <PlayerMedalsInventory
-                            unlockedMedals={profile.unlockedMedals}
-                            customMedals={auth.adminConfig.customMedals}
-                            profile={profile}
-                            stats={auth.stats}
-                            isOwner={true}
-                          />
-                        </Suspense>
-                      </div>
-                    )}
               </div>
 
               {/* Painel de Seleção Única de Escola, Série e Turma (Disponível APENAS se o jogador não selecionou na criação) */}
@@ -1075,7 +1070,7 @@ export function PlayerMenu({ onConfigChanged }: Props) {
                 );
               })()}
 
-              {/* ABA EXPANSÍVEL: LISTA DE JOGOS & PARTIDAS JOGADAS */}
+              {/* LISTA DE JOGOS & PARTIDAS JOGADAS (Sempre expandida) */}
               <div className="rounded-3xl border bg-card p-4 space-y-3 transition-all">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 font-display text-base font-extrabold text-foreground">
@@ -1085,80 +1080,77 @@ export function PlayerMenu({ onConfigChanged }: Props) {
                       {matchesCount} partida{matchesCount === 1 ? "" : "s"} no total
                     </span>
                   </div>
-
-                  <button
-                    type="button"
-                    onClick={() => setGamesExpanded(!gamesExpanded)}
-                    className="inline-flex items-center gap-1 font-display text-xs font-extrabold text-primary hover:underline"
-                  >
-                    {gamesExpanded ? (
-                      <>
-                        Recolher Lista <ChevronUp className="h-3.5 w-3.5" />
-                      </>
-                    ) : (
-                      <>
-                        Ver Lista de Jogos <ChevronDown className="h-3.5 w-3.5" />
-                      </>
-                    )}
-                  </button>
                 </div>
 
-                {gamesExpanded && (
-                  <div className="border-t pt-3 space-y-2 animate-in fade-in-50 duration-200">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {ALL_GAME_IDS.map((gId) => {
-                        const gName = GAME_NAMES[gId];
-                        const statRow = statsByGameMap.get(gId);
-                        const plays = statRow ? statRow.plays : 0;
-                        const bestScore = statRow ? statRow.best_score : 0;
-                        const bestLevel = statRow ? statRow.best_level : 1;
-                        const isEnabled = auth.adminConfig.enabledGames[gId] !== false;
+                <div className="border-t pt-3 space-y-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {ALL_GAME_IDS.map((gId) => {
+                      const gName = GAME_NAMES[gId];
+                      const statRow = statsByGameMap.get(gId);
+                      const plays = statRow ? statRow.plays : 0;
+                      const bestScore = statRow ? statRow.best_score : 0;
+                      const bestLevel = statRow ? statRow.best_level : 1;
+                      const isEnabled = auth.adminConfig.enabledGames[gId] !== false;
+                      const events = [...loadSpecialEvents(), ...loadRecurringEvents()];
+                      const gameMedalProg = getGameMedalsProgress(
+                        gId,
+                        profile.unlockedMedals ?? [],
+                        auth.adminConfig.customMedals,
+                        events,
+                      );
 
-                        return (
-                          <div
-                            key={gId}
-                            className={`flex items-center justify-between gap-2 rounded-2xl border p-2.5 transition-all ${
-                              plays > 0
-                                ? "bg-card border-primary/30"
-                                : "bg-muted/30 border-dashed opacity-75"
-                            }`}
-                          >
-                            <div className="min-w-0">
-                              <div className="font-display text-xs font-black truncate text-foreground flex items-center gap-1.5">
-                                <span>{gName}</span>
-                                {!isEnabled && (
-                                  <span className="rounded bg-muted px-1 text-[9px] font-bold text-muted-foreground">
-                                    Oculto
-                                  </span>
-                                )}
-                              </div>
-                              <div className="text-[10px] text-muted-foreground mt-0.5">
-                                {bestScore > 0 ? (
-                                  <span>Recorde: {bestScore} pts • Nv. {bestLevel}</span>
-                                ) : (
-                                  <span>Nenhuma partida registrada</span>
-                                )}
-                              </div>
+                      return (
+                        <div
+                          key={gId}
+                          className={`flex items-center justify-between gap-2 rounded-2xl border p-2.5 transition-all ${
+                            plays > 0
+                              ? "bg-card border-primary/30"
+                              : "bg-muted/30 border-dashed opacity-75"
+                          }`}
+                        >
+                          <div className="min-w-0">
+                            <div className="font-display text-xs font-black truncate text-foreground flex items-center gap-1.5">
+                              <span>{gName}</span>
+                              {!isEnabled && (
+                                <span className="rounded bg-muted px-1 text-[9px] font-bold text-muted-foreground">
+                                  Oculto
+                                </span>
+                              )}
                             </div>
-
-                            <div className="text-right shrink-0">
-                              <span
-                                className={`inline-flex items-center gap-1 rounded-xl px-2.5 py-1 text-xs font-black ${
-                                  plays > 0
-                                    ? "bg-primary text-primary-foreground shadow-xs"
-                                    : "bg-muted text-muted-foreground"
-                                }`}
-                              >
-                                <Gamepad2 className="h-3 w-3" />
-                                {plays} partida{plays === 1 ? "" : "s"}
-                              </span>
+                            <div className="text-[10px] text-muted-foreground mt-0.5">
+                              {bestScore > 0 ? (
+                                <span>Recorde: {bestScore} pts • Nv. {bestLevel}</span>
+                              ) : (
+                                <span>Nenhuma partida registrada</span>
+                              )}
                             </div>
                           </div>
-                        );
-                      })}
-                    </div>
+
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <span
+                              title={`${gameMedalProg.earned} de ${gameMedalProg.total} medalhas conquistadas neste jogo`}
+                              className="inline-flex items-center gap-1 rounded-xl bg-amber-500/15 border border-amber-500/40 px-2 py-1 text-xs font-black text-amber-600 dark:text-amber-400"
+                            >
+                              <Award className="h-3 w-3" />
+                              {gameMedalProg.earned}/{gameMedalProg.total}
+                            </span>
+
+                            <span
+                              className={`inline-flex items-center gap-1 rounded-xl px-2.5 py-1 text-xs font-black ${
+                                plays > 0
+                                  ? "bg-primary text-primary-foreground shadow-xs"
+                                  : "bg-muted text-muted-foreground"
+                              }`}
+                            >
+                              <Gamepad2 className="h-3 w-3" />
+                              {plays} partida{plays === 1 ? "" : "s"}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
-                )}
+                </div>
               </div>
 
               {/* Botão de Logout */}
@@ -1175,6 +1167,41 @@ export function PlayerMenu({ onConfigChanged }: Props) {
                   <LogOut className="mr-2 h-4 w-4" /> Sair da conta
                 </Button>
               </div>
+                </div>
+              )}
+
+              {/* ABA 2: MEDALHAS (Vitrine fixa de 6 + Catálogo Geral & Eventos) */}
+              {profileTab === "medalhas" && (
+                <Suspense
+                  fallback={
+                    <div className="py-10 text-center text-xs font-semibold text-muted-foreground">
+                      Carregando medalhas...
+                    </div>
+                  }
+                >
+                  <PlayerMedalsInventory
+                    unlockedMedals={profile.unlockedMedals}
+                    customMedals={auth.adminConfig.customMedals}
+                    profile={profile}
+                    stats={auth.stats}
+                    isOwner={true}
+                    alwaysShowShowcase={true}
+                  />
+                </Suspense>
+              )}
+
+              {/* ABA 3: INVENTÁRIO (Oculta para alunos comuns, visível apenas para ADM / Testes no próprio perfil) */}
+              {profileTab === "inventario" && showDailyRewards && (
+                <Suspense
+                  fallback={
+                    <div className="py-10 text-center text-xs font-semibold text-muted-foreground">
+                      Carregando inventário...
+                    </div>
+                  }
+                >
+                  <PlayerItemsInventory />
+                </Suspense>
+              )}
             </div>
           )}
         </DialogContent>

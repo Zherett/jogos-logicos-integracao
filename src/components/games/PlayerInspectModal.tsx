@@ -71,7 +71,9 @@ import {
   aggregateStatsByGame,
   getDistinctGamesPlayed,
   getEffectivePlayerProgression,
+  getGameMedalsProgress,
 } from "@/lib/medals-catalog";
+import { loadSpecialEvents, loadRecurringEvents } from "@/lib/custom-events";
 import { ALL_GAME_IDS, GAME_NAMES } from "@/lib/game-storage";
 import { PlayerMedalsInventory } from "./PlayerMedalsInventory";
 import { PresenceDot } from "./PresenceDot";
@@ -93,6 +95,7 @@ interface Props {
 export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpdated }: Props) {
   const auth = usePlayerAuth();
   const [profile, setProfile] = useState<PlayerProfile | null>(null);
+  const [inspectTab, setInspectTab] = useState<"perfil" | "medalhas">("perfil");
 
   const effectiveTournamentPoints = useMemo(() => {
     if (!profile) return 0;
@@ -134,7 +137,6 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
 
   // Estados para o Histórico de Pontuação & Auditoria (Score Ledger — apenas ADM)
   const [showLedger, setShowLedger] = useState(false);
-  const [gamesExpanded, setGamesExpanded] = useState(false);
   const [ledgerFilterType, setLedgerFilterType] = useState<ScoreTransactionType | "all">("all");
   const [ledgerSearch, setLedgerSearch] = useState("");
   const [ledgerVersion, setLedgerVersion] = useState(0);
@@ -156,7 +158,7 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
       setConfirmNickInput("");
       setDeleteFeedback(null);
       setShowLedger(false);
-      setGamesExpanded(false);
+      setInspectTab("perfil");
       if (found) {
         setSelfSchool(found.school || "Nenhuma");
         setSelfGrade(found.grade || RAIMUNDO_GRADES[0]);
@@ -340,6 +342,45 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+          {/* Navegação em Abas da Inspeção de Perfil (Apenas Perfil & Medalhas; Inventário é sempre privado) */}
+          <div
+            role="tablist"
+            aria-label="Seções do perfil do jogador"
+            className="grid grid-cols-2 items-center rounded-full border border-border/70 bg-card/70 p-1.5 shadow-2xs backdrop-blur-sm"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={inspectTab === "perfil"}
+              onClick={() => setInspectTab("perfil")}
+              className={`flex items-center justify-center gap-2 rounded-full px-4 py-2 text-xs sm:text-sm font-extrabold transition-all cursor-pointer ${
+                inspectTab === "perfil"
+                  ? "bg-primary text-primary-foreground shadow-md"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <User className="h-4 w-4" />
+              <span>Perfil</span>
+            </button>
+
+            <button
+              type="button"
+              role="tab"
+              aria-selected={inspectTab === "medalhas"}
+              onClick={() => setInspectTab("medalhas")}
+              className={`flex items-center justify-center gap-2 rounded-full px-4 py-2 text-xs sm:text-sm font-extrabold transition-all cursor-pointer ${
+                inspectTab === "medalhas"
+                  ? "bg-primary text-primary-foreground shadow-md"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <Award className="h-4 w-4" />
+              <span>Medalhas</span>
+            </button>
+          </div>
+
+          {inspectTab === "perfil" && (
+            <div className="space-y-4">
           {/* Cabeçalho do Perfil Inspecionado */}
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 rounded-3xl border bg-secondary/30 p-4">
             <div className="flex items-center gap-3.5">
@@ -396,14 +437,19 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                   className="mt-1.5 mb-0.5"
                 />
 
-                <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs">
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
                   {/* Rank Ranqueado do Torneio */}
                   <TournamentRankBadge
                     points={effectiveTournamentPoints}
                     size="xs"
                     showLabel
                   />
-                  <span className="text-muted-foreground">•</span>
+                  <span className="inline-flex items-center rounded-full bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 text-[10px] font-extrabold text-amber-500 dark:text-amber-400">
+                    🏅 {profile.unlockedMedals?.length ?? 0} Medalhas
+                  </span>
+                  <span className="inline-flex items-center rounded-full bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 text-[10px] font-extrabold text-amber-600 dark:text-amber-400">
+                    🪙 {profile.careerPoints ?? profile.pointsBalance ?? 0} Pontos
+                  </span>
                   <span className="font-extrabold text-primary">
                     {profile.xp} XP
                   </span>
@@ -453,47 +499,23 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
             </div>
           </div>
 
-          {/* Carteira e Pontos de Conquista do Aluno */}
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border-2 border-amber-500/30 bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-transparent p-3">
-            <div className="flex items-center gap-2">
-              <span className="grid h-8 w-8 place-items-center rounded-xl bg-amber-500/20 text-base">
-                🪙
-              </span>
-              <div>
-                <div className="text-xs font-black text-foreground">
-                  {profile.pointsBalance ?? 0} Pontos Conquistados
-                </div>
-                <div className="text-[10px] text-muted-foreground font-medium">
-                  Pontuação acumulada em partidas e desafios
-                </div>
-              </div>
+          {auth.isAdmin && (
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowLedger((prev) => !prev)}
+                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-bold transition-all shadow-xs ${
+                  showLedger
+                    ? "bg-amber-500 text-white border-amber-600"
+                    : "border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 text-amber-600 dark:text-amber-400"
+                }`}
+                title="Exibir histórico completo de pontuações, medalhas e extrato de auditoria"
+              >
+                <FileText className="h-3.5 w-3.5" />
+                {showLedger ? "Fechar Extrato & Auditoria" : "Extrato & Auditoria (ADM)"}
+              </button>
             </div>
-            <div className="flex items-center gap-2">
-              {auth.isAdmin && (
-                <button
-                  type="button"
-                  onClick={() => setShowLedger((prev) => !prev)}
-                  className={`inline-flex items-center gap-1.5 rounded-xl border px-2.5 py-1 text-xs font-bold transition-all shadow-xs ${
-                    showLedger
-                      ? "bg-amber-500 text-white border-amber-600"
-                      : "border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 text-amber-600 dark:text-amber-400"
-                  }`}
-                  title="Exibir histórico completo de pontuações, medalhas e extrato de auditoria"
-                >
-                  <FileText className="h-3.5 w-3.5" />
-                  {showLedger ? "Fechar Extrato" : "Extrato & Auditoria"}
-                </button>
-              )}
-              <div className="text-right">
-                <span className="rounded-lg bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 font-mono text-[11px] font-black text-amber-600 dark:text-amber-400">
-                  {profile.careerPoints ?? 0} pts totais
-                </span>
-                <div className="text-[9px] text-muted-foreground">
-                  Hall da Fama
-                </div>
-              </div>
-            </div>
-          </div>
+          )}
 
           {/* Seção Extrato de Pontuação e Ledger de Auditoria (Exclusiva do ADM) */}
           {auth.isAdmin && showLedger && (
@@ -1108,9 +1130,10 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
             </div>
           ))}
 
-          {/* Histórico e Partidas Jogadas por Jogo (Expansível) */}
+          {/* Histórico e Partidas Jogadas por Jogo (Sempre expandido) */}
           {(() => {
             const statsMap = aggregateStatsByGame(profile.stats ?? [], auth.adminConfig.enabledGames);
+            const events = [...loadSpecialEvents(), ...loadRecurringEvents()];
             return (
               <div className="rounded-2xl border bg-card p-4 space-y-3">
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1128,26 +1151,9 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                       </span>
                     )}
                   </div>
-
-                  <button
-                    type="button"
-                    onClick={() => setGamesExpanded((prev) => !prev)}
-                    className="inline-flex items-center gap-1 font-display text-xs font-extrabold text-primary hover:underline"
-                  >
-                    {gamesExpanded ? (
-                      <>
-                        Recolher Lista <ChevronUp className="h-3.5 w-3.5" />
-                      </>
-                    ) : (
-                      <>
-                        Ver Lista de Jogos <ChevronDown className="h-3.5 w-3.5" />
-                      </>
-                    )}
-                  </button>
                 </div>
 
-                {gamesExpanded && (
-                  <div className="border-t pt-3 grid grid-cols-1 sm:grid-cols-2 gap-2 animate-in fade-in-50 duration-200">
+                <div className="border-t pt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
                   {ALL_GAME_IDS.map((gId) => {
                     const gName = GAME_NAMES[gId];
                     const statRow = statsMap.get(gId);
@@ -1155,6 +1161,12 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                     const bestScore = statRow ? statRow.best_score : 0;
                     const bestLevel = statRow ? statRow.best_level : 1;
                     const isEnabled = auth.adminConfig.enabledGames[gId] !== false;
+                    const gameMedalProg = getGameMedalsProgress(
+                      gId,
+                      profile.unlockedMedals ?? [],
+                      auth.adminConfig.customMedals,
+                      events,
+                    );
 
                     return (
                       <div
@@ -1183,7 +1195,14 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                           </div>
                         </div>
 
-                        <div className="text-right shrink-0">
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span
+                            title={`${gameMedalProg.earned} de ${gameMedalProg.total} medalhas conquistadas neste jogo`}
+                            className="inline-flex items-center gap-1 rounded-lg bg-amber-500/15 border border-amber-500/40 px-2 py-0.5 text-xs font-black text-amber-600 dark:text-amber-400"
+                          >
+                            <Award className="h-3 w-3" />
+                            {gameMedalProg.earned}/{gameMedalProg.total}
+                          </span>
                           <span
                             className={`inline-flex items-center gap-1 rounded-lg px-2 py-0.5 text-xs font-black ${
                               plays > 0
@@ -1198,20 +1217,24 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                       </div>
                     );
                   })}
-                  </div>
-                )}
+                </div>
               </div>
             );
           })()}
+            </div>
+          )}
 
-          {/* Inventário Completo de Medalhas */}
-          <PlayerMedalsInventory
-            unlockedMedals={profile.unlockedMedals}
-            customMedals={auth.adminConfig.customMedals}
-            profile={profile}
-            stats={profile.stats ?? []}
-            isOwner={isMe}
-          />
+          {/* ABA 2: MEDALHAS DO JOGADOR INSPECIONADO */}
+          {inspectTab === "medalhas" && (
+            <PlayerMedalsInventory
+              unlockedMedals={profile.unlockedMedals}
+              customMedals={auth.adminConfig.customMedals}
+              profile={profile}
+              stats={profile.stats ?? []}
+              isOwner={isMe}
+              alwaysShowShowcase={true}
+            />
+          )}
 
           {/* Zona de Exclusão / Mover para Lixeira pelo Administrador */}
           {auth.isAdmin && !profile.isAdmin && (

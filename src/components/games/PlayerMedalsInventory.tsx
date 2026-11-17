@@ -34,6 +34,7 @@ interface Props {
   profile?: PlayerProfile | null;
   stats?: GameStatRow[];
   isOwner?: boolean;
+  alwaysShowShowcase?: boolean;
 }
 
 export function PlayerMedalsInventory({
@@ -42,11 +43,14 @@ export function PlayerMedalsInventory({
   profile,
   stats = [],
   isOwner = false,
+  alwaysShowShowcase = false,
 }: Props) {
   const [search, setSearch] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string>("ALL");
   const [selectedRarity, setSelectedRarity] = useState<string>("ALL");
-  const [activeTab, setActiveTab] = useState<"vitrine" | "catalogo" | "eventos">("vitrine");
+  const [activeTab, setActiveTab] = useState<"vitrine" | "catalogo" | "eventos">(
+    alwaysShowShowcase ? "catalogo" : "vitrine",
+  );
   const [catalogVisibleLimit, setCatalogVisibleLimit] = useState<number>(24);
 
   // Selected medal for detail modal
@@ -151,47 +155,49 @@ export function PlayerMedalsInventory({
 
   return (
     <div className="space-y-4">
-      {/* Abas: Vitrine de Honra, Catálogo Geral & Catálogo de Eventos */}
-      <div className="flex flex-wrap items-center gap-2 border-b pb-2">
-        <button
-          type="button"
-          onClick={() => setActiveTab("vitrine")}
-          className={`flex items-center gap-2 rounded-xl px-3 py-1.5 font-display text-xs font-black transition-all ${
-            activeTab === "vitrine"
-              ? "bg-primary text-primary-foreground shadow-sm"
-              : "text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
-          }`}
-        >
-          <Sparkles className="h-3.5 w-3.5" />
-          Vitrine de Honra ({unlockedMedals.length})
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab("catalogo")}
-          className={`flex items-center gap-2 rounded-xl px-3 py-1.5 font-display text-xs font-black transition-all ${
-            activeTab === "catalogo"
-              ? "bg-primary text-primary-foreground shadow-sm"
-              : "text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
-          }`}
-        >
-          <Trophy className="h-3.5 w-3.5" />
-          Catálogo Geral ({allMedals.length})
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab("eventos")}
-          className={`flex items-center gap-2 rounded-xl px-3 py-1.5 font-display text-xs font-black transition-all ${
-            activeTab === "eventos"
-              ? "bg-amber-500 text-amber-950 shadow-sm"
-              : "text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
-          }`}
-        >
-          <Star className="h-3.5 w-3.5" />
-          🎪 Medalhas de Eventos ({eventMedalsList.length})
-        </button>
-      </div>
+      {/* Abas: Vitrine de Honra (se não estiver fixa acima), Catálogo Geral & Catálogo de Eventos */}
+      {!alwaysShowShowcase && (
+        <div className="flex flex-wrap items-center gap-2 border-b pb-2">
+          <button
+            type="button"
+            onClick={() => setActiveTab("vitrine")}
+            className={`flex items-center gap-2 rounded-xl px-3 py-1.5 font-display text-xs font-black transition-all ${
+              activeTab === "vitrine"
+                ? "bg-primary text-primary-foreground shadow-sm"
+                : "text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
+            }`}
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            Vitrine de Honra ({unlockedMedals.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("catalogo")}
+            className={`flex items-center gap-2 rounded-xl px-3 py-1.5 font-display text-xs font-black transition-all ${
+              activeTab === "catalogo"
+                ? "bg-primary text-primary-foreground shadow-sm"
+                : "text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
+            }`}
+          >
+            <Trophy className="h-3.5 w-3.5" />
+            Catálogo Geral ({allMedals.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("eventos")}
+            className={`flex items-center gap-2 rounded-xl px-3 py-1.5 font-display text-xs font-black transition-all ${
+              activeTab === "eventos"
+                ? "bg-amber-500 text-amber-950 shadow-sm"
+                : "text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
+            }`}
+          >
+            <Star className="h-3.5 w-3.5" />
+            🎪 Medalhas de Eventos ({eventMedalsList.length})
+          </button>
+        </div>
+      )}
 
-      {activeTab === "vitrine" && (
+      {(alwaysShowShowcase || activeTab === "vitrine") && (
         <div className="space-y-4">
           {/* Vitrine de Destaque Automático */}
           <div className="rounded-3xl border-2 border-primary/30 bg-gradient-to-br from-primary/10 via-card to-accent/10 p-5 space-y-3">
@@ -320,17 +326,49 @@ export function PlayerMedalsInventory({
             </div>
           )}
 
-          {/* Quick link to catalogue */}
-          <div className="flex justify-center">
-            <button
-              type="button"
-              onClick={() => setActiveTab("catalogo")}
-              className="inline-flex items-center gap-2 rounded-2xl border border-primary/40 bg-primary/10 px-4 py-2 font-display text-xs font-bold text-primary transition-all hover:bg-primary/20 active:scale-95"
-            >
-              <Trophy className="h-4 w-4" />
-              Ver Todas as {allMedals.length} Medalhas e Próximos Desbloqueios ▾
-            </button>
-          </div>
+          {/* Quick link to catalogue (apenas quando a vitrine é aba separada) */}
+          {!alwaysShowShowcase && (
+            <div className="flex justify-center">
+              <button
+                type="button"
+                onClick={() => setActiveTab("catalogo")}
+                className="inline-flex items-center gap-2 rounded-2xl border border-primary/40 bg-primary/10 px-4 py-2 font-display text-xs font-bold text-primary transition-all hover:bg-primary/20 active:scale-95"
+              >
+                <Trophy className="h-4 w-4" />
+                Ver Todas as {allMedals.length} Medalhas e Próximos Desbloqueios ▾
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Botões de Catálogo Geral & Eventos abaixo da Vitrine fixa */}
+      {alwaysShowShowcase && (
+        <div className="flex flex-wrap items-center gap-2 border-b pb-2 pt-1">
+          <button
+            type="button"
+            onClick={() => setActiveTab("catalogo")}
+            className={`flex items-center gap-2 rounded-xl px-3 py-1.5 font-display text-xs font-black transition-all ${
+              activeTab === "catalogo"
+                ? "bg-primary text-primary-foreground shadow-sm"
+                : "text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
+            }`}
+          >
+            <Trophy className="h-3.5 w-3.5" />
+            Catálogo Geral ({allMedals.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("eventos")}
+            className={`flex items-center gap-2 rounded-xl px-3 py-1.5 font-display text-xs font-black transition-all ${
+              activeTab === "eventos"
+                ? "bg-amber-500 text-amber-950 shadow-sm"
+                : "text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
+            }`}
+          >
+            <Star className="h-3.5 w-3.5" />
+            🎪 Medalhas de Eventos ({eventMedalsList.length})
+          </button>
         </div>
       )}
 
