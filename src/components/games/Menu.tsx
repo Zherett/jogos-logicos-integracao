@@ -41,6 +41,7 @@ import {
 } from "@/lib/game-records";
 import type { PlatformNoticeSlide } from "@/lib/game-codes";
 import { NoticeBoard } from "./NoticeBoard";
+import { DynamicNewspaper } from "./DynamicNewspaper";
 
 const GameDetailDialog = lazy(() =>
   import("./GameDetailDialog").then((m) => ({ default: m.GameDetailDialog })),
@@ -443,24 +444,17 @@ export function Menu({
         );
       })()}
 
-      {/* 2. Linha Única Compacta (3 Colunas): Torneio à Esquerda + Quadro de Avisos no Meio + Arena X1 à Direita */}
-      <div
-        className={`grid grid-cols-1 gap-3 ${
-          tournamentEnabled && effectiveX1Enabled
-            ? "md:grid-cols-3"
-            : tournamentEnabled || effectiveX1Enabled
-              ? "md:grid-cols-2"
-              : ""
-        }`}
-      >
+      {/* 2. Linha 1 (2 Colunas lado a lado no celular e desktop): Torneio Ranqueado à Esquerda + Arena X1 à Direita */}
+      {(tournamentEnabled || effectiveX1Enabled) && (
+      <div className="grid grid-cols-2 gap-2.5 sm:gap-3">
         {tournamentEnabled && (
           <button
             type="button"
             onClick={handleTournamentClick}
-            className="group flex flex-col justify-between rounded-3xl border-2 border-sky-500/70 bg-gradient-to-br from-blue-950/80 via-slate-900/90 to-sky-950/60 p-4 text-left shadow-[0_4px_25px_rgba(14,165,233,0.18)] transition-all hover:-translate-y-0.5 hover:shadow-[0_8px_30px_rgba(14,165,233,0.3)] hover:border-sky-400 cursor-pointer min-h-[188px] md:h-[188px]"
+            className={`${!effectiveX1Enabled ? "col-span-2" : ""} group flex flex-col justify-between rounded-3xl border-2 border-sky-500/70 bg-gradient-to-br from-blue-950/80 via-slate-900/90 to-sky-950/60 p-3 sm:p-4 text-left shadow-[0_4px_25px_rgba(14,165,233,0.18)] transition-all hover:-translate-y-0.5 hover:shadow-[0_8px_30px_rgba(14,165,233,0.3)] hover:border-sky-400 cursor-pointer min-h-[172px] sm:min-h-[188px]`}
           >
             <div className="space-y-1.5">
-              <div className="flex items-center justify-between gap-1.5 flex-wrap">
+              <div className="flex items-center justify-between gap-1 flex-wrap">
                 <span className="inline-flex items-center gap-1 rounded-full bg-sky-500/20 border border-sky-400/40 px-2 py-0.5 text-[9px] font-black uppercase text-sky-300">
                   <Medal className="h-2.5 w-2.5" /> Nv. {TOURNAMENT_MIN_LEVEL}+ • +100 XP/dia
                 </span>
@@ -474,15 +468,15 @@ export function Menu({
                   </span>
                 ) : null}
               </div>
-              <h2 className="font-display text-base sm:text-lg font-black flex items-center gap-1.5 text-white leading-tight">
+              <h2 className="font-display text-sm sm:text-lg font-black flex items-center gap-1.5 text-white leading-tight">
                 🏆 Torneio Ranqueado
               </h2>
-              <p className="text-xs text-slate-300 leading-snug line-clamp-2">
+              <p className="text-[11px] sm:text-xs text-slate-300 leading-snug line-clamp-2">
                 <b className="text-white">{weeklyGameName}</b> • <b className="text-white">10 entradas/dia</b> para disputar o Top 5!
               </p>
             </div>
 
-            <div className="mt-2.5 inline-flex items-center gap-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 px-3 py-1.5 text-[11px] font-black text-white shadow-md shadow-sky-500/30 w-fit group-hover:scale-[1.02] transition-transform">
+            <div className="mt-2.5 inline-flex items-center gap-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 px-2.5 sm:px-3 py-1.5 text-[10px] sm:text-[11px] font-black text-white shadow-md shadow-sky-500/30 w-fit group-hover:scale-[1.02] transition-transform">
               {!playerProfile ? (
                 <>
                   <LogIn className="h-3 w-3" /> Entrar para Competir →
@@ -496,31 +490,12 @@ export function Menu({
           </button>
         )}
 
-        <NoticeBoard
-          compact
-          slides={noticeSlides}
-          enabledDefaultNotices={enabledDefaultNotices}
-          hideAllDefaultNotices={hideAllDefaultNotices}
-          pauseNoticeBoard={pauseNoticeBoard}
-          weeklyGameName={weeklyGameName}
-          onSelectGame={(gameId) => {
-            const g = GAME_REGISTRY.find((item) => item.id === gameId);
-            if (g) {
-              setSelectedGameForDetail(g);
-            } else {
-              onSelect(gameId);
-            }
-          }}
-          onOpenWeeklyTournament={handleTournamentClick}
-          onOpenX1Arena={handleX1Click}
-        />
-
         {effectiveX1Enabled && (
           <button
             type="button"
             onClick={handleX1Click}
             disabled={effectiveX1ArenaClosed}
-            className={`group relative flex flex-col justify-between overflow-hidden rounded-3xl border-2 p-4 text-left transition-all min-h-[188px] md:h-[188px] ${
+            className={`${!tournamentEnabled ? "col-span-2" : ""} group relative flex flex-col justify-between overflow-hidden rounded-3xl border-2 p-3 sm:p-4 text-left transition-all min-h-[172px] sm:min-h-[188px] ${
               effectiveX1ArenaClosed
                 ? "border-destructive/60 bg-gradient-to-br from-red-950/70 via-slate-900/95 to-neutral-950/90 cursor-not-allowed opacity-90 shadow-none"
                 : "border-orange-500/70 bg-gradient-to-br from-orange-950/80 via-slate-900/90 to-amber-950/60 shadow-[0_4px_25px_rgba(249,115,22,0.18)] hover:-translate-y-0.5 hover:shadow-[0_8px_30px_rgba(249,115,22,0.3)] hover:border-orange-400 cursor-pointer"
@@ -539,7 +514,7 @@ export function Menu({
             )}
 
             <div className="space-y-1.5">
-              <div className="flex flex-wrap items-center justify-between gap-1.5">
+              <div className="flex flex-wrap items-center justify-between gap-1">
                 <span className="inline-flex items-center gap-1 rounded-full bg-orange-500/20 border border-orange-400/40 px-2 py-0.5 text-[9px] font-black uppercase text-orange-300">
                   <Swords className="h-2.5 w-2.5" /> Nv. {X1_MIN_LEVEL}+ • +100 XP/dia
                 </span>
@@ -547,15 +522,15 @@ export function Menu({
                   <Clock className="h-2.5 w-2.5 text-orange-400" /> {x1HoursLabel}
                 </span>
               </div>
-              <h2 className="font-display text-base sm:text-lg font-black flex items-center gap-1.5 text-white leading-tight">
+              <h2 className="font-display text-sm sm:text-lg font-black flex items-center gap-1.5 text-white leading-tight">
                 ⚔️ Batalha X1 Online
               </h2>
-              <p className="text-xs text-slate-300 leading-snug line-clamp-2">
+              <p className="text-[11px] sm:text-xs text-slate-300 leading-snug line-clamp-2">
                 Duelos <b className="text-white">1 vs 1 ao vivo</b> com bônus diário de até <b className="text-white">+100 XP</b>.
               </p>
             </div>
 
-            <div className="mt-2.5 inline-flex items-center gap-1.5 rounded-xl bg-orange-500 hover:bg-orange-400 px-3 py-1.5 text-[11px] font-black text-white shadow-md shadow-orange-500/30 w-fit group-hover:scale-[1.02] transition-transform">
+            <div className="mt-2.5 inline-flex items-center gap-1.5 rounded-xl bg-orange-500 hover:bg-orange-400 px-2.5 sm:px-3 py-1.5 text-[10px] sm:text-[11px] font-black text-white shadow-md shadow-orange-500/30 w-fit group-hover:scale-[1.02] transition-transform">
               {effectiveX1ArenaClosed ? (
                 "Arena Fechada"
               ) : !playerProfile ? (
@@ -574,6 +549,34 @@ export function Menu({
             </div>
           </button>
         )}
+      </div>
+      )}
+
+      {/* 3. Linha 2 (Bloco único largo): Quadro de Novidades / Avisos */}
+      <div className="w-full">
+        <NoticeBoard
+          compact
+          slides={noticeSlides}
+          enabledDefaultNotices={enabledDefaultNotices}
+          hideAllDefaultNotices={hideAllDefaultNotices}
+          pauseNoticeBoard={pauseNoticeBoard}
+          weeklyGameName={weeklyGameName}
+          onSelectGame={(gameId) => {
+            const g = GAME_REGISTRY.find((item) => item.id === gameId);
+            if (g) {
+              setSelectedGameForDetail(g);
+            } else {
+              onSelect(gameId);
+            }
+          }}
+          onOpenWeeklyTournament={handleTournamentClick}
+          onOpenX1Arena={handleX1Click}
+        />
+      </div>
+
+      {/* 4. Linha 3 (Bloco único largo): Jornal Dinâmico */}
+      <div className="w-full">
+        <DynamicNewspaper />
       </div>
         </div>
       )}

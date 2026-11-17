@@ -720,9 +720,10 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
 
               <Link
                 to="/"
+                search={{ modal: "ranqueada" }}
                 className="inline-flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-xs font-extrabold text-primary-foreground shadow-sm transition-all hover:bg-primary/90 active:scale-95 shrink-0"
               >
-                <Swords className="h-4 w-4" /> Jogar Ranqueada na Home
+                <Swords className="h-4 w-4" /> Jogar Ranqueada
               </Link>
             </div>
 

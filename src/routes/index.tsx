@@ -90,6 +90,10 @@ import {
 } from "@/lib/game-storage";
 
 export const Route = createFileRoute("/")({
+  validateSearch: (search: Record<string, unknown>): { modal?: "ranqueada" } => {
+    if (search.modal === "ranqueada") return { modal: "ranqueada" };
+    return {};
+  },
   head: () => ({
     meta: [
       { title: "Desafios de Lógica — Plataforma Educacional" },
@@ -129,6 +133,16 @@ function Index() {
   const [incomingInvite, setIncomingInvite] = useState<X1DirectInvite | null>(null);
   const [rejectNotice, setRejectNotice] = useState<string | null>(null);
   const auth = usePlayerAuth();
+
+  const { modal: initialModal } = Route.useSearch();
+  const navigate = Route.useNavigate();
+
+  useEffect(() => {
+    if (initialModal === "ranqueada") {
+      setTournamentOpen(true);
+      void navigate({ to: "/", search: {}, replace: true });
+    }
+  }, [initialModal, navigate]);
 
   const refreshLocal = () => {
     setStats(loadStats());
