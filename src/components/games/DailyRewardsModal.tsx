@@ -82,6 +82,10 @@ export function DailyRewardsModal({
       }),
     [profile, stats, adminConfig, todayKey],
   );
+  const completedMissionsCount = useMemo(
+    () => missions.filter((m) => m.current >= m.target).length,
+    [missions],
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -96,9 +100,17 @@ export function DailyRewardsModal({
             </span>
           </div>
 
-          <DialogTitle className="font-display text-xl sm:text-2xl font-black text-foreground pt-2 flex items-center gap-2">
+          <DialogTitle className="font-display text-xl sm:text-2xl font-black text-foreground pt-2 flex flex-wrap items-center gap-2">
             <span>{activeTab === "recompensas" ? "Recompensas Diárias" : "Missões Diárias"}</span>
             <span className="text-amber-500">✨</span>
+            {activeTab === "missoes" && (
+              <span
+                aria-label={`${completedMissionsCount} de ${missions.length} missões concluídas`}
+                className="ml-auto inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/10 px-2.5 py-0.5 font-mono text-xs font-black text-primary"
+              >
+                {completedMissionsCount} / {missions.length}
+              </span>
+            )}
           </DialogTitle>
 
           {/* Navegação em Abas Estilo Pílula */}
@@ -374,10 +386,6 @@ export function DailyRewardsModal({
                   </div>
                 );
               })}
-            </div>
-
-            <div className="pt-2 border-t text-center text-[11px] text-muted-foreground">
-              A última missão é sempre personalizada para incentivar o jogo que você menos jogou até agora.
             </div>
           </div>
         )}

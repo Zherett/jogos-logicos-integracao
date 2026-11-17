@@ -263,6 +263,7 @@ export interface PlayerProfile {
   dailyXpDate?: string;
   dailyPostCapMatches?: number;
   dailyPostCapDate?: string;
+  dailyMissionsCompleted?: number;
   streakDays?: number;
   lastActiveDate?: string;
   activeDates?: string[];
@@ -1705,6 +1706,9 @@ export function ensurePlayerSeasonAligned(
 
         case "max_daily_xp":
           return acc.profile.xp >= (cond.threshold ?? 1000);
+
+        case "daily_missions_completed":
+          return (acc.profile.dailyMissionsCompleted ?? 0) >= (cond.threshold ?? 3);
 
         case "total_matches_played":
           return totalMatchesCount >= (cond.threshold ?? 50);

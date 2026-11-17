@@ -2292,4 +2292,60 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
     assert.equal(x1Progress.earned, 2);
     assert.equal(x1Progress.remaining, 29);
   });
+
+  it("avalia e calcula progresso das 6 medalhas de tarefas diárias concluídas (3, 15, 30, 90, 150 e 300)", () => {
+    const catalog = buildBaseMedalsCatalog();
+    const expected = [
+      { id: "daily_missions_3", rarity: "bronze", threshold: 3 },
+      { id: "daily_missions_15", rarity: "prata", threshold: 15 },
+      { id: "daily_missions_30", rarity: "ouro", threshold: 30 },
+      { id: "daily_missions_90", rarity: "platina", threshold: 90 },
+      { id: "daily_missions_150", rarity: "diamante", threshold: 150 },
+      { id: "daily_missions_300", rarity: "heroi", threshold: 300 },
+    ] as const;
+
+    for (const item of expected) {
+      const def = catalog.find((m) => m.id === item.id);
+      assert.ok(def, `Medalha ${item.id} deve existir no catálogo`);
+      assert.equal(def.rarity, item.rarity);
+      assert.equal(def.condition.type, "daily_missions_completed");
+      assert.equal(def.condition.threshold, item.threshold);
+    }
+
+    const baseProfile: PlayerProfile = {
+      id: "daily_missions_test",
+      nick: "aluno",
+      nickNormalized: "aluno",
+      full_name: "Aluno Teste",
+      school: "Escola",
+      grade: "6",
+      birthdate: "2012-01-01",
+      xp: 0,
+      seasonXp: 0,
+      level: 1,
+      wins: 0,
+      matchesPlayed: 0,
+      badges: [],
+      seasonId: 1,
+      unlockedMedals: [],
+    };
+
+    const p30: PlayerProfile = { ...baseProfile, dailyMissionsCompleted: 30 };
+    const awarded30 = evaluatePlayerMedals({ profile: p30, stats: [] }).map((m) => m.id);
+    assert.ok(awarded30.includes("daily_missions_3"));
+    assert.ok(awarded30.includes("daily_missions_15"));
+    assert.ok(awarded30.includes("daily_missions_30"));
+    assert.ok(!awarded30.includes("daily_missions_90"));
+
+    const p300: PlayerProfile = { ...baseProfile, dailyMissionsCompleted: 300 };
+    const awarded300 = evaluatePlayerMedals({ profile: p300, stats: [] }).map((m) => m.id);
+    for (const item of expected) {
+      assert.ok(awarded300.includes(item.id), `Deve conceder ${item.id} com 300 tarefas diárias`);
+    }
+
+    const platinaDef = catalog.find((m) => m.id === "daily_missions_90")!;
+    const prog = calculateMedalProgress(platinaDef, { ...baseProfile, dailyMissionsCompleted: 45 }, []);
+    assert.equal(prog.percent, 50);
+    assert.equal(prog.progressText, "45 de 90 tarefas diárias concluídas");
+  });
 });

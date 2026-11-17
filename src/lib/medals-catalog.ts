@@ -81,6 +81,7 @@ export interface MedalCondition {
     | "distinct_specialist_games"
     | "distinct_games_with_50_matches"
     | "max_daily_xp"
+    | "daily_missions_completed"
     | "streak_days"
     | "tournament_rank"
     | "tournament_rank_mastery"
@@ -713,6 +714,64 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
       iconName: "Rocket",
       isStackable: true,
       condition: { type: "streak_days", threshold: 7 },
+    },
+  );
+
+  // 9b. Tarefas Diárias Concluídas (3, 15, 30, 90, 150 e 300 tarefas diárias)
+  medals.push(
+    {
+      id: "daily_missions_3",
+      title: "Iniciante das Missões (3)",
+      description: "Complete 3 tarefas diárias.",
+      rarity: "bronze",
+      category: "atividade",
+      iconName: "CheckCircle",
+      condition: { type: "daily_missions_completed", threshold: 3 },
+    },
+    {
+      id: "daily_missions_15",
+      title: "Dedicado das Missões (15)",
+      description: "Complete 15 tarefas diárias.",
+      rarity: "prata",
+      category: "atividade",
+      iconName: "Target",
+      condition: { type: "daily_missions_completed", threshold: 15 },
+    },
+    {
+      id: "daily_missions_30",
+      title: "Mestre das Tarefas (30)",
+      description: "Complete 30 tarefas diárias.",
+      rarity: "ouro",
+      category: "atividade",
+      iconName: "Award",
+      condition: { type: "daily_missions_completed", threshold: 30 },
+    },
+    {
+      id: "daily_missions_90",
+      title: "Veterano das Missões (90)",
+      description: "Complete 90 tarefas diárias.",
+      rarity: "platina",
+      category: "atividade",
+      iconName: "Star",
+      condition: { type: "daily_missions_completed", threshold: 90 },
+    },
+    {
+      id: "daily_missions_150",
+      title: "Lenda das Missões (150)",
+      description: "Complete 150 tarefas diárias.",
+      rarity: "diamante",
+      category: "atividade",
+      iconName: "Gem",
+      condition: { type: "daily_missions_completed", threshold: 150 },
+    },
+    {
+      id: "daily_missions_300",
+      title: "Herói das Missões (300)",
+      description: "Complete 300 tarefas diárias.",
+      rarity: "heroi",
+      category: "atividade",
+      iconName: "Crown",
+      condition: { type: "daily_missions_completed", threshold: 300 },
     },
   );
 
@@ -1523,6 +1582,7 @@ export interface PlayerStatsContext {
     mode?: string;
   };
   todayXpEarned?: number;
+  dailyMissionsCompleted?: number;
   streakDays?: number;
   weeklyX1Wins?: number;
   enabledGames?: Partial<Record<GameId, boolean>>;
@@ -2215,6 +2275,12 @@ export function evaluatePlayerMedals(
         if ((ctx.todayXpEarned ?? p.dailyXp ?? 0) >= (cond.threshold ?? 1000)) earned = true;
         break;
 
+      case "daily_missions_completed": {
+        const completed = Math.max(0, ctx.dailyMissionsCompleted ?? p.dailyMissionsCompleted ?? 0);
+        if (completed >= (cond.threshold ?? 3)) earned = true;
+        break;
+      }
+
       case "streak_days":
         if (effectiveStreakDays >= (cond.threshold ?? 3)) earned = true;
         break;
@@ -2722,6 +2788,15 @@ export function calculateMedalProgress(
       return {
         percent: pct,
         progressText: `${cur} de ${target} XP diário acumulado hoje`,
+      };
+    }
+    case "daily_missions_completed": {
+      const cur = Math.max(0, profile.dailyMissionsCompleted ?? 0);
+      const target = cond.threshold ?? 3;
+      const pct = Math.min(100, Math.round((cur / target) * 100));
+      return {
+        percent: pct,
+        progressText: `${cur} de ${target} tarefas diárias concluídas`,
       };
     }
     case "streak_days": {
