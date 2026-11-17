@@ -11,6 +11,7 @@ import {
   isPlayFabConfigured,
   loadStoredSession,
   validateActiveSession,
+  validateActiveSessionRemote,
 } from "./playfab.ts";
 
 export type PresenceStatus = "online" | "idle" | "offline";
@@ -1207,26 +1208,39 @@ export function usePresenceTracker(player?: {
     const nickNormalized = player.nickNormalized || (nick ? nickSlug(nick) : undefined);
 
     let lastRecordedActivity = Date.now();
+    let lastRemoteSessionCheckAt = 0;
     recordLocalUserActivity(lastRecordedActivity);
+
+    const dispatchSessionTerminated = (ts: number) => {
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(
+          new CustomEvent("desafios:session-terminated", {
+            detail: {
+              reason: "outro_aparelho",
+              timestamp: ts,
+            },
+          })
+        );
+      }
+    };
 
     // Pulso periódico a cada 30 segundos (local + push na nuvem PlayFab, sem baixar toda a rede)
     const pulse = (disconnected = false) => {
       const now = Date.now();
 
-      // Sessão Única Modelo A: Verifica se a conta foi acessada em outro aparelho
+      // Sessão Única Modelo A: Verifica se a conta foi acessada em outro aparelho (local e nuvem)
       if (!disconnected && playerId) {
         if (!validateActiveSession(playerId)) {
-          if (typeof window !== "undefined") {
-            window.dispatchEvent(
-              new CustomEvent("desafios:session-terminated", {
-                detail: {
-                  reason: "outro_aparelho",
-                  timestamp: now,
-                },
-              })
-            );
-          }
+          dispatchSessionTerminated(now);
           return;
+        }
+        if (now - lastRemoteSessionCheckAt >= 20_000) {
+          lastRemoteSessionCheckAt = now;
+          void validateActiveSessionRemote(playerId).then((valid) => {
+            if (!valid) {
+              dispatchSessionTerminated(Date.now());
+            }
+          });
         }
       }
 

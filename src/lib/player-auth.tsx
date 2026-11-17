@@ -387,12 +387,7 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
     const clean = pin.trim().toUpperCase();
     const expected = getAdminPin().toUpperCase();
     const master = loadAdminConfig().masterCode.toUpperCase();
-    if (
-      clean === "SEMED2620ZZ" ||
-      clean === "SEMED2620QQ" ||
-      clean === expected ||
-      clean === master
-    ) {
+    if (clean.length >= 4 && (clean === expected || clean === master)) {
       setAdminUnlockedSession(true);
       setAdminPinUnlocked(true);
       return true;

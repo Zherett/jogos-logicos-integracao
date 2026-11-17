@@ -411,6 +411,25 @@ export function clearCachedAdminPlayFabTicket() {
   }
 }
 
+export function setCachedAdminPlayFabTicket(ticket: string | null) {
+  if (!ticket) {
+    clearCachedAdminPlayFabTicket();
+    return;
+  }
+  cachedAdminTicket = ticket;
+  cachedAdminTicketTime = Date.now();
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.setItem(
+        ADMIN_TICKET_CACHE_KEY,
+        JSON.stringify({ ticket: cachedAdminTicket, at: cachedAdminTicketTime }),
+      );
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 export async function getAdminPlayFabTicket(): Promise<string | null> {
   if (cachedAdminTicket && Date.now() - cachedAdminTicketTime < ADMIN_TICKET_TTL_MS) {
     return cachedAdminTicket;
@@ -430,37 +449,9 @@ export async function getAdminPlayFabTicket(): Promise<string | null> {
       /* ignore */
     }
   }
-  if (!isPlayFabConfigured()) return null;
-  if (inFlightAdminTicketPromise) return inFlightAdminTicketPromise;
-
-  inFlightAdminTicketPromise = (async () => {
-    try {
-      const res = await callPlayFabClient<PlayFabLoginPayload>("LoginWithPlayFab", {
-        Username: "adminjosiney",
-        Password: "SEMED2620ZZadm",
-      });
-      if (res.data?.SessionTicket) {
-        cachedAdminTicket = res.data.SessionTicket;
-        cachedAdminTicketTime = Date.now();
-        if (typeof window !== "undefined") {
-          try {
-            window.localStorage.setItem(
-              ADMIN_TICKET_CACHE_KEY,
-              JSON.stringify({ ticket: cachedAdminTicket, at: cachedAdminTicketTime }),
-            );
-          } catch {
-            /* ignore */
-          }
-        }
-        return cachedAdminTicket;
-      }
-      return null;
-    } finally {
-      inFlightAdminTicketPromise = null;
-    }
-  })();
-
-  return inFlightAdminTicketPromise;
+  // Nunca autentica automaticamente com credenciais administrativas no cliente.
+  // Para operações em SharedGroupData público, utiliza a sessão do próprio usuário logado ou visitante.
+  return loadStoredSession()?.sessionTicket ?? (await getViewerPlayFabTicket());
 }
 
 export function isSpecialAdminAccount(p?: {
@@ -2140,6 +2131,8 @@ function buildAccountFromPlayFabPayload(
     eventProgress: parsedProfile.eventProgress,
     isAdmin: parsedProfile.isAdmin || slug === "admin" || slug === "semed_admin",
     seasonId: parsedProfile.seasonId ?? cfg.seasonId,
+    activeSessionId: parsedProfile.activeSessionId,
+    activeSessionUpdatedAt: parsedProfile.activeSessionUpdatedAt,
   };
 
   return ensurePlayerSeasonAligned(
@@ -2380,27 +2373,16 @@ export async function playfabSignIn(
   }
 
   const reg = loadRegistry();
-  // 0. Dedicated Administrators: JOSINEY and QUEMUEL (replaces default admin)
-  const rawUpper = rawPassword.trim().toUpperCase();
+  // 0. Dedicated Administrators: JOSINEY and QUEMUEL (authenticated against PlayFab or local PIN/hash)
+  const rawTrimmed = rawPassword.trim();
+  const rawUpper = rawTrimmed.toUpperCase();
   const cleanIdLower = cleanId.toLowerCase().trim();
 
   let matchedAdminKey: "josiney" | "quemuel" | null = null;
-  if (
-    cleanIdLower === "josiney" ||
-    (cleanIdLower === "admin" && rawUpper === "SEMED2620ZZ") ||
-    (cleanIdLower === "adm" && rawUpper === "SEMED2620ZZ")
-  ) {
-    if (rawUpper === "SEMED2620ZZ") {
-      matchedAdminKey = "josiney";
-    }
-  } else if (
-    cleanIdLower === "quemuel" ||
-    (cleanIdLower === "admin" && rawUpper === "SEMED2620QQ") ||
-    (cleanIdLower === "adm" && rawUpper === "SEMED2620QQ")
-  ) {
-    if (rawUpper === "SEMED2620QQ") {
-      matchedAdminKey = "quemuel";
-    }
+  if (cleanIdLower === "josiney" || cleanIdLower === "adminjosiney") {
+    matchedAdminKey = "josiney";
+  } else if (cleanIdLower === "quemuel" || cleanIdLower === "adminquemuel") {
+    matchedAdminKey = "quemuel";
   }
 
   if (matchedAdminKey) {
@@ -2410,6 +2392,42 @@ export async function playfabSignIn(
       adminKey === "josiney"
         ? "JOSINEY - ADMINISTRAÇÃO SEMED"
         : "QUEMUEL - ADMINISTRAÇÃO SEMED";
+
+    let adminSessionTicket: string | undefined;
+    let adminPlayFabId: string | undefined;
+    let adminAuthenticated = false;
+
+    if (isPlayFabConfigured()) {
+      const pfAdminUser = adminKey === "josiney" ? "adminjosiney" : "adminquemuel";
+      const pfLogin = await callPlayFabClient<PlayFabLoginPayload>("LoginWithPlayFab", {
+        Username: pfAdminUser,
+        Password: rawTrimmed,
+      });
+      if (pfLogin.data?.SessionTicket) {
+        adminSessionTicket = pfLogin.data.SessionTicket;
+        adminPlayFabId = pfLogin.data.PlayFabId;
+        adminAuthenticated = true;
+        setCachedAdminPlayFabTicket(adminSessionTicket);
+      }
+    } else {
+      const expectedPin = getAdminPin().toUpperCase();
+      const masterCode = loadAdminConfig().masterCode.toUpperCase();
+      const existingAdmin = reg[adminKey];
+      if (
+        rawUpper === expectedPin ||
+        rawUpper === masterCode ||
+        (existingAdmin && existingAdmin.passwordHash === simpleHash(rawUpper))
+      ) {
+        adminAuthenticated = true;
+      }
+    }
+
+    if (!adminAuthenticated) {
+      return {
+        account: null,
+        error: "Usuário ou senha de administrador incorretos.",
+      };
+    }
 
     let adminAcc = reg[adminKey];
     if (!adminAcc) {
@@ -2440,26 +2458,11 @@ export async function playfabSignIn(
       };
       reg[adminKey] = adminAcc;
       saveRegistry(reg);
-  invalidatePioneersCache();
+      invalidatePioneersCache();
     } else {
       adminAcc.profile.isAdmin = true;
     }
     setAdminUnlockedSession(true);
-
-    let adminSessionTicket: string | undefined;
-    let adminPlayFabId: string | undefined;
-    if (isPlayFabConfigured()) {
-      const pfAdminUser = adminKey === "josiney" ? "adminjosiney" : "adminquemuel";
-      const pfAdminPass = adminKey === "josiney" ? "SEMED2620ZZadm" : "SEMED2620QQadm";
-      const pfLogin = await callPlayFabClient<PlayFabLoginPayload>("LoginWithPlayFab", {
-        Username: pfAdminUser,
-        Password: pfAdminPass,
-      });
-      if (pfLogin.data?.SessionTicket) {
-        adminSessionTicket = pfLogin.data.SessionTicket;
-        adminPlayFabId = pfLogin.data.PlayFabId;
-      }
-    }
 
     saveStoredSession({
       playerId: adminKey,
@@ -2543,77 +2546,17 @@ export async function playfabSignIn(
           activeSessionId: newActiveSessionId,
         });
         syncLocalBrowserFromAccount(account);
+        try {
+          await pushProfileToPlayFab(account, res.data.SessionTicket);
+        } catch {
+          /* ignore network sync errors during login */
+        }
         return {
           account,
           error: null,
           recoveredNick: typedAsFullName ? account.profile.nick : undefined,
         };
       }
-    }
-
-    // 1.1 Try LoginWithCustomID por nick (suporta underlines)
-    const nickCustomRes = await callPlayFabClient<PlayFabLoginPayload>("LoginWithCustomID", {
-      CustomId: `nick_${resolvedSlug}`,
-      CreateAccount: false,
-      InfoRequestParameters: {
-        GetUserData: true,
-        GetPlayerStatistics: true,
-        GetUserAccountInfo: true,
-      },
-    });
-
-    if (!nickCustomRes.error && nickCustomRes.data) {
-      const account = buildAccountFromPlayFabPayload(
-        nickCustomRes.data,
-        matchedLocal?.profile.nick ?? cleanId,
-        normalizedPassword,
-        cfg,
-      );
-      if (
-        account.profile.deletedAt &&
-        !account.profile.isAdmin &&
-        !isSpecialAdminAccount(account.profile)
-      ) {
-        return {
-          account: null,
-          error:
-            "Esta conta foi suspensa e movida para a lixeira pelo administrador. Procure a coordenação escolar.",
-        };
-      }
-
-      const previousSessionId = account.profile.activeSessionId;
-      const currentLocalSessionId = loadStoredSession()?.activeSessionId;
-      const newActiveSessionId = `sess_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-
-      if (previousSessionId && previousSessionId !== currentLocalSessionId) {
-        recordDeviceSecurityAlert({
-          studentNick: account.profile.nick,
-          studentFullName: account.profile.full_name,
-          studentId: account.profile.nickNormalized,
-          deviceInfo: typeof navigator !== "undefined" ? navigator.userAgent.slice(0, 80) : "Navegador Web",
-          timestamp: Date.now(),
-        });
-      }
-
-      account.profile.activeSessionId = newActiveSessionId;
-      account.profile.activeSessionUpdatedAt = new Date().toISOString();
-      checkAndApplyDailyLoginPoints(account.profile);
-
-      reg[account.profile.nickNormalized] = account;
-      saveRegistry(reg);
-  invalidatePioneersCache();
-      saveStoredSession({
-        playerId: account.profile.nickNormalized,
-        sessionTicket: nickCustomRes.data.SessionTicket,
-        playfabId: nickCustomRes.data.PlayFabId,
-        activeSessionId: newActiveSessionId,
-      });
-      syncLocalBrowserFromAccount(account);
-      return {
-        account,
-        error: null,
-        recoveredNick: typedAsFullName ? account.profile.nick : undefined,
-      };
     }
 
     // 2. If the student typed their Full Name, try LoginWithCustomID (stu_<fullName>_<DDMMAA>)
@@ -2663,6 +2606,11 @@ export async function playfabSignIn(
         activeSessionId: newActiveSessionId,
       });
       syncLocalBrowserFromAccount(account);
+      try {
+        await pushProfileToPlayFab(account, customRes.data.SessionTicket);
+      } catch {
+        /* ignore network sync errors during login */
+      }
       return {
         account,
         error: null,
@@ -2708,12 +2656,7 @@ export async function playfabSignIn(
   }
 
   const aligned = ensurePlayerSeasonAligned(targetAcc, cfg);
-  if (
-    aligned.profile.isAdmin ||
-    isSpecialAdminAccount(aligned.profile) ||
-    rawUpper === "SEMED2620ZZ" ||
-    rawUpper === "SEMED2620QQ"
-  ) {
+  if (aligned.profile.isAdmin || isSpecialAdminAccount(aligned.profile)) {
     aligned.profile.isAdmin = true;
     setAdminUnlockedSession(true);
   }
@@ -2811,6 +2754,11 @@ export async function playfabRecoverByNameAndBirthdate(
         activeSessionId: newActiveSessionId,
       });
       syncLocalBrowserFromAccount(account);
+      try {
+        await pushProfileToPlayFab(account, customRes.data.SessionTicket);
+      } catch {
+        /* ignore network sync errors during recovery */
+      }
       return {
         account,
         error: null,
@@ -2950,6 +2898,8 @@ async function pushProfileToPlayFab(account: StoredAccount, sessionTicket?: stri
           eventProgress: p.eventProgress,
           isAdmin: p.isAdmin,
           seasonId: p.seasonId,
+          activeSessionId: p.activeSessionId,
+          activeSessionUpdatedAt: p.activeSessionUpdatedAt,
         }),
         GameStats: JSON.stringify(account.stats),
         UnlockedGames: JSON.stringify(account.unlocked),
@@ -4128,6 +4078,51 @@ export function validateActiveSession(playerId: string, currentSessionId?: strin
   const activeLocal = currentSessionId ?? loadStoredSession()?.activeSessionId;
   if (!activeLocal) return true;
   return expected === activeLocal;
+}
+
+/**
+ * Consulta o PlayFab (GetUserData) para verificar se outro dispositivo assumiu a sessão
+ * da conta (Modelo A). Em caso de erro de rede/offline, retorna true para não desconectar
+ * indevidamente por instabilidade de conexão. Contas administrativas são isentas.
+ */
+export async function validateActiveSessionRemote(playerId: string): Promise<boolean> {
+  if (!validateActiveSession(playerId)) return false;
+  if (!isPlayFabConfigured()) return true;
+
+  const session = loadStoredSession();
+  if (!session?.sessionTicket || !session?.activeSessionId) return true;
+
+  const reg = loadRegistry();
+  const slug = nickSlug(playerId);
+  const acc = reg[slug] || Object.values(reg).find((a) => a.profile.nickNormalized === slug);
+  if (acc && (acc.profile.isAdmin || isSpecialAdminAccount(acc.profile))) {
+    return true;
+  }
+
+  try {
+    const res = await callPlayFabClient<{ Data?: Record<string, { Value: string }> }>(
+      "GetUserData",
+      { Keys: ["PlayerProfile"] },
+      session.sessionTicket,
+    );
+    if (res.error || !res.data?.Data?.PlayerProfile?.Value) return true;
+    const remoteProfile = JSON.parse(res.data.Data.PlayerProfile.Value) as Partial<PlayerProfile>;
+    if (
+      remoteProfile.activeSessionId &&
+      remoteProfile.activeSessionId !== session.activeSessionId
+    ) {
+      if (acc) {
+        acc.profile.activeSessionId = remoteProfile.activeSessionId;
+        acc.profile.activeSessionUpdatedAt = remoteProfile.activeSessionUpdatedAt;
+        reg[acc.profile.nickNormalized] = acc;
+        saveRegistry(reg);
+      }
+      return false;
+    }
+    return true;
+  } catch {
+    return true;
+  }
 }
 
 /**
