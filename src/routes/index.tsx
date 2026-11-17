@@ -455,7 +455,7 @@ function Index() {
   return (
     <main className="mx-auto max-w-5xl px-3 sm:px-4 py-4 sm:py-6">
       {/* Cabeçalho Unificado: Logos à Esquerda, Título Central/Esquerda e Controles à Direita */}
-      <div className="mb-3 flex items-center justify-between gap-3 flex-wrap">
+      <div className="mb-3 flex items-center justify-between gap-2 sm:gap-3 flex-wrap sm:flex-nowrap">
         <div className="flex items-center gap-3 min-w-0">
           <div className="flex flex-col gap-1 shrink-0">
             <img
