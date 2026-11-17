@@ -2348,4 +2348,60 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
     assert.equal(prog.percent, 50);
     assert.equal(prog.progressText, "45 de 90 tarefas diárias concluídas");
   });
+
+  it("avalia e calcula progresso das 6 medalhas de missões semanais concluídas (2, 4, 12, 20, 32 e 52)", () => {
+    const catalog = buildBaseMedalsCatalog();
+    const expected = [
+      { id: "weekly_missions_2", rarity: "bronze", threshold: 2 },
+      { id: "weekly_missions_4", rarity: "prata", threshold: 4 },
+      { id: "weekly_missions_12", rarity: "ouro", threshold: 12 },
+      { id: "weekly_missions_20", rarity: "platina", threshold: 20 },
+      { id: "weekly_missions_32", rarity: "diamante", threshold: 32 },
+      { id: "weekly_missions_52", rarity: "heroi", threshold: 52 },
+    ] as const;
+
+    for (const item of expected) {
+      const def = catalog.find((m) => m.id === item.id);
+      assert.ok(def, `Medalha ${item.id} deve existir no catálogo`);
+      assert.equal(def.rarity, item.rarity);
+      assert.equal(def.condition.type, "weekly_missions_completed");
+      assert.equal(def.condition.threshold, item.threshold);
+    }
+
+    const baseProfile: PlayerProfile = {
+      id: "weekly_missions_test",
+      nick: "aluno",
+      nickNormalized: "aluno",
+      full_name: "Aluno Teste",
+      school: "Escola",
+      grade: "6",
+      birthdate: "2012-01-01",
+      xp: 0,
+      seasonXp: 0,
+      level: 1,
+      wins: 0,
+      matchesPlayed: 0,
+      badges: [],
+      seasonId: 1,
+      unlockedMedals: [],
+    };
+
+    const p12: PlayerProfile = { ...baseProfile, weeklyMissionsCompleted: 12 };
+    const awarded12 = evaluatePlayerMedals({ profile: p12, stats: [] }).map((m) => m.id);
+    assert.ok(awarded12.includes("weekly_missions_2"));
+    assert.ok(awarded12.includes("weekly_missions_4"));
+    assert.ok(awarded12.includes("weekly_missions_12"));
+    assert.ok(!awarded12.includes("weekly_missions_20"));
+
+    const p52: PlayerProfile = { ...baseProfile, weeklyMissionsCompleted: 52 };
+    const awarded52 = evaluatePlayerMedals({ profile: p52, stats: [] }).map((m) => m.id);
+    for (const item of expected) {
+      assert.ok(awarded52.includes(item.id), `Deve conceder ${item.id} com 52 missões semanais`);
+    }
+
+    const platinaDef = catalog.find((m) => m.id === "weekly_missions_20")!;
+    const prog = calculateMedalProgress(platinaDef, { ...baseProfile, weeklyMissionsCompleted: 10 }, []);
+    assert.equal(prog.percent, 50);
+    assert.equal(prog.progressText, "10 de 20 missões semanais concluídas");
+  });
 });

@@ -82,6 +82,7 @@ export interface MedalCondition {
     | "distinct_games_with_50_matches"
     | "max_daily_xp"
     | "daily_missions_completed"
+    | "weekly_missions_completed"
     | "streak_days"
     | "tournament_rank"
     | "tournament_rank_mastery"
@@ -772,6 +773,64 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
       category: "atividade",
       iconName: "Crown",
       condition: { type: "daily_missions_completed", threshold: 300 },
+    },
+  );
+
+  // 9c. Missões Semanais Concluídas (2, 4, 12, 20, 32 e 52 missões semanais)
+  medals.push(
+    {
+      id: "weekly_missions_2",
+      title: "Iniciante Semanal (2)",
+      description: "Complete 2 missões semanais.",
+      rarity: "bronze",
+      category: "atividade",
+      iconName: "CheckCircle",
+      condition: { type: "weekly_missions_completed", threshold: 2 },
+    },
+    {
+      id: "weekly_missions_4",
+      title: "Ritmo Semanal (4)",
+      description: "Complete 4 missões semanais.",
+      rarity: "prata",
+      category: "atividade",
+      iconName: "Target",
+      condition: { type: "weekly_missions_completed", threshold: 4 },
+    },
+    {
+      id: "weekly_missions_12",
+      title: "Mestre Semanal (12)",
+      description: "Complete 12 missões semanais.",
+      rarity: "ouro",
+      category: "atividade",
+      iconName: "Award",
+      condition: { type: "weekly_missions_completed", threshold: 12 },
+    },
+    {
+      id: "weekly_missions_20",
+      title: "Veterano Semanal (20)",
+      description: "Complete 20 missões semanais.",
+      rarity: "platina",
+      category: "atividade",
+      iconName: "Star",
+      condition: { type: "weekly_missions_completed", threshold: 20 },
+    },
+    {
+      id: "weekly_missions_32",
+      title: "Lenda Semanal (32)",
+      description: "Complete 32 missões semanais.",
+      rarity: "diamante",
+      category: "atividade",
+      iconName: "Gem",
+      condition: { type: "weekly_missions_completed", threshold: 32 },
+    },
+    {
+      id: "weekly_missions_52",
+      title: "Herói Semanal (52)",
+      description: "Complete 52 missões semanais.",
+      rarity: "heroi",
+      category: "atividade",
+      iconName: "Crown",
+      condition: { type: "weekly_missions_completed", threshold: 52 },
     },
   );
 
@@ -1583,6 +1642,7 @@ export interface PlayerStatsContext {
   };
   todayXpEarned?: number;
   dailyMissionsCompleted?: number;
+  weeklyMissionsCompleted?: number;
   streakDays?: number;
   weeklyX1Wins?: number;
   enabledGames?: Partial<Record<GameId, boolean>>;
@@ -2281,6 +2341,12 @@ export function evaluatePlayerMedals(
         break;
       }
 
+      case "weekly_missions_completed": {
+        const completed = Math.max(0, ctx.weeklyMissionsCompleted ?? p.weeklyMissionsCompleted ?? 0);
+        if (completed >= (cond.threshold ?? 2)) earned = true;
+        break;
+      }
+
       case "streak_days":
         if (effectiveStreakDays >= (cond.threshold ?? 3)) earned = true;
         break;
@@ -2797,6 +2863,15 @@ export function calculateMedalProgress(
       return {
         percent: pct,
         progressText: `${cur} de ${target} tarefas diárias concluídas`,
+      };
+    }
+    case "weekly_missions_completed": {
+      const cur = Math.max(0, profile.weeklyMissionsCompleted ?? 0);
+      const target = cond.threshold ?? 2;
+      const pct = Math.min(100, Math.round((cur / target) * 100));
+      return {
+        percent: pct,
+        progressText: `${cur} de ${target} missões semanais concluídas`,
       };
     }
     case "streak_days": {

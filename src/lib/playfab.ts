@@ -264,6 +264,7 @@ export interface PlayerProfile {
   dailyPostCapMatches?: number;
   dailyPostCapDate?: string;
   dailyMissionsCompleted?: number;
+  weeklyMissionsCompleted?: number;
   streakDays?: number;
   lastActiveDate?: string;
   activeDates?: string[];
@@ -1709,6 +1710,9 @@ export function ensurePlayerSeasonAligned(
 
         case "daily_missions_completed":
           return (acc.profile.dailyMissionsCompleted ?? 0) >= (cond.threshold ?? 3);
+
+        case "weekly_missions_completed":
+          return (acc.profile.weeklyMissionsCompleted ?? 0) >= (cond.threshold ?? 2);
 
         case "total_matches_played":
           return totalMatchesCount >= (cond.threshold ?? 50);

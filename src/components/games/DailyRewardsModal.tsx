@@ -17,6 +17,7 @@ import {
   Zap,
   Medal,
   Target,
+  Trophy,
 } from "lucide-react";
 import type { GameStatRow, PlayerProfile } from "@/lib/playfab.ts";
 import type { AdminConfig } from "@/lib/game-codes.ts";
@@ -31,6 +32,8 @@ import {
   getDayStatus,
 } from "@/lib/daily-rewards.ts";
 import { generateDailyMissions } from "@/lib/daily-missions.ts";
+import { generateWeeklyMissions } from "@/lib/weekly-missions.ts";
+import { getWeekInfo } from "@/lib/weekly-tournament.ts";
 
 interface DailyRewardsModalProps {
   open: boolean;
@@ -47,7 +50,7 @@ export function DailyRewardsModal({
   stats = [],
   adminConfig,
 }: DailyRewardsModalProps) {
-  const [activeTab, setActiveTab] = useState<"recompensas" | "missoes">("recompensas");
+  const [activeTab, setActiveTab] = useState<"recompensas" | "missoes" | "semanais">("recompensas");
 
   useEffect(() => {
     if (open) {
@@ -87,6 +90,25 @@ export function DailyRewardsModal({
     [missions],
   );
 
+  const weekInfo = useMemo(() => getWeekInfo(), []);
+  const weeklyLevelTierLabel =
+    playerLevel <= 3 ? "Nível 1–3 (4 Missões)" : playerLevel <= 6 ? "Nível 4–6 (4 Missões)" : "Nível 7–10 (4 Missões)";
+
+  const weeklyMissions = useMemo(
+    () =>
+      generateWeeklyMissions({
+        profile,
+        adminConfig,
+        weekKey: weekInfo.weekKey,
+        weekIndex: weekInfo.weekIndex,
+      }),
+    [profile, adminConfig, weekInfo.weekKey, weekInfo.weekIndex],
+  );
+  const completedWeeklyMissionsCount = useMemo(
+    () => weeklyMissions.filter((m) => m.current >= m.target).length,
+    [weeklyMissions],
+  );
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="w-[95vw] max-w-2xl max-h-[90vh] overflow-y-auto rounded-3xl p-5 sm:p-6 shadow-2xl border-2 border-amber-500/40 bg-card">
@@ -101,7 +123,13 @@ export function DailyRewardsModal({
           </div>
 
           <DialogTitle className="font-display text-xl sm:text-2xl font-black text-foreground pt-2 flex flex-wrap items-center gap-2">
-            <span>{activeTab === "recompensas" ? "Recompensas Diárias" : "Missões Diárias"}</span>
+            <span>
+              {activeTab === "recompensas"
+                ? "Recompensas Diárias"
+                : activeTab === "missoes"
+                  ? "Missões Diárias"
+                  : "Missões Semanais"}
+            </span>
             <span className="text-amber-500">✨</span>
             {activeTab === "missoes" && (
               <span
@@ -111,27 +139,35 @@ export function DailyRewardsModal({
                 {completedMissionsCount} / {missions.length}
               </span>
             )}
+            {activeTab === "semanais" && (
+              <span
+                aria-label={`${completedWeeklyMissionsCount} de ${weeklyMissions.length} missões semanais concluídas`}
+                className="ml-auto inline-flex items-center gap-1 rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-0.5 font-mono text-xs font-black text-amber-600 dark:text-amber-400"
+              >
+                {completedWeeklyMissionsCount} / {weeklyMissions.length}
+              </span>
+            )}
           </DialogTitle>
 
           {/* Navegação em Abas Estilo Pílula */}
           <div
             role="tablist"
-            aria-label="Seções diárias"
-            className="mt-2 grid grid-cols-2 items-center rounded-full border border-border/70 bg-secondary/40 p-1.5 shadow-2xs"
+            aria-label="Seções diárias e semanais"
+            className="mt-2 grid grid-cols-3 items-center rounded-full border border-border/70 bg-secondary/40 p-1 shadow-2xs gap-1"
           >
             <button
               type="button"
               role="tab"
               aria-selected={activeTab === "recompensas"}
               onClick={() => setActiveTab("recompensas")}
-              className={`flex items-center justify-center gap-2 rounded-full px-3 py-2 text-xs sm:text-sm font-extrabold transition-all cursor-pointer ${
+              className={`flex items-center justify-center gap-1.5 rounded-full px-2 sm:px-3 py-2 text-[11px] sm:text-xs font-extrabold transition-all cursor-pointer ${
                 activeTab === "recompensas"
                   ? "bg-primary text-primary-foreground shadow-md"
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              <Calendar className="h-4 w-4 shrink-0" />
-              <span>Recompensa Diária</span>
+              <Calendar className="h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0" />
+              <span className="truncate">Recompensa Diária</span>
             </button>
 
             <button
@@ -139,14 +175,29 @@ export function DailyRewardsModal({
               role="tab"
               aria-selected={activeTab === "missoes"}
               onClick={() => setActiveTab("missoes")}
-              className={`flex items-center justify-center gap-2 rounded-full px-3 py-2 text-xs sm:text-sm font-extrabold transition-all cursor-pointer ${
+              className={`flex items-center justify-center gap-1.5 rounded-full px-2 sm:px-3 py-2 text-[11px] sm:text-xs font-extrabold transition-all cursor-pointer ${
                 activeTab === "missoes"
                   ? "bg-primary text-primary-foreground shadow-md"
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              <CheckCircle2 className="h-4 w-4 shrink-0" />
-              <span>Missões Diárias</span>
+              <CheckCircle2 className="h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0" />
+              <span className="truncate">Missões Diárias</span>
+            </button>
+
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "semanais"}
+              onClick={() => setActiveTab("semanais")}
+              className={`flex items-center justify-center gap-1.5 rounded-full px-2 sm:px-3 py-2 text-[11px] sm:text-xs font-extrabold transition-all cursor-pointer ${
+                activeTab === "semanais"
+                  ? "bg-primary text-primary-foreground shadow-md"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <Trophy className="h-3.5 w-3.5 sm:h-4 sm:w-4 shrink-0" />
+              <span className="truncate">Missões Semanais</span>
             </button>
           </div>
         </DialogHeader>
@@ -311,7 +362,7 @@ export function DailyRewardsModal({
               Entre todos os dias para acumular +{DAILY_STREAK_BONUS_STEP} pts de ofensiva por dia seguido (até +{DAILY_STREAK_BONUS_CAP} pts/dia)!
             </div>
           </div>
-        ) : (
+        ) : activeTab === "missoes" ? (
           <div className="space-y-3">
             {/* Resumo das Missões por Faixa de Nível */}
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
@@ -378,6 +429,83 @@ export function DailyRewardsModal({
                         <div
                           className={`h-full rounded-full transition-all ${
                             mission.isPersonalized ? "bg-amber-500" : "bg-primary"
+                          }`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {/* Resumo das Missões Semanais */}
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/15 border border-amber-500/30 px-3 py-1 font-bold text-amber-600 dark:text-amber-400">
+                <Trophy className="h-3.5 w-3.5" /> {weeklyLevelTierLabel}
+              </span>
+              <span className="text-muted-foreground font-medium">
+                Ciclo {weekInfo.weekKey} • Encerra {weekInfo.endsAtLabel} (Seg. 00h)
+              </span>
+            </div>
+
+            {/* Lista de 4 Missões Semanais */}
+            <div className="space-y-2.5 py-1">
+              {weeklyMissions.map((mission, idx) => {
+                const pct = Math.min(100, Math.round((mission.current / Math.max(1, mission.target)) * 100));
+                return (
+                  <div
+                    key={mission.id}
+                    className={`rounded-2xl border p-3.5 transition-all space-y-2 ${
+                      mission.type === "weekly_ranked_ranks"
+                        ? "border-amber-500/50 bg-gradient-to-r from-amber-500/10 via-primary/5 to-transparent"
+                        : "border-border/70 bg-secondary/20"
+                    }`}
+                  >
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div className="space-y-0.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="grid h-6 w-6 place-items-center rounded-lg bg-amber-500/15 font-mono text-xs font-black text-amber-600 dark:text-amber-400">
+                            {idx + 1}
+                          </span>
+                          <span className="font-display text-sm font-bold text-foreground">
+                            {mission.title}
+                          </span>
+                          {mission.type === "weekly_ranked_ranks" && (
+                            <span className="rounded-full bg-amber-500/20 border border-amber-500/40 px-2 py-0.5 text-[10px] font-black uppercase text-amber-600 dark:text-amber-400">
+                              🏆 Ranqueada
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-muted-foreground pl-8">
+                          {mission.description}
+                        </p>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0 pl-8 sm:pl-0">
+                        <span className="inline-flex items-center gap-1 rounded-lg bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 font-mono text-[11px] font-black text-amber-600 dark:text-amber-400">
+                          <Coins className="h-3 w-3" /> +{mission.rewardPoints} pts
+                        </span>
+                        <span className="inline-flex items-center gap-1 rounded-lg bg-primary/15 border border-primary/30 px-2 py-0.5 font-mono text-[11px] font-black text-primary">
+                          <Zap className="h-3 w-3" /> +{mission.rewardXp} XP
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Barra de Progresso */}
+                    <div className="pl-8 space-y-1">
+                      <div className="flex items-center justify-between text-[11px] font-bold text-muted-foreground">
+                        <span>Progresso</span>
+                        <span className="font-mono text-foreground">
+                          {mission.current} / {mission.target}
+                        </span>
+                      </div>
+                      <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                        <div
+                          className={`h-full rounded-full transition-all ${
+                            mission.type === "weekly_ranked_ranks" ? "bg-amber-500" : "bg-primary"
                           }`}
                           style={{ width: `${pct}%` }}
                         />
