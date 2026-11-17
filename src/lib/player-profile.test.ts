@@ -27,6 +27,7 @@ import {
   playfabUsernameFromNick,
   nickSlug,
   isPioneerExcludedAccount,
+  splitStudentNameForPrivacy,
   RANKING_SERIES_OPTIONS,
   resolveDefaultRankingCategory,
   SCHOOLS,
@@ -1117,5 +1118,27 @@ describe("Perfil do Jogador, Escolas, Trava de Níveis (1..10) e Limite Diário 
     // Limpa o mock
     delete reg["banana123"];
     saveRegistry(reg);
+  });
+
+  it("separa e mascara corretamente o sobrenome a partir do segundo nome para privacidade", () => {
+    const res1 = splitStudentNameForPrivacy("ELILSON SEIXAS DA COSTA");
+    assert.equal(res1.firstName, "ELILSON");
+    assert.equal(res1.restName, "SEIXAS DA COSTA");
+    assert.equal(res1.maskedRest, "•••••• •• •••••");
+
+    const res2 = splitStudentNameForPrivacy("  Maria   Eduarda  ");
+    assert.equal(res2.firstName, "Maria");
+    assert.equal(res2.restName, "Eduarda");
+    assert.equal(res2.maskedRest, "•••••••");
+
+    const resSingle = splitStudentNameForPrivacy("Zheret");
+    assert.equal(resSingle.firstName, "Zheret");
+    assert.equal(resSingle.restName, "");
+    assert.equal(resSingle.maskedRest, "");
+
+    const resEmpty = splitStudentNameForPrivacy("");
+    assert.equal(resEmpty.firstName, "");
+    assert.equal(resEmpty.restName, "");
+    assert.equal(resEmpty.maskedRest, "");
   });
 });

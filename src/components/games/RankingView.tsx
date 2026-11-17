@@ -28,10 +28,12 @@ import {
   RANKING_SERIES_OPTIONS,
   resolveDefaultRankingCategory,
   SCHOOLS,
+  splitStudentNameForPrivacy,
   stageFromBirthdate,
   type AgeStageId,
   type RankingFilterCategory,
 } from "@/lib/player-profile";
+import { StudentNameDisplay } from "./StudentNameDisplay";
 import { usePlayerAuth } from "@/lib/player-auth";
 import {
   fetchLeaderboard,
@@ -319,15 +321,23 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
 
+  const isAdminViewer = Boolean(auth.isAdmin || auth.profile?.isAdmin);
+
   const filteredEntries = useMemo(() => {
     if (!normalizedQuery) return entries;
-    return entries.filter(
-      (r) =>
-        r.nick.toLowerCase().includes(normalizedQuery) ||
-        (r.fullName && r.fullName.toLowerCase().includes(normalizedQuery)) ||
-        r.school.toLowerCase().includes(normalizedQuery),
-    );
-  }, [entries, normalizedQuery]);
+    return entries.filter((r) => {
+      if (r.nick.toLowerCase().includes(normalizedQuery)) return true;
+      if (r.school.toLowerCase().includes(normalizedQuery)) return true;
+      if (r.fullName) {
+        const searchableName =
+          isAdminViewer || r.isCurrentPlayer
+            ? r.fullName
+            : splitStudentNameForPrivacy(r.fullName).firstName;
+        if (searchableName.toLowerCase().includes(normalizedQuery)) return true;
+      }
+      return false;
+    });
+  }, [entries, normalizedQuery, isAdminViewer]);
 
   const displayedEntries = useMemo(
     () => filteredEntries.slice(0, visibleLimit),
@@ -992,7 +1002,6 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
             ) : (
               <>
                 {displayedEntries.map((row) => {
-                  const displayFullName = (row.fullName || row.nick).toUpperCase();
                   return (
                     <div
                       key={`${row.playerId}-${row.rank}`}
@@ -1044,7 +1053,10 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
 
                           {row.fullName && row.fullName.toLowerCase() !== row.nick.toLowerCase() && (
                             <div className="truncate text-[11px] font-semibold uppercase text-muted-foreground/90">
-                              {displayFullName}
+                              <StudentNameDisplay
+                                fullName={row.fullName}
+                                canViewFull={Boolean(isAdminViewer || row.isCurrentPlayer)}
+                              />
                             </div>
                           )}
 

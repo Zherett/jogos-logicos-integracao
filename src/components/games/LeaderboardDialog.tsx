@@ -24,6 +24,7 @@ import { usePlayerAuth } from "@/lib/player-auth";
 import { fetchLeaderboard, getSchoolStandings, type LeaderboardEntry } from "@/lib/playfab";
 import { PlayerInspectModal } from "./PlayerInspectModal";
 import { PresenceDot } from "./PresenceDot";
+import { StudentNameDisplay } from "./StudentNameDisplay";
 
 interface Props {
   open: boolean;
@@ -519,7 +520,7 @@ export function LeaderboardDialog({ open, onOpenChange }: Props) {
               </div>
             ) : (
               entries.map((row) => {
-                const displayFullName = (row.fullName || row.nick).toUpperCase();
+                const canViewFull = Boolean(auth.isAdmin || auth.profile?.isAdmin || row.isCurrentPlayer);
                 return (
                   <div
                     key={`${row.playerId}-${row.rank}`}
@@ -566,10 +567,10 @@ export function LeaderboardDialog({ open, onOpenChange }: Props) {
                           )}
                         </div>
 
-                        {/* Logo abaixo do Nick (com menos destaque): Nome Completo do aluno */}
+                        {/* Logo abaixo do Nick (com menos destaque): Nome Completo (ou mascarado para não-ADMs) */}
                         {row.fullName && row.fullName.toLowerCase() !== row.nick.toLowerCase() && (
                           <div className="truncate text-[11px] font-semibold uppercase text-muted-foreground/90">
-                            {displayFullName}
+                            <StudentNameDisplay fullName={row.fullName} canViewFull={canViewFull} />
                           </div>
                         )}
 

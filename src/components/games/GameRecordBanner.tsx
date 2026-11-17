@@ -1,7 +1,7 @@
 import { Trophy, Award, Sparkles, User, Calendar, CheckCircle2 } from "lucide-react";
 import type { GameId } from "@/lib/game-storage";
 import { GAME_NAMES } from "@/lib/game-storage";
-import { stageFromBirthdate, type AgeStageId } from "@/lib/player-profile";
+import { stageFromBirthdate, splitStudentNameForPrivacy, type AgeStageId } from "@/lib/player-profile";
 import type { PlayerProfile } from "@/lib/playfab";
 import {
   formatRecordDateBR,
@@ -89,11 +89,13 @@ export function GameRecordBanner({
                             ? "border-primary bg-primary/15 text-primary shadow-xs"
                             : "border-border bg-card/90 text-foreground"
                         }`}
-                        title={
-                          holder.school
-                            ? `${holder.fullName ?? holder.nick} (${holder.school})`
-                            : holder.fullName ?? holder.nick
-                        }
+                        title={(() => {
+                          const canSeeFull = Boolean(profile?.isAdmin || (profile && holder.playerId === profile.id));
+                          const displayName = canSeeFull
+                            ? (holder.fullName ?? holder.nick)
+                            : (splitStudentNameForPrivacy(holder.fullName).firstName || holder.nick);
+                          return holder.school ? `${displayName} (${holder.school})` : displayName;
+                        })()}
                       >
                         <span className="grid h-4 w-4 place-items-center rounded-full bg-amber-500/20 text-[10px] font-black text-amber-700 dark:text-amber-300">
                           {idx + 1}º

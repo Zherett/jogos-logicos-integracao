@@ -79,6 +79,7 @@ import { PlayerMedalsInventory } from "./PlayerMedalsInventory";
 import { PresenceDot } from "./PresenceDot";
 import { PlayerActivityBadge } from "./PlayerActivityBadge";
 import { TournamentRankBadge } from "./TournamentRankBadge";
+import { StudentNameDisplay } from "./StudentNameDisplay";
 import {
   getTournamentStoreRecord,
   resolveCanonicalTournamentPoints,
@@ -425,7 +426,12 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                     </span>
                   )}
                 </div>
-                <p className="truncate text-xs font-semibold text-muted-foreground uppercase">{profile.full_name}</p>
+                <p className="truncate text-xs font-semibold text-muted-foreground uppercase">
+                  <StudentNameDisplay
+                    fullName={profile.full_name}
+                    canViewFull={Boolean(auth.isAdmin || auth.profile?.isAdmin || isMe)}
+                  />
+                </p>
                 
                 {/* Status Extra de Atividade em Tempo Real (Separado do Online/Offline) */}
                 <PlayerActivityBadge

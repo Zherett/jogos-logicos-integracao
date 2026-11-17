@@ -1762,3 +1762,28 @@ export function computeMatchDisplayXp(args: {
     displayLabel,
   };
 }
+
+export interface StudentPrivacyNameParts {
+  firstName: string;
+  restName: string;
+  maskedRest: string;
+}
+
+/**
+ * Separa o primeiro nome do restante do nome oficial do aluno para exibição
+ * com privacidade (primeiro nome visível + sobrenome mascarado/embaçado para não-ADMs).
+ */
+export function splitStudentNameForPrivacy(fullName?: string | null): StudentPrivacyNameParts {
+  const clean = String(fullName ?? "").trim().replace(/\s+/g, " ");
+  if (!clean) {
+    return { firstName: "", restName: "", maskedRest: "" };
+  }
+  const spaceIdx = clean.indexOf(" ");
+  if (spaceIdx === -1) {
+    return { firstName: clean, restName: "", maskedRest: "" };
+  }
+  const firstName = clean.slice(0, spaceIdx);
+  const restName = clean.slice(spaceIdx + 1);
+  const maskedRest = restName.replace(/\S/g, "•");
+  return { firstName, restName, maskedRest };
+}
