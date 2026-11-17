@@ -84,11 +84,15 @@ export interface PromoCodeClaimResult {
 
 // Chaves de armazenamento
 const PROMO_CODES_LOCAL_KEY = "desafios_promo_codes_v1";
+const PROMO_TOMBSTONES_LOCAL_KEY = "desafios_promo_codes_deleted_v1";
+const PROMO_RATE_LIMIT_LOCAL_KEY = "desafios_promo_rate_limit_v1";
 export const PROMO_CODES_SHARED_GROUP_ID = "SEMED_PROMO_CODES_V1";
 
 // Cache em memória
 let inMemoryPromoCodes: PromoCodeItem[] = [];
 let memoryLoaded = false;
+const inMemoryDeletedCleanCodes = new Set<string>();
+let deletedMemoryLoaded = false;
 
 // Rate limiting de tentativas inválidas por aluno
 interface RateLimitTracker {
@@ -96,6 +100,83 @@ interface RateLimitTracker {
   blockedUntil?: number;
 }
 const rateLimitMap = new Map<string, RateLimitTracker>();
+let rateLimitLoaded = false;
+
+function ensureRateLimitLoaded(): void {
+  if (rateLimitLoaded) return;
+  rateLimitLoaded = true;
+  try {
+    if (typeof window === "undefined") return;
+    const raw = localStorage.getItem(PROMO_RATE_LIMIT_LOCAL_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as Record<string, RateLimitTracker>;
+    if (parsed && typeof parsed === "object") {
+      for (const [k, v] of Object.entries(parsed)) {
+        if (v && typeof v.failedAttempts === "number") {
+          rateLimitMap.set(k, v);
+        }
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function saveRateLimitStore(): void {
+  try {
+    if (typeof window === "undefined") return;
+    const obj: Record<string, RateLimitTracker> = {};
+    for (const [k, v] of rateLimitMap.entries()) {
+      obj[k] = v;
+    }
+    localStorage.setItem(PROMO_RATE_LIMIT_LOCAL_KEY, JSON.stringify(obj));
+  } catch {
+    /* ignore */
+  }
+}
+
+export function loadDeletedPromoCleanCodes(): Set<string> {
+  if (deletedMemoryLoaded) return inMemoryDeletedCleanCodes;
+  deletedMemoryLoaded = true;
+  try {
+    if (typeof window !== "undefined") {
+      const raw = localStorage.getItem(PROMO_TOMBSTONES_LOCAL_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          for (const item of parsed) {
+            if (typeof item === "string" && item.trim()) {
+              inMemoryDeletedCleanCodes.add(item.trim().toUpperCase());
+            }
+          }
+        }
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return inMemoryDeletedCleanCodes;
+}
+
+function saveDeletedPromoCleanCodes(set: Set<string>): void {
+  deletedMemoryLoaded = true;
+  for (const c of set) inMemoryDeletedCleanCodes.add(c);
+  try {
+    if (typeof window !== "undefined") {
+      localStorage.setItem(PROMO_TOMBSTONES_LOCAL_KEY, JSON.stringify(Array.from(inMemoryDeletedCleanCodes)));
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function addDeletedPromoCleanCode(cleanCode: string): void {
+  const clean = normalizePromoCodeInput(cleanCode);
+  if (!clean) return;
+  const set = loadDeletedPromoCleanCodes();
+  set.add(clean);
+  saveDeletedPromoCleanCodes(set);
+}
 
 /** Contas de teste com acesso exclusivo ao modo Beta de resgate */
 export const PROMO_CODE_TESTER_ACCOUNTS = ["zheret", "lord"];
@@ -106,12 +187,9 @@ export function canAccessPromoCodeRedeem(profile?: Partial<PlayerProfile> | null
   if (profile.isAdmin) return true; // Administrador autenticado sempre pode testar
   const rawNick = (profile.nick ?? "").toLowerCase().trim();
   const slug = (profile.nickNormalized ?? nickSlug(profile.nick ?? "")).toLowerCase().trim();
-  const name = (profile.full_name ?? "").toLowerCase().trim();
   const id = (profile.id ?? "").toLowerCase().trim();
-  const patterns = ["zheret", "lord", "josiney", "quemuel", "admin"];
-  return patterns.some(
-    (p) => slug === p || slug.includes(p) || rawNick.includes(p) || name.includes(p) || id.includes(p),
-  );
+  const allowed = new Set(["zheret", "lord", "josiney", "quemuel", "admin", "semed_admin"]);
+  return allowed.has(slug) || allowed.has(rawNick) || allowed.has(id);
 }
 
 /** Gera um caractere aleatório de uma lista */
@@ -153,7 +231,7 @@ export function normalizePromoCodeInput(raw: string): string {
 
 /** Carrega os códigos salvos no armazenamento local */
 export function loadLocalPromoCodes(): PromoCodeItem[] {
-  if (memoryLoaded && inMemoryPromoCodes.length > 0) {
+  if (memoryLoaded) {
     return inMemoryPromoCodes;
   }
   try {
@@ -252,6 +330,7 @@ export function deletePromoCode(codeId: string): { success: boolean; mode: "hard
   if (!target) return { success: false, mode: "hard_deleted" };
 
   if (target.status === "active") {
+    addDeletedPromoCleanCode(target.cleanCode);
     const remaining = list.filter((c) => c.id !== codeId);
     saveLocalPromoCodes(remaining);
     return { success: true, mode: "hard_deleted" };
@@ -270,6 +349,7 @@ export function checkStudentPromoRateLimit(studentId: string): {
   remainingSeconds: number;
   failedCount: number;
 } {
+  ensureRateLimitLoaded();
   const cleanId = nickSlug(studentId);
   const now = Date.now();
   const tracker = rateLimitMap.get(cleanId);
@@ -288,6 +368,7 @@ export function checkStudentPromoRateLimit(studentId: string): {
 
 /** Registra tentativa falha e calcula o cooldown adaptativo */
 export function recordFailedPromoAttempt(studentId: string): { blocked: boolean; remainingSeconds: number } {
+  ensureRateLimitLoaded();
   const cleanId = nickSlug(studentId);
   const now = Date.now();
   const tracker = rateLimitMap.get(cleanId) ?? { failedAttempts: 0 };
@@ -305,17 +386,21 @@ export function recordFailedPromoAttempt(studentId: string): { blocked: boolean;
   if (cooldownMs > 0) {
     tracker.blockedUntil = now + cooldownMs;
     rateLimitMap.set(cleanId, tracker);
+    saveRateLimitStore();
     return { blocked: true, remainingSeconds: Math.ceil(cooldownMs / 1000) };
   }
 
   rateLimitMap.set(cleanId, tracker);
+  saveRateLimitStore();
   return { blocked: false, remainingSeconds: 0 };
 }
 
 /** Limpa tentativas falhas após resgate legítimo */
 export function resetStudentPromoFailedAttempts(studentId: string): void {
+  ensureRateLimitLoaded();
   const cleanId = nickSlug(studentId);
   rateLimitMap.delete(cleanId);
+  saveRateLimitStore();
 }
 
 /**
@@ -536,6 +621,44 @@ async function ensurePromoCodesSharedGroup(ticket: string): Promise<void> {
 }
 
 /**
+ * Mescla o catálogo local e da nuvem respeitando tombstones de exclusão e soft-deletes.
+ */
+export function mergePromoCatalogs(
+  cloudList: PromoCodeItem[],
+  localList: PromoCodeItem[],
+  deletedSet: Set<string>,
+  now = Date.now(),
+): PromoCodeItem[] {
+  const map = new Map<string, PromoCodeItem>();
+  for (const item of cloudList) {
+    if (!item?.cleanCode || deletedSet.has(item.cleanCode)) continue;
+    map.set(item.cleanCode, { ...item });
+  }
+  for (const item of localList) {
+    if (!item?.cleanCode || deletedSet.has(item.cleanCode)) continue;
+    const cloudItem = map.get(item.cleanCode);
+    if (!cloudItem) {
+      // Preserva item local apenas se foi criado nos últimos 15s (ainda subindo para nuvem)
+      const ageMs = now - new Date(item.createdAt).getTime();
+      if (ageMs >= 0 && ageMs < 15_000) {
+        map.set(item.cleanCode, { ...item });
+      }
+    } else {
+      const merged: PromoCodeItem =
+        item.status === "claimed" && cloudItem.status !== "claimed"
+          ? { ...item }
+          : { ...cloudItem };
+      // Preserva soft delete se qualquer um dos lados marcou hiddenForAdmin
+      if (item.hiddenForAdmin || cloudItem.hiddenForAdmin) {
+        merged.hiddenForAdmin = true;
+      }
+      map.set(item.cleanCode, merged);
+    }
+  }
+  return Array.from(map.values());
+}
+
+/**
  * Sincroniza os códigos com a nuvem PlayFab (SharedGroup público).
  */
 export async function syncPromoCodesToPlayFab(): Promise<boolean> {
@@ -546,18 +669,27 @@ export async function syncPromoCodesToPlayFab(): Promise<boolean> {
 
     await ensurePromoCodesSharedGroup(ticket);
 
-    const list = loadLocalPromoCodes();
+    const deletedSet = loadDeletedPromoCleanCodes();
+    const list = loadLocalPromoCodes().filter((item) => !deletedSet.has(item.cleanCode));
     const payload = JSON.stringify(list);
+    const deletedPayload = JSON.stringify(Array.from(deletedSet));
 
-    await callPlayFabClient(
+    const res = await callPlayFabClient(
       "UpdateSharedGroupData",
       {
         SharedGroupId: PROMO_CODES_SHARED_GROUP_ID,
-        Data: { promo_codes_catalog: payload },
+        Data: {
+          promo_codes_catalog: payload,
+          promo_codes_deleted_ids: deletedPayload,
+        },
         Permission: "Public",
       },
       ticket,
     );
+    if (res.error) {
+      console.warn("[PromoCodes] Erro do PlayFab ao sincronizar códigos:", res.error);
+      return false;
+    }
     return true;
   } catch (err) {
     console.warn("[PromoCodes] Falha ao sincronizar códigos com a nuvem:", err);
@@ -574,44 +706,55 @@ export async function fetchPromoCodesFromPlayFab(): Promise<PromoCodeItem[]> {
     const ticket = (await getAdminPlayFabTicket()) ?? loadStoredSession()?.sessionTicket;
     if (!ticket) return loadLocalPromoCodes();
 
-    const res = await callPlayFabClient(
+    const res = await callPlayFabClient<{
+      Data?: {
+        promo_codes_catalog?: { Value?: string };
+        promo_codes_deleted_ids?: { Value?: string };
+      };
+    }>(
       "GetSharedGroupData",
       {
         SharedGroupId: PROMO_CODES_SHARED_GROUP_ID,
-        Keys: ["promo_codes_catalog"],
+        Keys: ["promo_codes_catalog", "promo_codes_deleted_ids"],
       },
       ticket,
     );
+
+    if (res.error) {
+      return loadLocalPromoCodes();
+    }
+
+    const deletedSet = loadDeletedPromoCleanCodes();
+    const rawDeleted = res?.data?.Data?.promo_codes_deleted_ids?.Value;
+    if (rawDeleted) {
+      try {
+        const parsedDeleted = JSON.parse(rawDeleted);
+        if (Array.isArray(parsedDeleted)) {
+          for (const d of parsedDeleted) {
+            if (typeof d === "string" && d.trim()) {
+              deletedSet.add(normalizePromoCodeInput(d));
+            }
+          }
+          saveDeletedPromoCleanCodes(deletedSet);
+        }
+      } catch {
+        /* ignore */
+      }
+    }
 
     const raw = res?.data?.Data?.promo_codes_catalog?.Value;
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        // Mescla códigos da nuvem com eventuais alterações locais muito recentes
         const local = loadLocalPromoCodes();
-        const now = Date.now();
-        const map = new Map<string, PromoCodeItem>();
-        for (const item of parsed) map.set(item.cleanCode, item);
-        for (const item of local) {
-          const cloudItem = map.get(item.cleanCode);
-          if (!cloudItem) {
-            // Preserva item local apenas se foi criado nos últimos 15s (ainda subindo para nuvem)
-            const ageMs = now - new Date(item.createdAt).getTime();
-            if (ageMs >= 0 && ageMs < 15_000) {
-              map.set(item.cleanCode, item);
-            }
-          } else if (item.status === "claimed" && cloudItem.status !== "claimed") {
-            map.set(item.cleanCode, item); // Prioriza resgate local se ainda não subiu
-          }
-        }
-        const merged = Array.from(map.values());
+        const merged = mergePromoCatalogs(parsed, local, deletedSet);
         saveLocalPromoCodes(merged);
         return merged;
       }
     }
 
     const localFallback = loadLocalPromoCodes();
-    if (localFallback.length > 0) {
+    if (localFallback.length > 0 || deletedSet.size > 0) {
       await syncPromoCodesToPlayFab();
     }
     return localFallback;

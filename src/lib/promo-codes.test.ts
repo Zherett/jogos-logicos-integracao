@@ -12,6 +12,7 @@ import {
   loadLocalPromoCodes,
   saveLocalPromoCodes,
   normalizePromoCodeInput,
+  mergePromoCatalogs,
   type PromoCodePattern,
 } from "./promo-codes.ts";
 
@@ -235,5 +236,45 @@ describe("Sistema de Códigos Promocionais e QR Codes (promo-codes)", () => {
     assert.equal(claim2.success, true);
     assert.equal(student.xp, 20);
     assert.equal(student.careerPoints, 10);
+  });
+
+  it("impede que códigos excluídos voltem no merge da nuvem (tombstones) e preserva soft delete", () => {
+    const nowIso = new Date().toISOString();
+    const deletedActive = {
+      id: "promo_del_1",
+      code: "TEST-1111-AAAA",
+      cleanCode: "TEST1111AAAA",
+      pattern: "padrao_1" as const,
+      batchId: "b1",
+      batchName: "Teste",
+      status: "active" as const,
+      rewards: { xp: 10, points: 5 },
+      createdAt: nowIso,
+      createdBy: "admin",
+    };
+    const claimedCloud = {
+      id: "promo_claim_1",
+      code: "TEST-2222-BBBB",
+      cleanCode: "TEST2222BBBB",
+      pattern: "padrao_1" as const,
+      batchId: "b1",
+      batchName: "Teste",
+      status: "claimed" as const,
+      rewards: { xp: 10, points: 5 },
+      createdAt: nowIso,
+      createdBy: "admin",
+    };
+    const claimedLocalHidden = { ...claimedCloud, hiddenForAdmin: true };
+
+    const merged = mergePromoCatalogs(
+      [deletedActive, claimedCloud],
+      [claimedLocalHidden],
+      new Set(["TEST1111AAAA"]),
+    );
+
+    assert.equal(merged.some((c) => c.cleanCode === "TEST1111AAAA"), false, "Código na tombstone não pode voltar");
+    const kept = merged.find((c) => c.cleanCode === "TEST2222BBBB");
+    assert.ok(kept);
+    assert.equal(kept.hiddenForAdmin, true, "Soft delete local (hiddenForAdmin) deve ser preservado no merge");
   });
 });

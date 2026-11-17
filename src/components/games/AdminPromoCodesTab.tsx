@@ -96,10 +96,14 @@ export function AdminPromoCodesTab() {
     const res = deletePromoCode(id);
     const updated = loadLocalPromoCodes();
     setCodes([...updated]);
-    await syncPromoCodesToPlayFab();
+    const synced = await syncPromoCodesToPlayFab();
+    if (!synced) {
+      flash("⚠️ Código removido localmente, mas não foi possível sincronizar com a nuvem PlayFab.");
+      return;
+    }
     flash(
       res.mode === "hard_deleted"
-        ? "🗑️ Código ativo excluído permanentemente."
+        ? "🗑️ Código ativo excluído permanentemente (local e nuvem)."
         : "👁️ Código resgatado arquivado/ocultado do painel com sucesso.",
     );
   }
