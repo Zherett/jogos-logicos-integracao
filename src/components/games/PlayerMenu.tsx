@@ -255,13 +255,13 @@ export function PlayerMenu({ onConfigChanged }: Props) {
     if (inboxOpen) {
       setPlayerCurrentActivity({ type: "inbox" });
     } else if (profileOpen) {
-      if (medalsExpanded) {
+      if (profileTab === "medalhas") {
         setPlayerCurrentActivity({ type: "medals" });
       } else {
         setPlayerCurrentActivity({ type: "profile" });
       }
     }
-  }, [inboxOpen, profileOpen, medalsExpanded]);
+  }, [inboxOpen, profileOpen, profileTab]);
   useEffect(() => {
     if (!profile) {
       setInboxCounts({ unreadCount: 0, unclaimedRewardsCount: 0, totalAlerts: 0 });
@@ -648,13 +648,12 @@ export function PlayerMenu({ onConfigChanged }: Props) {
                           {/* Botão Sutil de Medalhas no Topo */}
                           <button
                             type="button"
-                            onClick={() => setMedalsExpanded((prev) => !prev)}
-                            title="Expandir Inventário de Medalhas"
-                            className="shrink-0 flex items-center gap-1 rounded-xl border border-accent/40 bg-accent/10 hover:bg-accent/20 px-2 py-1 text-[10px] sm:text-[11px] font-extrabold text-accent transition-all active:scale-95"
+                            onClick={() => setProfileTab("medalhas")}
+                            title="Ir para a aba de Medalhas"
+                            className="shrink-0 flex items-center gap-1 rounded-xl border border-accent/40 bg-accent/10 hover:bg-accent/20 px-2 py-1 text-[10px] sm:text-[11px] font-extrabold text-accent transition-all active:scale-95 cursor-pointer"
                           >
                             <Award className="h-3 w-3" />
                             <span className="hidden sm:inline">Medalhas</span>
-                            {medalsExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
                           </button>
                         </div>
 
