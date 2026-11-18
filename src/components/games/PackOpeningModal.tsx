@@ -175,24 +175,24 @@ export function PackOpeningModal({
 
         {/* ETAPA 1: PACOTE FECHADO */}
         {stage === "sealed" && pack && (
-          <div className="flex flex-col items-center gap-5 py-3">
-            <div className="relative w-52 select-none drop-shadow-xl transition-transform hover:scale-[1.02]">
+          <div className="flex flex-col items-center gap-5 py-2">
+            <div className="relative w-[17rem] select-none drop-shadow-xl transition-transform hover:scale-[1.02]">
               <SerratedEdge position="top" />
-              <div className="flex h-64 flex-col items-center justify-between bg-gradient-to-b from-teal-700 via-teal-800 to-teal-900 px-4 py-5 text-center text-white">
-                <span className="rounded-full border border-white/25 bg-black/25 px-2.5 py-0.5 text-[10px] font-extrabold uppercase tracking-widest">
+              <div className="flex h-[23rem] flex-col items-center justify-between bg-gradient-to-b from-teal-700 via-teal-800 to-teal-900 px-5 py-6 text-center text-white">
+                <span className="rounded-full border border-white/25 bg-black/25 px-3 py-1 text-[11px] font-extrabold uppercase tracking-widest">
                   {pack.cardsPerPack} Cartas
                 </span>
 
-                <div className="flex flex-col items-center gap-2">
-                  <div className="grid h-16 w-16 place-items-center rounded-2xl border-2 border-teal-300/60 bg-white/10 shadow-inner">
-                    <Layers className="h-8 w-8 text-teal-200" />
+                <div className="flex flex-col items-center gap-3">
+                  <div className="grid h-20 w-20 place-items-center rounded-2xl border-2 border-teal-300/60 bg-white/10 shadow-inner">
+                    <Layers className="h-10 w-10 text-teal-200" />
                   </div>
-                  <p className="font-display text-base font-black leading-tight line-clamp-2">
+                  <p className="font-display text-lg font-black leading-tight line-clamp-2">
                     {pack.name}
                   </p>
                 </div>
 
-                <p className="text-[11px] text-teal-100/80 line-clamp-2">
+                <p className="text-xs text-teal-100/85 line-clamp-3">
                   {pack.description || "Pacote de cartas colecionáveis."}
                 </p>
               </div>
@@ -216,19 +216,19 @@ export function PackOpeningModal({
 
         {/* ETAPA 2: ANIMAÇÃO DE RASGO E SAÍDA DAS CARTAS */}
         {stage === "tearing" && (
-          <div className="relative flex h-80 flex-col items-center justify-center overflow-hidden py-4">
-            {/* Pilha de cartas de costas limpa emergindo */}
-            <div className="animate-pack-cards-emerge relative z-10 h-60 w-44">
+          <div className="relative flex h-[26rem] flex-col items-center justify-center overflow-hidden py-2">
+            {/* Pilha de cartas de costas no tamanho real (w-60 h-[21rem]) emergindo */}
+            <div className="animate-pack-cards-emerge relative z-10 h-[21rem] w-60">
               <CardBackFace minimal />
             </div>
 
             {/* Embalagem opaca do pacote rasgando ao redor */}
             <div className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center">
-              <div className="relative w-52">
+              <div className="relative w-[17rem]">
                 {/* Tira superior destacada */}
                 <div className="animate-pack-top-rip">
                   <SerratedEdge position="top" />
-                  <div className="h-7 w-full bg-teal-700" />
+                  <div className="h-9 w-full bg-teal-700" />
                 </div>
 
                 {/* Linha de rasgo luminosa */}
@@ -238,8 +238,8 @@ export function PackOpeningModal({
 
                 {/* Corpo opaco do pacote descendo e sumindo */}
                 <div className="animate-pack-body-drop">
-                  <div className="h-52 w-full bg-gradient-to-b from-teal-700 via-teal-800 to-teal-900 flex items-center justify-center">
-                    <Layers className="h-10 w-10 text-teal-200/60" />
+                  <div className="h-[20.75rem] w-full bg-gradient-to-b from-teal-700 via-teal-800 to-teal-900 flex items-center justify-center">
+                    <Layers className="h-12 w-12 text-teal-200/60" />
                   </div>
                   <SerratedEdge position="bottom" />
                 </div>
