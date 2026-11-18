@@ -298,39 +298,40 @@
   animation: foil-shimmer-sweep 3.6s ease-in-out infinite;
 }
 
-/* Abertura Interativa de Pacotes */
+/* Abertura Interativa de Pacotes (2.3s em 4 tempos) */
 @keyframes pack-tear-line {
   0% { width: 0%; opacity: 0.95; }
-  45% { width: 100%; opacity: 1; }
-  75%, 100% { width: 100%; opacity: 0; }
+  36% { width: 100%; opacity: 1; }
+  46%, 100% { width: 100%; opacity: 0; }
 }
 @keyframes pack-top-rip {
-  0%, 30% { transform: translateY(0) rotate(0deg); opacity: 1; }
-  80%, 100% { transform: translateY(-76px) translateX(18px) rotate(12deg); opacity: 0; }
-}
-@keyframes pack-body-drop {
-  0%, 40% { transform: translateY(0) scale(1); opacity: 1; }
-  85%, 100% { transform: translateY(120px) scale(0.88); opacity: 0; }
+  0%, 34% { transform: translateY(0) translateX(0) rotate(0deg); opacity: 1; }
+  60%, 100% { transform: translateY(-100px) translateX(28px) rotate(16deg); opacity: 0; }
 }
 @keyframes pack-cards-emerge {
-  0%, 30% { transform: translateY(18px) scale(1); opacity: 0; }
-  75%, 100% { transform: translateY(0) scale(1); opacity: 1; }
+  0%, 34% { transform: translateY(34px) scale(1); opacity: 0; }
+  38% { transform: translateY(34px) scale(1); opacity: 1; }
+  62%, 100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+@keyframes pack-body-drop {
+  0%, 60% { transform: translateY(0) rotate(0deg); opacity: 1; }
+  95%, 100% { transform: translateY(280px) rotate(-3deg); opacity: 0; }
 }
 @keyframes card-toss-out {
   0% { transform: translateX(0) translateY(0) rotate(0deg) scale(1); opacity: 1; }
   100% { transform: translateX(135%) translateY(-36px) rotate(26deg) scale(0.84); opacity: 0; }
 }
 .animate-pack-tear-line {
-  animation: pack-tear-line 0.95s ease-out forwards;
+  animation: pack-tear-line 2.3s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
 }
 .animate-pack-top-rip {
-  animation: pack-top-rip 1s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation: pack-top-rip 2.3s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 .animate-pack-body-drop {
-  animation: pack-body-drop 1.05s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation: pack-body-drop 2.3s cubic-bezier(0.4, 0, 0.85, 0.6) forwards;
 }
 .animate-pack-cards-emerge {
-  animation: pack-cards-emerge 1.05s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation: pack-cards-emerge 2.3s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 .animate-card-toss-out {
   animation: card-toss-out 0.36s cubic-bezier(0.4, 0, 0.2, 1) forwards;

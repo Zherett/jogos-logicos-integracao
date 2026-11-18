@@ -123,7 +123,7 @@ export function PackOpeningModal({
 
     timerRef.current = window.setTimeout(() => {
       setStage("stack");
-    }, 1080);
+    }, 2350);
   }
 
   function handleCardInteraction() {
