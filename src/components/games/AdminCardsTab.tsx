@@ -34,6 +34,7 @@ import {
 import type { PlatformAdminConfig } from "@/lib/game-codes";
 import { usePlayerAuth } from "@/lib/player-auth";
 import { CollectibleCardView } from "./CollectibleCardView";
+import { PackOpeningModal, type PackOpenOutcome } from "./PackOpeningModal";
 
 interface AdminCardsTabProps {
   draft: PlatformAdminConfig;
@@ -80,11 +81,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
   const [packError, setPackError] = useState<string | null>(null);
 
   // Modal de Teste de Abertura de Pacote (ADM)
-  const [testOpenResult, setTestOpenResult] = useState<{
-    packName: string;
-    drawn: CardDefinition[];
-    newlyDiscovered: string[];
-  } | null>(null);
+  const [packToTestOpen, setPackToTestOpen] = useState<CardPackDefinition | null>(null);
 
   const filteredCards = useMemo(() => {
     if (rarityFilter === "todas") return cards;
@@ -242,22 +239,27 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
     await onSaveConfig(nextCfg);
   }
 
-  async function handleTestOpenPack(pack: CardPackDefinition) {
+  function handleTestOpenPack(pack: CardPackDefinition) {
+    setPackError(null);
+    setPackToTestOpen(pack);
+  }
+
+  async function confirmTestOpenPack(pack: CardPackDefinition): Promise<PackOpenOutcome | null> {
     const currentCards = auth.profile?.cards ?? {};
     const res = openCardPack(pack, cards, currentCards);
     if (res.error) {
       setPackError(res.error);
-      return;
+      setPackToTestOpen(null);
+      return null;
     }
     await auth.updatePlayerCards({
       cards: res.updatedCardsMap,
       unopenedPacks: auth.profile?.unopenedPacks,
     });
-    setTestOpenResult({
-      packName: pack.name,
+    return {
       drawn: res.drawnCards,
       newlyDiscovered: res.newlyDiscoveredIds,
-    });
+    };
   }
 
   const probsTotal = sumPackProbabilities(packProbs);
@@ -759,29 +761,13 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
         </DialogContent>
       </Dialog>
 
-      {/* Modal de Resultado da Abertura de Teste */}
-      <Dialog open={Boolean(testOpenResult)} onOpenChange={(v) => !v && setTestOpenResult(null)}>
-        <DialogContent className="max-w-3xl max-h-[88vh] overflow-y-auto rounded-3xl">
-          <DialogHeader>
-            <DialogTitle className="font-display text-xl font-extrabold flex items-center gap-2">
-              <Sparkles className="h-5 w-5 text-amber-500" />
-              Abertura: {testOpenResult?.packName}
-            </DialogTitle>
-          </DialogHeader>
-          {testOpenResult && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 py-2">
-              {testOpenResult.drawn.map((card, idx) => (
-                <CollectibleCardView
-                  key={`${card.id}_${idx}`}
-                  card={card}
-                  isNew={testOpenResult.newlyDiscovered.includes(card.id)}
-                  compact
-                />
-              ))}
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
+      {/* Modal Interativo de Teste de Abertura de Pacote */}
+      <PackOpeningModal
+        pack={packToTestOpen}
+        titlePrefix="Prévia de Abertura"
+        onConfirmOpen={confirmTestOpenPack}
+        onClose={() => setPackToTestOpen(null)}
+      />
     </div>
   );
 }

@@ -24,47 +24,57 @@ export const CARD_RARITY_META: Record<CardRarity, CardRarityMeta> = {
   comum: {
     id: "comum",
     label: "Comum",
-    borderClass: "border-slate-500/80",
-    cardBgClass: "bg-slate-900",
-    innerBoxClass: "bg-slate-950/90 border-slate-700/80 text-slate-100",
-    badgeClass: "bg-slate-950/95 text-slate-200 border-slate-500/70",
-    glowClass: "shadow-[0_0_14px_-3px_rgba(148,163,184,0.35)]",
+    borderClass: "border-slate-300 dark:border-slate-500/80",
+    cardBgClass: "bg-white dark:bg-slate-900",
+    innerBoxClass:
+      "bg-slate-100/90 border-slate-300/80 text-slate-900 dark:bg-slate-950/90 dark:border-slate-700/80 dark:text-slate-100",
+    badgeClass:
+      "bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-950/95 dark:text-slate-200 dark:border-slate-500/70",
+    glowClass: "shadow-sm dark:shadow-[0_0_14px_-3px_rgba(148,163,184,0.35)]",
   },
   incomum: {
     id: "incomum",
     label: "Incomum",
-    borderClass: "border-emerald-400",
-    cardBgClass: "bg-emerald-600 dark:bg-emerald-700",
-    innerBoxClass: "bg-slate-950/90 border-emerald-400/50 text-slate-100",
-    badgeClass: "bg-slate-950/95 text-emerald-300 border-emerald-400/80",
-    glowClass: "shadow-[0_0_18px_-2px_rgba(16,185,129,0.65)]",
+    borderClass: "border-emerald-500 dark:border-emerald-400",
+    cardBgClass: "bg-emerald-500 dark:bg-emerald-700",
+    innerBoxClass:
+      "bg-white/95 border-emerald-600/35 text-slate-900 dark:bg-slate-950/90 dark:border-emerald-400/50 dark:text-slate-100",
+    badgeClass:
+      "bg-white/95 text-emerald-700 border-emerald-600/50 dark:bg-slate-950/95 dark:text-emerald-300 dark:border-emerald-400/80",
+    glowClass: "shadow-[0_0_18px_-2px_rgba(16,185,129,0.55)] dark:shadow-[0_0_18px_-2px_rgba(16,185,129,0.65)]",
   },
   rara: {
     id: "rara",
     label: "Rara",
-    borderClass: "border-blue-400",
-    cardBgClass: "bg-blue-600 dark:bg-blue-700",
-    innerBoxClass: "bg-slate-950/90 border-blue-400/50 text-slate-100",
-    badgeClass: "bg-slate-950/95 text-blue-300 border-blue-400/80",
-    glowClass: "shadow-[0_0_20px_-2px_rgba(59,130,246,0.7)]",
+    borderClass: "border-blue-500 dark:border-blue-400",
+    cardBgClass: "bg-blue-500 dark:bg-blue-700",
+    innerBoxClass:
+      "bg-white/95 border-blue-600/35 text-slate-900 dark:bg-slate-950/90 dark:border-blue-400/50 dark:text-slate-100",
+    badgeClass:
+      "bg-white/95 text-blue-700 border-blue-600/50 dark:bg-slate-950/95 dark:text-blue-300 dark:border-blue-400/80",
+    glowClass: "shadow-[0_0_20px_-2px_rgba(59,130,246,0.6)] dark:shadow-[0_0_20px_-2px_rgba(59,130,246,0.7)]",
   },
   epica: {
     id: "epica",
     label: "Épica",
-    borderClass: "border-purple-400",
-    cardBgClass: "bg-purple-600 dark:bg-purple-700",
-    innerBoxClass: "bg-slate-950/90 border-purple-400/50 text-slate-100",
-    badgeClass: "bg-slate-950/95 text-purple-300 border-purple-400/80",
-    glowClass: "shadow-[0_0_22px_-2px_rgba(168,85,247,0.75)]",
+    borderClass: "border-purple-500 dark:border-purple-400",
+    cardBgClass: "bg-purple-500 dark:bg-purple-700",
+    innerBoxClass:
+      "bg-white/95 border-purple-600/35 text-slate-900 dark:bg-slate-950/90 dark:border-purple-400/50 dark:text-slate-100",
+    badgeClass:
+      "bg-white/95 text-purple-700 border-purple-600/50 dark:bg-slate-950/95 dark:text-purple-300 dark:border-purple-400/80",
+    glowClass: "shadow-[0_0_22px_-2px_rgba(168,85,247,0.65)] dark:shadow-[0_0_22px_-2px_rgba(168,85,247,0.75)]",
   },
   lendaria: {
     id: "lendaria",
     label: "Lendária",
-    borderClass: "border-red-400",
-    cardBgClass: "bg-red-600 dark:bg-red-700",
-    innerBoxClass: "bg-slate-950/90 border-red-400/50 text-slate-100",
-    badgeClass: "bg-slate-950/95 text-red-300 border-red-400/80",
-    glowClass: "shadow-[0_0_26px_-1px_rgba(239,68,68,0.85)]",
+    borderClass: "border-red-500 dark:border-red-400",
+    cardBgClass: "bg-red-500 dark:bg-red-700",
+    innerBoxClass:
+      "bg-white/95 border-red-600/35 text-slate-900 dark:bg-slate-950/90 dark:border-red-400/50 dark:text-slate-100",
+    badgeClass:
+      "bg-white/95 text-red-700 border-red-600/50 dark:bg-slate-950/95 dark:text-red-300 dark:border-red-400/80",
+    glowClass: "shadow-[0_0_26px_-1px_rgba(239,68,68,0.75)] dark:shadow-[0_0_26px_-1px_rgba(239,68,68,0.85)]",
   },
 };
 
@@ -363,6 +373,54 @@ export function openCardPack(
     updatedCardsMap,
     newlyDiscoveredIds: Array.from(newlyDiscoveredSet),
   };
+}
+
+const RARITY_REVEAL_RANK: Record<CardRarity, number> = {
+  comum: 0,
+  incomum: 1,
+  rara: 2,
+  epica: 3,
+  lendaria: 4,
+};
+
+/**
+ * Ordena as cartas sorteadas para a revelação:
+ * - Padrão: menor raridade primeiro e maior raridade por último (clímax).
+ * - Pequena chance (~12%) de mover uma carta de maior raridade para o meio.
+ * - Chance bem pequena (~4%) de colocá-la logo na frente.
+ */
+export function orderPackRevealCards(
+  drawnCards: CardDefinition[],
+  rng: () => number = Math.random,
+): CardDefinition[] {
+  if (drawnCards.length <= 1) return [...drawnCards];
+
+  const ordered = [...drawnCards].sort((a, b) => {
+    const rankDiff = RARITY_REVEAL_RANK[a.rarity] - RARITY_REVEAL_RANK[b.rarity];
+    if (rankDiff !== 0) return rankDiff;
+    return (a.isFoil ? 1 : 0) - (b.isFoil ? 1 : 0);
+  });
+
+  const highest = ordered[ordered.length - 1];
+  const lowest = ordered[0];
+  const hasHigherRarity =
+    RARITY_REVEAL_RANK[highest.rarity] > RARITY_REVEAL_RANK[lowest.rarity];
+
+  if (!hasHigherRarity) return ordered;
+
+  const surpriseRoll = rng();
+  if (surpriseRoll < 0.04) {
+    // 4% de chance de surpresa logo na primeira carta
+    ordered.pop();
+    ordered.unshift(highest);
+  } else if (surpriseRoll < 0.16 && ordered.length >= 3) {
+    // 12% de chance de aparecer no meio da pilha
+    ordered.pop();
+    const midIdx = Math.floor(ordered.length / 2);
+    ordered.splice(midIdx, 0, highest);
+  }
+
+  return ordered;
 }
 
 export function mergeWithDefaultCardPacks(

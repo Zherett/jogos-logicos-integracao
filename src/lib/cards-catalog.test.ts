@@ -8,6 +8,7 @@ import {
   editCardDefinition,
   mergeWithDefaultCardPacks,
   openCardPack,
+  orderPackRevealCards,
   sumPackProbabilities,
   validatePackProbabilities,
   type CardDefinition,
@@ -107,5 +108,30 @@ describe("Sistema de Cartas Colecionáveis e Pacotes", () => {
       },
     ]);
     assert.equal(merged.length, 6);
+  });
+
+  it("ordena cartas do pacote da menor para a maior raridade por padrão e suporta surpresa", () => {
+    const cards: CardDefinition[] = [
+      createCardDefinition({ name: "L1", description: "d", rarity: "lendaria", imageUrl: "https://a.com/5.gif" }).card!,
+      createCardDefinition({ name: "C1", description: "d", rarity: "comum", imageUrl: "https://a.com/1.png" }).card!,
+      createCardDefinition({ name: "R1", description: "d", rarity: "rara", imageUrl: "https://a.com/3.png" }).card!,
+      createCardDefinition({ name: "I1", description: "d", rarity: "incomum", imageUrl: "https://a.com/2.png" }).card!,
+      createCardDefinition({ name: "E1", description: "d", rarity: "epica", imageUrl: "https://a.com/4.gif" }).card!,
+    ];
+
+    // Padrão (sem surpresa): menor raridade primeiro, lendária por último
+    const normalOrder = orderPackRevealCards(cards, () => 0.9);
+    assert.deepEqual(
+      normalOrder.map((c) => c.rarity),
+      ["comum", "incomum", "rara", "epica", "lendaria"],
+    );
+
+    // Surpresa na frente (roll < 0.04)
+    const frontSurprise = orderPackRevealCards(cards, () => 0.01);
+    assert.equal(frontSurprise[0].rarity, "lendaria");
+
+    // Surpresa no meio (0.04 <= roll < 0.16)
+    const midSurprise = orderPackRevealCards(cards, () => 0.1);
+    assert.equal(midSurprise[2].rarity, "lendaria");
   });
 });

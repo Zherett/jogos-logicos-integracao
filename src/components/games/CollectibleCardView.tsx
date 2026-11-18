@@ -80,7 +80,7 @@ export function CollectibleCardView({
 
       {/* 2. Moldura da Imagem / GIF ao Centro */}
       <div
-        className={`relative z-20 mx-auto w-full overflow-hidden rounded-xl border border-black/35 bg-white/95 dark:bg-slate-950/75 shadow-sm ${
+        className={`relative z-20 mx-auto w-full overflow-hidden rounded-xl border border-slate-300/80 dark:border-black/40 bg-white dark:bg-slate-950/75 shadow-sm ${
           compact ? "aspect-[4/3]" : "aspect-[5/4]"
         }`}
       >
@@ -112,7 +112,7 @@ export function CollectibleCardView({
 
         {/* Badge de quantidade acumulada */}
         {typeof count === "number" && count > 0 && (
-          <span className="absolute top-1.5 right-1.5 rounded-full bg-slate-950/90 border border-white/20 px-2 py-0.5 font-mono text-[10px] font-black text-white shadow-sm">
+          <span className="absolute top-1.5 right-1.5 rounded-full bg-white/95 dark:bg-slate-950/90 border border-slate-300 dark:border-white/20 px-2 py-0.5 font-mono text-[10px] font-black text-slate-900 dark:text-white shadow-sm">
             x{count}
           </span>
         )}
@@ -146,7 +146,7 @@ export function CollectibleCardView({
         }`}
       >
         <p
-          className={`leading-relaxed text-slate-200/95 ${
+          className={`leading-relaxed text-slate-700 dark:text-slate-200/95 ${
             compact ? "text-[10px] line-clamp-2" : "text-[11px] sm:text-xs line-clamp-4"
           }`}
         >

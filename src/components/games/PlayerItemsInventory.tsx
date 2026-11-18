@@ -15,6 +15,7 @@ import { usePlayerAuth } from "@/lib/player-auth";
 import { isAdminUnlockedSession } from "@/lib/playfab";
 import { isAdminOrTestAccount } from "@/lib/player-profile";
 import { CollectibleCardView } from "./CollectibleCardView";
+import { PackOpeningModal, type PackOpenOutcome } from "./PackOpeningModal";
 
 const INVENTORY_SLOTS_COUNT = 12;
 
@@ -25,11 +26,7 @@ export function PlayerItemsInventory() {
   const [activePill, setActivePill] = useState<"mochila" | "album">("mochila");
   const [rarityFilter, setRarityFilter] = useState<CardRarity | "todas">("todas");
   const [inspectCard, setInspectCard] = useState<{ card: CardDefinition; count: number } | null>(null);
-  const [packResult, setPackResult] = useState<{
-    packName: string;
-    drawn: CardDefinition[];
-    newlyDiscovered: string[];
-  } | null>(null);
+  const [packToOpen, setPackToOpen] = useState<CardPackDefinition | null>(null);
 
   const slots = Array.from({ length: INVENTORY_SLOTS_COUNT }, (_, idx) => idx + 1);
   const catalog = useMemo(() => auth.adminConfig.cardsCatalog ?? [], [auth.adminConfig.cardsCatalog]);
@@ -53,18 +50,24 @@ export function PlayerItemsInventory() {
     return catalog.filter((c) => c.rarity === rarityFilter);
   }, [catalog, rarityFilter]);
 
-  async function handleOpenPack(pack: CardPackDefinition) {
+  function handleOpenPack(pack: CardPackDefinition) {
+    setPackToOpen(pack);
+  }
+
+  async function confirmOpenPack(pack: CardPackDefinition): Promise<PackOpenOutcome | null> {
     const res = openCardPack(pack, catalog, ownedCardsMap);
-    if (res.error) return;
+    if (res.error) {
+      setPackToOpen(null);
+      return null;
+    }
     await auth.updatePlayerCards({
       cards: res.updatedCardsMap,
       unopenedPacks: auth.profile?.unopenedPacks,
     });
-    setPackResult({
-      packName: pack.name,
+    return {
       drawn: res.drawnCards,
       newlyDiscovered: res.newlyDiscoveredIds,
-    });
+    };
   }
 
   return (
@@ -270,29 +273,13 @@ export function PlayerItemsInventory() {
         </DialogContent>
       </Dialog>
 
-      {/* Modal de Abertura de Pacote */}
-      <Dialog open={Boolean(packResult)} onOpenChange={(v) => !v && setPackResult(null)}>
-        <DialogContent className="max-w-3xl max-h-[88vh] overflow-y-auto rounded-3xl">
-          <DialogHeader>
-            <DialogTitle className="font-display text-xl font-extrabold flex items-center gap-2">
-              <Sparkles className="h-5 w-5 text-amber-500" />
-              Pacote Aberto: {packResult?.packName}
-            </DialogTitle>
-          </DialogHeader>
-          {packResult && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 py-2">
-              {packResult.drawn.map((card, idx) => (
-                <CollectibleCardView
-                  key={`${card.id}_${idx}`}
-                  card={card}
-                  isNew={packResult.newlyDiscovered.includes(card.id)}
-                  compact
-                />
-              ))}
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
+      {/* Modal Interativo de Abertura de Pacote */}
+      <PackOpeningModal
+        pack={packToOpen}
+        titlePrefix="Abrir Pacote"
+        onConfirmOpen={confirmOpenPack}
+        onClose={() => setPackToOpen(null)}
+      />
     </div>
   );
 }
