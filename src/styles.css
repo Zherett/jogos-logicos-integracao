@@ -306,16 +306,15 @@
 }
 @keyframes pack-top-rip {
   0%, 34% { transform: translateY(0) translateX(0) rotate(0deg); opacity: 1; }
-  60%, 100% { transform: translateY(-100px) translateX(28px) rotate(16deg); opacity: 0; }
+  62%, 100% { transform: translateY(-240px) translateX(36px) rotate(18deg); opacity: 1; }
 }
 @keyframes pack-cards-emerge {
-  0%, 34% { transform: translateY(34px) scale(1); opacity: 0; }
-  38% { transform: translateY(34px) scale(1); opacity: 1; }
+  0%, 34% { transform: translateY(24px) scale(1); opacity: 1; }
   62%, 100% { transform: translateY(0) scale(1); opacity: 1; }
 }
 @keyframes pack-body-drop {
   0%, 60% { transform: translateY(0) rotate(0deg); opacity: 1; }
-  95%, 100% { transform: translateY(280px) rotate(-3deg); opacity: 0; }
+  96%, 100% { transform: translateY(460px) rotate(-3deg); opacity: 1; }
 }
 @keyframes card-toss-out {
   0% { transform: translateX(0) translateY(0) rotate(0deg) scale(1); opacity: 1; }

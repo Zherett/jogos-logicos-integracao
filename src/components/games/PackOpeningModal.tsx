@@ -167,39 +167,35 @@ export function PackOpeningModal({
         } max-h-[90vh] overflow-y-auto rounded-3xl transition-all`}
       >
         <DialogHeader>
-          <DialogTitle className="font-display text-lg sm:text-xl font-extrabold flex items-center gap-2">
+          <DialogTitle className="font-display text-lg sm:text-xl font-extrabold flex flex-wrap items-center gap-2">
             <PackageOpen className="h-5 w-5 text-primary" />
-            {titlePrefix}: {pack?.name}
+            <span>
+              {titlePrefix}: {pack?.name}
+            </span>
+            {pack && (
+              <span className="rounded-full bg-secondary px-2.5 py-0.5 font-mono text-[11px] font-bold text-muted-foreground">
+                {pack.cardsPerPack} cartas
+              </span>
+            )}
           </DialogTitle>
         </DialogHeader>
 
         {/* ETAPA 1: PACOTE FECHADO */}
         {stage === "sealed" && pack && (
-          <div className="flex flex-col items-center gap-5 py-2">
-            <div className="relative w-[17rem] select-none drop-shadow-xl transition-transform hover:scale-[1.02]">
-              <SerratedEdge position="top" />
-              <div className="flex h-[23rem] flex-col items-center justify-between bg-gradient-to-b from-teal-700 via-teal-800 to-teal-900 px-5 py-6 text-center text-white">
-                <span className="rounded-full border border-white/25 bg-black/25 px-3 py-1 text-[11px] font-extrabold uppercase tracking-widest">
-                  {pack.cardsPerPack} Cartas
-                </span>
-
-                <div className="flex flex-col items-center gap-3">
-                  <div className="grid h-20 w-20 place-items-center rounded-2xl border-2 border-teal-300/60 bg-white/10 shadow-inner">
-                    <Layers className="h-10 w-10 text-teal-200" />
+          <div className="flex h-[31rem] flex-col items-center justify-between py-2">
+            <div className="flex flex-1 items-center justify-center">
+              <div className="relative w-[17rem] select-none drop-shadow-xl transition-transform hover:scale-[1.02]">
+                <SerratedEdge position="top" />
+                <div className="flex h-[22.5rem] items-center justify-center bg-gradient-to-b from-teal-700 via-teal-800 to-teal-900">
+                  <div className="grid h-24 w-24 place-items-center rounded-3xl border-2 border-teal-300/60 bg-teal-950/35 shadow-inner">
+                    <Layers className="h-12 w-12 text-teal-200" />
                   </div>
-                  <p className="font-display text-lg font-black leading-tight line-clamp-2">
-                    {pack.name}
-                  </p>
                 </div>
-
-                <p className="text-xs text-teal-100/85 line-clamp-3">
-                  {pack.description || "Pacote de cartas colecionáveis."}
-                </p>
+                <SerratedEdge position="bottom" />
               </div>
-              <SerratedEdge position="bottom" />
             </div>
 
-            <div className="flex w-full items-center justify-center gap-2">
+            <div className="flex w-full flex-col items-center gap-2">
               <Button
                 type="button"
                 size="lg"
@@ -210,22 +206,27 @@ export function PackOpeningModal({
                 <Sparkles className="h-4 w-4 mr-2" />
                 {isOpening ? "Abrindo..." : "Abrir Pacote"}
               </Button>
+              {pack.description && (
+                <p className="max-w-xs text-center text-[11px] text-muted-foreground line-clamp-2">
+                  {pack.description}
+                </p>
+              )}
             </div>
           </div>
         )}
 
         {/* ETAPA 2: ANIMAÇÃO DE RASGO E SAÍDA DAS CARTAS */}
         {stage === "tearing" && (
-          <div className="relative flex h-[26rem] flex-col items-center justify-center overflow-hidden py-2">
-            {/* Pilha de cartas de costas no tamanho real (w-60 h-[21rem]) emergindo */}
+          <div className="relative flex h-[31rem] flex-col items-center justify-center overflow-hidden py-2">
+            {/* Pilha de cartas de costas no tamanho real (w-60 h-[21rem]) escondida atrás do pacote */}
             <div className="animate-pack-cards-emerge relative z-10 h-[21rem] w-60">
               <CardBackFace minimal />
             </div>
 
-            {/* Embalagem opaca do pacote rasgando ao redor */}
-            <div className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center">
+            {/* Embalagem 100% sólida do pacote rasgando na frente */}
+            <div className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center overflow-hidden">
               <div className="relative w-[17rem]">
-                {/* Tira superior destacada */}
+                {/* Tira superior sólida destacada */}
                 <div className="animate-pack-top-rip">
                   <SerratedEdge position="top" />
                   <div className="h-9 w-full bg-teal-700" />
@@ -236,10 +237,12 @@ export function PackOpeningModal({
                   <div className="animate-pack-tear-line h-1 rounded-full bg-white shadow-[0_0_12px_2px_#5eead4]" />
                 </div>
 
-                {/* Corpo opaco do pacote descendo e sumindo */}
+                {/* Corpo sólido do pacote descendo e saindo da tela */}
                 <div className="animate-pack-body-drop">
-                  <div className="h-[20.75rem] w-full bg-gradient-to-b from-teal-700 via-teal-800 to-teal-900 flex items-center justify-center">
-                    <Layers className="h-12 w-12 text-teal-200/60" />
+                  <div className="h-[20.25rem] w-full bg-gradient-to-b from-teal-700 via-teal-800 to-teal-900 flex items-center justify-center">
+                    <div className="grid h-24 w-24 place-items-center rounded-3xl border-2 border-teal-300/60 bg-teal-950/35 shadow-inner">
+                      <Layers className="h-12 w-12 text-teal-200" />
+                    </div>
                   </div>
                   <SerratedEdge position="bottom" />
                 </div>
@@ -250,7 +253,7 @@ export function PackOpeningModal({
 
         {/* ETAPA 3: PILHA INTERATIVA (CLICAR PARA VIRAR E ARREMESSAR EM 2D) */}
         {stage === "stack" && currentCard && (
-          <div className="flex flex-col items-center gap-4 py-2 overflow-hidden">
+          <div className="flex h-[31rem] flex-col items-center justify-between py-2 overflow-hidden">
             {/* Contagem de restantes no topo do container, fora da carta */}
             <div className="flex items-center justify-between w-full px-2 text-xs font-bold text-muted-foreground">
               <span>
