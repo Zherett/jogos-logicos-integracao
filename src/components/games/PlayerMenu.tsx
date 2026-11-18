@@ -105,6 +105,7 @@ import {
 
 interface Props {
   onConfigChanged?: () => void;
+  leftSlot?: React.ReactNode;
 }
 
 /** Discreet explanation tooltip */
@@ -136,7 +137,7 @@ function HelpTip({ text }: { text: string }) {
 }
 
 /** Top navigation bar with Ranking, Sound Mute, Admin Panel and Player Profile. */
-export function PlayerMenu({ onConfigChanged }: Props) {
+export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
   const auth = usePlayerAuth();
   const sound = useSoundMuted();
   const [authOpen, setAuthOpen] = useState(false);
@@ -404,92 +405,110 @@ export function PlayerMenu({ onConfigChanged }: Props) {
 
   return (
     <>
-      <div className="flex flex-wrap sm:flex-nowrap items-center justify-end gap-1.5 sm:gap-2">
-        {/* Alternador de Tema (Modo Escuro / Modo Claro) */}
-        <ThemeToggle />
+      <div
+        className={
+          leftSlot
+            ? "flex w-full flex-wrap sm:flex-nowrap items-center justify-between gap-x-2 gap-y-2.5 sm:gap-3"
+            : "flex flex-wrap sm:flex-nowrap items-center justify-end gap-1.5 sm:gap-2"
+        }
+      >
+        {leftSlot && <div className="order-1 flex items-center gap-3 min-w-0">{leftSlot}</div>}
 
-        {/* Sound Mute Toggle */}
-        <button
-          type="button"
-          onClick={sound.toggle}
-          title={sound.muted ? "Ativar som" : "Silenciar som"}
-          aria-label={sound.muted ? "Ativar som" : "Silenciar som"}
-          className="grid h-11 w-11 place-items-center rounded-2xl border bg-card text-foreground shadow-sm transition-all hover:bg-secondary active:scale-95"
+        <div
+          className={
+            leftSlot
+              ? "order-3 flex w-full items-center justify-between gap-1.5 sm:order-none sm:w-auto sm:justify-end sm:gap-2"
+              : "contents"
+          }
         >
-          {sound.muted ? (
-            <VolumeX className="h-5 w-5 text-muted-foreground" />
-          ) : (
-            <Volume2 className="h-5 w-5 text-primary" />
-          )}
-        </button>
+          {/* Alternador de Tema (Modo Escuro / Modo Claro) */}
+          <ThemeToggle />
 
-        {/* Ranking Page Link */}
-        <Link
-          to="/ranking"
-          className="grid h-11 w-11 place-items-center rounded-2xl border bg-card text-foreground shadow-sm transition-all hover:bg-secondary active:scale-95"
-          aria-label="Abrir Ranking"
-          title="Ranking da Temporada (Por Etapa, Geral e Torneio)"
-        >
-          <Trophy className="h-5 w-5 text-amber-500" />
-        </Link>
-
-        {/* Recompensa Diária Progressiva (Oculto para Alunos, visível apenas para ADM / Testes) */}
-        {showDailyRewards && (
+          {/* Sound Mute Toggle */}
           <button
             type="button"
-            onClick={() => setDailyRewardsOpen(true)}
-            className="grid h-11 w-11 place-items-center rounded-2xl border border-amber-500/40 bg-gradient-to-r from-amber-500/10 to-amber-500/5 text-foreground shadow-sm transition-all hover:bg-amber-500/20 active:scale-95 cursor-pointer"
-            aria-label="Abrir Recompensas Diárias"
-            title={`Trilha de Recompensas Diárias (Dia ${currentCycleDay} do Ciclo - Prévia ADM)`}
+            onClick={sound.toggle}
+            title={sound.muted ? "Ativar som" : "Silenciar som"}
+            aria-label={sound.muted ? "Ativar som" : "Silenciar som"}
+            className="grid h-11 w-11 place-items-center rounded-2xl border bg-card text-foreground shadow-sm transition-all hover:bg-secondary active:scale-95"
           >
-            <span className="flex items-center justify-center gap-0.5">
-              <span className="font-mono text-[11px] font-black text-amber-600 dark:text-amber-400 leading-none">
-                {currentCycleDay}
-              </span>
-              <Calendar className="h-4 w-4 text-amber-500" />
-            </span>
+            {sound.muted ? (
+              <VolumeX className="h-5 w-5 text-muted-foreground" />
+            ) : (
+              <Volume2 className="h-5 w-5 text-primary" />
+            )}
           </button>
-        )}
 
-        {/* Caixa de Entrada e Correio do Aluno */}
-        {profile && (
-          <button
-            type="button"
-            onClick={() => setInboxOpen(true)}
-            className="relative grid h-11 w-11 place-items-center rounded-2xl border bg-card text-foreground shadow-sm transition-all hover:bg-secondary active:scale-95"
-            aria-label="Abrir Caixa de Entrada"
-            title="Caixa de Entrada & Correio (Comunicados e Recompensas)"
-          >
-            <Mail className="h-5 w-5 text-amber-500" />
-            {inboxCounts.unclaimedRewardsCount > 0 ? (
-              <span className="absolute -top-1.5 -right-1.5 grid h-5 w-5 place-items-center rounded-full bg-amber-500 text-[10px] font-black text-zinc-950 shadow-md animate-bounce">
-                🎁
-              </span>
-            ) : inboxCounts.unreadCount > 0 ? (
-              <span className="absolute -top-1.5 -right-1.5 grid h-5 min-w-5 px-1 place-items-center rounded-full bg-primary text-[10px] font-black text-primary-foreground shadow-md animate-pulse">
-                {inboxCounts.unreadCount}
-              </span>
-            ) : null}
-          </button>
-        )}
-
-        {/* Admin Panel Button — Only visible when Admin is already logged in */}
-        {auth.isAdmin && (
+          {/* Ranking Page Link */}
           <Link
-            to="/admin"
-            className="grid h-11 w-11 place-items-center rounded-2xl border border-primary/50 bg-primary/10 text-primary shadow-sm transition-all hover:bg-primary/20 active:scale-95 cursor-pointer"
-            aria-label="Painel do Administrador"
-            title="Abrir Painel do Administrador em tela cheia rápida"
+            to="/ranking"
+            className="grid h-11 w-11 place-items-center rounded-2xl border bg-card text-foreground shadow-sm transition-all hover:bg-secondary active:scale-95"
+            aria-label="Abrir Ranking"
+            title="Ranking da Temporada (Por Etapa, Geral e Torneio)"
           >
-            <ShieldCheck className="h-5 w-5" />
+            <Trophy className="h-5 w-5 text-amber-500" />
           </Link>
-        )}
+
+          {/* Recompensa Diária Progressiva (Oculto para Alunos, visível apenas para ADM / Testes) */}
+          {showDailyRewards && (
+            <button
+              type="button"
+              onClick={() => setDailyRewardsOpen(true)}
+              className="grid h-11 w-11 place-items-center rounded-2xl border border-amber-500/40 bg-gradient-to-r from-amber-500/10 to-amber-500/5 text-foreground shadow-sm transition-all hover:bg-amber-500/20 active:scale-95 cursor-pointer"
+              aria-label="Abrir Recompensas Diárias"
+              title={`Trilha de Recompensas Diárias (Dia ${currentCycleDay} do Ciclo - Prévia ADM)`}
+            >
+              <span className="flex items-center justify-center gap-0.5">
+                <span className="font-mono text-[11px] font-black text-amber-600 dark:text-amber-400 leading-none">
+                  {currentCycleDay}
+                </span>
+                <Calendar className="h-4 w-4 text-amber-500" />
+              </span>
+            </button>
+          )}
+
+          {/* Caixa de Entrada e Correio do Aluno */}
+          {profile && (
+            <button
+              type="button"
+              onClick={() => setInboxOpen(true)}
+              className="relative grid h-11 w-11 place-items-center rounded-2xl border bg-card text-foreground shadow-sm transition-all hover:bg-secondary active:scale-95"
+              aria-label="Abrir Caixa de Entrada"
+              title="Caixa de Entrada & Correio (Comunicados e Recompensas)"
+            >
+              <Mail className="h-5 w-5 text-amber-500" />
+              {inboxCounts.unclaimedRewardsCount > 0 ? (
+                <span className="absolute -top-1.5 -right-1.5 grid h-5 w-5 place-items-center rounded-full bg-amber-500 text-[10px] font-black text-zinc-950 shadow-md animate-bounce">
+                  🎁
+                </span>
+              ) : inboxCounts.unreadCount > 0 ? (
+                <span className="absolute -top-1.5 -right-1.5 grid h-5 min-w-5 px-1 place-items-center rounded-full bg-primary text-[10px] font-black text-primary-foreground shadow-md animate-pulse">
+                  {inboxCounts.unreadCount}
+                </span>
+              ) : null}
+            </button>
+          )}
+
+          {/* Admin Panel Button — Only visible when Admin is already logged in */}
+          {auth.isAdmin && (
+            <Link
+              to="/admin"
+              className="grid h-11 w-11 place-items-center rounded-2xl border border-primary/50 bg-primary/10 text-primary shadow-sm transition-all hover:bg-primary/20 active:scale-95 cursor-pointer"
+              aria-label="Painel do Administrador"
+              title="Abrir Painel do Administrador em tela cheia rápida"
+            >
+              <ShieldCheck className="h-5 w-5" />
+            </Link>
+          )}
+        </div>
 
         {/* Player Profile / Login Button */}
         <button
           type="button"
           onClick={() => (profile ? setProfileOpen(true) : setAuthOpen(true))}
-          className="flex items-center gap-2 rounded-2xl border bg-card px-3 py-1.5 text-left shadow-sm transition-all hover:bg-secondary active:scale-95"
+          className={`flex items-center gap-2 rounded-2xl border bg-card px-3 py-1.5 text-left shadow-sm transition-all hover:bg-secondary active:scale-95 ${
+            leftSlot ? "order-2 shrink-0 max-w-[68vw] sm:order-none sm:max-w-none" : ""
+          }`}
           aria-label={profile ? "Abrir meu perfil" : "Entrar na minha conta"}
         >
           <span className="relative grid h-9 w-9 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground">

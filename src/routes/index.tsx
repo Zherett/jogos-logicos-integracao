@@ -454,42 +454,41 @@ function Index() {
 
   return (
     <main className="mx-auto max-w-5xl px-3 sm:px-4 py-4 sm:py-6">
-      {/* Cabeçalho Unificado: Logos à Esquerda, Título Central/Esquerda e Controles à Direita */}
-      <div className="mb-3 flex items-center justify-between gap-2 sm:gap-3 flex-wrap sm:flex-nowrap">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="flex flex-col gap-1 shrink-0">
-            <img
-              src={integracaoPreto}
-              alt="Logo do Projeto INTEGRAÇÃO"
-              decoding="async"
-              className="h-6 sm:h-7 w-auto object-contain rounded-sm dark:brightness-110"
-            />
-            <img
-              src={semed}
-              alt="Logo da SEMED Coari"
-              decoding="async"
-              className="h-6 sm:h-7 w-auto object-contain rounded-sm dark:brightness-110"
-            />
-          </div>
+      {/* Cabeçalho Unificado: Logos à Esquerda, Título Central/Esquerda e Controles à Direita (no mobile: Perfil no topo + Ícones abaixo) */}
+      <div className="mb-3">
+        <PlayerMenu
+          leftSlot={
+            <>
+              <div className="flex flex-col gap-1 shrink-0">
+                <img
+                  src={integracaoPreto}
+                  alt="Logo do Projeto INTEGRAÇÃO"
+                  decoding="async"
+                  className="h-6 sm:h-7 w-auto object-contain rounded-sm dark:brightness-110"
+                />
+                <img
+                  src={semed}
+                  alt="Logo da SEMED Coari"
+                  decoding="async"
+                  className="h-6 sm:h-7 w-auto object-contain rounded-sm dark:brightness-110"
+                />
+              </div>
 
-          <div className="hidden sm:flex flex-col items-start min-w-0 border-l border-border/60 pl-3">
-            <span className="inline-flex items-center gap-1 rounded-full border bg-card px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-primary shadow-2xs">
-              <Sparkles className="h-2.5 w-2.5" /> Plataforma Educacional
-            </span>
-            <h1 className="font-display text-xl md:text-2xl font-extrabold leading-tight tracking-tight text-foreground truncate">
-              Desafios de <span className="text-primary">Lógica</span>
-            </h1>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2 shrink-0">
-          <PlayerMenu
-            onConfigChanged={() => {
-              refreshLocal();
-              void auth.refresh();
-            }}
-          />
-        </div>
+              <div className="hidden sm:flex flex-col items-start min-w-0 border-l border-border/60 pl-3">
+                <span className="inline-flex items-center gap-1 rounded-full border bg-card px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-primary shadow-2xs">
+                  <Sparkles className="h-2.5 w-2.5" /> Plataforma Educacional
+                </span>
+                <h1 className="font-display text-xl md:text-2xl font-extrabold leading-tight tracking-tight text-foreground truncate">
+                  Desafios de <span className="text-primary">Lógica</span>
+                </h1>
+              </div>
+            </>
+          }
+          onConfigChanged={() => {
+            refreshLocal();
+            void auth.refresh();
+          }}
+        />
       </div>
 
       {/* Título compacto visível apenas no mobile */}
