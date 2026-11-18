@@ -10,7 +10,7 @@ import type { PlayerProfile } from "./playfab.ts";
 import { awardCareerPoints } from "./career-points.ts";
 import { getAllAvailableMedals, type PlayerUnlockedMedal } from "./medals-catalog.ts";
 import {
-  stageFromBirthdate,
+  stageForPlayer,
   accumulateTournamentMedal,
   calculatePlayerLevel,
   type TournamentMedal,
@@ -61,12 +61,14 @@ export interface SystemInboxMessage {
   mentionedGameId?: string; // ID do jogo referenciado na tag [game] (apenas menção de texto)
   mentionedEventId?: string; // ID do evento referenciado na tag [event]
   mentionedEventTitle?: string; // Nome do evento para cache e fallback
-  linkEventDetails?: boolean; // Se true (padrão), o nome do evento é clicável e abre modal com detalhes
+  linkEventDetails?: boolean;
+  includeNewPlayers?: boolean; // Se true (padrão), o nome do evento é clicável e abre modal com detalhes
   mentionedGames?: Record<string, string>; // Tags indexadas de jogos: { game: "velha", game1: "memoria", game2: "quebra-cabeca" }
   mentionedEvents?: Record<string, {
     eventId: string;
     eventTitle?: string;
     linkEventDetails?: boolean;
+  includeNewPlayers?: boolean;
   }>; // Tags indexadas de eventos: { event: { eventId, ... }, event1: { ... } }
   reward?: InboxReward;
   rewards?: InboxReward[];
@@ -86,6 +88,7 @@ export interface SystemInboxMessage {
   };
   read: boolean;
   readAt?: string;
+  includeNewPlayers?: boolean;
   createdAt: string;
 }
 
@@ -430,6 +433,7 @@ export function createInboxMessage(
     rewards: data.rewards,
     metadata: data.metadata,
     read: false,
+    includeNewPlayers: Boolean(data.includeNewPlayers),
     createdAt: data.createdAt ?? new Date().toISOString(),
   };
 
@@ -469,11 +473,13 @@ export interface AdminBroadcastDraft {
   mentionedEventId?: string;
   mentionedEventTitle?: string;
   linkEventDetails?: boolean;
+  includeNewPlayers?: boolean;
   mentionedGames?: Record<string, string>;
   mentionedEvents?: Record<string, {
     eventId: string;
     eventTitle?: string;
     linkEventDetails?: boolean;
+  includeNewPlayers?: boolean;
   }>;
   reward?: {
     type: InboxRewardType;
@@ -729,6 +735,7 @@ export function sendAdminBroadcastMessage(draft: AdminBroadcastDraft): SystemInb
     mentionedEvents: draft.mentionedEvents ?? {},
     reward: rewardObj,
     rewards: rewardsList.length > 0 ? rewardsList : undefined,
+    includeNewPlayers: Boolean(draft.includeNewPlayers),
   });
 
   return msg;
@@ -777,8 +784,9 @@ export function isMessageEligibleForPlayer(
 
   // Mensagem de transmissão ("ALL")
   if (msg.recipientId === "ALL") {
-    // Alunos recém-criados não recebem mensagens antigas com recompensas anteriores à criação de sua conta
-    if (msg.reward && (player as any).createdAt && msg.createdAt) {
+    // Por padrão, alunos que se cadastrarem DEPOIS do envio não recebem mensagens antigas,
+    // a menos que o ADM tenha marcado explicitamente `includeNewPlayers: true`.
+    if (!msg.includeNewPlayers && (player as any).createdAt && msg.createdAt) {
       const msgTime = new Date(msg.createdAt).getTime();
       const playerCreatedTime = new Date((player as any).createdAt).getTime();
       // Tolerância de 10 minutos para relógios locais
@@ -813,15 +821,18 @@ export function isMessageEligibleForPlayer(
 
     // Filtro por etapa
     if (filter.stage && filter.stage !== "TODAS") {
-      if (player.birthdate) {
-        try {
-          const st = stageFromBirthdate(player.birthdate, new Date(), player.school);
-          if (st.id !== filter.stage && st.shortLabel !== filter.stage) {
-            return false;
-          }
-        } catch {
-          /* ignore */
+      try {
+        const st = stageForPlayer(
+          player.school,
+          player.birthdate,
+          new Date(),
+          (player as any).ageStage,
+        );
+        if (st.id !== filter.stage && st.shortLabel !== filter.stage) {
+          return false;
         }
+      } catch {
+        /* ignore */
       }
     }
 
@@ -1611,6 +1622,22 @@ export type InboxBodySegment =
  * - <= 80%: até 2 por linha
  * - > 80% (100%): 1 por linha
  */
+/**
+ * Valida URL de mídia externa/interna para impedir esquemas perigosos (javascript:, data:, etc.)
+ */
+export function isSafeMediaUrl(url?: string | null): boolean {
+  if (!url || typeof url !== "string") return false;
+  const trimmed = url.trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith("/") && !trimmed.startsWith("//")) return true;
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 export function getMediaRowSlotWidth(scale: number): string {
   if (scale <= 40) return "calc((100% - 2.25rem) / 4)";
   if (scale <= 60) return "calc((100% - 1.5rem) / 3)";

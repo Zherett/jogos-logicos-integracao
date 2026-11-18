@@ -23,7 +23,7 @@ import {
   TOURNAMENT_DAILY_EXTRA_XP_CAP,
   TOURNAMENT_MIN_LEVEL,
 } from "@/lib/weekly-tournament";
-import { stageFromBirthdate } from "@/lib/player-profile";
+import { stageForPlayer } from "@/lib/player-profile";
 import { TournamentRankBadge } from "./TournamentRankBadge";
 
 interface Props {
@@ -46,7 +46,7 @@ export function WeeklyTournamentDialog({
   const [spendingEntry, setSpendingEntry] = useState(false);
 
   const myStageId = profile
-    ? stageFromBirthdate(profile.birthdate, new Date(), profile.school).id
+    ? stageForPlayer(profile.school, profile.birthdate, new Date(), profile.ageStage).id
     : "etapa_1";
 
   useEffect(() => {

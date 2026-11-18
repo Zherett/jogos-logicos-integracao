@@ -75,20 +75,18 @@ import { setPlayerCurrentActivity } from "@/lib/presence";
 import { PresenceDot } from "./PresenceDot";
 import { usePlayerAuth } from "@/lib/player-auth";
 import {
-  ageFrom,
-  birthdayInfo,
   DEFAULT_DAILY_XP_CAP,
-  getAvailableSchoolsForAge,
   getLocalDateKey,
   is5thGradeSchool,
-  isEtapa3OrOlder,
   isOfficialSemedSchool,
+  isSecondStageSchool,
   levelProgress,
   MAX_LEVEL,
   RAIMUNDO_GRADES,
   resolveDefaultRankingCategory,
   schoolNeedsGrade,
-  stageFromBirthdate,
+  SCHOOLS,
+  stageForPlayer,
   TOURNAMENT_DAILY_ENTRIES_LIMIT,
   TOURNAMENT_DAILY_EXTRA_XP_CAP,
   VALID_TURMAS,
@@ -168,9 +166,10 @@ export function PlayerMenu({ onConfigChanged }: Props) {
   const [playerRank, setPlayerRank] = useState<number | null>(null);
 
   const profile = auth.profile;
-  const age = profile ? ageFrom(profile.birthdate) : null;
-  const stageInfo = profile ? stageFromBirthdate(profile.birthdate, new Date(), profile.school) : null;
-  const bday = profile ? birthdayInfo(profile.birthdate) : null;
+  const stageInfo = profile
+    ? stageForPlayer(profile.school, profile.birthdate, new Date(), profile.ageStage)
+    : null;
+  const bday: { isToday: boolean; daysUntil: number } | null = null;
   const effProg = useMemo(
     () =>
       profile
@@ -671,7 +670,8 @@ export function PlayerMenu({ onConfigChanged }: Props) {
                         <p className="text-[11px] sm:text-xs text-muted-foreground flex flex-wrap items-center gap-1">
                           <span>
                             {profile.school}
-                            {profile.grade ? ` • ${profile.grade}` : ""} • {age} anos
+                            {profile.grade ? ` • ${profile.grade}` : ""}
+                            {stageInfo ? ` • ${stageInfo.shortLabel}` : ""}
                           </span>
                           {profile.school && profile.school !== "Nenhuma" && (
                             <span className="inline-flex items-center gap-0.5 rounded-md bg-secondary px-1.5 py-0.5 text-[9px] font-bold text-muted-foreground" title="Escola e série fixadas no perfil. Somente o ADM pode alterar.">
@@ -923,7 +923,7 @@ export function PlayerMenu({ onConfigChanged }: Props) {
 
               {/* Painel de Seleção Única de Escola, Série e Turma (Disponível APENAS se o jogador não selecionou na criação) */}
               {(() => {
-                const isOver15 = isEtapa3OrOlder(profile.birthdate);
+                const isOver15 = stageInfo?.id === "etapa_3";
                 if (isOver15) return null;
 
                 const schoolNotSelected = !profile.school || profile.school === "Nenhuma" || profile.school === "Outro";
@@ -938,9 +938,12 @@ export function PlayerMenu({ onConfigChanged }: Props) {
 
                 if (!hasUnselectedFields) return null;
 
-                const availableSchoolsForStudent = getAvailableSchoolsForAge(profile.birthdate).filter(
-                  (s) => s.name !== "Nenhuma",
-                );
+                const availableSchoolsForStudent = SCHOOLS.filter((s) => {
+                  if (s.name === "Nenhuma") return false;
+                  if (stageInfo?.id === "etapa_2") return !is5thGradeSchool(s.name);
+                  if (stageInfo?.id === "etapa_1") return !isSecondStageSchool(s.name);
+                  return s.name === "Outro";
+                });
 
                 return (
                   <div className="rounded-3xl border-2 border-primary/40 bg-primary/5 p-4 space-y-3">

@@ -79,7 +79,7 @@ import { loadSpecialEvents, loadRecurringEvents } from "@/lib/custom-events";
 import {
   SCHOOLS,
   AGE_STAGES,
-  stageFromBirthdate,
+  stageForPlayer,
   levelProgress,
 } from "@/lib/player-profile";
 import {
@@ -212,6 +212,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
     isSecret: boolean;
   };
   const [rewardsList, setRewardsList] = useState<RewardDraftItem[]>([]);
+  const [includeNewPlayers, setIncludeNewPlayers] = useState(false);
 
   // Modal de Confirmação com Pré-visualização antes do envio
   const [pendingSendConfirm, setPendingSendConfirm] = useState<{
@@ -665,7 +666,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
       // Filtro de Etapa
       if (recipientMode === "stage" && selectedStage !== "TODAS") {
         try {
-          const stInfo = stageFromBirthdate(student.birthdate, new Date(), student.school);
+          const stInfo = stageForPlayer(student.school, student.birthdate, new Date(), student.ageStage);
           if (stInfo.id !== selectedStage && stInfo.shortLabel !== selectedStage) {
             return false;
           }
@@ -706,7 +707,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
     const counts: Record<string, number> = {};
     for (const st of studentsList) {
       try {
-        const info = stageFromBirthdate(st.birthdate, new Date(), st.school);
+        const info = stageForPlayer(st.school, st.birthdate, new Date(), st.ageStage);
         counts[info.id] = (counts[info.id] || 0) + 1;
       } catch {
         /* ignore */
@@ -919,6 +920,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
       mentionedEvents: Object.keys(effectiveEvents).length > 0 ? effectiveEvents : undefined,
       reward: convertedRewards[0],
       rewards: convertedRewards.length > 0 ? convertedRewards : undefined,
+      includeNewPlayers,
     };
 
     const simulatedRewards: InboxReward[] = convertedRewards.map((r, idx) => ({
@@ -956,6 +958,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
       reward: simulatedRewards[0],
       rewards: simulatedRewards.length > 0 ? simulatedRewards : undefined,
       read: false,
+      includeNewPlayers: draft.includeNewPlayers,
       createdAt: new Date().toISOString(),
     };
 
@@ -1020,6 +1023,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
       setMentionedEvents({});
       setLinkEventDetails(true);
       setRewardsList([]);
+      setIncludeNewPlayers(false);
       setSelectedStudentIds(new Set());
     } finally {
       setIsSendingConfirmed(false);
@@ -1603,7 +1607,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                   const isChecked = selectedStudentIds.has(student.id);
                   let stageText = "Geral";
                   try {
-                    const stInfo = stageFromBirthdate(student.birthdate, new Date(), student.school);
+                    const stInfo = stageForPlayer(student.school, student.birthdate, new Date(), student.ageStage);
                     stageText = stInfo.shortLabel || "Geral";
                   } catch {
                     stageText = "Geral";
@@ -2389,6 +2393,22 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                   </div>
                 </div>
               )}
+            </div>
+
+            {/* OPÇÃO DE ENVIO PARA NOVOS JOGADORES */}
+            <div className="flex items-center justify-between rounded-2xl border bg-secondary/25 p-3">
+              <div className="pr-3">
+                <span className="font-display text-xs font-extrabold text-foreground block">
+                  Enviar também para novos jogadores que se cadastrarem
+                </span>
+                <span className="text-[11px] text-muted-foreground">
+                  Desmarcado (padrão): apenas alunos já cadastrados recebem esta mensagem.
+                </span>
+              </div>
+              <Switch
+                checked={includeNewPlayers}
+                onCheckedChange={setIncludeNewPlayers}
+              />
             </div>
 
             {/* BOTÃO PRINCIPAL DE ENVIO */}

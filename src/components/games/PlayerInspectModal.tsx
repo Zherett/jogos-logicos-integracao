@@ -52,19 +52,19 @@ import {
 } from "@/lib/playfab";
 import { usePlayerAuth } from "@/lib/player-auth";
 import {
-  ageFrom,
-  formatBirthdateBR,
-  getAvailableSchoolsForAge,
+  abbreviateStudentName,
+  AGE_STAGES,
   is5thGradeSchool,
-  isEtapa3OrOlder,
-  isOlderThanEtapa1,
   isOfficialSemedSchool,
+  isSecondStageSchool,
   levelProgress,
   MAX_LEVEL,
   RAIMUNDO_GRADES,
   schoolNeedsGrade,
   SCHOOLS,
+  stageForPlayer,
   VALID_TURMAS,
+  type AgeStageId,
   type TurmaCode,
 } from "@/lib/player-profile";
 import {
@@ -117,7 +117,7 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
   // Estados de edição pelo Administrador
   const [isEditing, setIsEditing] = useState(false);
   const [editFullName, setEditFullName] = useState("");
-  const [editBirthdate, setEditBirthdate] = useState("");
+  const [editAgeStage, setEditAgeStage] = useState<AgeStageId>("etapa_1");
   const [editSchool, setEditSchool] = useState("");
   const [editGrade, setEditGrade] = useState<string>(RAIMUNDO_GRADES[0]);
   const [editTurma, setEditTurma] = useState("");
@@ -197,15 +197,25 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
     }
   }, [open, playerId]);
 
+  const getSchoolsForStage = (stageId: AgeStageId) => {
+    if (stageId === "etapa_3") {
+      return SCHOOLS.filter((s) => s.name === "Nenhuma" || s.name === "Outro");
+    }
+    if (stageId === "etapa_2") {
+      return SCHOOLS.filter((s) => !is5thGradeSchool(s.name));
+    }
+    return SCHOOLS.filter((s) => !isSecondStageSchool(s.name));
+  };
+
   useEffect(() => {
     if (isEditing) {
-      const available = getAvailableSchoolsForAge(editBirthdate);
+      const available = getSchoolsForStage(editAgeStage);
       if (!available.some((s) => s.name === editSchool)) {
         setEditSchool("Nenhuma");
         setEditTurma("");
       }
     }
-  }, [editBirthdate, editSchool, isEditing]);
+  }, [editAgeStage, editSchool, isEditing]);
 
   const ledgerEntries = useMemo(() => {
     if (!profile || !auth.isAdmin || !showLedger) return [];
@@ -229,7 +239,7 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
 
   if (!profile) return null;
 
-  const age = ageFrom(profile.birthdate);
+  const stageInfo = stageForPlayer(profile.school, profile.birthdate, new Date(), profile.ageStage);
   const effProg = getEffectivePlayerProgression(
     profile,
     profile.stats ?? [],
@@ -292,8 +302,8 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
             : profile.grade;
     const updated = await updateStudentProfileByAdmin({
       playerId: profile.id,
-      fullName: editFullName.trim(),
-      birthdate: editBirthdate,
+      fullName: abbreviateStudentName(editFullName),
+      ageStage: editAgeStage,
       school: editSchool,
       turma: editSchool === "Nenhuma" || editSchool === "Outro" ? null : (editTurma ? editTurma : null),
       grade: resolvedGrade,
@@ -461,26 +471,21 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                   </span>
                   <span className="text-muted-foreground">•</span>
                   <span className="font-semibold text-foreground">
-                    {age} anos
+                    {stageInfo.shortLabel}
                   </span>
-                  {Boolean(auth.profile?.isAdmin || isMe) && profile.birthdate && (
-                    <span className="text-muted-foreground font-medium text-[11px]">
-                      (Nasc: {formatBirthdateBR(profile.birthdate)})
-                    </span>
-                  )}
                   {auth.profile?.isAdmin && !isEditing && (
                     <button
                       type="button"
                       onClick={() => {
                         setEditFullName(profile.full_name || "");
-                        setEditBirthdate(profile.birthdate || "");
+                        setEditAgeStage(stageInfo.id);
                         setEditSchool(profile.school || "Outro");
                         setEditGrade(profile.grade || RAIMUNDO_GRADES[0]);
                         setEditTurma(profile.turma || "");
                         setIsEditing(true);
                       }}
                       className="ml-2 inline-flex items-center gap-1 text-[11px] font-bold text-primary underline hover:text-primary/80"
-                      title="Editar data de nascimento, nome, escola, série e turma deste aluno"
+                      title="Editar etapa, nome, escola, série e turma deste aluno"
                     >
                       <Pencil className="h-3 w-3" /> Editar (ADM)
                     </button>
@@ -784,32 +789,30 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                   />
                 </div>
 
-                {/* 2. Data de Nascimento */}
+                {/* 2. Etapa / Ciclo Escolar */}
                 <div className="space-y-1">
-                  <label className="text-[11px] font-bold text-foreground">Data de Nascimento:</label>
-                  <input
-                    type="date"
-                    value={editBirthdate}
+                  <label className="text-[11px] font-bold text-foreground">Etapa / Ciclo:</label>
+                  <select
+                    value={editAgeStage}
                     onChange={(e) => {
-                      const newDate = e.target.value;
-                      setEditBirthdate(newDate);
-                      if (isEtapa3OrOlder(newDate) && isOfficialSemedSchool(editSchool)) {
+                      const nextStage = e.target.value as AgeStageId;
+                      setEditAgeStage(nextStage);
+                      if (nextStage === "etapa_3" && isOfficialSemedSchool(editSchool)) {
                         setEditSchool("Nenhuma");
                         setEditTurma("");
-                      } else if (newDate) {
-                        if (isOlderThanEtapa1(newDate) && is5thGradeSchool(editSchool)) {
-                          setEditSchool("Nenhuma");
-                          setEditTurma("");
-                        }
+                      } else if (nextStage === "etapa_2" && is5thGradeSchool(editSchool)) {
+                        setEditSchool("Nenhuma");
+                        setEditTurma("");
                       }
                     }}
                     className="h-9 w-full rounded-xl border bg-background px-3 text-xs font-semibold"
-                  />
-                  {editBirthdate && (
-                    <div className="text-[10px] text-muted-foreground">
-                      Idade calculada: <b>{ageFrom(editBirthdate)} anos</b>
-                    </div>
-                  )}
+                  >
+                    {AGE_STAGES.map((st) => (
+                      <option key={st.id} value={st.id}>
+                        {st.emoji} {st.shortLabel} — {st.schoolCycleLabel}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 {/* 3. Instituição (Escola) */}
@@ -828,7 +831,7 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                     }}
                     className="h-9 w-full rounded-xl border bg-background px-3 text-xs font-semibold"
                   >
-                    {getAvailableSchoolsForAge(editBirthdate).map((s) => (
+                    {getSchoolsForStage(editAgeStage).map((s) => (
                       <option key={s.name} value={s.name}>
                         {s.name}
                       </option>
@@ -900,14 +903,14 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
           )}
 
           {/* Seleção Única para o próprio jogador comum caso ainda não tenha definido Escola / Série na criação */}
-          {isMe && !auth.profile?.isAdmin && !isEtapa3OrOlder(profile.birthdate) && (() => {
+          {isMe && !auth.profile?.isAdmin && stageInfo.id !== "etapa_3" && (() => {
             const schoolNotSelected = !profile.school || profile.school === "Nenhuma";
             const effectiveSchool = schoolNotSelected ? selfSchool : profile.school;
             const needsGrade = !profile.grade && schoolNeedsGrade(effectiveSchool);
             const needsTurma = !profile.turma && isOfficialSemedSchool(effectiveSchool);
             if (!schoolNotSelected && !needsGrade && !needsTurma) return null;
 
-            const availableSchools = getAvailableSchoolsForAge(profile.birthdate).filter(
+            const availableSchools = getSchoolsForStage(stageInfo.id).filter(
               (s) => s.name !== "Nenhuma",
             );
 

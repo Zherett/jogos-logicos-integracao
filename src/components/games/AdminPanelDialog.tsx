@@ -80,7 +80,7 @@ import { usePlayerAuth } from "@/lib/player-auth";
 import {
   ageFrom,
   levelProgress,
-  stageFromBirthdate,
+  stageForPlayer,
   SCHOOLS,
   VALID_TURMAS,
   type TurmaCode,
@@ -5122,11 +5122,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                                 {p.school}
                                 {p.grade ? ` • ${p.grade}` : ""} •{" "}
                                 <b className="text-foreground">
-                                  {stageFromBirthdate(p.birthdate).shortLabel} ({ageFrom(p.birthdate)}{" "}
-                                  anos)
-                                </b>{" "}
-                                • Nasc:{" "}
-                                {new Date(`${p.birthdate}T00:00:00`).toLocaleDateString("pt-BR")}
+                                  {stageForPlayer(p.school, p.birthdate, new Date(), p.ageStage).shortLabel}
+                                </b>
                               </div>
                             </div>
                             <div className="text-right shrink-0 font-display font-bold text-primary">

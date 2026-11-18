@@ -37,7 +37,7 @@ import {
   getAgeStageInfo,
   getLocalDateKey,
   isMatchVictory,
-  stageFromBirthdate,
+  stageForPlayer,
   TOURNAMENT_DAILY_FREE_ENTRIES,
   TOURNAMENT_DAILY_PAID_ENTRIES_LIMIT,
   TOURNAMENT_DAILY_ENTRIES_LIMIT,
@@ -636,7 +636,12 @@ export function evaluateTournamentStandings(
         rec.age ?? (rec.birthdate ? ageFrom(rec.birthdate, new Date(nowMs)) : 10);
       const resolvedStage: AgeStageId =
         rec.stage ??
-        (rec.birthdate ? stageFromBirthdate(rec.birthdate, new Date(nowMs), rec.school).id : "etapa_1");
+        stageForPlayer(
+          rec.school,
+          rec.birthdate,
+          new Date(nowMs),
+          foundAcc?.profile?.ageStage,
+        ).id;
       const stInfo = getAgeStageInfo(resolvedStage);
       const { holdMinutes, holdBonusPoints } = computeTop5HoldMetrics(rec, nowMs);
       const tourPoints = resolveCanonicalTournamentPoints({
@@ -994,10 +999,9 @@ function loadTournamentStore(now = new Date()): WeeklyTournamentStore {
       const existingRecord = matched[0]?.record;
 
       if (pts > 0 || (p.dailyTournamentEntries ?? 0) > 0 || matched.length > 0) {
-        const pAge = p.birthdate ? ageFrom(p.birthdate, now) : 10;
-        const pStage = p.birthdate
-          ? stageFromBirthdate(p.birthdate, now, p.school).id
-          : "etapa_1";
+        const pStageInfo = stageForPlayer(p.school, p.birthdate, now, p.ageStage);
+        const pStage = pStageInfo.id;
+        const pAge = p.birthdate ? ageFrom(p.birthdate, now) : pStageInfo.minAge;
         const bestPts = Math.max(pts, existingBestPts);
         const rank = getTournamentRank(bestPts).currentRank;
         const recKey = p.nickNormalized || p.id;
@@ -1543,7 +1547,7 @@ export function getWeeklyTournamentSnapshot(
       : defaultWeekEnd;
   const seasonLabel = `Temporada ${currentSeasonId}`;
   const playerStageInfo = profile
-    ? stageFromBirthdate(profile.birthdate, now, profile.school)
+    ? stageForPlayer(profile.school, profile.birthdate, now, profile.ageStage)
     : AGE_STAGES[0];
   const effectiveStage: AgeStageId | "TODAS" = stageFilter ?? playerStageInfo.id;
   const evaluated = evaluateTournamentStandings(store.records, now.getTime(), effectiveStage);
@@ -1682,8 +1686,13 @@ export async function recordWeeklyTournamentAttempt(args: {
   const won = isMatchVictory(safeScore, safeCorrect, safeWrong);
 
   const existing = store.records[args.profile.id];
-  const pAge = ageFrom(args.profile.birthdate, nowDate);
-  const pStage = stageFromBirthdate(args.profile.birthdate, nowDate, args.profile.school);
+  const pStage = stageForPlayer(
+    args.profile.school,
+    args.profile.birthdate,
+    nowDate,
+    args.profile.ageStage,
+  );
+  const pAge = args.profile.birthdate ? ageFrom(args.profile.birthdate, nowDate) : pStage.minAge;
 
   // Regra de pontuação ranqueada:
   // Base 10 pontos, -1 ponto por erro cometido. Piso mínimo de 1 ponto ao concluir.

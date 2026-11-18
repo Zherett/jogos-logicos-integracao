@@ -1,5 +1,5 @@
 import type { GameId } from "./game-storage.ts";
-import { stageFromBirthdate, type AgeStageId } from "./player-profile.ts";
+import { stageForPlayer, type AgeStageId } from "./player-profile.ts";
 import {
   getAdminPlayFabTicket,
   getPlayFabTitleId,
@@ -294,7 +294,7 @@ export function seedRecordsFromRegistry(): AllGameRecords {
   for (const acc of Object.values(reg)) {
     if (!acc.profile || !acc.stats || acc.profile.deletedAt) continue;
     const p = acc.profile;
-    const stage = stageFromBirthdate(p.birthdate, new Date(), p.school).id;
+    const stage = stageForPlayer(p.school, p.birthdate, new Date(), p.ageStage).id;
 
     for (const s of acc.stats) {
       if (!s.game_id || (s.best_score ?? 0) <= 0 || !isRecordScoreAllowed(s.game_id, s.best_score)) continue;

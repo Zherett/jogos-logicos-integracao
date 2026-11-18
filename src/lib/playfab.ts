@@ -1892,9 +1892,15 @@ export function ensurePlayerSeasonAligned(
   ensurePlayerCareerPointsInitialized(acc.profile, { skipMedalPrune: options?.skipMedalPrune });
   const medalsAfterCareerInit = acc.profile.unlockedMedals?.length ?? 0;
 
-  // Sanitization: Players in Etapa 3 (15+ years old) cannot belong to elementary SEMED schools or classes.
+  // Sanitization: Players in Etapa 3 (Comunidade) cannot belong to elementary SEMED schools or classes.
   // If institution is "Nenhuma" or "Outro", grade and turma are always null.
-  if (isEtapa3OrOlder(acc.profile.birthdate)) {
+  const alignedStage = stageForPlayer(
+    acc.profile.school,
+    acc.profile.birthdate,
+    new Date(),
+    acc.profile.ageStage,
+  ).id;
+  if (alignedStage === "etapa_3") {
     if (isOfficialSemedSchool(acc.profile.school)) {
       acc.profile.school = "Outro";
     }
@@ -2021,7 +2027,7 @@ interface PlayFabLoginPayload {
   InfoResultPayload?: {
     UserData?: Record<string, { Value: string }>;
     PlayerStatistics?: { StatisticName: string; Value: number }[];
-    AccountInfo?: { TitleInfo?: { DisplayName?: string }; Username?: string };
+    AccountInfo?: { Created?: string; TitleInfo?: { DisplayName?: string; Created?: string }; Username?: string };
   };
 }
 
@@ -2150,6 +2156,11 @@ function buildAccountFromPlayFabPayload(
     seasonId: parsedProfile.seasonId ?? cfg.seasonId,
     activeSessionId: parsedProfile.activeSessionId,
     activeSessionUpdatedAt: parsedProfile.activeSessionUpdatedAt,
+    createdAt:
+      parsedProfile.createdAt ||
+      payload.InfoResultPayload?.AccountInfo?.Created ||
+      payload.InfoResultPayload?.AccountInfo?.TitleInfo?.Created ||
+      new Date().toISOString(),
   };
 
   return ensurePlayerSeasonAligned(
@@ -2820,6 +2831,7 @@ async function pushProfileToPlayFab(account: StoredAccount, sessionTicket?: stri
           seasonId: p.seasonId,
           activeSessionId: p.activeSessionId,
           activeSessionUpdatedAt: p.activeSessionUpdatedAt,
+          createdAt: p.createdAt,
         }),
         GameStats: JSON.stringify(account.stats),
         UnlockedGames: JSON.stringify(account.unlocked),
@@ -4537,6 +4549,7 @@ export async function updateStudentProfileByAdmin(args: {
   turma?: string | null;
   grade?: string | null;
   fullName?: string;
+  ageStage?: AgeStageId;
 }): Promise<PlayerProfile | null> {
   const reg = loadRegistry();
   const slug = nickSlug(args.playerId);
@@ -4568,25 +4581,35 @@ export async function updateStudentProfileByAdmin(args: {
     };
   }
 
-  if (args.birthdate) {
-    acc.profile.birthdate = args.birthdate;
-    if (!acc.profile.isAdmin && !isSpecialAdminAccount(acc.profile)) {
-      acc.passwordHash = simpleHash(passwordFromBirthdate(args.birthdate));
-    }
+  if (args.ageStage) {
+    acc.profile.ageStage = args.ageStage;
+    acc.profile.birthdate = "";
+  } else if (args.birthdate) {
+    acc.profile.ageStage = stageForPlayer(
+      args.school ?? acc.profile.school,
+      args.birthdate,
+      new Date(),
+    ).id;
+    acc.profile.birthdate = "";
   }
   if (args.school !== undefined) {
     acc.profile.school = args.school;
   }
 
-  // Validate age restrictions
-  const currentAge = ageFrom(acc.profile.birthdate);
-  if (isEtapa3OrOlder(acc.profile.birthdate)) {
+  // Validate stage restrictions
+  const resolvedStageId = stageForPlayer(
+    acc.profile.school,
+    acc.profile.birthdate,
+    new Date(),
+    acc.profile.ageStage,
+  ).id;
+  if (resolvedStageId === "etapa_3") {
     if (isOfficialSemedSchool(acc.profile.school)) {
       acc.profile.school = "Nenhuma";
     }
     acc.profile.turma = null;
     acc.profile.grade = null;
-  } else if (currentAge > 11) {
+  } else if (resolvedStageId === "etapa_2") {
     if (is5thGradeSchool(acc.profile.school)) {
       acc.profile.school = "Nenhuma";
       acc.profile.turma = null;
@@ -4605,7 +4628,7 @@ export async function updateStudentProfileByAdmin(args: {
     acc.profile.grade = args.grade;
   }
   if (args.fullName) {
-    acc.profile.full_name = formatFullNameUpper(args.fullName);
+    acc.profile.full_name = abbreviateStudentName(args.fullName);
   }
 
   acc.updatedAt = new Date().toISOString();
@@ -6368,9 +6391,9 @@ export async function playfabCompleteInitialSchoolSetup(args: {
   }
 
   const p = acc.profile;
-  const currentAge = ageFrom(p.birthdate);
-  const isOver15 = isEtapa3OrOlder(p.birthdate);
-  const isOlderEtapa1 = isOlderThanEtapa1(p.birthdate);
+  const resolvedStage = stageForPlayer(p.school, p.birthdate, new Date(), p.ageStage).id;
+  const isOver15 = resolvedStage === "etapa_3";
+  const isOlderEtapa1 = resolvedStage === "etapa_2";
 
   if (isOver15) {
     return {
@@ -6388,7 +6411,7 @@ export async function playfabCompleteInitialSchoolSetup(args: {
     if (isOlderEtapa1 && is5thGradeSchool(args.school)) {
       return {
         profile: p,
-        error: "Alunos nascidos antes de janeiro de 2014 não podem selecionar escolas de 5º ano.",
+        error: "Alunos da 2ª Etapa (6º ao 9º ano) não podem selecionar escolas de 5º ano.",
       };
     }
     p.school = args.school;

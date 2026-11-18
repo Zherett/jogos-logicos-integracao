@@ -1,7 +1,7 @@
 import { Trophy, Award, Sparkles, User, Calendar, CheckCircle2 } from "lucide-react";
 import type { GameId } from "@/lib/game-storage";
 import { GAME_NAMES } from "@/lib/game-storage";
-import { stageFromBirthdate, splitStudentNameForPrivacy, type AgeStageId } from "@/lib/player-profile";
+import { stageForPlayer, splitStudentNameForPrivacy, type AgeStageId } from "@/lib/player-profile";
 import type { PlayerProfile } from "@/lib/playfab";
 import {
   formatRecordDateBR,
@@ -23,7 +23,7 @@ export function GameRecordBanner({
   className = "",
 }: Props) {
   const stageInfo = profile
-    ? stageFromBirthdate(profile.birthdate, new Date(), profile.school)
+    ? stageForPlayer(profile.school, profile.birthdate, new Date(), profile.ageStage)
     : { id: "etapa_1" as AgeStageId, label: "1ª Etapa (1º ao 5º Ano)", shortLabel: "1ª Etapa", emoji: "🌱" };
 
   const stageRecord: StageGameRecord | null = getGameStageRecord(gameId, stageInfo.id);

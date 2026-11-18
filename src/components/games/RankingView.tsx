@@ -29,7 +29,7 @@ import {
   resolveDefaultRankingCategory,
   SCHOOLS,
   splitStudentNameForPrivacy,
-  stageFromBirthdate,
+  stageForPlayer,
   type AgeStageId,
   type RankingFilterCategory,
 } from "@/lib/player-profile";
@@ -143,7 +143,7 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
   const auth = usePlayerAuth();
   const defaultPlayerCategory = resolveDefaultRankingCategory(auth.profile);
   const myAgeStageId: AgeStageId = auth.profile
-    ? stageFromBirthdate(auth.profile.birthdate, new Date(), auth.profile.school).id
+    ? stageForPlayer(auth.profile.school, auth.profile.birthdate, new Date(), auth.profile.ageStage).id
     : "etapa_1";
 
   const [tab, setTab] = useState<RankingTabKind>(initialTab);
@@ -175,7 +175,7 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
     if (auth.profile) {
       setSelectedStage(resolveDefaultRankingCategory(auth.profile));
       setTournamentStage(
-        stageFromBirthdate(auth.profile.birthdate, new Date(), auth.profile.school).id,
+        stageForPlayer(auth.profile.school, auth.profile.birthdate, new Date(), auth.profile.ageStage).id,
       );
     }
   }, [auth.profile?.id]);

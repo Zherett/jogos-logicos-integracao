@@ -27,6 +27,7 @@ import {
   formatInboxMessageText,
   splitInboxBodySegments,
   getMediaRowSlotWidth,
+  isSafeMediaUrl,
   parseInboxBoldSegments,
   stripInboxBoldMarkers,
   type SystemInboxMessage,
@@ -331,7 +332,7 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
       <div className="whitespace-pre-wrap text-sm text-foreground leading-relaxed space-y-3">
         {segments.map((segment, index) => {
           if (segment.type === "media-group") {
-            const validItems = segment.items.filter((item) => Boolean(item.url));
+            const validItems = segment.items.filter((item) => isSafeMediaUrl(item.url));
             if (validItems.length === 0) return null;
 
             return (

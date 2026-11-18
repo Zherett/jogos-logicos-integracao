@@ -28,6 +28,7 @@ import {
   isMessageEligibleForPlayer,
   getMessageRewards,
   getMediaRowSlotWidth,
+  isSafeMediaUrl,
   splitInboxBodySegments,
   parseInboxBoldSegments,
   stripInboxBoldMarkers,
@@ -1030,5 +1031,74 @@ describe("Sistema Completo de Caixa de Entrada e Correio (inbox-messages)", () =
       stripInboxBoldMarkers("Olá! Confira *dia 22/11* e **urgente**."),
       "Olá! Confira dia 22/11 e urgente.",
     );
+  });
+
+  it("bloqueia comunicados antigos (sem recompensa) para novos jogadores por padrão e libera apenas quando includeNewPlayers=true", () => {
+    const twoDaysAgo = new Date(Date.now() - 48 * 3600 * 1000).toISOString();
+    const defaultBroadcast = createInboxMessage({
+      createdAt: twoDaysAgo,
+      recipientId: "ALL",
+      sender: "adm",
+      category: "comunicado",
+      title: "Aviso antigo",
+      body: "Só para quem já estava cadastrado.",
+    });
+    const welcomeBroadcast = createInboxMessage({
+      createdAt: twoDaysAgo,
+      recipientId: "ALL",
+      sender: "adm",
+      category: "comunicado",
+      title: "Boas-vindas geral",
+      body: "Vale para todos, inclusive novos jogadores!",
+      includeNewPlayers: true,
+    });
+
+    const newStudent = createTestStudent({
+      id: "aluno_novo_sem_recompensa",
+      createdAt: new Date().toISOString(),
+    });
+
+    assert.equal(isMessageEligibleForPlayer(defaultBroadcast, newStudent), false);
+    assert.equal(isMessageEligibleForPlayer(welcomeBroadcast, newStudent), true);
+  });
+
+  it("filtra corretamente por etapa mesmo quando o aluno não possui data de nascimento", () => {
+    const stage2Msg = createInboxMessage({
+      recipientId: "ALL",
+      recipientFilter: { stage: "etapa_2" },
+      sender: "adm",
+      category: "comunicado",
+      title: "Aviso 2ª Etapa",
+      body: "Conteúdo do 6º ao 9º ano",
+      includeNewPlayers: true,
+    });
+
+    const studentEtapa2 = {
+      id: "aluno_e2",
+      nick: "e2",
+      school: "Raimundo Bezerra",
+      birthdate: "",
+      ageStage: "etapa_2",
+      createdAt: new Date().toISOString(),
+    };
+    const studentEtapa1 = {
+      id: "aluno_e1",
+      nick: "e1",
+      school: "Raimunda Cruz",
+      birthdate: "",
+      ageStage: "etapa_1",
+      createdAt: new Date().toISOString(),
+    };
+
+    assert.equal(isMessageEligibleForPlayer(stage2Msg, studentEtapa2 as any), true);
+    assert.equal(isMessageEligibleForPlayer(stage2Msg, studentEtapa1 as any), false);
+  });
+
+  it("valida URLs de mídia do correio bloqueando esquemas inseguros", () => {
+    assert.equal(isSafeMediaUrl("https://media.giphy.com/media/abc/giphy.gif"), true);
+    assert.equal(isSafeMediaUrl("/assets/robot-hero.png"), true);
+    assert.equal(isSafeMediaUrl("javascript:alert(1)"), false);
+    assert.equal(isSafeMediaUrl("data:text/html,<script>alert(1)</script>"), false);
+    assert.equal(isSafeMediaUrl("//evil.example.com/a.png"), false);
   });
 });

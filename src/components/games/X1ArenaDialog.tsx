@@ -34,7 +34,7 @@ import {
   getLocalDateKey,
   isAdminOrTestAccount,
   isX1WindowOpen,
-  stageFromBirthdate,
+  stageForPlayer,
   X1_DAILY_EXTRA_XP_CAP,
   X1_MIN_LEVEL,
 } from "@/lib/player-profile";
@@ -140,14 +140,14 @@ export function X1ArenaDialog({
     if (!open || !profile) return;
 
     const sendHeartbeat = () => {
-      const pStage = stageFromBirthdate(profile.birthdate, new Date(), profile.school);
+      const pStage = stageForPlayer(profile.school, profile.birthdate, new Date(), profile.ageStage);
       heartbeatOnlinePlayer({
         playerId: profile.id,
         nick: profile.nick,
         fullName: profile.full_name,
         school: profile.school,
         level: profile.level,
-        age: ageFrom(profile.birthdate),
+        age: profile.birthdate ? ageFrom(profile.birthdate) : pStage.minAge,
         stage: pStage.id,
         inRoomCode: waitingRoomCode,
       });
@@ -354,7 +354,7 @@ export function X1ArenaDialog({
     );
   }
 
-  const myStage = stageFromBirthdate(profile.birthdate, new Date(), profile.school);
+  const myStage = stageForPlayer(profile.school, profile.birthdate, new Date(), profile.ageStage);
   const myNickLower = profile.nick.trim().toLowerCase();
   const snapshot = getX1LobbySnapshot(profile.id, profile.nick);
   const allOtherOnline = snapshot.onlinePlayers.filter(
@@ -378,7 +378,7 @@ export function X1ArenaDialog({
         nick: profile.nick,
         school: profile.school,
         level: profile.level,
-        age: ageFrom(profile.birthdate),
+        age: profile.birthdate ? ageFrom(profile.birthdate) : myStage.minAge,
         stage: myStage.id,
         avatar: profile.avatar,
       },
