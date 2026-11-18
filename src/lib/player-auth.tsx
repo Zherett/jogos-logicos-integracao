@@ -18,7 +18,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { onMatchSaved, type GameId } from "./game-storage";
 import { recordGameStageScore } from "./game-records";
-import { stageFromBirthdate } from "./player-profile";
+import { stageForPlayer } from "./player-profile";
 import {
   loadAdminConfig,
   type PlatformAdminConfig,
@@ -291,7 +291,7 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
         return;
       }
       if (match.score > 0) {
-        const stage = stageFromBirthdate(profile.birthdate, new Date(), profile.school).id;
+        const stage = stageForPlayer(profile.school, profile.birthdate, new Date(), profile.ageStage).id;
         recordGameStageScore({
           gameId: id,
           stage,

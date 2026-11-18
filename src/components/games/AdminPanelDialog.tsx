@@ -1267,7 +1267,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                   setPinInput(e.target.value);
                   setPinError(null);
                 }}
-                placeholder="Digite o código ADM (ex: SEMED26)"
+                placeholder="Digite o código ADM"
                 className="rounded-xl"
                 autoFocus
                 required

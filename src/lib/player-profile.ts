@@ -549,8 +549,30 @@ export function stageForPlayer(
   school?: string | null,
   birthdate?: string | null,
   now = new Date(),
+  explicitStage?: AgeStageId | null,
 ): AgeStageInfo {
+  if (explicitStage && AGE_STAGES.some((s) => s.id === explicitStage)) {
+    return getAgeStageInfo(explicitStage);
+  }
+  if (!birthdate && (school === "Nenhuma" || school === "Outro")) {
+    return AGE_STAGES[2];
+  }
   return stageFromBirthdate(birthdate, now, school);
+}
+
+/**
+ * Converte um nome completo para o formato minimizado (LGPD):
+ * Primeiro nome + inicial do segundo nome com ponto (ex.: "MARIA SILVA SOUZA" -> "MARIA S.").
+ * Se houver apenas um nome, retorna apenas ele em maiúsculas.
+ */
+export function abbreviateStudentName(rawName?: string | null): string {
+  const clean = String(rawName ?? "").trim().replace(/\s+/g, " ").toUpperCase();
+  if (!clean) return "";
+  const parts = clean.split(" ").filter(Boolean);
+  if (parts.length === 1) return parts[0];
+  const first = parts[0];
+  const secondInitial = parts[1].replace(/[^A-ZÀ-ÖØ-Þ0-9]/gi, "").slice(0, 1);
+  return secondInitial ? `${first} ${secondInitial}.` : first;
 }
 
 /* --------------------- Categorias de Série / Etapa para o Ranking --------------------- */
@@ -624,11 +646,16 @@ export function getRankingCategoryLabel(category: RankingFilterCategory): string
  * - Student in 3ª Etapa (15+ years): sees "etapa_3" ("3ª Etapa (15+)")
  */
 export function resolveDefaultRankingCategory(
-  profile?: { birthdate?: string | null; school?: string | null; grade?: string | null } | null,
+  profile?: {
+    birthdate?: string | null;
+    school?: string | null;
+    grade?: string | null;
+    ageStage?: AgeStageId | null;
+  } | null,
   now = new Date(),
 ): RankingFilterCategory {
   if (!profile) return "etapa_1";
-  const st = stageFromBirthdate(profile.birthdate, now, profile.school);
+  const st = stageForPlayer(profile.school, profile.birthdate, now, profile.ageStage);
   return st.id;
 }
 
@@ -636,12 +663,17 @@ export function resolveDefaultRankingCategory(
  * Checks whether a student profile belongs to the selected Ranking series/stage filter.
  */
 export function matchesRankingCategory(
-  profile: { birthdate?: string | null; school?: string | null; grade?: string | null },
+  profile: {
+    birthdate?: string | null;
+    school?: string | null;
+    grade?: string | null;
+    ageStage?: AgeStageId | null;
+  },
   category?: RankingFilterCategory | null,
   now = new Date(),
 ): boolean {
   if (!category || category === "TODAS") return true;
-  const st = stageFromBirthdate(profile.birthdate, now, profile.school);
+  const st = stageForPlayer(profile.school, profile.birthdate, now, profile.ageStage);
   if (category === "etapa_3") return st.id === "etapa_3";
   if (category === "etapa_1" || category === "5º ano") return st.id === "etapa_1";
   if (category === "etapa_2") return st.id === "etapa_2";

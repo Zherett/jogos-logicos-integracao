@@ -32,7 +32,8 @@ import {
   type CumulativeActiveBonuses,
 } from "@/lib/custom-events";
 import type { PlayerProfile } from "@/lib/playfab";
-import { stageFromBirthdate } from "@/lib/player-profile";
+import { stageForPlayer } from "@/lib/player-profile";
+import { LegalModal, DPO_CONTACT_EMAIL, type LegalTab } from "./LegalModal";
 import {
   formatRecordDateBR,
   getGameStageRecord,
@@ -120,8 +121,11 @@ export function Menu({
   const canTournament = Boolean(playerProfile && (isAdminBypass || playerLevel >= TOURNAMENT_MIN_LEVEL));
   const canX1 = Boolean(playerProfile && (isAdminBypass || (playerLevel >= X1_MIN_LEVEL && x1OpenNow)));
 
+  const [legalOpen, setLegalOpen] = useState(false);
+  const [legalTab, setLegalTab] = useState<LegalTab>("privacidade");
+
   const stageId = playerProfile
-    ? stageFromBirthdate(playerProfile.birthdate, new Date(), playerProfile.school).id
+    ? stageForPlayer(playerProfile.school, playerProfile.birthdate, new Date(), playerProfile.ageStage).id
     : "etapa_1";
 
   const [gameRecords, setGameRecords] = useState<AllGameRecords>(() => loadGameRecords());
@@ -656,9 +660,54 @@ export function Menu({
       </div>
       )}
 
-      <p className="text-center text-xs text-muted-foreground font-medium pt-2">
-        Idealizado para alunos do 5º ao 9º ano • Funciona no celular, tablet e computador. Projeto INTEGRAÇÃO — SEMED-COARI.
-      </p>
+      <footer className="pt-4 pb-2 text-center text-xs text-muted-foreground space-y-1.5">
+        <p className="font-medium">
+          Idealizado para alunos do 5º ao 9º ano • Funciona no celular, tablet e computador. Projeto INTEGRAÇÃO — SEMED Coari.
+        </p>
+        <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[11px]">
+          <button
+            type="button"
+            onClick={() => {
+              setLegalTab("privacidade");
+              setLegalOpen(true);
+            }}
+            className="font-semibold text-primary hover:underline"
+          >
+            Política de Privacidade (LGPD)
+          </button>
+          <span>•</span>
+          <button
+            type="button"
+            onClick={() => {
+              setLegalTab("termos");
+              setLegalOpen(true);
+            }}
+            className="font-semibold text-primary hover:underline"
+          >
+            Termos de Uso
+          </button>
+          <span>•</span>
+          <button
+            type="button"
+            onClick={() => {
+              setLegalTab("armazenamento");
+              setLegalOpen(true);
+            }}
+            className="font-semibold text-primary hover:underline"
+          >
+            Dados Locais
+          </button>
+          <span>•</span>
+          <a
+            href={`mailto:${DPO_CONTACT_EMAIL}`}
+            className="font-semibold text-primary hover:underline"
+          >
+            Encarregado LGPD: {DPO_CONTACT_EMAIL}
+          </a>
+        </div>
+      </footer>
+
+      <LegalModal open={legalOpen} onOpenChange={setLegalOpen} defaultTab={legalTab} />
 
       {/* 6. Modal de Detalhes do Jogo (Instruções, Recorde Pessoal, Recorde da Etapa, Modalidades e Botão Jogar) */}
       {selectedGameForDetail && (

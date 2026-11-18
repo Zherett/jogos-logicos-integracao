@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  abbreviateStudentName,
   adjustXpForGameMode,
   advanceLevelStageOnMatch,
   applyDailyXpCap,
@@ -31,6 +32,7 @@ import {
   RANKING_SERIES_OPTIONS,
   resolveDefaultRankingCategory,
   SCHOOLS,
+  stageForPlayer,
   stageFromAge,
   stageFromBirthdate,
   studentCustomId,
@@ -1140,5 +1142,20 @@ describe("Perfil do Jogador, Escolas, Trava de Níveis (1..10) e Limite Diário 
     assert.equal(resEmpty.firstName, "");
     assert.equal(resEmpty.restName, "");
     assert.equal(resEmpty.maskedRest, "");
+  });
+
+  it("abrevia o nome do aluno para Primeiro Nome + Inicial do segundo nome com ponto (LGPD)", () => {
+    assert.equal(abbreviateStudentName("Maria Silva Souza"), "MARIA S.");
+    assert.equal(abbreviateStudentName("  joão   pedro  "), "JOÃO P.");
+    assert.equal(abbreviateStudentName("MARIA S."), "MARIA S.");
+    assert.equal(abbreviateStudentName("Zheret"), "ZHERET");
+    assert.equal(abbreviateStudentName(""), "");
+  });
+
+  it("resolve a etapa sem data de nascimento usando explicitStage ou escola", () => {
+    assert.equal(stageForPlayer("Nenhuma", "", new Date(), "etapa_2").id, "etapa_2");
+    assert.equal(stageForPlayer("Raimundo Bezerra", "", new Date()).id, "etapa_2");
+    assert.equal(stageForPlayer("Raimunda Cruz", "", new Date()).id, "etapa_1");
+    assert.equal(stageForPlayer("Nenhuma", "", new Date()).id, "etapa_3");
   });
 });

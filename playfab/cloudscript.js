@@ -72,12 +72,23 @@ handlers.RecordMatchResult = function (args, context) {
   for (var i = 0; i < rawStats.length; i++) {
     var st = rawStats[i];
     if (!st || typeof st.StatisticName !== "string") continue;
+    var name = st.StatisticName;
+    var isAllowed =
+      name === "XP_Total" ||
+      name === "Medals_Total" ||
+      name.indexOf("XP_Season_") === 0 ||
+      name.indexOf("Best_") === 0 ||
+      name.indexOf("School_") === 0;
+    if (!isAllowed) continue;
+
     var val = Math.max(0, Math.floor(Number(st.Value) || 0));
-    if (st.StatisticName.indexOf("Best_") === 0 && val > maxAllowed) {
+    if (name.indexOf("Best_") === 0 && val > maxAllowed) {
       val = maxAllowed;
+    } else if (val > 1000000) {
+      val = 1000000;
     }
     statsToUpdate.push({
-      StatisticName: st.StatisticName,
+      StatisticName: name,
       Value: val
     });
   }

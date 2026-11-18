@@ -21,6 +21,7 @@ import {
 import { computeSeasonDates, extendSeasonDate } from "./season-cycle.ts";
 import type { PlayerAvatarConfig } from "./avatar.ts";
 import {
+  abbreviateStudentName,
   adjustXpForGameMode,
   advanceLevelStageOnMatch,
   ageFrom,
@@ -48,6 +49,7 @@ import {
   schoolNeedsGrade,
   SCHOOLS,
   schoolSlug,
+  stageForPlayer,
   stageFromBirthdate,
   studentCustomId,
   syncLevelStageProgress,
@@ -229,6 +231,7 @@ export interface PlayerProfile {
   turma?: string | null;
   pendingTurmaRequest?: string | null;
   birthdate: string;
+  ageStage?: AgeStageId;
   xp: number;
   seasonXp: number;
   level: number;
@@ -311,7 +314,8 @@ export interface SignUpData {
   school: string;
   grade: string | null;
   turma?: string | null;
-  birthdate: string;
+  birthdate?: string;
+  ageStage?: AgeStageId;
 }
 
 export interface LeaderboardEntry {
@@ -2072,18 +2076,23 @@ function buildAccountFromPlayFabPayload(
     (parsedProfile as any).totalPlays ?? 0,
   );
 
+  const resolvedSchool =
+    parsedProfile.school && isValidSchool(parsedProfile.school)
+      ? parsedProfile.school
+      : SCHOOLS[0].name;
+  const resolvedAgeStage =
+    parsedProfile.ageStage ??
+    stageForPlayer(resolvedSchool, parsedProfile.birthdate, new Date()).id;
   const mergedProfile: PlayerProfile = {
     id: playfabId ?? `pf_${slug}`,
     playfabId,
     nick: resolvedNick,
     nickNormalized: slug,
-    full_name: formatFullNameUpper((parsedProfile.full_name || displayName).trim()),
-    school:
-      parsedProfile.school && isValidSchool(parsedProfile.school)
-        ? parsedProfile.school
-        : SCHOOLS[0].name,
+    full_name: abbreviateStudentName((parsedProfile.full_name || displayName).trim()),
+    school: resolvedSchool,
     grade: parsedProfile.grade ?? null,
-    birthdate: parsedProfile.birthdate || "2015-01-01",
+    birthdate: "",
+    ageStage: resolvedAgeStage,
     xp,
     seasonXp: parsedProfile.seasonXp ?? xp,
     level: calculatePlayerLevel({
@@ -2169,46 +2178,20 @@ export async function playfabSignUp(data: SignUpData): Promise<{
     };
   }
   if (!data.fullName.trim()) {
-    return { account: null, error: "Informe o seu nome completo." };
+    return { account: null, error: "Informe seu primeiro nome e inicial do sobrenome." };
   }
   if (!isValidSchool(data.school)) {
     return { account: null, error: "Selecione uma instituição válida." };
   }
-  if (!data.birthdate) {
-    return { account: null, error: "Informe a sua data de nascimento." };
-  }
 
-  // The student's password is automatically derived from their birthdate in DDMMAA format (e.g. 20/01/2014 -> 200114)
-  const derivedPassword = passwordFromBirthdate(data.birthdate);
+  // Aceita senha informada diretamente (6+ caracteres) ou, por compatibilidade, derivada da data caso fornecida
+  const rawPassword = data.password?.trim() || (data.birthdate ? passwordFromBirthdate(data.birthdate) : "");
+  const derivedPassword = rawPassword;
   if (derivedPassword.length < 6) {
-    return { account: null, error: "Data de nascimento inválida." };
+    return { account: null, error: "A senha deve ter pelo menos 6 caracteres (ex: 6 dígitos)." };
   }
 
   const reg = loadRegistry();
-
-  // If a student with the exact same Full Name + Birthdate already exists, log them in automatically!
-  const existingByPerson = findAccountByFullNameAndPassword(
-    reg,
-    data.fullName,
-    derivedPassword,
-    data.birthdate,
-  );
-  if (existingByPerson) {
-    const aligned = ensurePlayerSeasonAligned(existingByPerson, cfg);
-    reg[aligned.profile.nickNormalized] = aligned;
-    saveRegistry(reg);
-  invalidatePioneersCache();
-    saveStoredSession({
-      playerId: aligned.profile.nickNormalized,
-      playfabId: aligned.profile.playfabId,
-    });
-    syncLocalBrowserFromAccount(aligned);
-    return {
-      account: aligned,
-      error: null,
-      recoveredNick: aligned.profile.nick,
-    };
-  }
 
   const nickCleanLower = data.nick.trim().toLowerCase();
   const isNickTaken =
@@ -2259,7 +2242,7 @@ export async function playfabSignUp(data: SignUpData): Promise<{
     playfabId = res.data?.PlayFabId;
     sessionTicket = res.data?.SessionTicket;
 
-    // Link CustomId para o Nick (suporta underlines nativamente) e CustomId para Nome Completo + DDMMAA
+    // Link CustomId para o Nick (suporta underlines nativamente)
     if (sessionTicket) {
       try {
         await callPlayFabClient(
@@ -2273,28 +2256,16 @@ export async function playfabSignUp(data: SignUpData): Promise<{
       } catch {
         // ignore optional link
       }
-      try {
-        await callPlayFabClient(
-          "LinkCustomID",
-          {
-            CustomId: studentCustomId(data.fullName, derivedPassword),
-            ForceLink: false,
-          },
-          sessionTicket,
-        );
-      } catch {
-        // ignore optional link
-      }
     }
   }
 
-  const age = ageFrom(data.birthdate);
-  const isOver15 = isEtapa3OrOlder(data.birthdate);
-  const isOlderEtapa1 = isOlderThanEtapa1(data.birthdate);
+  const resolvedAgeStage: AgeStageId =
+    data.ageStage ?? stageForPlayer(data.school, data.birthdate, new Date()).id;
+  const isOver15 = resolvedAgeStage === "etapa_3";
   let resolvedSchool = data.school;
   if (isOver15 && isOfficialSemedSchool(data.school)) {
     resolvedSchool = "Nenhuma";
-  } else if (isOlderEtapa1 && is5thGradeSchool(data.school)) {
+  } else if (resolvedAgeStage === "etapa_2" && is5thGradeSchool(data.school)) {
     resolvedSchool = "Nenhuma";
   }
   const isNoSchool = resolvedSchool === "Nenhuma" || resolvedSchool === "Outro" || isOver15;
@@ -2308,11 +2279,12 @@ export async function playfabSignUp(data: SignUpData): Promise<{
     playfabId,
     nick: data.nick.trim(),
     nickNormalized: slug,
-    full_name: formatFullNameUpper(data.fullName.trim()),
+    full_name: abbreviateStudentName(data.fullName),
     school: resolvedSchool,
     grade: resolvedGrade,
     turma: resolvedTurma,
-    birthdate: data.birthdate,
+    birthdate: "",
+    ageStage: resolvedAgeStage,
     xp: 0,
     seasonXp: 0,
     level: 1,
@@ -2567,70 +2539,10 @@ export async function playfabSignIn(
       }
     }
 
-    // 2. If the student typed their Full Name, try LoginWithCustomID (stu_<fullName>_<DDMMAA>)
-    const customRes = await callPlayFabClient<PlayFabLoginPayload>("LoginWithCustomID", {
-      CustomId: studentCustomId(cleanId, normalizedPassword),
-      CreateAccount: false,
-      InfoRequestParameters: {
-        GetUserData: true,
-        GetPlayerStatistics: true,
-        GetUserAccountInfo: true,
-      },
-    });
-
-    if (!customRes.error && customRes.data) {
-      const account = buildAccountFromPlayFabPayload(
-        customRes.data,
-        matchedLocal?.profile.nick ?? cleanId,
-        normalizedPassword,
-        cfg,
-      );
-
-      const previousSessionId = account.profile.activeSessionId;
-      const currentLocalSessionId = loadStoredSession()?.activeSessionId;
-      const newActiveSessionId = `sess_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-
-      if (previousSessionId && previousSessionId !== currentLocalSessionId) {
-        recordDeviceSecurityAlert({
-          studentNick: account.profile.nick,
-          studentFullName: account.profile.full_name,
-          studentId: account.profile.nickNormalized,
-          deviceInfo: typeof navigator !== "undefined" ? navigator.userAgent.slice(0, 80) : "Navegador Web",
-          timestamp: Date.now(),
-        });
-      }
-
-      account.profile.activeSessionId = newActiveSessionId;
-      account.profile.activeSessionUpdatedAt = new Date().toISOString();
-      checkAndApplyDailyLoginPoints(account.profile);
-
-      reg[account.profile.nickNormalized] = account;
-      saveRegistry(reg);
-  invalidatePioneersCache();
-      saveStoredSession({
-        playerId: account.profile.nickNormalized,
-        sessionTicket: customRes.data.SessionTicket,
-        playfabId: customRes.data.PlayFabId,
-        activeSessionId: newActiveSessionId,
-      });
-      syncLocalBrowserFromAccount(account);
-      try {
-        await pushProfileToPlayFab(account, customRes.data.SessionTicket);
-      } catch {
-        /* ignore network sync errors during login */
-      }
-      return {
-        account,
-        error: null,
-        recoveredNick: account.profile.nick,
-      };
-    }
-
     return {
       account: null,
       error:
-        "Não encontramos sua conta com esses dados. Confirme seu Nome Completo e selecione sua Data de Nascimento abaixo para entrar automaticamente!",
-      needsRecovery: true,
+        "Apelido ou senha incorretos. Se esqueceu sua senha, procure seu professor ou a coordenação escolar.",
     };
   }
 
@@ -2864,10 +2776,10 @@ async function pushProfileToPlayFab(account: StoredAccount, sessionTicket?: stri
       Data: {
         PlayerProfile: JSON.stringify({
           nick: p.nick,
-          full_name: p.full_name,
+          full_name: abbreviateStudentName(p.full_name),
           school: p.school,
           grade: p.grade,
-          birthdate: p.birthdate,
+          ageStage: p.ageStage ?? stageForPlayer(p.school, p.birthdate, new Date()).id,
           xp: p.xp,
           seasonXp: p.seasonXp,
           level: p.level,
@@ -2932,11 +2844,11 @@ async function pushProfileToPlayFab(account: StoredAccount, sessionTicket?: stri
               playfabId: p.playfabId,
               nick: p.nick,
               nickNormalized: p.nickNormalized,
-              full_name: p.full_name,
+              full_name: abbreviateStudentName(p.full_name),
               school: p.school,
               grade: p.grade,
               turma: p.turma ?? null,
-              birthdate: p.birthdate,
+              ageStage: p.ageStage ?? stageForPlayer(p.school, p.birthdate, new Date()).id,
               xp: p.xp,
               seasonXp: p.seasonXp,
               level: p.level,
@@ -3313,11 +3225,15 @@ export async function syncStudentRosterFromPlayFab(
               id: p.id || parsedItem.id,
               playfabId: p.playfabId || parsedItem.playfabId,
               nick: incMatches > pMatches ? (parsedItem.nick || p.nick) : p.nick,
-              full_name: p.full_name || parsedItem.full_name,
+              full_name: abbreviateStudentName(p.full_name || parsedItem.full_name),
               school: p.school || parsedItem.school,
               grade: p.grade ?? parsedItem.grade,
               turma: p.turma ?? parsedItem.turma,
-              birthdate: p.birthdate || parsedItem.birthdate,
+              birthdate: "",
+              ageStage:
+                p.ageStage ??
+                parsedItem.ageStage ??
+                stageForPlayer(p.school || parsedItem.school, p.birthdate || parsedItem.birthdate, new Date()).id,
               xp: Math.max(p.xp ?? 0, parsedItem.xp ?? 0),
               seasonXp: Math.max(p.seasonXp ?? 0, parsedItem.seasonXp ?? 0),
               level: Math.max(p.level ?? 1, parsedItem.level ?? 1),
@@ -3483,15 +3399,27 @@ export async function syncStudentRosterFromPlayFab(
               playfabIdBySlug.get(slug),
             nick: parsed.nick || existing?.profile.nick || udProf?.nick || slug,
             nickNormalized: slug,
-            full_name: parsed.full_name || existing?.profile.full_name || udProf?.full_name || "",
+            full_name: abbreviateStudentName(
+              parsed.full_name || existing?.profile.full_name || udProf?.full_name || "",
+            ),
             school:
               parsed.school && isValidSchool(parsed.school)
                 ? parsed.school
                 : existing?.profile.school || udProf?.school || SCHOOLS[0].name,
             grade: parsed.grade ?? existing?.profile.grade ?? udProf?.grade ?? null,
             turma: parsed.turma ?? existing?.profile.turma ?? udProf?.turma ?? null,
-            birthdate:
-              parsed.birthdate || existing?.profile.birthdate || udProf?.birthdate || "2015-01-01",
+            birthdate: "",
+            ageStage:
+              parsed.ageStage ??
+              existing?.profile.ageStage ??
+              udProf?.ageStage ??
+              stageForPlayer(
+                parsed.school && isValidSchool(parsed.school)
+                  ? parsed.school
+                  : existing?.profile.school || udProf?.school || SCHOOLS[0].name,
+                parsed.birthdate || existing?.profile.birthdate || udProf?.birthdate,
+                new Date(),
+              ).id,
             xp: (() => {
               const existingIsAdmin = isSpecialAdminAccount(existing?.profile) || existing?.profile.isAdmin;
               if (existingIsAdmin && isStudent) return 0;
@@ -3981,11 +3909,13 @@ export async function syncStudentRosterFromPlayFab(
           playfabId: acc.profile.playfabId,
           nick: acc.profile.nick,
           nickNormalized: acc.profile.nickNormalized,
-          full_name: acc.profile.full_name,
+          full_name: abbreviateStudentName(acc.profile.full_name),
           school: acc.profile.school,
           grade: acc.profile.grade,
           turma: acc.profile.turma ?? null,
-          birthdate: acc.profile.birthdate,
+          ageStage:
+            acc.profile.ageStage ??
+            stageForPlayer(acc.profile.school, acc.profile.birthdate, new Date()).id,
           xp: acc.profile.xp,
           seasonXp: acc.profile.seasonXp,
           level: acc.profile.level,
@@ -5361,7 +5291,7 @@ export async function playfabRecordMatch(args: {
   if (session.sessionTicket && isPlayFabConfigured()) {
     const sSlug = schoolSlug(acc.profile.school);
     const sId = cfg.seasonId;
-    const playerStage = stageFromBirthdate(acc.profile.birthdate, new Date(), acc.profile.school);
+    const playerStage = stageForPlayer(acc.profile.school, acc.profile.birthdate, new Date(), acc.profile.ageStage);
     const bestGameScore = Math.max(
       safeScore,
       ...acc.stats.filter((s) => s.game_id === args.gameId).map((s) => s.best_score),
@@ -5502,8 +5432,8 @@ function buildLeaderboardFromLocal(
     if (!matchesRankingCategory(p, filter.stage)) continue;
     if (filter.kind === "school" && p.school !== filter.school) continue;
 
-    const pAge = ageFrom(p.birthdate);
-    const stInfo = stageFromBirthdate(p.birthdate, new Date(), p.school);
+    const stInfo = stageForPlayer(p.school, p.birthdate, new Date(), p.ageStage);
+    const pAge = p.birthdate ? ageFrom(p.birthdate) : stInfo.minAge;
     const pfStatVal =
       (p.playfabId ? playfabStatByPlayer.get(p.playfabId) : undefined) ??
       playfabStatByPlayer.get(p.nick.toLowerCase()) ??
