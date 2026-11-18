@@ -3,6 +3,11 @@
 import { ALL_GAME_IDS, type GameId } from "./game-storage.ts";
 import type { MedalDefinition, AdminMedalNotification } from "./medals-catalog.ts";
 import {
+  mergeWithDefaultCardPacks,
+  type CardDefinition,
+  type CardPackDefinition,
+} from "./cards-catalog.ts";
+import {
   type SpecialEvent,
   type RecurringEvent,
   loadSpecialEvents,
@@ -221,6 +226,10 @@ export interface PlatformAdminConfig {
   canceledInboxMessageIds?: string[];
   /** Regras de mensagens programadas e recorrentes */
   scheduledInboxRules?: ScheduledInboxRule[];
+  /** Catálogo de cartas colecionáveis criadas pelo ADM */
+  cardsCatalog?: CardDefinition[];
+  /** Pacotes de cartas (5 padrão + pacotes especiais do ADM) */
+  cardPacks?: CardPackDefinition[];
   /** Optional PlayFab Title ID configured via Admin UI. */
   playfabTitleId?: string;
   updatedAt: string;
@@ -399,6 +408,8 @@ export function loadAdminConfig(): PlatformAdminConfig {
       scheduledInboxRules: Array.isArray(parsed.scheduledInboxRules)
         ? parsed.scheduledInboxRules
         : loadScheduledInboxRules(),
+      cardsCatalog: Array.isArray(parsed.cardsCatalog) ? parsed.cardsCatalog : [],
+      cardPacks: mergeWithDefaultCardPacks(parsed.cardPacks),
       dailyXpCap:
         typeof parsed.dailyXpCap === "number" && parsed.dailyXpCap >= 100
           ? Math.floor(parsed.dailyXpCap)
@@ -443,6 +454,8 @@ export function saveAdminConfig(config: PlatformAdminConfig): PlatformAdminConfi
     scheduledInboxRules: Array.isArray(config.scheduledInboxRules)
       ? config.scheduledInboxRules
       : loadScheduledInboxRules(),
+    cardsCatalog: Array.isArray(config.cardsCatalog) ? config.cardsCatalog : [],
+    cardPacks: mergeWithDefaultCardPacks(config.cardPacks),
     updatedAt: new Date().toISOString(),
   };
   if (typeof window !== "undefined") {

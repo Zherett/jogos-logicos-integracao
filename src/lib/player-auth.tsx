@@ -35,6 +35,7 @@ import {
   playfabSignIn,
   playfabSignOut,
   playfabSignUp,
+  playfabUpdatePlayerCards,
   playfabUnlockGames,
   pushAdminConfigToPlayFab,
   setAdminUnlockedSession,
@@ -79,6 +80,10 @@ interface AuthValue {
   }>;
   signOut: () => Promise<void>;
   unlockGames: (games: GameId[]) => Promise<void>;
+  updatePlayerCards: (args: {
+    cards: Record<string, number>;
+    unopenedPacks?: Record<string, number>;
+  }) => Promise<void>;
   recordMatch: (args: {
     gameId: GameId;
     mode?: string;
@@ -402,6 +407,16 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
 
   const isAdmin = Boolean(profile?.isAdmin || adminPinUnlocked);
 
+  const updatePlayerCards = useCallback(
+    async (args: { cards: Record<string, number>; unopenedPacks?: Record<string, number> }) => {
+      const updated = await playfabUpdatePlayerCards(args);
+      if (updated) {
+        setProfile({ ...updated });
+      }
+    },
+    [],
+  );
+
   const value = useMemo<AuthValue>(
     () => ({
       loading,
@@ -415,6 +430,7 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
       recoverByNameAndBirthdate,
       signOut,
       unlockGames,
+      updatePlayerCards,
       recordMatch,
       awardSpecialRobotMedal,
       awardSpaceQuestMedal,
@@ -438,6 +454,7 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
       recoverByNameAndBirthdate,
       signOut,
       unlockGames,
+      updatePlayerCards,
       recordMatch,
       awardSpecialRobotMedal,
       awardSpaceQuestMedal,

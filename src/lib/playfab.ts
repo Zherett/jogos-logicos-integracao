@@ -274,6 +274,8 @@ export interface PlayerProfile {
   pointsBalance?: number;
   careerPoints?: number;
   coins?: number;
+  cards?: Record<string, number>;
+  unopenedPacks?: Record<string, number>;
   claimedInboxRewardIds?: string[];
   lastDailyLoginPointsDate?: string;
   lastDailyFirstGamePointsDate?: string;
@@ -2163,6 +2165,14 @@ function buildAccountFromPlayFabPayload(
     careerPoints: parsedProfile.careerPoints ?? 0,
     pointsBalance: parsedProfile.pointsBalance ?? 0,
     coins: parsedProfile.coins ?? 0,
+    cards:
+      parsedProfile.cards && typeof parsedProfile.cards === "object"
+        ? parsedProfile.cards
+        : {},
+    unopenedPacks:
+      parsedProfile.unopenedPacks && typeof parsedProfile.unopenedPacks === "object"
+        ? parsedProfile.unopenedPacks
+        : {},
     claimedInboxRewardIds: Array.isArray(parsedProfile.claimedInboxRewardIds)
       ? parsedProfile.claimedInboxRewardIds
       : [],
@@ -2844,6 +2854,8 @@ async function pushProfileToPlayFab(account: StoredAccount, sessionTicket?: stri
           careerPoints: p.careerPoints ?? 0,
           pointsBalance: p.pointsBalance ?? 0,
           coins: p.coins ?? 0,
+          cards: p.cards ?? {},
+          unopenedPacks: p.unopenedPacks ?? {},
           claimedInboxRewardIds: p.claimedInboxRewardIds ?? [],
           lastDailyLoginPointsDate: p.lastDailyLoginPointsDate,
           lastDailyFirstGamePointsDate: p.lastDailyFirstGamePointsDate,
@@ -7385,6 +7397,34 @@ export async function runGlobalStudentsIntegrityAudit(
     medalsRevokedCount,
     details,
   };
+}
+
+export async function playfabUpdatePlayerCards(args: {
+  cards: Record<string, number>;
+  unopenedPacks?: Record<string, number>;
+}): Promise<PlayerProfile | null> {
+  const session = loadStoredSession();
+  if (!session) return null;
+  const reg = loadRegistry();
+  const acc = reg[session.playerId];
+  if (!acc) return null;
+
+  acc.profile.cards = { ...args.cards };
+  if (args.unopenedPacks) {
+    acc.profile.unopenedPacks = { ...args.unopenedPacks };
+  }
+  acc.updatedAt = new Date().toISOString();
+  reg[session.playerId] = acc;
+  saveRegistry(reg);
+
+  if (session.sessionTicket && isPlayFabConfigured()) {
+    try {
+      await pushProfileToPlayFab(acc, session.sessionTicket);
+    } catch {
+      /* ignore network sync error */
+    }
+  }
+  return acc.profile;
 }
 
 export { ALL_GAME_IDS };

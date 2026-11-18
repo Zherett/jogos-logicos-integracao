@@ -177,6 +177,9 @@ const AdminInboxTab = lazy(() =>
 const AdminEventsTab = lazy(() =>
   import("./AdminEventsTab").then((m) => ({ default: m.AdminEventsTab })),
 );
+const AdminCardsTab = lazy(() =>
+  import("./AdminCardsTab").then((m) => ({ default: m.AdminCardsTab })),
+);
 import {
   AGE_STAGES,
   getTournamentRank,
@@ -204,7 +207,8 @@ type AdminTab =
   | "resets"
   | "sistema"
   | "lixeira"
-  | "codigos";
+  | "codigos"
+  | "cartas";
 
 function randomGameCode(prefix: string): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -1362,6 +1366,17 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                   }`}
                 >
                   <Ticket className="h-4 w-4 text-fuchsia-500" /> Códigos Promo
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTab("cartas");
+                  }}
+                  className={`flex items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-bold transition-colors ${
+                    tab === "cartas" ? "bg-card text-emerald-600 dark:text-emerald-400 shadow-sm" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  <Sparkles className="h-4 w-4 text-emerald-500" /> Cartas &amp; Pacotes
                 </button>
                 <button
                   type="button"
@@ -5288,6 +5303,21 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
 
             {/* TAB CÓDIGOS PROMOCIONAIS: GERADOR E GESTÃO DE LOTES COM PADRÕES DE MÁSCARA */}
             {tab === "codigos" && <AdminPromoCodesTab />}
+
+            {/* TAB CARTAS & PACOTES (RESTRITO ADM) */}
+            {tab === "cartas" && (
+              <Suspense fallback={<div className="p-6 text-center text-xs text-muted-foreground">Carregando Cartas &amp; Pacotes...</div>}>
+                <AdminCardsTab
+                  draft={draft}
+                  setDraft={setDraft}
+                  onSaveConfig={async (nextCfg) => {
+                    await auth.updateAdminConfig(nextCfg);
+                    onConfigSaved?.(nextCfg);
+                    flashSaved("Catálogo de Cartas e Pacotes salvo!");
+                  }}
+                />
+              </Suspense>
+            )}
             </div>
           </div>
         );
