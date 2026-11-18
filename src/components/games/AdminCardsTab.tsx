@@ -55,6 +55,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
   const [cardDesc, setCardDesc] = useState("");
   const [cardRarity, setCardRarity] = useState<CardRarity>("comum");
   const [cardImageUrl, setCardImageUrl] = useState("");
+  const [cardFoil, setCardFoil] = useState(false);
   const [cardError, setCardError] = useState<string | null>(null);
   const [rarityFilter, setRarityFilter] = useState<CardRarity | "todas">("todas");
   const [previewModalCard, setPreviewModalCard] = useState<CardDefinition | null>(null);
@@ -96,6 +97,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
     setCardDesc("");
     setCardRarity("comum");
     setCardImageUrl("");
+    setCardFoil(false);
     setCardError(null);
   }
 
@@ -105,6 +107,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
     setCardDesc(card.description);
     setCardRarity(card.rarity);
     setCardImageUrl(card.imageUrl);
+    setCardFoil(Boolean(card.isFoil));
     setCardError(null);
     setSection("cartas");
   }
@@ -121,6 +124,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
         name: cardName,
         description: cardDesc,
         imageUrl: cardImageUrl,
+        isFoil: cardFoil,
       });
       if (!res.card) {
         setCardError(res.error ?? "Erro ao atualizar carta.");
@@ -133,6 +137,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
         description: cardDesc,
         rarity: cardRarity,
         imageUrl: cardImageUrl,
+        isFoil: cardFoil,
       });
       if (!res.card) {
         setCardError(res.error ?? "Erro ao criar carta.");
@@ -371,14 +376,35 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
 
               <div className="space-y-1">
                 <Label htmlFor="card-desc">Descrição</Label>
-                <Input
+                <textarea
                   id="card-desc"
+                  rows={3}
                   value={cardDesc}
                   onChange={(e) => setCardDesc(e.target.value)}
                   placeholder="Breve história ou poder da carta"
-                  className="rounded-xl"
+                  className="w-full rounded-xl border bg-background px-3 py-2 text-sm leading-relaxed placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 />
               </div>
+
+              <label
+                htmlFor="card-foil"
+                className="flex items-center justify-between gap-3 rounded-xl border bg-background/70 px-3 py-2.5 cursor-pointer transition-colors hover:bg-secondary/40"
+              >
+                <span className="flex items-center gap-2 text-xs font-bold text-foreground">
+                  <Sparkles className="h-4 w-4 text-amber-500" />
+                  Carta Brilhante (Foil)
+                  <span className="text-[10px] font-normal text-muted-foreground">
+                    Efeito holográfico e brilho deslizante
+                  </span>
+                </span>
+                <input
+                  id="card-foil"
+                  type="checkbox"
+                  checked={cardFoil}
+                  onChange={(e) => setCardFoil(e.target.checked)}
+                  className="h-4 w-4 accent-amber-500 cursor-pointer"
+                />
+              </label>
 
               {cardError && (
                 <p className="rounded-xl bg-destructive/15 px-3 py-2 text-xs font-semibold text-destructive">
@@ -410,6 +436,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
                   description: cardDesc,
                   rarity: cardRarity,
                   imageUrl: cardImageUrl,
+                  isFoil: cardFoil,
                 }}
               />
             </div>

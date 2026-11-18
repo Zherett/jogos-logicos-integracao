@@ -262,3 +262,39 @@
   50% { filter: drop-shadow(0 0 14px #dc2626) drop-shadow(0 0 22px #f97316) brightness(1.4); }
 }
 
+/* Cartas Brilhantes (Foil) */
+@keyframes foil-gradient-shift {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+@keyframes foil-shimmer-sweep {
+  0% { transform: translateX(-160%) skewX(-22deg); }
+  45%, 100% { transform: translateX(260%) skewX(-22deg); }
+}
+.card-foil-gradient {
+  background: linear-gradient(
+    125deg,
+    rgba(255, 255, 255, 0.22) 0%,
+    rgba(56, 189, 248, 0.28) 22%,
+    rgba(244, 114, 182, 0.28) 45%,
+    rgba(250, 204, 21, 0.28) 68%,
+    rgba(52, 211, 153, 0.28) 88%,
+    rgba(255, 255, 255, 0.22) 100%
+  );
+  background-size: 260% 260%;
+  animation: foil-gradient-shift 4.5s ease-in-out infinite;
+  mix-blend-mode: soft-light;
+}
+.card-foil-shimmer {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.08) 35%,
+    rgba(255, 255, 255, 0.55) 50%,
+    rgba(255, 255, 255, 0.08) 65%,
+    transparent 100%
+  );
+  animation: foil-shimmer-sweep 3.6s ease-in-out infinite;
+}
+

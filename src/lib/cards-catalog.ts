@@ -14,6 +14,8 @@ export interface CardRarityMeta {
   id: CardRarity;
   label: string;
   borderClass: string;
+  cardBgClass: string;
+  innerBoxClass: string;
   badgeClass: string;
   glowClass: string;
 }
@@ -22,37 +24,47 @@ export const CARD_RARITY_META: Record<CardRarity, CardRarityMeta> = {
   comum: {
     id: "comum",
     label: "Comum",
-    borderClass: "border-border",
-    badgeClass: "bg-secondary text-secondary-foreground border-border",
-    glowClass: "",
+    borderClass: "border-slate-500/80",
+    cardBgClass: "bg-slate-900",
+    innerBoxClass: "bg-slate-950/90 border-slate-700/80 text-slate-100",
+    badgeClass: "bg-slate-950/95 text-slate-200 border-slate-500/70",
+    glowClass: "shadow-[0_0_14px_-3px_rgba(148,163,184,0.35)]",
   },
   incomum: {
     id: "incomum",
     label: "Incomum",
-    borderClass: "border-emerald-500",
-    badgeClass: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/40",
-    glowClass: "shadow-[0_0_16px_-4px_rgba(16,185,129,0.45)]",
+    borderClass: "border-emerald-400",
+    cardBgClass: "bg-emerald-600 dark:bg-emerald-700",
+    innerBoxClass: "bg-slate-950/90 border-emerald-400/50 text-slate-100",
+    badgeClass: "bg-slate-950/95 text-emerald-300 border-emerald-400/80",
+    glowClass: "shadow-[0_0_18px_-2px_rgba(16,185,129,0.65)]",
   },
   rara: {
     id: "rara",
     label: "Rara",
-    borderClass: "border-blue-500",
-    badgeClass: "bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/40",
-    glowClass: "shadow-[0_0_18px_-4px_rgba(59,130,246,0.5)]",
+    borderClass: "border-blue-400",
+    cardBgClass: "bg-blue-600 dark:bg-blue-700",
+    innerBoxClass: "bg-slate-950/90 border-blue-400/50 text-slate-100",
+    badgeClass: "bg-slate-950/95 text-blue-300 border-blue-400/80",
+    glowClass: "shadow-[0_0_20px_-2px_rgba(59,130,246,0.7)]",
   },
   epica: {
     id: "epica",
     label: "Épica",
-    borderClass: "border-purple-500",
-    badgeClass: "bg-purple-500/15 text-purple-600 dark:text-purple-400 border-purple-500/40",
-    glowClass: "shadow-[0_0_20px_-4px_rgba(168,85,247,0.55)]",
+    borderClass: "border-purple-400",
+    cardBgClass: "bg-purple-600 dark:bg-purple-700",
+    innerBoxClass: "bg-slate-950/90 border-purple-400/50 text-slate-100",
+    badgeClass: "bg-slate-950/95 text-purple-300 border-purple-400/80",
+    glowClass: "shadow-[0_0_22px_-2px_rgba(168,85,247,0.75)]",
   },
   lendaria: {
     id: "lendaria",
     label: "Lendária",
-    borderClass: "border-red-500",
-    badgeClass: "bg-red-500/15 text-red-600 dark:text-red-400 border-red-500/50",
-    glowClass: "shadow-[0_0_24px_-3px_rgba(239,68,68,0.65)]",
+    borderClass: "border-red-400",
+    cardBgClass: "bg-red-600 dark:bg-red-700",
+    innerBoxClass: "bg-slate-950/90 border-red-400/50 text-slate-100",
+    badgeClass: "bg-slate-950/95 text-red-300 border-red-400/80",
+    glowClass: "shadow-[0_0_26px_-1px_rgba(239,68,68,0.85)]",
   },
 };
 
@@ -62,6 +74,7 @@ export interface CardDefinition {
   description: string;
   rarity: CardRarity;
   imageUrl: string;
+  isFoil?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -196,6 +209,7 @@ export function createCardDefinition(input: {
   description: string;
   rarity: CardRarity;
   imageUrl: string;
+  isFoil?: boolean;
 }): { card: CardDefinition | null; error?: string } {
   const name = input.name.trim();
   const description = input.description.trim();
@@ -212,6 +226,7 @@ export function createCardDefinition(input: {
       description,
       rarity: input.rarity,
       imageUrl,
+      isFoil: Boolean(input.isFoil),
       createdAt: now,
       updatedAt: now,
     },
@@ -223,11 +238,12 @@ export function createCardDefinition(input: {
  */
 export function editCardDefinition(
   existing: CardDefinition,
-  patch: { name?: string; description?: string; imageUrl?: string },
+  patch: { name?: string; description?: string; imageUrl?: string; isFoil?: boolean },
 ): { card: CardDefinition | null; error?: string } {
   const nextName = patch.name !== undefined ? patch.name.trim() : existing.name;
   const nextDesc = patch.description !== undefined ? patch.description.trim() : existing.description;
   const nextUrl = patch.imageUrl !== undefined ? patch.imageUrl.trim() : existing.imageUrl;
+  const nextFoil = patch.isFoil !== undefined ? Boolean(patch.isFoil) : Boolean(existing.isFoil);
 
   if (!nextName) return { card: null, error: "O nome da carta não pode ficar vazio." };
   if (!isValidCardMediaUrl(nextUrl)) {
@@ -240,6 +256,7 @@ export function editCardDefinition(
       name: nextName,
       description: nextDesc,
       imageUrl: nextUrl,
+      isFoil: nextFoil,
       rarity: existing.rarity, // Raridade nunca pode ser alterada após criação
       updatedAt: new Date().toISOString(),
     },

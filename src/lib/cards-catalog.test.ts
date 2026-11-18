@@ -24,32 +24,40 @@ describe("Sistema de Cartas Colecionáveis e Pacotes", () => {
     }
   });
 
-  it("define as cores de borda corretas para cada raridade", () => {
+  it("define as cores de borda e fundo interno corretas para cada raridade", () => {
     assert.equal(CARD_RARITIES.length, 5);
     assert.match(CARD_RARITY_META.incomum.borderClass, /emerald/);
+    assert.match(CARD_RARITY_META.incomum.cardBgClass, /emerald/);
     assert.match(CARD_RARITY_META.rara.borderClass, /blue/);
+    assert.match(CARD_RARITY_META.rara.cardBgClass, /blue/);
     assert.match(CARD_RARITY_META.epica.borderClass, /purple/);
+    assert.match(CARD_RARITY_META.epica.cardBgClass, /purple/);
     assert.match(CARD_RARITY_META.lendaria.borderClass, /red/);
+    assert.match(CARD_RARITY_META.lendaria.cardBgClass, /red/);
   });
 
-  it("permite editar nome, descrição e imagem mantendo a raridade imutável", () => {
+  it("permite editar nome, descrição, imagem e flag foil mantendo a raridade imutável", () => {
     const created = createCardDefinition({
       name: "Robô Guardião",
       description: "Defensor da lógica",
       rarity: "epica",
       imageUrl: "https://example.com/robo.gif",
+      isFoil: true,
     });
     assert.ok(created.card);
+    assert.equal(created.card.isFoil, true);
 
     const edited = editCardDefinition(created.card, {
       name: "Robô Guardião II",
       description: "Nova descrição",
       imageUrl: "https://example.com/robo2.gif",
+      isFoil: false,
     });
     assert.ok(edited.card);
     assert.equal(edited.card.name, "Robô Guardião II");
     assert.equal(edited.card.description, "Nova descrição");
     assert.equal(edited.card.imageUrl, "https://example.com/robo2.gif");
+    assert.equal(edited.card.isFoil, false);
     assert.equal(edited.card.rarity, "epica");
   });
 
