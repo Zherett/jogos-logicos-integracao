@@ -30,6 +30,7 @@ import {
   sumPackProbabilities,
   validatePackProbabilities,
   type CardDefinition,
+  type CardImageFit,
   type CardPackColorId,
   type CardPackDefinition,
   type CardPackIconId,
@@ -61,6 +62,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
   const [cardDesc, setCardDesc] = useState("");
   const [cardRarity, setCardRarity] = useState<CardRarity>("comum");
   const [cardImageUrl, setCardImageUrl] = useState("");
+  const [cardImageFit, setCardImageFit] = useState<CardImageFit>("contain-blur");
   const [cardFoil, setCardFoil] = useState(false);
   const [cardError, setCardError] = useState<string | null>(null);
   const [rarityFilter, setRarityFilter] = useState<CardRarity | "todas">("todas");
@@ -102,6 +104,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
     setCardDesc("");
     setCardRarity("comum");
     setCardImageUrl("");
+    setCardImageFit("contain-blur");
     setCardFoil(false);
     setCardError(null);
   }
@@ -112,6 +115,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
     setCardDesc(card.description);
     setCardRarity(card.rarity);
     setCardImageUrl(card.imageUrl);
+    setCardImageFit(card.imageFit ?? "contain-blur");
     setCardFoil(Boolean(card.isFoil));
     setCardError(null);
     setSection("cartas");
@@ -129,6 +133,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
         name: cardName,
         description: cardDesc,
         imageUrl: cardImageUrl,
+        imageFit: cardImageFit,
         isFoil: cardFoil,
       });
       if (!res.card) {
@@ -142,6 +147,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
         description: cardDesc,
         rarity: cardRarity,
         imageUrl: cardImageUrl,
+        imageFit: cardImageFit,
         isFoil: cardFoil,
       });
       if (!res.card) {
@@ -394,6 +400,40 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
               </div>
 
               <div className="space-y-1">
+                <Label>Enquadramento da Imagem</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setCardImageFit("contain-blur")}
+                    className={`rounded-xl border px-3 py-2 text-left text-xs font-bold transition-colors ${
+                      cardImageFit === "contain-blur"
+                        ? "border-primary bg-primary/15 text-primary"
+                        : "bg-background text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    Centralizada com Blur
+                    <span className="block text-[10px] font-normal opacity-80">
+                      Mostra inteira sem cortar
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCardImageFit("cover")}
+                    className={`rounded-xl border px-3 py-2 text-left text-xs font-bold transition-colors ${
+                      cardImageFit === "cover"
+                        ? "border-primary bg-primary/15 text-primary"
+                        : "bg-background text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    Preencher tudo
+                    <span className="block text-[10px] font-normal opacity-80">
+                      Ajusta cortando as bordas
+                    </span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-1">
                 <Label htmlFor="card-desc">Descrição</Label>
                 <textarea
                   id="card-desc"
@@ -455,6 +495,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
                   description: cardDesc,
                   rarity: cardRarity,
                   imageUrl: cardImageUrl,
+                  imageFit: cardImageFit,
                   isFoil: cardFoil,
                 }}
               />

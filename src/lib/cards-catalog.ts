@@ -78,12 +78,15 @@ export const CARD_RARITY_META: Record<CardRarity, CardRarityMeta> = {
   },
 };
 
+export type CardImageFit = "contain-blur" | "cover";
+
 export interface CardDefinition {
   id: string;
   name: string;
   description: string;
   rarity: CardRarity;
   imageUrl: string;
+  imageFit?: CardImageFit;
   isFoil?: boolean;
   createdAt: string;
   updatedAt: string;
@@ -351,6 +354,7 @@ export function createCardDefinition(input: {
   description: string;
   rarity: CardRarity;
   imageUrl: string;
+  imageFit?: CardImageFit;
   isFoil?: boolean;
 }): { card: CardDefinition | null; error?: string } {
   const name = input.name.trim();
@@ -368,6 +372,7 @@ export function createCardDefinition(input: {
       description,
       rarity: input.rarity,
       imageUrl,
+      imageFit: input.imageFit ?? "contain-blur",
       isFoil: Boolean(input.isFoil),
       createdAt: now,
       updatedAt: now,
@@ -380,11 +385,18 @@ export function createCardDefinition(input: {
  */
 export function editCardDefinition(
   existing: CardDefinition,
-  patch: { name?: string; description?: string; imageUrl?: string; isFoil?: boolean },
+  patch: {
+    name?: string;
+    description?: string;
+    imageUrl?: string;
+    imageFit?: CardImageFit;
+    isFoil?: boolean;
+  },
 ): { card: CardDefinition | null; error?: string } {
   const nextName = patch.name !== undefined ? patch.name.trim() : existing.name;
   const nextDesc = patch.description !== undefined ? patch.description.trim() : existing.description;
   const nextUrl = patch.imageUrl !== undefined ? patch.imageUrl.trim() : existing.imageUrl;
+  const nextFit = patch.imageFit ?? existing.imageFit ?? "contain-blur";
   const nextFoil = patch.isFoil !== undefined ? Boolean(patch.isFoil) : Boolean(existing.isFoil);
 
   if (!nextName) return { card: null, error: "O nome da carta não pode ficar vazio." };
@@ -398,6 +410,7 @@ export function editCardDefinition(
       name: nextName,
       description: nextDesc,
       imageUrl: nextUrl,
+      imageFit: nextFit,
       isFoil: nextFoil,
       rarity: existing.rarity, // Raridade nunca pode ser alterada após criação
       updatedAt: new Date().toISOString(),
