@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ArrowRight,
   Check,
@@ -158,9 +158,14 @@ export function PackOpeningModal({
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
   const [isExiting, setIsExiting] = useState(false);
+  const [summaryOffsets, setSummaryOffsets] = useState<
+    Array<{ dx: number; dy: number; scale: number; rot: number }>
+  >([]);
   const timersRef = useRef<number[]>([]);
   const openingLockRef = useRef(false);
   const activePackIdRef = useRef<string | null>(null);
+  const summaryContainerRef = useRef<HTMLDivElement | null>(null);
+  const slotRefs = useRef<Array<HTMLDivElement | null>>([]);
 
   function clearAllTimers() {
     for (const id of timersRef.current) {
@@ -187,7 +192,30 @@ export function PackOpeningModal({
     setCurrentIndex(0);
     setIsFlipped(false);
     setIsExiting(false);
+    setSummaryOffsets([]);
   }, [pack]);
+
+  useLayoutEffect(() => {
+    if (stage !== "summary" || !summaryContainerRef.current || orderedCards.length === 0) return;
+    const containerRect = summaryContainerRef.current.getBoundingClientRect();
+    const centerX = containerRect.left + containerRect.width / 2;
+    const centerY = containerRect.top + containerRect.height / 2;
+
+    const nextOffsets = orderedCards.map((_, idx) => {
+      const el = slotRefs.current[idx];
+      if (!el) return { dx: 0, dy: 0, scale: 1.5, rot: 0 };
+      const rect = el.getBoundingClientRect();
+      const slotCenterX = rect.left + rect.width / 2;
+      const slotCenterY = rect.top + rect.height / 2;
+      const dx = centerX - slotCenterX;
+      const dy = centerY - slotCenterY;
+      const scale = rect.width > 0 ? Math.min(1.85, Math.max(1.25, 220 / rect.width)) : 1.55;
+      const rot = (idx - (orderedCards.length - 1) / 2) * 2.5;
+      return { dx, dy, scale, rot };
+    });
+
+    setSummaryOffsets(nextOffsets);
+  }, [stage, orderedCards]);
 
   useEffect(() => {
     return () => {
@@ -331,7 +359,7 @@ export function PackOpeningModal({
               <div className="relative w-[17rem] select-none drop-shadow-xl transition-transform hover:scale-[1.02]">
                 <SerratedEdge position="top" bgClass={colorMeta.topBgClass} />
                 <div
-                  className={`relative flex h-[22.5rem] items-center justify-center overflow-hidden ${colorMeta.gradientClass}`}
+                  className={`relative flex h-[24.5rem] items-center justify-center overflow-hidden ${colorMeta.gradientClass}`}
                 >
                   {isFoilPack && <FoilOverlay />}
                   <div
@@ -396,7 +424,7 @@ export function PackOpeningModal({
                 {/* Corpo sólido do pacote descendo e saindo da tela */}
                 <div className="animate-pack-body-drop">
                   <div
-                    className={`relative flex h-[20.25rem] w-full items-center justify-center overflow-hidden ${colorMeta.gradientClass}`}
+                    className={`relative flex h-[22.5rem] w-full items-center justify-center overflow-hidden ${colorMeta.gradientClass}`}
                   >
                     {isFoilPack && <FoilOverlay />}
                     <div
@@ -544,74 +572,81 @@ export function PackOpeningModal({
           </div>
         )}
 
-        {/* ETAPA 4: RESUMO FINAL (JUNTAR DE COSTAS -> VIRAR JUNTAS -> ESPALHAR LADO A LADO) */}
+        {/* ETAPA 4: RESUMO FINAL (JUNTAR DE COSTAS -> VIRAR JUNTAS -> ESPALHAR SUAVEMENTE) */}
         {stage === "summary" && (
           <div className="space-y-4 py-2">
-            {summaryPhase !== "spread" ? (
-              <div className="flex h-[26rem] items-center justify-center overflow-hidden">
-                <div className="animate-summary-gather relative h-[21rem] w-60">
-                  {orderedCards.map((card, idx) => {
-                    const offset = (idx - (orderedCards.length - 1) / 2) * 5;
-                    const rot = (idx - (orderedCards.length - 1) / 2) * 2.5;
-                    return (
+            <div
+              ref={summaryContainerRef}
+              className={`relative min-h-[22rem] flex items-center justify-center ${
+                summaryPhase === "gathering" ? "animate-summary-gather" : ""
+              }`}
+            >
+              <div className="grid w-full grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
+                {orderedCards.map((card, idx) => {
+                  const off = summaryOffsets[idx];
+                  const isStacked = summaryPhase !== "spread";
+                  const transform =
+                    isStacked && off
+                      ? `translate(${off.dx}px, ${off.dy}px) rotate(${off.rot}deg) scale(${off.scale})`
+                      : "translate(0px, 0px) rotate(0deg) scale(1)";
+
+                  return (
+                    <div
+                      key={`summary_${card.id}_${idx}`}
+                      ref={(el) => {
+                        slotRefs.current[idx] = el;
+                      }}
+                      className="perspective-1000 relative"
+                      style={{
+                        zIndex: isStacked ? idx + 1 : 1,
+                        transform,
+                        transition:
+                          summaryPhase === "spread"
+                            ? "transform 700ms cubic-bezier(0.22, 1, 0.36, 1)"
+                            : "none",
+                        transitionDelay: summaryPhase === "spread" ? `${idx * 90}ms` : "0ms",
+                      }}
+                    >
                       <div
-                        key={`gather_${card.id}_${idx}`}
-                        className="perspective-1000 absolute inset-0"
-                        style={{
-                          transform: `translate(${offset}px, ${Math.abs(offset) * 0.4}px) rotate(${rot}deg)`,
-                          zIndex: idx + 1,
-                        }}
+                        className={`preserve-3d relative w-full transition-transform duration-500 ease-out ${
+                          summaryPhase !== "gathering" ? "rotate-y-180" : ""
+                        }`}
                       >
+                        {/* Verso da carta */}
                         <div
-                          className={`preserve-3d relative h-full w-full transition-transform duration-500 ease-out ${
-                            summaryPhase === "flipping" ? "rotate-y-180" : ""
-                          }`}
+                          className="backface-hidden absolute inset-0 overflow-hidden rounded-2xl"
+                          style={{ transform: "rotateY(0deg) translateZ(1px)" }}
                         >
-                          <div
-                            className="backface-hidden absolute inset-0 overflow-hidden rounded-2xl"
-                            style={{ transform: "rotateY(0deg) translateZ(1px)" }}
-                          >
-                            <CardBackFace minimal />
-                          </div>
-                          <div
-                            className="backface-hidden w-full overflow-hidden rounded-2xl"
-                            style={{ transform: "rotateY(180deg) translateZ(1px)" }}
-                          >
-                            <CollectibleCardView
-                              card={card}
-                              isNew={newlyDiscovered.includes(card.id)}
-                            />
-                          </div>
+                          <CardBackFace minimal />
+                        </div>
+
+                        {/* Frente da carta */}
+                        <div
+                          className="backface-hidden w-full overflow-hidden rounded-2xl"
+                          style={{ transform: "rotateY(180deg) translateZ(1px)" }}
+                        >
+                          <CollectibleCardView
+                            card={card}
+                            isNew={newlyDiscovered.includes(card.id)}
+                            compact
+                          />
                         </div>
                       </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ) : (
-              <>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
-                  {orderedCards.map((card, idx) => (
-                    <div
-                      key={`${card.id}_${idx}`}
-                      className="animate-summary-spread-in"
-                      style={{ animationDelay: `${idx * 75}ms` }}
-                    >
-                      <CollectibleCardView
-                        card={card}
-                        isNew={newlyDiscovered.includes(card.id)}
-                        compact
-                      />
                     </div>
-                  ))}
-                </div>
-                <div className="flex justify-end">
-                  <Button type="button" onClick={onClose} className="rounded-xl font-bold">
-                    <Check className="h-4 w-4 mr-1.5" /> Concluir
-                  </Button>
-                </div>
-              </>
-            )}
+                  );
+                })}
+              </div>
+            </div>
+
+            <div
+              className={`flex justify-end transition-opacity duration-500 ${
+                summaryPhase === "spread" ? "opacity-100" : "opacity-0 pointer-events-none"
+              }`}
+            >
+              <Button type="button" onClick={onClose} className="rounded-xl font-bold">
+                <Check className="h-4 w-4 mr-1.5" /> Concluir
+              </Button>
+            </div>
           </div>
         )}
       </DialogContent>

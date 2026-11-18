@@ -561,13 +561,13 @@ export function playCardsSpread(count: number) {
   const safeCount = Math.max(1, Math.min(20, count));
   for (let i = 0; i < safeCount; i++) {
     playFilteredNoise({
-      duration: 0.09,
+      duration: 0.1,
       freqStart: 2000 + i * 90,
       freqEnd: 900,
       q: 1.5,
       filterType: "bandpass",
       vol: 0.09,
-      delay: i * 0.075,
+      delay: i * 0.09,
     });
   }
 }
