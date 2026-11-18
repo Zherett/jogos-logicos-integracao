@@ -148,7 +148,7 @@ export function CollectibleCardView({
         }`}
       >
         <p
-          className={`leading-snug text-slate-700 dark:text-slate-200/95 ${
+          className={`text-justify leading-snug text-slate-700 dark:text-slate-200/95 ${
             compact ? "text-[10px] line-clamp-3" : "text-[11px] sm:text-xs line-clamp-6"
           }`}
         >
