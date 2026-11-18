@@ -43,7 +43,7 @@ export function CollectibleCardView({
             }
           : undefined
       }
-      className={`group relative flex flex-col overflow-hidden rounded-2xl border-2 transition-all ${meta.cardBgClass} ${meta.borderClass} ${
+      className={`group relative flex flex-col overflow-hidden rounded-2xl border-2 isolate transition-all ${meta.cardBgClass} ${meta.borderClass} ${
         locked ? "opacity-55 grayscale" : meta.glowClass
       } ${compact ? "gap-1.5 p-2" : "gap-2 p-2.5"} ${
         onClick ? "cursor-pointer hover:-translate-y-0.5 hover:shadow-xl" : ""
@@ -80,9 +80,9 @@ export function CollectibleCardView({
 
       {/* 2. Moldura da Imagem / GIF ao Centro */}
       <div
-        className={`relative z-20 mx-auto w-full overflow-hidden rounded-xl border border-slate-300/80 dark:border-black/40 bg-white dark:bg-slate-950/75 shadow-sm ${
-          compact ? "aspect-[4/3]" : "aspect-[5/4]"
-        }`}
+        className={`relative z-20 mx-auto w-full overflow-hidden rounded-xl border border-slate-300/80 dark:border-black/40 shadow-sm ${
+          hasValidUrl ? "bg-slate-950/15" : "bg-white dark:bg-slate-950/75"
+        } ${compact ? "aspect-[4/3]" : "aspect-[5/4]"}`}
       >
         {hasValidUrl ? (
           <img

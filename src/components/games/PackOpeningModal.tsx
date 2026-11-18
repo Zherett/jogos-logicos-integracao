@@ -24,6 +24,7 @@ import {
 } from "@/lib/cards-catalog";
 import {
   playCardFlip,
+  playCardMagicReveal,
   playCardsFlipAll,
   playCardsGather,
   playCardsSpread,
@@ -266,6 +267,17 @@ export function PackOpeningModal({
     if (stage !== "stack" || isExiting || isFlipped) return;
     playCardFlip();
     setIsFlipped(true);
+
+    const card = orderedCards[currentIndex];
+    if (card) {
+      const isEpicOrHigher = card.rarity === "epica" || card.rarity === "lendaria";
+      const isFoil = Boolean(card.isFoil);
+      if (isEpicOrHigher || isFoil) {
+        scheduleTimer(() => {
+          playCardMagicReveal({ isEpicOrHigher, isFoil });
+        }, 180);
+      }
+    }
   }
 
   function handleCardInteraction() {
@@ -311,6 +323,9 @@ export function PackOpeningModal({
 
   const currentCard = orderedCards[currentIndex];
   const remainingCount = Math.max(0, orderedCards.length - currentIndex);
+  const isEpicOrHigher =
+    currentCard && (currentCard.rarity === "epica" || currentCard.rarity === "lendaria");
+  const isFoilCard = Boolean(currentCard?.isFoil);
   const isHighRarity =
     currentCard &&
     (currentCard.rarity === "rara" ||
@@ -491,25 +506,42 @@ export function PackOpeningModal({
                 }`}
               >
                 <div
-                  className={`preserve-3d relative min-h-[21rem] w-full transition-transform duration-500 ease-out ${
+                  className={`preserve-3d relative min-h-[21rem] w-full will-change-transform transition-transform duration-500 ease-out ${
                     isFlipped ? "rotate-y-180" : "hover:-translate-y-1"
                   }`}
                 >
                   {/* Verso (de costas) */}
                   <div
-                    className="backface-hidden absolute inset-0 overflow-hidden rounded-2xl"
-                    style={{ transform: "rotateY(0deg) translateZ(1px)" }}
+                    className={`backface-hidden absolute inset-0 rounded-2xl transition-opacity duration-100 ${
+                      isFlipped ? "opacity-0 delay-150 pointer-events-none" : "opacity-100"
+                    }`}
+                    style={{ transform: "rotateY(0deg) translateZ(2px)" }}
                   >
                     <CardBackFace />
                   </div>
 
                   {/* Frente (carta revelada) */}
                   <div
-                    className={`backface-hidden w-full overflow-hidden rounded-2xl ${
-                      isFlipped && isHighRarity && !isExiting ? "animate-[pop-in_0.35s_ease-out]" : ""
+                    className={`backface-hidden relative w-full rounded-2xl transition-opacity duration-100 ${
+                      isFlipped
+                        ? `opacity-100 delay-150 ${isHighRarity && !isExiting ? "animate-[pop-in_0.35s_ease-out]" : ""}`
+                        : "opacity-0 pointer-events-none"
                     }`}
-                    style={{ transform: "rotateY(180deg) translateZ(1px)" }}
+                    style={{ transform: "rotateY(180deg) translateZ(2px)" }}
                   >
+                    {/* Aura mágica visual ao revelar Épica/Lendária ou Foil */}
+                    {isFlipped && !isExiting && (isEpicOrHigher || isFoilCard) && (
+                      <div
+                        aria-hidden="true"
+                        className={`animate-card-magic-aura pointer-events-none absolute -inset-2 -z-10 rounded-3xl blur-md ${
+                          isFoilCard
+                            ? "bg-gradient-to-tr from-amber-400/75 via-pink-500/75 to-cyan-400/75"
+                            : currentCard.rarity === "lendaria"
+                              ? "bg-red-500/70"
+                              : "bg-purple-500/70"
+                        }`}
+                      />
+                    )}
                     <CollectibleCardView
                       card={currentCard}
                       isNew={newlyDiscovered.includes(currentCard.id)}
@@ -608,22 +640,30 @@ export function PackOpeningModal({
                       }}
                     >
                       <div
-                        className={`preserve-3d relative w-full transition-transform duration-500 ease-out ${
+                        className={`preserve-3d relative w-full will-change-transform transition-transform duration-500 ease-out ${
                           summaryPhase !== "gathering" ? "rotate-y-180" : ""
                         }`}
                       >
                         {/* Verso da carta */}
                         <div
-                          className="backface-hidden absolute inset-0 overflow-hidden rounded-2xl"
-                          style={{ transform: "rotateY(0deg) translateZ(1px)" }}
+                          className={`backface-hidden absolute inset-0 rounded-2xl transition-opacity duration-100 ${
+                            summaryPhase !== "gathering"
+                              ? "opacity-0 delay-150 pointer-events-none"
+                              : "opacity-100"
+                          }`}
+                          style={{ transform: "rotateY(0deg) translateZ(2px)" }}
                         >
                           <CardBackFace minimal />
                         </div>
 
                         {/* Frente da carta */}
                         <div
-                          className="backface-hidden w-full overflow-hidden rounded-2xl"
-                          style={{ transform: "rotateY(180deg) translateZ(1px)" }}
+                          className={`backface-hidden w-full rounded-2xl transition-opacity duration-100 ${
+                            summaryPhase !== "gathering"
+                              ? "opacity-100 delay-150"
+                              : "opacity-0 pointer-events-none"
+                          }`}
+                          style={{ transform: "rotateY(180deg) translateZ(2px)" }}
                         >
                           <CollectibleCardView
                             card={card}

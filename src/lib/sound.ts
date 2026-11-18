@@ -571,3 +571,46 @@ export function playCardsSpread(count: number) {
     });
   }
 }
+
+/**
+ * Brilho mágico sutil ao revelar carta Épica/Lendária ou Foil.
+ * Cartas Foil recebem um arpejo mágico um pouco mais longo e trabalhado.
+ */
+export function playCardMagicReveal(opts: { isEpicOrHigher?: boolean; isFoil?: boolean }) {
+  if (isSoundMuted()) return;
+  if (!opts.isEpicOrHigher && !opts.isFoil) return;
+  const ctx = getAudioContext();
+  if (!ctx) return;
+
+  try {
+    const now = ctx.currentTime;
+    const notes = opts.isFoil
+      ? [783.99, 987.77, 1174.66, 1567.98, 1975.53] // G5-B5-D6-G6-B6 (mais longo e trabalhado)
+      : [659.25, 880, 1174.66]; // E5-A5-D6 (sutil e cristalino para épica+)
+    const step = opts.isFoil ? 0.075 : 0.065;
+    const noteDur = opts.isFoil ? 0.34 : 0.24;
+    const baseVol = opts.isFoil ? 0.065 : 0.05;
+
+    notes.forEach((freq, idx) => {
+      const start = now + idx * step;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = idx % 2 === 0 ? "sine" : "triangle";
+      osc.frequency.setValueAtTime(freq, start);
+      if (opts.isFoil) {
+        osc.frequency.exponentialRampToValueAtTime(freq * 1.02, start + noteDur);
+      }
+
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.linearRampToValueAtTime(baseVol, start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + noteDur);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(start);
+      osc.stop(start + noteDur + 0.03);
+    });
+  } catch {
+    /* ignore */
+  }
+}
