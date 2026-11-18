@@ -369,7 +369,7 @@ export function PackOpeningModal({
 
         {/* ETAPA 1: PACOTE FECHADO */}
         {stage === "sealed" && pack && (
-          <div className="flex h-[31rem] flex-col items-center justify-between py-2">
+          <div className="flex h-[34rem] flex-col items-center justify-between py-2">
             <div className="flex flex-1 items-center justify-center">
               <div className="relative w-[17rem] select-none drop-shadow-xl transition-transform hover:scale-[1.02]">
                 <SerratedEdge position="top" bgClass={colorMeta.topBgClass} />
@@ -387,7 +387,7 @@ export function PackOpeningModal({
               </div>
             </div>
 
-            <div className="flex w-full flex-col items-center gap-2">
+            <div className="flex w-full flex-col items-center gap-2 pt-3">
               {openError && (
                 <p className="w-full rounded-xl bg-destructive/15 px-3 py-2 text-center text-xs font-semibold text-destructive">
                   {openError}
@@ -414,7 +414,7 @@ export function PackOpeningModal({
 
         {/* ETAPA 2: ANIMAÇÃO DE RASGO E SAÍDA DAS CARTAS */}
         {stage === "tearing" && (
-          <div className="relative flex h-[31rem] flex-col items-center justify-center overflow-hidden py-2">
+          <div className="relative flex h-[34rem] flex-col items-center justify-center overflow-hidden py-2">
             {/* Pilha de cartas de costas no tamanho real (w-60 h-[21rem]) escondida atrás do pacote */}
             <div className="animate-pack-cards-emerge relative z-10 h-[21rem] w-60">
               <CardBackFace minimal />
@@ -457,7 +457,7 @@ export function PackOpeningModal({
 
         {/* ETAPA 3: PILHA INTERATIVA (CLICAR PARA VIRAR E ARREMESSAR EM 2D) */}
         {stage === "stack" && currentCard && (
-          <div className="flex h-[31rem] flex-col items-center justify-between py-2 overflow-hidden">
+          <div className="flex h-[34rem] flex-col items-center justify-between py-2 overflow-hidden">
             {/* Contagem de restantes no topo do container, fora da carta */}
             <div className="flex items-center justify-between w-full px-2 text-xs font-bold text-muted-foreground">
               <span>
@@ -552,7 +552,7 @@ export function PackOpeningModal({
             </div>
 
             {/* Botão de ação contextual */}
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 pt-3">
               {!isFlipped ? (
                 <Button
                   type="button"
