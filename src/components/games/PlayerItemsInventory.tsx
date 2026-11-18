@@ -5,6 +5,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import {
   CARD_RARITIES,
   CARD_RARITY_META,
+  consumeAndOpenCardPack,
   mergeWithDefaultCardPacks,
   openCardPack,
   type CardDefinition,
@@ -55,15 +56,48 @@ export function PlayerItemsInventory() {
   }
 
   async function confirmOpenPack(pack: CardPackDefinition): Promise<PackOpenOutcome | null> {
+    const unopenedMap = auth.profile?.unopenedPacks ?? {};
+    const hasStock = (Number(unopenedMap[pack.id]) || 0) > 0;
+
+    if (hasStock) {
+      const res = consumeAndOpenCardPack(pack, catalog, ownedCardsMap, unopenedMap);
+      if (res.error) {
+        return { drawn: [], newlyDiscovered: [], error: res.error };
+      }
+      const saveRes = await auth.updatePlayerCards({
+        cards: res.updatedCardsMap,
+        unopenedPacks: res.updatedUnopenedPacks,
+        requireServerSync: true,
+      });
+      if (!saveRes.ok) {
+        return {
+          drawn: [],
+          newlyDiscovered: [],
+          error: saveRes.error ?? "Sem conexão com o servidor. Tente novamente.",
+        };
+      }
+      return {
+        drawn: res.drawnCards,
+        newlyDiscovered: res.newlyDiscoveredIds,
+      };
+    }
+
+    // Modo teste ADM (sem estoque de pacotes fechados)
     const res = openCardPack(pack, catalog, ownedCardsMap);
     if (res.error) {
-      setPackToOpen(null);
-      return null;
+      return { drawn: [], newlyDiscovered: [], error: res.error };
     }
-    await auth.updatePlayerCards({
+    const saveRes = await auth.updatePlayerCards({
       cards: res.updatedCardsMap,
-      unopenedPacks: auth.profile?.unopenedPacks,
+      unopenedPacks: unopenedMap,
     });
+    if (!saveRes.ok) {
+      return {
+        drawn: [],
+        newlyDiscovered: [],
+        error: saveRes.error ?? "Erro ao salvar cartas.",
+      };
+    }
     return {
       drawn: res.drawnCards,
       newlyDiscovered: res.newlyDiscoveredIds,

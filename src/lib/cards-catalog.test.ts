@@ -1,8 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  CARD_PACK_COLOR_META,
+  CARD_PACK_ICONS,
   CARD_RARITIES,
   CARD_RARITY_META,
+  consumeAndOpenCardPack,
   createCardDefinition,
   DEFAULT_CARD_PACKS,
   editCardDefinition,
@@ -133,5 +136,31 @@ describe("Sistema de Cartas Colecionáveis e Pacotes", () => {
     // Surpresa no meio (0.04 <= roll < 0.16)
     const midSurprise = orderPackRevealCards(cards, () => 0.1);
     assert.equal(midSurprise[2].rarity, "lendaria");
+  });
+
+  it("consome 1 pacote fechado atomicamente e bloqueia quando não há estoque", () => {
+    const card = createCardDefinition({
+      name: "C1",
+      description: "d",
+      rarity: "comum",
+      imageUrl: "https://a.com/1.png",
+    }).card!;
+    const pack = DEFAULT_CARD_PACKS[0];
+
+    const emptyRes = consumeAndOpenCardPack(pack, [card], {}, {});
+    assert.equal(emptyRes.drawnCards.length, 0);
+    assert.ok(emptyRes.error);
+
+    const okRes = consumeAndOpenCardPack(pack, [card], {}, { [pack.id]: 2 }, () => 0.1);
+    assert.equal(okRes.drawnCards.length, 5);
+    assert.equal(okRes.updatedUnopenedPacks[pack.id], 1);
+    assert.equal(okRes.updatedCardsMap[card.id], 5);
+
+    const lastRes = consumeAndOpenCardPack(pack, [card], okRes.updatedCardsMap, okRes.updatedUnopenedPacks, () => 0.1);
+    assert.equal(lastRes.updatedUnopenedPacks[pack.id], undefined);
+    assert.equal(lastRes.updatedCardsMap[card.id], 10);
+
+    assert.ok(CARD_PACK_ICONS.length >= 9);
+    assert.ok(CARD_PACK_COLOR_META.aurora.gradientClass.includes("bg-gradient-to-b"));
   });
 });

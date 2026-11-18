@@ -7402,6 +7402,7 @@ export async function runGlobalStudentsIntegrityAudit(
 export async function playfabUpdatePlayerCards(args: {
   cards: Record<string, number>;
   unopenedPacks?: Record<string, number>;
+  requireServerSync?: boolean;
 }): Promise<PlayerProfile | null> {
   const session = loadStoredSession();
   if (!session) return null;
@@ -7409,22 +7410,37 @@ export async function playfabUpdatePlayerCards(args: {
   const acc = reg[session.playerId];
   if (!acc) return null;
 
-  acc.profile.cards = { ...args.cards };
-  if (args.unopenedPacks) {
-    acc.profile.unopenedPacks = { ...args.unopenedPacks };
+  const nextAcc = {
+    ...acc,
+    profile: {
+      ...acc.profile,
+      cards: { ...args.cards },
+      ...(args.unopenedPacks ? { unopenedPacks: { ...args.unopenedPacks } } : {}),
+    },
+    updatedAt: new Date().toISOString(),
+  };
+
+  if (args.requireServerSync && isPlayFabConfigured()) {
+    if (!session.sessionTicket) {
+      throw new Error("Sessão expirada. Faça login novamente para abrir pacotes.");
+    }
+    await pushProfileToPlayFab(nextAcc, session.sessionTicket);
+    reg[session.playerId] = nextAcc;
+    saveRegistry(reg);
+    return nextAcc.profile;
   }
-  acc.updatedAt = new Date().toISOString();
-  reg[session.playerId] = acc;
+
+  reg[session.playerId] = nextAcc;
   saveRegistry(reg);
 
   if (session.sessionTicket && isPlayFabConfigured()) {
     try {
-      await pushProfileToPlayFab(acc, session.sessionTicket);
+      await pushProfileToPlayFab(nextAcc, session.sessionTicket);
     } catch {
-      /* ignore network sync error */
+      /* ignore network sync error in non-strict mode */
     }
   }
-  return acc.profile;
+  return nextAcc.profile;
 }
 
 export { ALL_GAME_IDS };

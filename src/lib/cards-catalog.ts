@@ -91,6 +91,135 @@ export interface CardDefinition {
 
 export type PackProbabilities = Record<CardRarity, number>;
 
+export type CardPackIconId =
+  | "layers"
+  | "sparkles"
+  | "flame"
+  | "crown"
+  | "gem"
+  | "zap"
+  | "star"
+  | "shield"
+  | "rocket";
+
+export const CARD_PACK_ICONS: readonly { id: CardPackIconId; label: string }[] = [
+  { id: "layers", label: "Cartas" },
+  { id: "sparkles", label: "Brilho" },
+  { id: "flame", label: "Fogo" },
+  { id: "crown", label: "Coroa" },
+  { id: "gem", label: "Gema" },
+  { id: "zap", label: "Raio" },
+  { id: "star", label: "Estrela" },
+  { id: "shield", label: "Escudo" },
+  { id: "rocket", label: "Foguete" },
+] as const;
+
+export type CardPackColorId =
+  | "teal"
+  | "emerald"
+  | "blue"
+  | "purple"
+  | "red"
+  | "amber"
+  | "sunset"
+  | "aurora";
+
+export interface CardPackColorMeta {
+  id: CardPackColorId;
+  label: string;
+  gradientClass: string;
+  topBgClass: string;
+  bottomBgClass: string;
+  iconBoxClass: string;
+  iconClass: string;
+  swatchClass: string;
+}
+
+export const CARD_PACK_COLOR_META: Record<CardPackColorId, CardPackColorMeta> = {
+  teal: {
+    id: "teal",
+    label: "Teal Clássico",
+    gradientClass: "bg-gradient-to-b from-teal-700 via-teal-800 to-teal-900",
+    topBgClass: "bg-teal-700",
+    bottomBgClass: "bg-teal-900",
+    iconBoxClass: "border-teal-300/60 bg-teal-950/35",
+    iconClass: "text-teal-200",
+    swatchClass: "bg-gradient-to-br from-teal-600 to-teal-900",
+  },
+  emerald: {
+    id: "emerald",
+    label: "Verde Esmeralda",
+    gradientClass: "bg-gradient-to-b from-emerald-600 via-emerald-700 to-emerald-900",
+    topBgClass: "bg-emerald-600",
+    bottomBgClass: "bg-emerald-900",
+    iconBoxClass: "border-emerald-300/60 bg-emerald-950/35",
+    iconClass: "text-emerald-200",
+    swatchClass: "bg-gradient-to-br from-emerald-500 to-emerald-900",
+  },
+  blue: {
+    id: "blue",
+    label: "Azul Cobalto",
+    gradientClass: "bg-gradient-to-b from-blue-600 via-indigo-700 to-slate-900",
+    topBgClass: "bg-blue-600",
+    bottomBgClass: "bg-slate-900",
+    iconBoxClass: "border-blue-300/60 bg-slate-950/40",
+    iconClass: "text-blue-200",
+    swatchClass: "bg-gradient-to-br from-blue-500 to-indigo-900",
+  },
+  purple: {
+    id: "purple",
+    label: "Roxo Místico",
+    gradientClass: "bg-gradient-to-b from-purple-600 via-fuchsia-700 to-purple-950",
+    topBgClass: "bg-purple-600",
+    bottomBgClass: "bg-purple-950",
+    iconBoxClass: "border-purple-300/60 bg-purple-950/45",
+    iconClass: "text-purple-200",
+    swatchClass: "bg-gradient-to-br from-purple-500 to-fuchsia-900",
+  },
+  red: {
+    id: "red",
+    label: "Rubi Lendário",
+    gradientClass: "bg-gradient-to-b from-red-600 via-rose-700 to-red-950",
+    topBgClass: "bg-red-600",
+    bottomBgClass: "bg-red-950",
+    iconBoxClass: "border-red-300/60 bg-red-950/45",
+    iconClass: "text-red-200",
+    swatchClass: "bg-gradient-to-br from-red-500 to-rose-900",
+  },
+  amber: {
+    id: "amber",
+    label: "Dourado Solar",
+    gradientClass: "bg-gradient-to-b from-amber-500 via-orange-600 to-amber-900",
+    topBgClass: "bg-amber-500",
+    bottomBgClass: "bg-amber-900",
+    iconBoxClass: "border-amber-200/70 bg-amber-950/40",
+    iconClass: "text-amber-100",
+    swatchClass: "bg-gradient-to-br from-amber-400 to-orange-800",
+  },
+  sunset: {
+    id: "sunset",
+    label: "Degradê Pôr do Sol",
+    gradientClass: "bg-gradient-to-b from-rose-500 via-fuchsia-600 to-indigo-900",
+    topBgClass: "bg-rose-500",
+    bottomBgClass: "bg-indigo-900",
+    iconBoxClass: "border-pink-200/65 bg-indigo-950/40",
+    iconClass: "text-pink-100",
+    swatchClass: "bg-gradient-to-br from-rose-500 via-fuchsia-600 to-indigo-800",
+  },
+  aurora: {
+    id: "aurora",
+    label: "Degradê Aurora",
+    gradientClass: "bg-gradient-to-b from-cyan-500 via-emerald-600 to-purple-900",
+    topBgClass: "bg-cyan-500",
+    bottomBgClass: "bg-purple-900",
+    iconBoxClass: "border-cyan-200/65 bg-slate-950/40",
+    iconClass: "text-cyan-100",
+    swatchClass: "bg-gradient-to-br from-cyan-400 via-emerald-500 to-purple-800",
+  },
+};
+
+export const CARD_PACK_COLORS: readonly CardPackColorMeta[] = Object.values(CARD_PACK_COLOR_META);
+
 export interface CardPackDefinition {
   id: string;
   name: string;
@@ -101,6 +230,9 @@ export interface CardPackDefinition {
   /** Lista opcional de IDs de cartas permitidas neste pacote. Null/vazio = todas as cartas do catálogo. */
   cardIds?: string[] | null;
   pricePoints?: number;
+  icon?: CardPackIconId;
+  colorTheme?: CardPackColorId;
+  isFoil?: boolean;
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -372,6 +504,54 @@ export function openCardPack(
     drawnCards,
     updatedCardsMap,
     newlyDiscoveredIds: Array.from(newlyDiscoveredSet),
+  };
+}
+
+export interface ConsumePackResult extends OpenPackResult {
+  updatedUnopenedPacks: Record<string, number>;
+}
+
+/**
+ * Consome 1 unidade do pacote fechado do jogador e sorteia as cartas atomicamente.
+ * Se o jogador não possuir o pacote ou o catálogo estiver vazio, nada é debitado.
+ */
+export function consumeAndOpenCardPack(
+  pack: CardPackDefinition,
+  allCards: CardDefinition[],
+  currentCardsMap: Record<string, number> = {},
+  currentUnopenedPacks: Record<string, number> = {},
+  rng: () => number = Math.random,
+): ConsumePackResult {
+  const available = Math.max(0, Math.floor(Number(currentUnopenedPacks[pack.id]) || 0));
+  if (available <= 0) {
+    return {
+      drawnCards: [],
+      updatedCardsMap: { ...currentCardsMap },
+      updatedUnopenedPacks: { ...currentUnopenedPacks },
+      newlyDiscoveredIds: [],
+      error: "Você não possui unidades fechadas deste pacote.",
+    };
+  }
+
+  const openRes = openCardPack(pack, allCards, currentCardsMap, rng);
+  if (openRes.error || openRes.drawnCards.length === 0) {
+    return {
+      ...openRes,
+      updatedUnopenedPacks: { ...currentUnopenedPacks },
+    };
+  }
+
+  const updatedUnopenedPacks: Record<string, number> = { ...currentUnopenedPacks };
+  const remaining = available - 1;
+  if (remaining > 0) {
+    updatedUnopenedPacks[pack.id] = remaining;
+  } else {
+    delete updatedUnopenedPacks[pack.id];
+  }
+
+  return {
+    ...openRes,
+    updatedUnopenedPacks,
   };
 }
 

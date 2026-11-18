@@ -83,7 +83,8 @@ interface AuthValue {
   updatePlayerCards: (args: {
     cards: Record<string, number>;
     unopenedPacks?: Record<string, number>;
-  }) => Promise<void>;
+    requireServerSync?: boolean;
+  }) => Promise<{ ok: boolean; error?: string }>;
   recordMatch: (args: {
     gameId: GameId;
     mode?: string;
@@ -408,10 +409,26 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
   const isAdmin = Boolean(profile?.isAdmin || adminPinUnlocked);
 
   const updatePlayerCards = useCallback(
-    async (args: { cards: Record<string, number>; unopenedPacks?: Record<string, number> }) => {
-      const updated = await playfabUpdatePlayerCards(args);
-      if (updated) {
-        setProfile({ ...updated });
+    async (args: {
+      cards: Record<string, number>;
+      unopenedPacks?: Record<string, number>;
+      requireServerSync?: boolean;
+    }) => {
+      try {
+        const updated = await playfabUpdatePlayerCards(args);
+        if (updated) {
+          setProfile({ ...updated });
+          return { ok: true };
+        }
+        return { ok: false, error: "Sessão de jogador não encontrada." };
+      } catch (err) {
+        return {
+          ok: false,
+          error:
+            err instanceof Error && err.message
+              ? err.message
+              : "Sem conexão com o servidor. Tente novamente.",
+        };
       }
     },
     [],

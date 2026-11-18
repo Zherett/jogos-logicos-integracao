@@ -18,6 +18,9 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
+  CARD_PACK_COLORS,
+  CARD_PACK_COLOR_META,
+  CARD_PACK_ICONS,
   CARD_RARITIES,
   CARD_RARITY_META,
   createCardDefinition,
@@ -27,14 +30,16 @@ import {
   sumPackProbabilities,
   validatePackProbabilities,
   type CardDefinition,
+  type CardPackColorId,
   type CardPackDefinition,
+  type CardPackIconId,
   type CardRarity,
   type PackProbabilities,
 } from "@/lib/cards-catalog";
 import type { PlatformAdminConfig } from "@/lib/game-codes";
 import { usePlayerAuth } from "@/lib/player-auth";
 import { CollectibleCardView } from "./CollectibleCardView";
-import { PackOpeningModal, type PackOpenOutcome } from "./PackOpeningModal";
+import { PackIconSvg, PackOpeningModal, type PackOpenOutcome } from "./PackOpeningModal";
 
 interface AdminCardsTabProps {
   draft: PlatformAdminConfig;
@@ -78,6 +83,9 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
   });
   const [packUseAllCards, setPackUseAllCards] = useState(true);
   const [packSelectedCardIds, setPackSelectedCardIds] = useState<string[]>([]);
+  const [packIcon, setPackIcon] = useState<CardPackIconId>("layers");
+  const [packColorTheme, setPackColorTheme] = useState<CardPackColorId>("teal");
+  const [packIsFoil, setPackIsFoil] = useState(false);
   const [packError, setPackError] = useState<string | null>(null);
 
   // Modal de Teste de Abertura de Pacote (ADM)
@@ -167,6 +175,9 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
     setPackProbs({ comum: 40, incomum: 30, rara: 20, epica: 8, lendaria: 2 });
     setPackUseAllCards(true);
     setPackSelectedCardIds([]);
+    setPackIcon("layers");
+    setPackColorTheme("teal");
+    setPackIsFoil(false);
     setPackError(null);
     setIsPackFormOpen(true);
   }
@@ -182,6 +193,9 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
     const hasCustomPool = Array.isArray(pack.cardIds) && pack.cardIds.length > 0;
     setPackUseAllCards(!hasCustomPool);
     setPackSelectedCardIds(hasCustomPool ? [...pack.cardIds!] : []);
+    setPackIcon(pack.icon ?? "layers");
+    setPackColorTheme(pack.colorTheme ?? "teal");
+    setPackIsFoil(Boolean(pack.isFoil));
     setPackError(null);
     setIsPackFormOpen(true);
   }
@@ -216,6 +230,9 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
       probabilities: { ...packProbs },
       cardIds: packUseAllCards ? null : [...packSelectedCardIds],
       pricePoints: Math.max(0, Math.floor(packPrice || 0)),
+      icon: packIcon,
+      colorTheme: packColorTheme,
+      isFoil: packIsFoil,
       enabled: packEnabled,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
@@ -589,6 +606,109 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
                     onChange={(e) => setPackPrice(Number(e.target.value))}
                     className="rounded-xl"
                   />
+                </div>
+              </div>
+
+              {/* Aparência do Pacote (Ícone, Cor/Degradê, Foil e Mini Prévia) */}
+              <div className="rounded-2xl border bg-secondary/20 p-3 grid gap-4 md:grid-cols-[1fr_110px] items-center">
+                <div className="space-y-3">
+                  <div className="space-y-1.5">
+                    <span className="block text-xs font-bold text-foreground">Ícone do Pacote</span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {CARD_PACK_ICONS.map((item) => {
+                        const active = packIcon === item.id;
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            title={item.label}
+                            onClick={() => setPackIcon(item.id)}
+                            className={`flex items-center gap-1 rounded-xl border px-2.5 py-1.5 text-[11px] font-bold transition-colors ${
+                              active
+                                ? "border-primary bg-primary/15 text-primary"
+                                : "bg-background text-muted-foreground hover:text-foreground"
+                            }`}
+                          >
+                            <PackIconSvg icon={item.id} className="h-3.5 w-3.5" />
+                            <span>{item.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <span className="block text-xs font-bold text-foreground">Cor / Degradê do Pacote</span>
+                    <div className="flex flex-wrap gap-2">
+                      {CARD_PACK_COLORS.map((c) => {
+                        const active = packColorTheme === c.id;
+                        return (
+                          <button
+                            key={c.id}
+                            type="button"
+                            title={c.label}
+                            onClick={() => setPackColorTheme(c.id)}
+                            className={`flex items-center gap-1.5 rounded-xl border px-2.5 py-1 text-[11px] font-bold transition-all ${
+                              active
+                                ? "border-primary ring-2 ring-primary/30 bg-background text-foreground"
+                                : "bg-background/70 text-muted-foreground hover:text-foreground"
+                            }`}
+                          >
+                            <span className={`h-3.5 w-3.5 rounded-full border border-white/30 ${c.swatchClass}`} />
+                            <span>{c.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <label
+                    htmlFor="pack-foil"
+                    className="flex items-center justify-between gap-2 rounded-xl border bg-background/70 px-3 py-2 cursor-pointer hover:bg-secondary/40"
+                  >
+                    <span className="flex items-center gap-1.5 text-xs font-bold text-foreground">
+                      <Sparkles className="h-4 w-4 text-amber-500" />
+                      Pacote Brilhante (Foil)
+                    </span>
+                    <input
+                      id="pack-foil"
+                      type="checkbox"
+                      checked={packIsFoil}
+                      onChange={(e) => setPackIsFoil(e.target.checked)}
+                      className="h-4 w-4 accent-amber-500 cursor-pointer"
+                    />
+                  </label>
+                </div>
+
+                {/* Mini Prévia do Pacote */}
+                <div className="flex flex-col items-center gap-1">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                    Prévia
+                  </span>
+                  <div
+                    className={`relative flex h-28 w-20 items-center justify-center overflow-hidden rounded-xl border border-white/15 shadow-md ${
+                      CARD_PACK_COLOR_META[packColorTheme].gradientClass
+                    }`}
+                  >
+                    {packIsFoil && (
+                      <>
+                        <div className="card-foil-gradient pointer-events-none absolute inset-0 z-10" />
+                        <div className="pointer-events-none absolute inset-0 z-10 overflow-hidden">
+                          <div className="card-foil-shimmer absolute inset-y-0 w-1/2 opacity-75" />
+                        </div>
+                      </>
+                    )}
+                    <div
+                      className={`relative z-20 grid h-10 w-10 place-items-center rounded-xl border ${
+                        CARD_PACK_COLOR_META[packColorTheme].iconBoxClass
+                      }`}
+                    >
+                      <PackIconSvg
+                        icon={packIcon}
+                        className={`h-5 w-5 ${CARD_PACK_COLOR_META[packColorTheme].iconClass}`}
+                      />
+                    </div>
+                  </div>
                 </div>
               </div>
 

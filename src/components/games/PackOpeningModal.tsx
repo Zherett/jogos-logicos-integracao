@@ -1,17 +1,33 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowRight, Check, Layers, PackageOpen, Sparkles } from "lucide-react";
+import {
+  ArrowRight,
+  Check,
+  Crown,
+  Flame,
+  Gem,
+  Layers,
+  PackageOpen,
+  Rocket,
+  Shield,
+  Sparkles,
+  Star,
+  Zap,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
+  CARD_PACK_COLOR_META,
   orderPackRevealCards,
   type CardDefinition,
   type CardPackDefinition,
+  type CardPackIconId,
 } from "@/lib/cards-catalog";
 import { CollectibleCardView } from "./CollectibleCardView";
 
 export interface PackOpenOutcome {
   drawn: CardDefinition[];
   newlyDiscovered: string[];
+  error?: string;
 }
 
 interface PackOpeningModalProps {
@@ -23,13 +39,47 @@ interface PackOpeningModalProps {
 
 type Stage = "sealed" | "tearing" | "stack" | "summary";
 
-function SerratedEdge({ position }: { position: "top" | "bottom" }) {
+export function PackIconSvg({
+  icon,
+  className,
+}: {
+  icon?: CardPackIconId;
+  className?: string;
+}) {
+  switch (icon) {
+    case "sparkles":
+      return <Sparkles className={className} />;
+    case "flame":
+      return <Flame className={className} />;
+    case "crown":
+      return <Crown className={className} />;
+    case "gem":
+      return <Gem className={className} />;
+    case "zap":
+      return <Zap className={className} />;
+    case "star":
+      return <Star className={className} />;
+    case "shield":
+      return <Shield className={className} />;
+    case "rocket":
+      return <Rocket className={className} />;
+    case "layers":
+    default:
+      return <Layers className={className} />;
+  }
+}
+
+function SerratedEdge({
+  position,
+  bgClass,
+}: {
+  position: "top" | "bottom";
+  bgClass: string;
+}) {
   return (
     <div
       aria-hidden="true"
-      className={`h-2.5 w-full ${
-        position === "top" ? "-mb-px bg-teal-700" : "-mt-px bg-teal-900"
-      }`}
+      className={`h-2.5 w-full ${bgClass} ${position === "top" ? "-mb-px" : "-mt-px"}`}
       style={{
         clipPath:
           position === "top"
@@ -37,6 +87,23 @@ function SerratedEdge({ position }: { position: "top" | "bottom" }) {
             : "polygon(0% 0%, 4% 100%, 8% 0%, 12% 100%, 16% 0%, 20% 100%, 24% 0%, 28% 100%, 32% 0%, 36% 100%, 40% 0%, 44% 100%, 48% 0%, 52% 100%, 56% 0%, 60% 100%, 64% 0%, 68% 100%, 72% 0%, 76% 100%, 80% 0%, 84% 100%, 88% 0%, 92% 100%, 96% 0%, 100% 100%, 100% 0%)",
       }}
     />
+  );
+}
+
+function FoilOverlay() {
+  return (
+    <>
+      <div
+        aria-hidden="true"
+        className="card-foil-gradient pointer-events-none absolute inset-0 z-10"
+      />
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0 z-10 overflow-hidden"
+      >
+        <div className="card-foil-shimmer absolute inset-y-0 w-1/2 opacity-75" />
+      </div>
+    </>
   );
 }
 
@@ -73,6 +140,7 @@ export function PackOpeningModal({
 }: PackOpeningModalProps) {
   const [stage, setStage] = useState<Stage>("sealed");
   const [isOpening, setIsOpening] = useState(false);
+  const [openError, setOpenError] = useState<string | null>(null);
   const [orderedCards, setOrderedCards] = useState<CardDefinition[]>([]);
   const [newlyDiscovered, setNewlyDiscovered] = useState<string[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -80,6 +148,8 @@ export function PackOpeningModal({
   const [isExiting, setIsExiting] = useState(false);
   const timerRef = useRef<number | null>(null);
   const exitTimerRef = useRef<number | null>(null);
+  const openingLockRef = useRef(false);
+  const activePackIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (timerRef.current) {
@@ -90,8 +160,11 @@ export function PackOpeningModal({
       window.clearTimeout(exitTimerRef.current);
       exitTimerRef.current = null;
     }
+    openingLockRef.current = false;
+    activePackIdRef.current = pack?.id ?? null;
     setStage("sealed");
     setIsOpening(false);
+    setOpenError(null);
     setOrderedCards([]);
     setNewlyDiscovered([]);
     setCurrentIndex(0);
@@ -107,23 +180,38 @@ export function PackOpeningModal({
   }, []);
 
   async function handleStartOpen() {
-    if (!pack || isOpening) return;
+    if (!pack || openingLockRef.current) return;
+    const requestedPackId = pack.id;
+    openingLockRef.current = true;
     setIsOpening(true);
-    const outcome = await onConfirmOpen(pack);
-    setIsOpening(false);
-    if (!outcome || outcome.drawn.length === 0) return;
+    setOpenError(null);
 
-    const ordered = orderPackRevealCards(outcome.drawn);
-    setOrderedCards(ordered);
-    setNewlyDiscovered(outcome.newlyDiscovered);
-    setCurrentIndex(0);
-    setIsFlipped(false);
-    setIsExiting(false);
-    setStage("tearing");
+    try {
+      const outcome = await onConfirmOpen(pack);
+      if (activePackIdRef.current !== requestedPackId) return;
 
-    timerRef.current = window.setTimeout(() => {
-      setStage("stack");
-    }, 2350);
+      if (!outcome || outcome.error || outcome.drawn.length === 0) {
+        if (outcome?.error) {
+          setOpenError(outcome.error);
+        }
+        return;
+      }
+
+      const ordered = orderPackRevealCards(outcome.drawn);
+      setOrderedCards(ordered);
+      setNewlyDiscovered(outcome.newlyDiscovered);
+      setCurrentIndex(0);
+      setIsFlipped(false);
+      setIsExiting(false);
+      setStage("tearing");
+
+      timerRef.current = window.setTimeout(() => {
+        setStage("stack");
+      }, 2350);
+    } finally {
+      openingLockRef.current = false;
+      setIsOpening(false);
+    }
   }
 
   function handleCardInteraction() {
@@ -150,6 +238,10 @@ export function PackOpeningModal({
     }, 360);
   }
 
+  const colorMeta = CARD_PACK_COLOR_META[pack?.colorTheme ?? "teal"] ?? CARD_PACK_COLOR_META.teal;
+  const packIcon = pack?.icon ?? "layers";
+  const isFoilPack = Boolean(pack?.isFoil);
+
   const currentCard = orderedCards[currentIndex];
   const remainingCount = Math.max(0, orderedCards.length - currentIndex);
   const isHighRarity =
@@ -160,7 +252,15 @@ export function PackOpeningModal({
       currentCard.isFoil);
 
   return (
-    <Dialog open={Boolean(pack)} onOpenChange={(open) => !open && onClose()}>
+    <Dialog
+      open={Boolean(pack)}
+      onOpenChange={(open) => {
+        // Impede fechamento acidental enquanto a requisição de abertura está em andamento
+        if (!open && !isOpening) {
+          onClose();
+        }
+      }}
+    >
       <DialogContent
         className={`${
           stage === "summary" ? "max-w-3xl" : "max-w-md"
@@ -177,6 +277,11 @@ export function PackOpeningModal({
                 {pack.cardsPerPack} cartas
               </span>
             )}
+            {isFoilPack && (
+              <span className="inline-flex items-center gap-0.5 rounded-full bg-gradient-to-r from-amber-500 via-pink-500 to-cyan-500 px-2 py-0.5 text-[10px] font-black uppercase text-white shadow-sm">
+                <Sparkles className="h-2.5 w-2.5" /> Foil
+              </span>
+            )}
           </DialogTitle>
         </DialogHeader>
 
@@ -185,17 +290,27 @@ export function PackOpeningModal({
           <div className="flex h-[31rem] flex-col items-center justify-between py-2">
             <div className="flex flex-1 items-center justify-center">
               <div className="relative w-[17rem] select-none drop-shadow-xl transition-transform hover:scale-[1.02]">
-                <SerratedEdge position="top" />
-                <div className="flex h-[22.5rem] items-center justify-center bg-gradient-to-b from-teal-700 via-teal-800 to-teal-900">
-                  <div className="grid h-24 w-24 place-items-center rounded-3xl border-2 border-teal-300/60 bg-teal-950/35 shadow-inner">
-                    <Layers className="h-12 w-12 text-teal-200" />
+                <SerratedEdge position="top" bgClass={colorMeta.topBgClass} />
+                <div
+                  className={`relative flex h-[22.5rem] items-center justify-center overflow-hidden ${colorMeta.gradientClass}`}
+                >
+                  {isFoilPack && <FoilOverlay />}
+                  <div
+                    className={`relative z-20 grid h-24 w-24 place-items-center rounded-3xl border-2 shadow-inner ${colorMeta.iconBoxClass}`}
+                  >
+                    <PackIconSvg icon={packIcon} className={`h-12 w-12 ${colorMeta.iconClass}`} />
                   </div>
                 </div>
-                <SerratedEdge position="bottom" />
+                <SerratedEdge position="bottom" bgClass={colorMeta.bottomBgClass} />
               </div>
             </div>
 
             <div className="flex w-full flex-col items-center gap-2">
+              {openError && (
+                <p className="w-full rounded-xl bg-destructive/15 px-3 py-2 text-center text-xs font-semibold text-destructive">
+                  {openError}
+                </p>
+              )}
               <Button
                 type="button"
                 size="lg"
@@ -228,8 +343,10 @@ export function PackOpeningModal({
               <div className="relative w-[17rem]">
                 {/* Tira superior sólida destacada */}
                 <div className="animate-pack-top-rip">
-                  <SerratedEdge position="top" />
-                  <div className="h-9 w-full bg-teal-700" />
+                  <SerratedEdge position="top" bgClass={colorMeta.topBgClass} />
+                  <div className={`relative h-9 w-full overflow-hidden ${colorMeta.topBgClass}`}>
+                    {isFoilPack && <FoilOverlay />}
+                  </div>
                 </div>
 
                 {/* Linha de rasgo luminosa */}
@@ -239,12 +356,17 @@ export function PackOpeningModal({
 
                 {/* Corpo sólido do pacote descendo e saindo da tela */}
                 <div className="animate-pack-body-drop">
-                  <div className="h-[20.25rem] w-full bg-gradient-to-b from-teal-700 via-teal-800 to-teal-900 flex items-center justify-center">
-                    <div className="grid h-24 w-24 place-items-center rounded-3xl border-2 border-teal-300/60 bg-teal-950/35 shadow-inner">
-                      <Layers className="h-12 w-12 text-teal-200" />
+                  <div
+                    className={`relative flex h-[20.25rem] w-full items-center justify-center overflow-hidden ${colorMeta.gradientClass}`}
+                  >
+                    {isFoilPack && <FoilOverlay />}
+                    <div
+                      className={`relative z-20 grid h-24 w-24 place-items-center rounded-3xl border-2 shadow-inner ${colorMeta.iconBoxClass}`}
+                    >
+                      <PackIconSvg icon={packIcon} className={`h-12 w-12 ${colorMeta.iconClass}`} />
                     </div>
                   </div>
-                  <SerratedEdge position="bottom" />
+                  <SerratedEdge position="bottom" bgClass={colorMeta.bottomBgClass} />
                 </div>
               </div>
             </div>
