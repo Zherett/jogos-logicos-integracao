@@ -412,12 +412,16 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
             : "flex flex-wrap sm:flex-nowrap items-center justify-end gap-1.5 sm:gap-2"
         }
       >
-        {leftSlot && <div className="order-1 flex items-center gap-3 min-w-0">{leftSlot}</div>}
+        {leftSlot && (
+          <div className="order-1 sm:order-none flex items-center gap-3 min-w-0">
+            {leftSlot}
+          </div>
+        )}
 
         <div
           className={
             leftSlot
-              ? "order-3 flex w-full items-center justify-between gap-1.5 sm:order-none sm:w-auto sm:justify-end sm:gap-2"
+              ? "order-3 flex w-full items-center justify-between gap-1.5 sm:order-none sm:ml-auto sm:w-auto sm:justify-end sm:gap-2"
               : "contents"
           }
         >
