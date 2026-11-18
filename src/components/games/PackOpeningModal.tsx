@@ -3,7 +3,6 @@ import { ArrowRight, Check, Layers, PackageOpen, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
-  CARD_RARITY_META,
   orderPackRevealCards,
   type CardDefinition,
   type CardPackDefinition,
@@ -28,7 +27,9 @@ function SerratedEdge({ position }: { position: "top" | "bottom" }) {
   return (
     <div
       aria-hidden="true"
-      className="h-2.5 w-full bg-teal-600 dark:bg-teal-700"
+      className={`h-2.5 w-full ${
+        position === "top" ? "-mb-px bg-teal-700" : "-mt-px bg-teal-900"
+      }`}
       style={{
         clipPath:
           position === "top"
@@ -39,24 +40,27 @@ function SerratedEdge({ position }: { position: "top" | "bottom" }) {
   );
 }
 
-function CardBackFace({ remaining }: { remaining: number }) {
+function CardBackFace({ minimal = false }: { minimal?: boolean }) {
   return (
-    <div className="flex h-full w-full flex-col items-center justify-between rounded-2xl border-2 border-teal-400/80 bg-gradient-to-br from-slate-900 via-teal-950 to-slate-900 p-4 shadow-xl select-none">
-      <div className="flex w-full items-center justify-between text-[10px] font-black uppercase tracking-widest text-teal-300/70">
+    <div className="flex h-full w-full flex-col items-center justify-between overflow-hidden rounded-2xl border-2 border-teal-400/80 bg-gradient-to-br from-slate-900 via-teal-950 to-slate-900 p-4 shadow-xl select-none">
+      <div className="flex w-full items-center justify-center text-[10px] font-black uppercase tracking-[0.2em] text-teal-300/75">
         <span>Integração</span>
-        <span>{remaining} restante{remaining === 1 ? "" : "s"}</span>
       </div>
 
-      {/* Emblema circular central (conforme modelo) */}
+      {/* Emblema circular central */}
       <div className="relative flex h-28 w-28 items-center justify-center rounded-full border-4 border-teal-400/60 bg-teal-500/15 shadow-[0_0_28px_-4px_rgba(45,212,191,0.55)]">
         <div className="flex h-20 w-20 items-center justify-center rounded-full border-2 border-dashed border-teal-300/60 bg-slate-950/60">
-          <Sparkles className="h-9 w-9 text-teal-300 animate-pulse" />
+          <Sparkles className="h-9 w-9 text-teal-300" />
         </div>
       </div>
 
-      <span className="rounded-full border border-teal-400/40 bg-teal-500/15 px-3 py-1 text-[11px] font-extrabold uppercase tracking-wider text-teal-200">
-        Clique para virar
-      </span>
+      {minimal ? (
+        <div className="h-6" />
+      ) : (
+        <span className="rounded-full border border-teal-400/40 bg-teal-500/15 px-3 py-1 text-[11px] font-extrabold uppercase tracking-wider text-teal-200">
+          Clique para virar
+        </span>
+      )}
     </div>
   );
 }
@@ -73,12 +77,18 @@ export function PackOpeningModal({
   const [newlyDiscovered, setNewlyDiscovered] = useState<string[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
+  const [isExiting, setIsExiting] = useState(false);
   const timerRef = useRef<number | null>(null);
+  const exitTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (timerRef.current) {
       window.clearTimeout(timerRef.current);
       timerRef.current = null;
+    }
+    if (exitTimerRef.current) {
+      window.clearTimeout(exitTimerRef.current);
+      exitTimerRef.current = null;
     }
     setStage("sealed");
     setIsOpening(false);
@@ -86,11 +96,13 @@ export function PackOpeningModal({
     setNewlyDiscovered([]);
     setCurrentIndex(0);
     setIsFlipped(false);
+    setIsExiting(false);
   }, [pack]);
 
   useEffect(() => {
     return () => {
       if (timerRef.current) window.clearTimeout(timerRef.current);
+      if (exitTimerRef.current) window.clearTimeout(exitTimerRef.current);
     };
   }, []);
 
@@ -106,15 +118,16 @@ export function PackOpeningModal({
     setNewlyDiscovered(outcome.newlyDiscovered);
     setCurrentIndex(0);
     setIsFlipped(false);
+    setIsExiting(false);
     setStage("tearing");
 
     timerRef.current = window.setTimeout(() => {
       setStage("stack");
-    }, 1050);
+    }, 1080);
   }
 
   function handleCardInteraction() {
-    if (stage !== "stack") return;
+    if (stage !== "stack" || isExiting) return;
     if (!isFlipped) {
       setIsFlipped(true);
       return;
@@ -123,12 +136,18 @@ export function PackOpeningModal({
   }
 
   function handleNextCard() {
-    if (currentIndex + 1 < orderedCards.length) {
-      setIsFlipped(false);
-      setCurrentIndex((prev) => prev + 1);
-    } else {
-      setStage("summary");
-    }
+    if (isExiting) return;
+    setIsExiting(true);
+    exitTimerRef.current = window.setTimeout(() => {
+      if (currentIndex + 1 < orderedCards.length) {
+        setIsFlipped(false);
+        setIsExiting(false);
+        setCurrentIndex((prev) => prev + 1);
+      } else {
+        setIsExiting(false);
+        setStage("summary");
+      }
+    }, 360);
   }
 
   const currentCard = orderedCards[currentIndex];
@@ -159,7 +178,7 @@ export function PackOpeningModal({
           <div className="flex flex-col items-center gap-5 py-3">
             <div className="relative w-52 select-none drop-shadow-xl transition-transform hover:scale-[1.02]">
               <SerratedEdge position="top" />
-              <div className="flex h-64 flex-col items-center justify-between bg-gradient-to-b from-teal-700 via-teal-800 to-teal-900 px-4 py-5 text-center text-white border-x border-teal-500/40">
+              <div className="flex h-64 flex-col items-center justify-between bg-gradient-to-b from-teal-700 via-teal-800 to-teal-900 px-4 py-5 text-center text-white">
                 <span className="rounded-full border border-white/25 bg-black/25 px-2.5 py-0.5 text-[10px] font-extrabold uppercase tracking-widest">
                   {pack.cardsPerPack} Cartas
                 </span>
@@ -198,18 +217,18 @@ export function PackOpeningModal({
         {/* ETAPA 2: ANIMAÇÃO DE RASGO E SAÍDA DAS CARTAS */}
         {stage === "tearing" && (
           <div className="relative flex h-80 flex-col items-center justify-center overflow-hidden py-4">
-            {/* Pilha de cartas de costas emergindo */}
+            {/* Pilha de cartas de costas limpa emergindo */}
             <div className="animate-pack-cards-emerge relative z-10 h-60 w-44">
-              <CardBackFace remaining={orderedCards.length} />
+              <CardBackFace minimal />
             </div>
 
-            {/* Embalagem do pacote rasgando ao redor */}
+            {/* Embalagem opaca do pacote rasgando ao redor */}
             <div className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center">
               <div className="relative w-52">
                 {/* Tira superior destacada */}
                 <div className="animate-pack-top-rip">
                   <SerratedEdge position="top" />
-                  <div className="h-7 w-full bg-teal-700 border-x border-teal-500/40" />
+                  <div className="h-7 w-full bg-teal-700" />
                 </div>
 
                 {/* Linha de rasgo luminosa */}
@@ -217,10 +236,10 @@ export function PackOpeningModal({
                   <div className="animate-pack-tear-line h-1 rounded-full bg-white shadow-[0_0_12px_2px_#5eead4]" />
                 </div>
 
-                {/* Corpo do pacote descendo e sumindo */}
+                {/* Corpo opaco do pacote descendo e sumindo */}
                 <div className="animate-pack-body-drop">
-                  <div className="h-52 w-full bg-gradient-to-b from-teal-700 via-teal-800 to-teal-900 border-x border-teal-500/40 flex items-center justify-center">
-                    <Layers className="h-10 w-10 text-teal-200/50" />
+                  <div className="h-52 w-full bg-gradient-to-b from-teal-700 via-teal-800 to-teal-900 flex items-center justify-center">
+                    <Layers className="h-10 w-10 text-teal-200/60" />
                   </div>
                   <SerratedEdge position="bottom" />
                 </div>
@@ -229,15 +248,16 @@ export function PackOpeningModal({
           </div>
         )}
 
-        {/* ETAPA 3: PILHA INTERATIVA (CLICAR PARA VIRAR UMA A UMA) */}
+        {/* ETAPA 3: PILHA INTERATIVA (CLICAR PARA VIRAR E ARREMESSAR EM 2D) */}
         {stage === "stack" && currentCard && (
-          <div className="flex flex-col items-center gap-4 py-2">
+          <div className="flex flex-col items-center gap-4 py-2 overflow-hidden">
+            {/* Contagem de restantes no topo do container, fora da carta */}
             <div className="flex items-center justify-between w-full px-2 text-xs font-bold text-muted-foreground">
               <span>
                 Carta {currentIndex + 1} de {orderedCards.length}
               </span>
-              <span className="font-mono">
-                {isFlipped ? CARD_RARITY_META[currentCard.rarity].label : "Virada para baixo"}
+              <span className="rounded-full bg-secondary px-2.5 py-0.5 font-mono text-[11px] font-extrabold text-foreground">
+                {remainingCount} restante{remainingCount === 1 ? "" : "s"}
               </span>
             </div>
 
@@ -246,18 +266,25 @@ export function PackOpeningModal({
               {remainingCount > 2 && (
                 <div
                   aria-hidden="true"
-                  className="absolute h-[21rem] w-60 translate-x-3 translate-y-3 rotate-2 rounded-2xl border-2 border-teal-500/40 bg-slate-900/90 shadow-md"
+                  className="absolute h-[21rem] w-60 translate-x-3 translate-y-3 rotate-2 rounded-2xl border-2 border-teal-500/40 bg-slate-900 shadow-md"
                 />
               )}
               {remainingCount > 1 && (
                 <div
                   aria-hidden="true"
-                  className="absolute h-[21rem] w-60 translate-x-1.5 translate-y-1.5 rotate-1 rounded-2xl border-2 border-teal-500/60 bg-slate-900/95 shadow-lg"
-                />
+                  className={`absolute h-[21rem] w-60 rounded-2xl transition-all duration-300 ${
+                    isExiting
+                      ? "translate-x-0 translate-y-0 rotate-0"
+                      : "translate-x-1.5 translate-y-1.5 rotate-1"
+                  }`}
+                >
+                  <CardBackFace minimal />
+                </div>
               )}
 
-              {/* Carta ativa com giro 3D */}
+              {/* Carta ativa com giro 3D ao revelar e arremesso 2D ao sair */}
               <div
+                key={`active_${currentIndex}`}
                 role="button"
                 tabIndex={0}
                 onClick={handleCardInteraction}
@@ -267,7 +294,9 @@ export function PackOpeningModal({
                     handleCardInteraction();
                   }
                 }}
-                className="perspective-1000 relative z-10 w-60 cursor-pointer focus:outline-none"
+                className={`perspective-1000 relative z-10 w-60 cursor-pointer focus:outline-none ${
+                  isExiting ? "animate-card-toss-out pointer-events-none" : ""
+                }`}
               >
                 <div
                   className={`preserve-3d relative min-h-[21rem] w-full transition-transform duration-500 ease-out ${
@@ -275,15 +304,19 @@ export function PackOpeningModal({
                   }`}
                 >
                   {/* Verso (de costas) */}
-                  <div className="backface-hidden absolute inset-0">
-                    <CardBackFace remaining={remainingCount} />
+                  <div
+                    className="backface-hidden absolute inset-0 overflow-hidden rounded-2xl"
+                    style={{ transform: "rotateY(0deg) translateZ(1px)" }}
+                  >
+                    <CardBackFace />
                   </div>
 
                   {/* Frente (carta revelada) */}
                   <div
-                    className={`backface-hidden rotate-y-180 w-full ${
-                      isFlipped && isHighRarity ? "animate-[pop-in_0.35s_ease-out]" : ""
+                    className={`backface-hidden w-full overflow-hidden rounded-2xl ${
+                      isFlipped && isHighRarity && !isExiting ? "animate-[pop-in_0.35s_ease-out]" : ""
                     }`}
+                    style={{ transform: "rotateY(180deg) translateZ(1px)" }}
                   >
                     <CollectibleCardView
                       card={currentCard}
@@ -300,6 +333,7 @@ export function PackOpeningModal({
                 <Button
                   type="button"
                   onClick={() => setIsFlipped(true)}
+                  disabled={isExiting}
                   className="rounded-xl font-bold"
                 >
                   <Sparkles className="h-4 w-4 mr-1.5" /> Virar Carta
@@ -308,6 +342,7 @@ export function PackOpeningModal({
                 <Button
                   type="button"
                   onClick={handleNextCard}
+                  disabled={isExiting}
                   className="rounded-xl font-bold"
                 >
                   {currentIndex + 1 < orderedCards.length ? (
