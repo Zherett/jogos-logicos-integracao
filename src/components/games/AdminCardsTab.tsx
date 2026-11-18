@@ -841,8 +841,10 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
                     className="h-8 flex-1 rounded-xl text-xs font-bold"
                     onClick={() => void handleTestOpenPack(pack)}
                     disabled={cards.length === 0}
+                    title={cards.length === 0 ? "Crie pelo menos 1 carta na aba Cartas para testar" : undefined}
                   >
-                    <Sparkles className="h-3.5 w-3.5 mr-1" /> Testar Abertura
+                    <Sparkles className="h-3.5 w-3.5 mr-1" />
+                    {cards.length === 0 ? "Sem cartas no catálogo" : "Testar Abertura"}
                   </Button>
                   <Button
                     type="button"

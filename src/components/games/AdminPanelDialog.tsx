@@ -605,6 +605,18 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
     };
   }, [open, tab]);
 
+  // Sincroniza o draft quando auth.adminConfig chega do PlayFab após a abertura direta (#/admin)
+  useEffect(() => {
+    if (!open) return;
+    const remoteCardsCount = auth.adminConfig.cardsCatalog?.length ?? 0;
+    const localCardsCount = draft.cardsCatalog?.length ?? 0;
+    const remoteUpdated = auth.adminConfig.updatedAt ?? "";
+    const localUpdated = draft.updatedAt ?? "";
+    if ((localCardsCount === 0 && remoteCardsCount > 0) || remoteUpdated > localUpdated) {
+      setDraft(auth.adminConfig);
+    }
+  }, [open, auth.adminConfig, draft.cardsCatalog?.length, draft.updatedAt]);
+
   useEffect(() => {
     if (!open) return;
     setDraft(auth.adminConfig);
