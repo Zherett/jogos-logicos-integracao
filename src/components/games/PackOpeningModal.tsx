@@ -22,6 +22,16 @@ import {
   type CardPackDefinition,
   type CardPackIconId,
 } from "@/lib/cards-catalog";
+import {
+  playCardFlip,
+  playCardsFlipAll,
+  playCardsGather,
+  playCardsSpread,
+  playCardToss,
+  playPackBodyWhoosh,
+  playPackTear,
+  playPackTopWhoosh,
+} from "@/lib/sound";
 import { CollectibleCardView } from "./CollectibleCardView";
 
 export interface PackOpenOutcome {
@@ -38,6 +48,7 @@ interface PackOpeningModalProps {
 }
 
 type Stage = "sealed" | "tearing" | "stack" | "summary";
+type SummaryPhase = "gathering" | "flipping" | "spread";
 
 export function PackIconSvg({
   icon,
@@ -139,6 +150,7 @@ export function PackOpeningModal({
   titlePrefix = "Pacote",
 }: PackOpeningModalProps) {
   const [stage, setStage] = useState<Stage>("sealed");
+  const [summaryPhase, setSummaryPhase] = useState<SummaryPhase>("gathering");
   const [isOpening, setIsOpening] = useState(false);
   const [openError, setOpenError] = useState<string | null>(null);
   const [orderedCards, setOrderedCards] = useState<CardDefinition[]>([]);
@@ -146,23 +158,28 @@ export function PackOpeningModal({
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
   const [isExiting, setIsExiting] = useState(false);
-  const timerRef = useRef<number | null>(null);
-  const exitTimerRef = useRef<number | null>(null);
+  const timersRef = useRef<number[]>([]);
   const openingLockRef = useRef(false);
   const activePackIdRef = useRef<string | null>(null);
 
+  function clearAllTimers() {
+    for (const id of timersRef.current) {
+      window.clearTimeout(id);
+    }
+    timersRef.current = [];
+  }
+
+  function scheduleTimer(fn: () => void, ms: number) {
+    const id = window.setTimeout(fn, ms);
+    timersRef.current.push(id);
+  }
+
   useEffect(() => {
-    if (timerRef.current) {
-      window.clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    if (exitTimerRef.current) {
-      window.clearTimeout(exitTimerRef.current);
-      exitTimerRef.current = null;
-    }
+    clearAllTimers();
     openingLockRef.current = false;
     activePackIdRef.current = pack?.id ?? null;
     setStage("sealed");
+    setSummaryPhase("gathering");
     setIsOpening(false);
     setOpenError(null);
     setOrderedCards([]);
@@ -174,8 +191,7 @@ export function PackOpeningModal({
 
   useEffect(() => {
     return () => {
-      if (timerRef.current) window.clearTimeout(timerRef.current);
-      if (exitTimerRef.current) window.clearTimeout(exitTimerRef.current);
+      clearAllTimers();
     };
   }, []);
 
@@ -205,7 +221,11 @@ export function PackOpeningModal({
       setIsExiting(false);
       setStage("tearing");
 
-      timerRef.current = window.setTimeout(() => {
+      // Sons sincronizados com os 4 tempos da abertura do pacote
+      playPackTear();
+      scheduleTimer(() => playPackTopWhoosh(), 780);
+      scheduleTimer(() => playPackBodyWhoosh(), 1380);
+      scheduleTimer(() => {
         setStage("stack");
       }, 2350);
     } finally {
@@ -214,10 +234,16 @@ export function PackOpeningModal({
     }
   }
 
+  function handleFlipCurrentCard() {
+    if (stage !== "stack" || isExiting || isFlipped) return;
+    playCardFlip();
+    setIsFlipped(true);
+  }
+
   function handleCardInteraction() {
     if (stage !== "stack" || isExiting) return;
     if (!isFlipped) {
-      setIsFlipped(true);
+      handleFlipCurrentCard();
       return;
     }
     handleNextCard();
@@ -226,14 +252,27 @@ export function PackOpeningModal({
   function handleNextCard() {
     if (isExiting) return;
     setIsExiting(true);
-    exitTimerRef.current = window.setTimeout(() => {
+    playCardToss();
+    scheduleTimer(() => {
       if (currentIndex + 1 < orderedCards.length) {
         setIsFlipped(false);
         setIsExiting(false);
         setCurrentIndex((prev) => prev + 1);
       } else {
         setIsExiting(false);
+        setSummaryPhase("gathering");
         setStage("summary");
+        playCardsGather();
+
+        scheduleTimer(() => {
+          setSummaryPhase("flipping");
+          playCardsFlipAll();
+        }, 480);
+
+        scheduleTimer(() => {
+          setSummaryPhase("spread");
+          playCardsSpread(orderedCards.length);
+        }, 1050);
       }
     }, 360);
   }
@@ -457,7 +496,7 @@ export function PackOpeningModal({
               {!isFlipped ? (
                 <Button
                   type="button"
-                  onClick={() => setIsFlipped(true)}
+                  onClick={handleFlipCurrentCard}
                   disabled={isExiting}
                   className="rounded-xl font-bold"
                 >
@@ -505,24 +544,74 @@ export function PackOpeningModal({
           </div>
         )}
 
-        {/* ETAPA 4: RESUMO FINAL */}
+        {/* ETAPA 4: RESUMO FINAL (JUNTAR DE COSTAS -> VIRAR JUNTAS -> ESPALHAR LADO A LADO) */}
         {stage === "summary" && (
           <div className="space-y-4 py-2">
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
-              {orderedCards.map((card, idx) => (
-                <CollectibleCardView
-                  key={`${card.id}_${idx}`}
-                  card={card}
-                  isNew={newlyDiscovered.includes(card.id)}
-                  compact
-                />
-              ))}
-            </div>
-            <div className="flex justify-end">
-              <Button type="button" onClick={onClose} className="rounded-xl font-bold">
-                <Check className="h-4 w-4 mr-1.5" /> Concluir
-              </Button>
-            </div>
+            {summaryPhase !== "spread" ? (
+              <div className="flex h-[26rem] items-center justify-center overflow-hidden">
+                <div className="animate-summary-gather relative h-[21rem] w-60">
+                  {orderedCards.map((card, idx) => {
+                    const offset = (idx - (orderedCards.length - 1) / 2) * 5;
+                    const rot = (idx - (orderedCards.length - 1) / 2) * 2.5;
+                    return (
+                      <div
+                        key={`gather_${card.id}_${idx}`}
+                        className="perspective-1000 absolute inset-0"
+                        style={{
+                          transform: `translate(${offset}px, ${Math.abs(offset) * 0.4}px) rotate(${rot}deg)`,
+                          zIndex: idx + 1,
+                        }}
+                      >
+                        <div
+                          className={`preserve-3d relative h-full w-full transition-transform duration-500 ease-out ${
+                            summaryPhase === "flipping" ? "rotate-y-180" : ""
+                          }`}
+                        >
+                          <div
+                            className="backface-hidden absolute inset-0 overflow-hidden rounded-2xl"
+                            style={{ transform: "rotateY(0deg) translateZ(1px)" }}
+                          >
+                            <CardBackFace minimal />
+                          </div>
+                          <div
+                            className="backface-hidden w-full overflow-hidden rounded-2xl"
+                            style={{ transform: "rotateY(180deg) translateZ(1px)" }}
+                          >
+                            <CollectibleCardView
+                              card={card}
+                              isNew={newlyDiscovered.includes(card.id)}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
+                  {orderedCards.map((card, idx) => (
+                    <div
+                      key={`${card.id}_${idx}`}
+                      className="animate-summary-spread-in"
+                      style={{ animationDelay: `${idx * 75}ms` }}
+                    >
+                      <CollectibleCardView
+                        card={card}
+                        isNew={newlyDiscovered.includes(card.id)}
+                        compact
+                      />
+                    </div>
+                  ))}
+                </div>
+                <div className="flex justify-end">
+                  <Button type="button" onClick={onClose} className="rounded-xl font-bold">
+                    <Check className="h-4 w-4 mr-1.5" /> Concluir
+                  </Button>
+                </div>
+              </>
+            )}
           </div>
         )}
       </DialogContent>

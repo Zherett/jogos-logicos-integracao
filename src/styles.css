@@ -335,6 +335,20 @@
 .animate-card-toss-out {
   animation: card-toss-out 0.36s cubic-bezier(0.4, 0, 0.2, 1) forwards;
 }
+@keyframes summary-gather {
+  0% { transform: scale(0.75) translateY(28px); opacity: 0; }
+  100% { transform: scale(1) translateY(0); opacity: 1; }
+}
+@keyframes summary-spread-in {
+  0% { transform: scale(0.86) translateY(-10px); opacity: 0; }
+  100% { transform: scale(1) translateY(0); opacity: 1; }
+}
+.animate-summary-gather {
+  animation: summary-gather 0.4s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+.animate-summary-spread-in {
+  animation: summary-spread-in 0.38s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
 .perspective-1000 {
   perspective: 1000px;
 }

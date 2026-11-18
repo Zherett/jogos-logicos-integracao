@@ -414,3 +414,160 @@ export function playSound(
   else if (type === "barrier") playBarrierBreach();
   else playClick();
 }
+
+function playFilteredNoise(opts: {
+  duration: number;
+  freqStart: number;
+  freqEnd: number;
+  q?: number;
+  filterType?: BiquadFilterType;
+  vol: number;
+  delay?: number;
+  crackle?: boolean;
+}) {
+  if (isSoundMuted()) return;
+  const ctx = getAudioContext();
+  if (!ctx) return;
+  try {
+    const sampleRate = ctx.sampleRate;
+    const frameCount = Math.max(1, Math.floor(sampleRate * opts.duration));
+    const buffer = ctx.createBuffer(1, frameCount, sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < frameCount; i++) {
+      let sample = Math.random() * 2 - 1;
+      if (opts.crackle) {
+        // Modulação irregular para simular plástico/papel rasgando
+        const gate = Math.sin((i / sampleRate) * 95) * 0.45 + 0.65;
+        sample *= gate;
+      }
+      data[i] = sample;
+    }
+
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = opts.filterType ?? "bandpass";
+    filter.Q.value = opts.q ?? 1.4;
+    const start = ctx.currentTime + (opts.delay ?? 0);
+    filter.frequency.setValueAtTime(opts.freqStart, start);
+    filter.frequency.exponentialRampToValueAtTime(
+      Math.max(60, opts.freqEnd),
+      start + opts.duration,
+    );
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.linearRampToValueAtTime(opts.vol, start + Math.min(0.025, opts.duration * 0.2));
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + opts.duration);
+
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+    src.start(start);
+    src.stop(start + opts.duration + 0.02);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Som de plástico/papel rasgando na abertura do pacote */
+export function playPackTear() {
+  playFilteredNoise({
+    duration: 0.72,
+    freqStart: 1900,
+    freqEnd: 3400,
+    q: 1.8,
+    filterType: "bandpass",
+    vol: 0.14,
+    crackle: true,
+  });
+}
+
+/** Som leve da aba superior do pacote voando */
+export function playPackTopWhoosh() {
+  playFilteredNoise({
+    duration: 0.22,
+    freqStart: 1500,
+    freqEnd: 620,
+    q: 1.3,
+    filterType: "bandpass",
+    vol: 0.09,
+  });
+}
+
+/** Som mais grave e alto da parte de baixo do pacote sendo jogada fora */
+export function playPackBodyWhoosh() {
+  playFilteredNoise({
+    duration: 0.34,
+    freqStart: 680,
+    freqEnd: 190,
+    q: 1.1,
+    filterType: "lowpass",
+    vol: 0.18,
+  });
+}
+
+/** Estalo rápido ao virar uma carta */
+export function playCardFlip() {
+  playFilteredNoise({
+    duration: 0.11,
+    freqStart: 2400,
+    freqEnd: 950,
+    q: 1.6,
+    filterType: "bandpass",
+    vol: 0.12,
+  });
+}
+
+/** Som de arremessar uma carta revelada para fora */
+export function playCardToss() {
+  playFilteredNoise({
+    duration: 0.17,
+    freqStart: 1650,
+    freqEnd: 520,
+    q: 1.2,
+    filterType: "bandpass",
+    vol: 0.11,
+  });
+}
+
+/** Som das cartas se juntando em um maço no centro */
+export function playCardsGather() {
+  playFilteredNoise({
+    duration: 0.24,
+    freqStart: 900,
+    freqEnd: 340,
+    q: 1.2,
+    filterType: "lowpass",
+    vol: 0.13,
+  });
+}
+
+/** Som encorpado de todas as cartas virando juntas no amontoado */
+export function playCardsFlipAll() {
+  playFilteredNoise({
+    duration: 0.22,
+    freqStart: 2100,
+    freqEnd: 780,
+    q: 1.3,
+    filterType: "bandpass",
+    vol: 0.15,
+  });
+}
+
+/** Som sequencial de cada carta se espalhando lado a lado */
+export function playCardsSpread(count: number) {
+  const safeCount = Math.max(1, Math.min(20, count));
+  for (let i = 0; i < safeCount; i++) {
+    playFilteredNoise({
+      duration: 0.09,
+      freqStart: 2000 + i * 90,
+      freqEnd: 900,
+      q: 1.5,
+      filterType: "bandpass",
+      vol: 0.09,
+      delay: i * 0.075,
+    });
+  }
+}
