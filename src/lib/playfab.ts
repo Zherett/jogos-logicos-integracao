@@ -582,10 +582,33 @@ function parseAndCleanRegistry(): { reg: Record<string, StoredAccount>; raw: str
     ) {
       delete parsed[key];
       tombstoneCleaned = true;
+      continue;
+    }
+    // Sanitização LGPD automática no cache local: remove birthdate e abrevia full_name legado
+    if (acc.profile.birthdate) {
+      if (!acc.profile.ageStage) {
+        acc.profile.ageStage = stageForPlayer(
+          acc.profile.school,
+          acc.profile.birthdate,
+          new Date(),
+        ).id;
+      }
+      acc.profile.birthdate = "";
+      tombstoneCleaned = true;
+    }
+    if (acc.profile.full_name) {
+      const abbr = abbreviateStudentName(acc.profile.full_name);
+      if (abbr && acc.profile.full_name !== abbr) {
+        acc.profile.full_name = abbr;
+        tombstoneCleaned = true;
+      }
     }
   }
   if (purgeExpiredTrash(parsed) || tombstoneCleaned) {
     saveRegistry(parsed);
+    cachedRegistryReadOnly = parsed;
+    cachedRegistryClean = parsed;
+    cachedTombstoneCount = tombCount;
     return { reg: parsed, raw: cachedRegistryRaw ?? raw, tombCount };
   }
   cachedRegistryRaw = raw;
