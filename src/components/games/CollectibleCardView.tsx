@@ -3,13 +3,14 @@ import { ImageOff, Lock, Sparkles } from "lucide-react";
 import {
   CARD_RARITY_META,
   isValidCardMediaUrl,
+  resolveCardBgClass,
   type CardDefinition,
 } from "@/lib/cards-catalog";
 
 interface CollectibleCardViewProps {
   card: Pick<
     CardDefinition,
-    "name" | "description" | "rarity" | "imageUrl" | "imageFit" | "isFoil"
+    "name" | "description" | "rarity" | "imageUrl" | "imageFit" | "colorVariant" | "isFoil"
   >;
   count?: number;
   isNew?: boolean;
@@ -28,6 +29,7 @@ export function CollectibleCardView({
 }: CollectibleCardViewProps) {
   const [imgError, setImgError] = useState(false);
   const meta = CARD_RARITY_META[card.rarity] ?? CARD_RARITY_META.comum;
+  const bgClass = resolveCardBgClass(card.rarity, card.colorVariant);
   const hasValidUrl = isValidCardMediaUrl(card.imageUrl) && !imgError;
   const isFoil = Boolean(card.isFoil) && !locked;
   const useContainBlur = (card.imageFit ?? "contain-blur") === "contain-blur";
@@ -47,7 +49,7 @@ export function CollectibleCardView({
             }
           : undefined
       }
-      className={`group relative flex flex-col overflow-hidden rounded-2xl border-2 isolate transition-all ${meta.cardBgClass} ${meta.borderClass} ${
+      className={`group relative flex flex-col overflow-hidden rounded-2xl border-2 isolate transition-all ${bgClass} ${meta.borderClass} ${
         locked ? "opacity-55 grayscale" : meta.glowClass
       } ${compact ? "gap-1.5 p-2 pb-1.5" : "gap-1.5 p-2.5 pb-2"} ${
         onClick ? "cursor-pointer hover:-translate-y-0.5 hover:shadow-xl" : ""

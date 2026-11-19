@@ -12,6 +12,7 @@ import {
   mergeWithDefaultCardPacks,
   openCardPack,
   orderPackRevealCards,
+  resolveCardBgClass,
   sumPackProbabilities,
   validatePackProbabilities,
   type CardDefinition,
@@ -162,5 +163,28 @@ describe("Sistema de Cartas Colecionáveis e Pacotes", () => {
 
     assert.ok(CARD_PACK_ICONS.length >= 9);
     assert.ok(CARD_PACK_COLOR_META.aurora.gradientClass.includes("bg-gradient-to-b"));
+  });
+
+  it("aplica 3 variações de degradê para raridades coloridas e persiste na criação/edição", () => {
+    const v1 = resolveCardBgClass("rara", 1);
+    const v2 = resolveCardBgClass("rara", 2);
+    const v3 = resolveCardBgClass("rara", 3);
+    assert.ok(v1.includes("bg-gradient-to-br"));
+    assert.notEqual(v1, v2);
+    assert.notEqual(v2, v3);
+
+    const created = createCardDefinition({
+      name: "Dragão Azul",
+      description: "Degradê oceânico",
+      rarity: "rara",
+      imageUrl: "https://example.com/dragao.png",
+      colorVariant: 2,
+    });
+    assert.ok(created.card);
+    assert.equal(created.card.colorVariant, 2);
+
+    const edited = editCardDefinition(created.card, { colorVariant: 3 });
+    assert.ok(edited.card);
+    assert.equal(edited.card.colorVariant, 3);
   });
 });

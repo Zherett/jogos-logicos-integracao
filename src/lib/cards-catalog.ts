@@ -10,11 +10,16 @@ export const CARD_RARITIES: readonly CardRarity[] = [
   "lendaria",
 ] as const;
 
+export type CardColorVariant = 1 | 2 | 3;
+
+export const CARD_COLOR_VARIANTS: readonly CardColorVariant[] = [1, 2, 3] as const;
+
 export interface CardRarityMeta {
   id: CardRarity;
   label: string;
   borderClass: string;
   cardBgClass: string;
+  gradientVariants: Record<CardColorVariant, string>;
   innerBoxClass: string;
   badgeClass: string;
   glowClass: string;
@@ -26,6 +31,11 @@ export const CARD_RARITY_META: Record<CardRarity, CardRarityMeta> = {
     label: "Comum",
     borderClass: "border-slate-300 dark:border-slate-500/80",
     cardBgClass: "bg-white dark:bg-slate-900",
+    gradientVariants: {
+      1: "bg-white dark:bg-slate-900",
+      2: "bg-white dark:bg-slate-900",
+      3: "bg-white dark:bg-slate-900",
+    },
     innerBoxClass:
       "bg-slate-100/90 border-slate-300/80 text-slate-900 dark:bg-slate-950/90 dark:border-slate-700/80 dark:text-slate-100",
     badgeClass:
@@ -36,7 +46,13 @@ export const CARD_RARITY_META: Record<CardRarity, CardRarityMeta> = {
     id: "incomum",
     label: "Incomum",
     borderClass: "border-emerald-500 dark:border-emerald-400",
-    cardBgClass: "bg-emerald-500 dark:bg-emerald-700",
+    cardBgClass:
+      "bg-gradient-to-br from-emerald-400 via-emerald-600 to-teal-700 dark:from-emerald-600 dark:via-emerald-700 dark:to-teal-900",
+    gradientVariants: {
+      1: "bg-gradient-to-br from-emerald-400 via-emerald-600 to-teal-700 dark:from-emerald-600 dark:via-emerald-700 dark:to-teal-900",
+      2: "bg-gradient-to-br from-lime-400 via-emerald-600 to-green-900 dark:from-lime-600 dark:via-emerald-800 dark:to-green-950",
+      3: "bg-gradient-to-br from-teal-400 via-emerald-500 to-cyan-800 dark:from-teal-600 dark:via-emerald-700 dark:to-cyan-950",
+    },
     innerBoxClass:
       "bg-white/95 border-emerald-600/35 text-slate-900 dark:bg-slate-950/90 dark:border-emerald-400/50 dark:text-slate-100",
     badgeClass:
@@ -47,7 +63,13 @@ export const CARD_RARITY_META: Record<CardRarity, CardRarityMeta> = {
     id: "rara",
     label: "Rara",
     borderClass: "border-blue-500 dark:border-blue-400",
-    cardBgClass: "bg-blue-500 dark:bg-blue-700",
+    cardBgClass:
+      "bg-gradient-to-br from-sky-400 via-blue-600 to-indigo-800 dark:from-sky-600 dark:via-blue-700 dark:to-indigo-950",
+    gradientVariants: {
+      1: "bg-gradient-to-br from-sky-400 via-blue-600 to-indigo-800 dark:from-sky-600 dark:via-blue-700 dark:to-indigo-950",
+      2: "bg-gradient-to-br from-cyan-400 via-blue-600 to-slate-900 dark:from-cyan-600 dark:via-blue-800 dark:to-slate-950",
+      3: "bg-gradient-to-br from-blue-400 via-indigo-600 to-violet-800 dark:from-blue-600 dark:via-indigo-800 dark:to-violet-950",
+    },
     innerBoxClass:
       "bg-white/95 border-blue-600/35 text-slate-900 dark:bg-slate-950/90 dark:border-blue-400/50 dark:text-slate-100",
     badgeClass:
@@ -58,7 +80,13 @@ export const CARD_RARITY_META: Record<CardRarity, CardRarityMeta> = {
     id: "epica",
     label: "Épica",
     borderClass: "border-purple-500 dark:border-purple-400",
-    cardBgClass: "bg-purple-500 dark:bg-purple-700",
+    cardBgClass:
+      "bg-gradient-to-br from-violet-400 via-purple-600 to-fuchsia-900 dark:from-violet-600 dark:via-purple-700 dark:to-fuchsia-950",
+    gradientVariants: {
+      1: "bg-gradient-to-br from-violet-400 via-purple-600 to-fuchsia-900 dark:from-violet-600 dark:via-purple-700 dark:to-fuchsia-950",
+      2: "bg-gradient-to-br from-pink-500 via-purple-600 to-indigo-900 dark:from-pink-600 dark:via-purple-800 dark:to-indigo-950",
+      3: "bg-gradient-to-br from-purple-400 via-purple-700 to-slate-900 dark:from-purple-600 dark:via-purple-800 dark:to-slate-950",
+    },
     innerBoxClass:
       "bg-white/95 border-purple-600/35 text-slate-900 dark:bg-slate-950/90 dark:border-purple-400/50 dark:text-slate-100",
     badgeClass:
@@ -69,7 +97,13 @@ export const CARD_RARITY_META: Record<CardRarity, CardRarityMeta> = {
     id: "lendaria",
     label: "Lendária",
     borderClass: "border-red-500 dark:border-red-400",
-    cardBgClass: "bg-red-500 dark:bg-red-700",
+    cardBgClass:
+      "bg-gradient-to-br from-orange-400 via-red-600 to-rose-900 dark:from-orange-600 dark:via-red-700 dark:to-rose-950",
+    gradientVariants: {
+      1: "bg-gradient-to-br from-orange-400 via-red-600 to-rose-900 dark:from-orange-600 dark:via-red-700 dark:to-rose-950",
+      2: "bg-gradient-to-br from-amber-400 via-red-600 to-red-950 dark:from-amber-600 dark:via-red-800 dark:to-red-950",
+      3: "bg-gradient-to-br from-rose-400 via-red-600 to-purple-950 dark:from-rose-600 dark:via-red-800 dark:to-purple-950",
+    },
     innerBoxClass:
       "bg-white/95 border-red-600/35 text-slate-900 dark:bg-slate-950/90 dark:border-red-400/50 dark:text-slate-100",
     badgeClass:
@@ -77,6 +111,15 @@ export const CARD_RARITY_META: Record<CardRarity, CardRarityMeta> = {
     glowClass: "shadow-[0_0_26px_-1px_rgba(239,68,68,0.75)] dark:shadow-[0_0_26px_-1px_rgba(239,68,68,0.85)]",
   },
 };
+
+export function resolveCardBgClass(
+  rarity: CardRarity,
+  variant?: CardColorVariant,
+): string {
+  const meta = CARD_RARITY_META[rarity] ?? CARD_RARITY_META.comum;
+  const v: CardColorVariant = variant === 2 || variant === 3 ? variant : 1;
+  return meta.gradientVariants[v] ?? meta.cardBgClass;
+}
 
 export type CardImageFit = "contain-blur" | "cover";
 
@@ -87,6 +130,7 @@ export interface CardDefinition {
   rarity: CardRarity;
   imageUrl: string;
   imageFit?: CardImageFit;
+  colorVariant?: CardColorVariant;
   isFoil?: boolean;
   createdAt: string;
   updatedAt: string;
@@ -355,6 +399,7 @@ export function createCardDefinition(input: {
   rarity: CardRarity;
   imageUrl: string;
   imageFit?: CardImageFit;
+  colorVariant?: CardColorVariant;
   isFoil?: boolean;
 }): { card: CardDefinition | null; error?: string } {
   const name = input.name.trim();
@@ -373,6 +418,7 @@ export function createCardDefinition(input: {
       rarity: input.rarity,
       imageUrl,
       imageFit: input.imageFit ?? "contain-blur",
+      colorVariant: input.colorVariant === 2 || input.colorVariant === 3 ? input.colorVariant : 1,
       isFoil: Boolean(input.isFoil),
       createdAt: now,
       updatedAt: now,
@@ -390,6 +436,7 @@ export function editCardDefinition(
     description?: string;
     imageUrl?: string;
     imageFit?: CardImageFit;
+    colorVariant?: CardColorVariant;
     isFoil?: boolean;
   },
 ): { card: CardDefinition | null; error?: string } {
@@ -397,6 +444,12 @@ export function editCardDefinition(
   const nextDesc = patch.description !== undefined ? patch.description.trim() : existing.description;
   const nextUrl = patch.imageUrl !== undefined ? patch.imageUrl.trim() : existing.imageUrl;
   const nextFit = patch.imageFit ?? existing.imageFit ?? "contain-blur";
+  const nextVariant: CardColorVariant =
+    patch.colorVariant === 1 || patch.colorVariant === 2 || patch.colorVariant === 3
+      ? patch.colorVariant
+      : existing.colorVariant === 2 || existing.colorVariant === 3
+        ? existing.colorVariant
+        : 1;
   const nextFoil = patch.isFoil !== undefined ? Boolean(patch.isFoil) : Boolean(existing.isFoil);
 
   if (!nextName) return { card: null, error: "O nome da carta não pode ficar vazio." };
@@ -411,6 +464,7 @@ export function editCardDefinition(
       description: nextDesc,
       imageUrl: nextUrl,
       imageFit: nextFit,
+      colorVariant: nextVariant,
       isFoil: nextFoil,
       rarity: existing.rarity, // Raridade nunca pode ser alterada após criação
       updatedAt: new Date().toISOString(),

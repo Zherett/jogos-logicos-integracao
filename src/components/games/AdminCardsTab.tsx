@@ -18,6 +18,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
+  CARD_COLOR_VARIANTS,
   CARD_PACK_COLORS,
   CARD_PACK_COLOR_META,
   CARD_PACK_ICONS,
@@ -27,8 +28,10 @@ import {
   editCardDefinition,
   mergeWithDefaultCardPacks,
   openCardPack,
+  resolveCardBgClass,
   sumPackProbabilities,
   validatePackProbabilities,
+  type CardColorVariant,
   type CardDefinition,
   type CardImageFit,
   type CardPackColorId,
@@ -63,6 +66,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
   const [cardRarity, setCardRarity] = useState<CardRarity>("comum");
   const [cardImageUrl, setCardImageUrl] = useState("");
   const [cardImageFit, setCardImageFit] = useState<CardImageFit>("contain-blur");
+  const [cardColorVariant, setCardColorVariant] = useState<CardColorVariant>(1);
   const [cardFoil, setCardFoil] = useState(false);
   const [cardError, setCardError] = useState<string | null>(null);
   const [rarityFilter, setRarityFilter] = useState<CardRarity | "todas">("todas");
@@ -105,6 +109,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
     setCardRarity("comum");
     setCardImageUrl("");
     setCardImageFit("contain-blur");
+    setCardColorVariant(1);
     setCardFoil(false);
     setCardError(null);
   }
@@ -116,6 +121,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
     setCardRarity(card.rarity);
     setCardImageUrl(card.imageUrl);
     setCardImageFit(card.imageFit ?? "contain-blur");
+    setCardColorVariant(card.colorVariant === 2 || card.colorVariant === 3 ? card.colorVariant : 1);
     setCardFoil(Boolean(card.isFoil));
     setCardError(null);
     setSection("cartas");
@@ -134,6 +140,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
         description: cardDesc,
         imageUrl: cardImageUrl,
         imageFit: cardImageFit,
+        colorVariant: cardColorVariant,
         isFoil: cardFoil,
       });
       if (!res.card) {
@@ -148,6 +155,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
         rarity: cardRarity,
         imageUrl: cardImageUrl,
         imageFit: cardImageFit,
+        colorVariant: cardColorVariant,
         isFoil: cardFoil,
       });
       if (!res.card) {
@@ -387,6 +395,35 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
                 </div>
               </div>
 
+              {cardRarity !== "comum" && (
+                <div className="space-y-1.5">
+                  <Label>Modo de Coloração (Degradê)</Label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {CARD_COLOR_VARIANTS.map((variant) => {
+                      const active = cardColorVariant === variant;
+                      const swatchBg = resolveCardBgClass(cardRarity, variant);
+                      return (
+                        <button
+                          key={variant}
+                          type="button"
+                          onClick={() => setCardColorVariant(variant)}
+                          className={`flex items-center gap-2 rounded-xl border px-2.5 py-2 text-xs font-bold transition-all ${
+                            active
+                              ? "border-primary ring-2 ring-primary/30 bg-primary/10 text-primary"
+                              : "bg-background text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          <span
+                            className={`h-5 w-5 shrink-0 rounded-md border border-white/30 shadow-xs ${swatchBg}`}
+                          />
+                          <span>Variação {variant}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               <div className="space-y-1">
                 <Label htmlFor="card-img">Link da Imagem ou GIF (HTTPS)</Label>
                 <Input
@@ -496,6 +533,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
                   rarity: cardRarity,
                   imageUrl: cardImageUrl,
                   imageFit: cardImageFit,
+                  colorVariant: cardColorVariant,
                   isFoil: cardFoil,
                 }}
               />
