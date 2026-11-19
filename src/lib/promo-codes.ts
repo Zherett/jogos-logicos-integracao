@@ -35,11 +35,28 @@ const SAFE_LETTERS = "ABCDEFGHJKMNPQRTUVWXYZ";
 // Dígitos sanitizados (sem 0 e 1)
 const SAFE_DIGITS = "23456789";
 
+export type PromoRewardItemCategory = "chest" | "card_pack";
+
+export interface PromoRewardItemPayload {
+  category: PromoRewardItemCategory;
+  itemId: string;
+  label: string;
+  quantity: number;
+}
+
+export const PROMO_CHEST_PRESETS: readonly { id: string; label: string }[] = [
+  { id: "weekly_common", label: "Baú Semanal Comum" },
+  { id: "weekly_epic", label: "Grande Baú Semanal" },
+  { id: "quantum_logic", label: "Baú de Lógica Quântica" },
+  { id: "event_special", label: "Baú Especial de Evento" },
+] as const;
+
 export interface PromoCodeRewardPayload {
   xp: number;
   points: number;
   chestName?: string;
   chestQuantity?: number;
+  rewardItem?: PromoRewardItemPayload;
   // TODO - COSMÉTICOS & AVATARES: ganchos futuros
   cosmeticId?: string;
   avatarPieceId?: string;
@@ -306,6 +323,12 @@ export function generatePromoCodesBatch(options: {
           points: Math.max(0, options.rewards.points ?? 0),
           chestName: options.rewards.chestName,
           chestQuantity: options.rewards.chestQuantity,
+          rewardItem: options.rewards.rewardItem
+            ? {
+                ...options.rewards.rewardItem,
+                quantity: Math.max(1, Math.floor(options.rewards.rewardItem.quantity || 1)),
+              }
+            : undefined,
         },
         createdAt: nowIso,
         createdBy: options.createdBy || "admin",
@@ -586,6 +609,16 @@ export function claimPromoCode(
     } catch {
       /* ignore */
     }
+  }
+
+  // 4. Concede Item (Pacote de Cartas) se houver
+  if (rewards.rewardItem?.category === "card_pack" && rewards.rewardItem.itemId) {
+    const qty = Math.max(1, Math.floor(rewards.rewardItem.quantity || 1));
+    const curPacks = student.unopenedPacks ?? {};
+    student.unopenedPacks = {
+      ...curPacks,
+      [rewards.rewardItem.itemId]: (Number(curPacks[rewards.rewardItem.itemId]) || 0) + qty,
+    };
   }
 
   // Limpa as tentativas falhas após o sucesso

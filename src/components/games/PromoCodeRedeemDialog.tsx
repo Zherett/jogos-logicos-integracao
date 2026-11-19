@@ -255,13 +255,19 @@ export function PromoCodeRedeemDialog({ open, onOpenChange, onRewardClaimed }: P
                     </div>
                   )}
 
-                  {identifiedReward.chestName && (
+                  {(identifiedReward.rewardItem || identifiedReward.chestName) && (
                     <div className="col-span-2 rounded-xl border bg-background/90 p-2.5 flex items-center gap-2">
                       <Package className="h-5 w-5 text-primary" />
                       <div>
-                        <div className="text-[10px] text-muted-foreground font-bold uppercase">Baú de Recompensa</div>
+                        <div className="text-[10px] text-muted-foreground font-bold uppercase">
+                          {identifiedReward.rewardItem?.category === "card_pack"
+                            ? "Pacote de Cartas"
+                            : "Baú de Recompensa"}
+                        </div>
                         <div className="font-display text-xs font-black text-foreground">
-                          {identifiedReward.chestQuantity ?? 1}x {identifiedReward.chestName}
+                          {identifiedReward.rewardItem
+                            ? `${identifiedReward.rewardItem.quantity}x ${identifiedReward.rewardItem.label}`
+                            : `${identifiedReward.chestQuantity ?? 1}x ${identifiedReward.chestName}`}
                         </div>
                       </div>
                     </div>

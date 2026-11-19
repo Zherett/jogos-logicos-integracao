@@ -21,18 +21,28 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PromoCodeRedeemDialog } from "./PromoCodeRedeemDialog";
+import { mergeWithDefaultCardPacks } from "@/lib/cards-catalog";
+import { usePlayerAuth } from "@/lib/player-auth";
 import {
   generatePromoCodesBatch,
   loadLocalPromoCodes,
   deletePromoCode,
   syncPromoCodesToPlayFab,
   fetchPromoCodesFromPlayFab,
+  PROMO_CHEST_PRESETS,
   PROMO_CODE_PATTERN_NAMES,
   type PromoCodePattern,
   type PromoCodeItem,
+  type PromoRewardItemCategory,
+  type PromoRewardItemPayload,
 } from "@/lib/promo-codes";
 
 export function AdminPromoCodesTab() {
+  const auth = usePlayerAuth();
+  const availablePacks = useMemo(
+    () => mergeWithDefaultCardPacks(auth.adminConfig.cardPacks),
+    [auth.adminConfig.cardPacks],
+  );
   const [codes, setCodes] = useState<PromoCodeItem[]>(() => loadLocalPromoCodes());
   const [filterStatus, setFilterStatus] = useState<"ALL" | "active" | "claimed">("ALL");
   const [searchFilter, setSearchFilter] = useState("");
@@ -46,8 +56,9 @@ export function AdminPromoCodesTab() {
   const [batchCount, setBatchCount] = useState<number>(10);
   const [rewardXp, setRewardXp] = useState<number>(50);
   const [rewardPoints, setRewardPoints] = useState<number>(25);
-  const [chestName, setChestName] = useState<string>("");
-  const [chestQuantity, setChestQuantity] = useState<number>(1);
+  const [itemCategory, setItemCategory] = useState<"none" | PromoRewardItemCategory>("none");
+  const [selectedItemId, setSelectedItemId] = useState<string>("");
+  const [itemQuantity, setItemQuantity] = useState<number>(1);
   const [allowMultiplePerStudent, setAllowMultiplePerStudent] = useState<boolean>(false);
   const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
 
@@ -68,6 +79,25 @@ export function AdminPromoCodesTab() {
       return;
     }
 
+    let rewardItem: PromoRewardItemPayload | undefined;
+    let chestNameLegacy: string | undefined;
+    let chestQtyLegacy: number | undefined;
+    const safeQty = Math.max(1, Math.min(99, Math.floor(itemQuantity || 1)));
+
+    if (itemCategory === "chest") {
+      const found = PROMO_CHEST_PRESETS.find((c) => c.id === selectedItemId) ?? PROMO_CHEST_PRESETS[0];
+      if (found) {
+        rewardItem = { category: "chest", itemId: found.id, label: found.label, quantity: safeQty };
+        chestNameLegacy = found.label;
+        chestQtyLegacy = safeQty;
+      }
+    } else if (itemCategory === "card_pack") {
+      const found = availablePacks.find((p) => p.id === selectedItemId) ?? availablePacks[0];
+      if (found) {
+        rewardItem = { category: "card_pack", itemId: found.id, label: found.name, quantity: safeQty };
+      }
+    }
+
     const created = generatePromoCodesBatch({
       count: batchCount,
       pattern,
@@ -76,8 +106,9 @@ export function AdminPromoCodesTab() {
       rewards: {
         xp: rewardXp,
         points: rewardPoints,
-        chestName: chestName.trim() || undefined,
-        chestQuantity: chestName.trim() ? chestQuantity : undefined,
+        chestName: chestNameLegacy,
+        chestQuantity: chestQtyLegacy,
+        rewardItem,
       },
       createdBy: "admin",
     });
@@ -267,15 +298,67 @@ export function AdminPromoCodesTab() {
           </div>
 
           <div className="space-y-1">
-            <Label className="text-xs font-bold text-muted-foreground">Baú de Recompensa (Opcional):</Label>
-            <Input
-              value={chestName}
-              onChange={(e) => setChestName(e.target.value)}
-              placeholder="Ex: Baú de Lógica Quântica"
-              className="h-9 text-xs rounded-xl"
-            />
+            <Label className="text-xs font-bold text-muted-foreground">Itens (Opcional):</Label>
+            <select
+              value={itemCategory}
+              onChange={(e) => {
+                const nextCat = e.target.value as "none" | PromoRewardItemCategory;
+                setItemCategory(nextCat);
+                if (nextCat === "chest") {
+                  setSelectedItemId(PROMO_CHEST_PRESETS[0]?.id ?? "");
+                } else if (nextCat === "card_pack") {
+                  setSelectedItemId(availablePacks[0]?.id ?? "");
+                } else {
+                  setSelectedItemId("");
+                }
+              }}
+              className="w-full h-9 rounded-xl border bg-background px-3 text-xs font-semibold"
+            >
+              <option value="none">Nenhum item</option>
+              <option value="chest">Baús</option>
+              <option value="card_pack">Pacotes de Cartas</option>
+            </select>
           </div>
         </div>
+
+        {itemCategory !== "none" && (
+          <div className="grid grid-cols-1 sm:grid-cols-[1fr_140px] gap-3 rounded-xl border border-border/70 bg-background/50 p-2.5">
+            <div className="space-y-1">
+              <Label className="text-xs font-bold text-muted-foreground">
+                {itemCategory === "chest" ? "Selecionar Baú:" : "Selecionar Pacote de Cartas:"}
+              </Label>
+              <select
+                value={selectedItemId}
+                onChange={(e) => setSelectedItemId(e.target.value)}
+                className="w-full h-9 rounded-xl border bg-background px-3 text-xs font-semibold"
+              >
+                {itemCategory === "chest"
+                  ? PROMO_CHEST_PRESETS.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.label}
+                      </option>
+                    ))
+                  : availablePacks.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} ({p.cardsPerPack} cartas)
+                      </option>
+                    ))}
+              </select>
+            </div>
+
+            <div className="space-y-1">
+              <Label className="text-xs font-bold text-muted-foreground">Quantidade:</Label>
+              <Input
+                type="number"
+                min={1}
+                max={99}
+                value={itemQuantity}
+                onChange={(e) => setItemQuantity(Math.max(1, Math.min(99, Number(e.target.value) || 1)))}
+                className="h-9 text-xs rounded-xl font-bold"
+              />
+            </div>
+          </div>
+        )}
 
         {/* REGULAMENTO DE RESGATE POR ALUNO (PODE MARCAR E DESMARCAR) */}
         <div className="rounded-xl border border-border/80 bg-background/60 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -415,7 +498,16 @@ export function AdminPromoCodesTab() {
                     <td className="px-3 py-2.5 font-bold">
                       <span className="text-amber-500">+{item.rewards.xp} XP</span>
                       {item.rewards.points > 0 && <span className="text-yellow-500 ml-1.5">+{item.rewards.points} pts</span>}
-                      {item.rewards.chestName && <span className="text-primary ml-1.5">• 🎁 {item.rewards.chestName}</span>}
+                      {item.rewards.rewardItem ? (
+                        <span className="text-primary ml-1.5">
+                          • {item.rewards.rewardItem.category === "card_pack" ? "🃏" : "🎁"}{" "}
+                          {item.rewards.rewardItem.quantity}x {item.rewards.rewardItem.label}
+                        </span>
+                      ) : item.rewards.chestName ? (
+                        <span className="text-primary ml-1.5">
+                          • 🎁 {item.rewards.chestQuantity ?? 1}x {item.rewards.chestName}
+                        </span>
+                      ) : null}
                     </td>
                     <td className="px-3 py-2.5">
                       {item.status === "active" ? (
