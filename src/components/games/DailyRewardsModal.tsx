@@ -202,7 +202,7 @@ export function DailyRewardsModal({
           </div>
         </DialogHeader>
 
-        <div className="flex-1 overflow-y-auto pr-1">
+        <div className="flex-1 min-h-0 overflow-y-auto pr-1">
         {activeTab === "recompensas" ? (
           <div className="space-y-3">
             {/* Resumo de Check-in e Ofensiva */}

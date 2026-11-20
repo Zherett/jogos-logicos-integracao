@@ -37,7 +37,7 @@ export function MedalUnlockNotification() {
 
   return (
     <Dialog open={Boolean(current)} onOpenChange={() => setCurrent(null)}>
-      <DialogContent className="overflow-hidden rounded-3xl border-2 sm:max-w-md p-6 text-center animate-in zoom-in-95 duration-200">
+      <DialogContent className="max-h-[90vh] overflow-y-auto rounded-3xl border-2 sm:max-w-md p-6 text-center animate-in zoom-in-95 duration-200">
         <DialogHeader>
           <DialogTitle className="flex items-center justify-center gap-2 font-display text-xl font-extrabold text-primary">
             <Sparkles className="h-5 w-5 text-accent animate-pulse" /> NOVA MEDALHA DESBLOQUEADA!

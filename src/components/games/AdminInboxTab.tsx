@@ -1597,7 +1597,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
             </div>
 
             {/* LISTA ROLÁVEL DE ALUNOS COM CHECKBOX */}
-            <div className="max-h-[380px] overflow-y-auto space-y-1.5 rounded-2xl border bg-background/50 p-2">
+            <div className="space-y-1.5 rounded-2xl border bg-background/50 p-2">
               {displayStudents.length === 0 ? (
                 <div className="py-8 text-center text-xs text-muted-foreground">
                   Nenhum aluno encontrado com os filtros atuais.
@@ -2498,7 +2498,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                 Nenhum comunicado foi transmitido recentemente.
               </div>
             ) : (
-              <div className="max-h-72 overflow-y-auto space-y-2.5">
+              <div className="space-y-2.5">
                 {sortedSentHistory.map((msg) => {
                   let formattedDate = "Recente";
                   try {
@@ -3769,7 +3769,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
               </div>
 
               {/* LISTA ROLÁVEL DE ALUNOS */}
-              <div className="max-h-60 overflow-y-auto space-y-1.5 rounded-2xl border bg-background/50 p-2 text-xs">
+              <div className="space-y-1.5 rounded-2xl border bg-background/50 p-2 text-xs">
                 {readersTab === "read" ? (
                   activeReadersData.readStudents.length === 0 ? (
                     <div className="py-6 text-center text-muted-foreground">
@@ -3901,7 +3901,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                     <strong className="text-foreground font-semibold">{batchCancelingMsgs.length} mensagens</strong>{" "}
                     selecionadas?
                   </p>
-                  <ul className="max-h-28 overflow-y-auto rounded-xl border bg-secondary/30 p-2.5 space-y-1 text-[11px] text-foreground">
+                  <ul className="rounded-xl border bg-secondary/30 p-2.5 space-y-1 text-[11px] text-foreground">
                     {batchCancelingMsgs.map((m) => (
                       <li key={m.id} className="truncate">
                         • {m.title}

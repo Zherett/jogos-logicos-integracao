@@ -1456,8 +1456,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
               </div>
             </div>
 
-            {/* Stable Internal Scrollable Body with CSS containment for silky 60fps scrolling */}
-            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4 overscroll-contain [contain:paint]">
+            {/* Corpo rolável único do painel */}
+            <div className="flex-1 min-h-0 overflow-y-auto px-6 py-4 space-y-4">
               {savedMsg && (
                 <div className="animate-pop-in rounded-2xl bg-success/15 px-4 py-2.5 text-center text-sm font-bold text-success">
                   {savedMsg}
@@ -2105,7 +2105,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                       Nenhum confronto registrado na Arena X1 ainda. Conforme os alunos disputarem partidas 1v1, os relatórios aparecerão aqui em tempo real.
                     </div>
                   ) : (
-                    <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+                    <div className="space-y-2">
                       {x1History.map((m) => (
                         <div
                           key={m.id}
@@ -3163,7 +3163,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                     </div>
 
                     {studentsAuditModalResult.details.length > 0 ? (
-                      <div className="mt-2 max-h-48 overflow-y-auto space-y-1.5 pr-1">
+                      <div className="mt-2 space-y-1.5">
                         {studentsAuditModalResult.details.map((st) => (
                           <div
                             key={st.id}
@@ -3373,7 +3373,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                             </div>
                           </div>
 
-                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-80 overflow-y-auto pr-1">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                             {sortedFiltered.slice(0, adminStudentsVisibleLimit).map(({ st }) => {
                               const stEff = getEffectivePlayerProgression(
                                 st,
@@ -4324,7 +4324,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                           Todos os alunos já estavam com 100% de suas medalhas e pontos em dia! Nenhuma pendência ou medalha indevida encontrada.
                         </p>
                       ) : (
-                        <div className="max-h-56 overflow-y-auto space-y-2 pr-1">
+                        <div className="space-y-2">
                           {auditResult.details.map((st) => (
                             <div key={st.studentId} className="rounded-lg border bg-background/80 p-2.5 text-xs space-y-1.5">
                               <div className="flex items-center justify-between">
@@ -4405,7 +4405,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                       medalhas no jogo, as mensagens aparecerão aqui em tempo real.
                     </div>
                   ) : (
-                    <div className="max-h-48 overflow-y-auto space-y-2 pr-1">
+                    <div className="space-y-2">
                       {draft.adminMedalNotifications!.map((notif) => {
                         const rarity = RARITY_INFO[notif.medalRarity];
                         return (
@@ -4463,7 +4463,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                     </span>
                   </p>
 
-                  <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
+                  <div className="space-y-2">
                     {getAllAvailableMedals(draft.customMedals).map((m) => {
                       const pioneer = pioneersMap[m.id];
                       const rarity = RARITY_INFO[m.rarity];
@@ -4641,7 +4641,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                       {/* Seletor de Ícones Visual */}
                       <div className="space-y-1.5">
                         <Label className="text-xs font-bold">Selecione o Ícone da Medalha</Label>
-                        <div className="grid grid-cols-8 sm:grid-cols-12 gap-1.5 max-h-32 overflow-y-auto rounded-xl border bg-card p-2">
+                        <div className="grid grid-cols-8 sm:grid-cols-12 gap-1.5 rounded-xl border bg-card p-2">
                           {AVAILABLE_MEDAL_ICONS.map((ic) => (
                             <button
                               key={ic}
@@ -4822,7 +4822,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                         )}
                       </div>
 
-                      <div className="max-h-72 overflow-y-auto space-y-2 pr-1">
+                      <div className="space-y-2">
                         {filteredAdminMedals.length === 0 ? (
                           <p className="py-6 text-center text-xs text-muted-foreground">
                             Nenhuma medalha encontrada com os filtros selecionados.
@@ -5094,7 +5094,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                       Nenhum aluno cadastrado neste navegador ainda.
                     </p>
                   ) : (
-                    <div className="max-h-56 overflow-y-auto space-y-1.5 pr-1">
+                    <div className="space-y-1.5">
                       {players.map((p) => {
                         const pEff = getEffectivePlayerProgression(
                           p,
@@ -5390,7 +5390,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
 
         {/* Corpo do Painel em Tela Cheia */}
         <main className="flex-1 w-full max-w-7xl mx-auto p-4 sm:p-6 lg:p-8 flex flex-col">
-          <div className="flex flex-col flex-1 rounded-3xl border bg-card shadow-sm overflow-hidden [contain:paint]">
+          <div className="flex flex-col flex-1 rounded-3xl border bg-card shadow-sm">
             {adminBody}
           </div>
         </main>

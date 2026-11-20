@@ -1381,7 +1381,7 @@ export function AdminEventsTab({
                                   {/* Ícones Selector Compact */}
                                   <div className="space-y-1">
                                     <Label className="text-[11px] font-bold">Ícone</Label>
-                                    <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto rounded-lg border bg-background p-1.5">
+                                    <div className="flex flex-wrap gap-1 rounded-lg border bg-background p-1.5">
                                       {AVAILABLE_MEDAL_ICONS.map((ic) => (
                                         <button
                                           key={ic}
@@ -1482,7 +1482,7 @@ export function AdminEventsTab({
                                   ) : (
                                     <div className="space-y-2">
                                       <Label className="text-[11px] font-bold">Selecione uma Medalha Existente</Label>
-                                      <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
+                                      <div className="space-y-1.5">
                                         {availableExistingEventMedals.map((m) => {
                                           const rarity = RARITY_INFO[m.rarity];
                                           const isAlreadyAttached = evAttachedMedals.some((a) => a.id === m.id);
@@ -2184,7 +2184,7 @@ export function AdminEventsTab({
                                   {/* Ícones Selector Compact */}
                                   <div className="space-y-1">
                                     <Label className="text-[11px] font-bold">Ícone</Label>
-                                    <div className="flex flex-wrap gap-1 max-h-20 overflow-y-auto rounded-lg border bg-background p-1.5">
+                                    <div className="flex flex-wrap gap-1 rounded-lg border bg-background p-1.5">
                                       {AVAILABLE_MEDAL_ICONS.map((ic) => (
                                         <button
                                           key={ic}
@@ -2285,7 +2285,7 @@ export function AdminEventsTab({
                                   ) : (
                                     <div className="space-y-2">
                                       <Label className="text-[11px] font-bold">Selecione uma Medalha Existente</Label>
-                                      <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
+                                      <div className="space-y-1.5">
                                         {availableExistingEventMedals.map((m) => {
                                           const rarity = RARITY_INFO[m.rarity];
                                           const isAlreadyAttached = recAttachedMedals.some((a) => a.id === m.id);

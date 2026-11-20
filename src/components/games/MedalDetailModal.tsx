@@ -78,7 +78,7 @@ export function MedalDetailModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[92vw] max-w-md rounded-3xl border bg-card p-6 shadow-2xl">
+      <DialogContent className="w-[92vw] max-w-md max-h-[90vh] overflow-y-auto rounded-3xl border bg-card p-6 shadow-2xl">
         <DialogHeader className="sr-only">
           <DialogTitle>{isSecretLocked ? "Medalha Secreta" : medal.title}</DialogTitle>
         </DialogHeader>

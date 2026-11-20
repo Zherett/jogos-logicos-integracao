@@ -429,7 +429,7 @@ export function PlayerMedalsInventory({
           </p>
 
           {/* Grade Geral de Medalhas */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5 max-h-[48vh] overflow-y-auto pr-1">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
             {filtered.slice(0, catalogVisibleLimit).map(({ medal: m, unlocked, progress }) => {
               const isUnlocked = Boolean(unlocked);
               const isSecretLocked = Boolean(m.isSecret && !isUnlocked);

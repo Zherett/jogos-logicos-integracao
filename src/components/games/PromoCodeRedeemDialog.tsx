@@ -152,7 +152,7 @@ export function PromoCodeRedeemDialog({ open, onOpenChange, onRewardClaimed }: P
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="max-w-md rounded-3xl p-6 border shadow-2xl bg-background overflow-hidden">
+      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto rounded-3xl p-6 border shadow-2xl bg-background">
         <DialogHeader className="border-b pb-3">
           <DialogTitle className="flex items-center gap-2 font-display text-xl font-black text-foreground">
             <Ticket className="h-6 w-6 text-fuchsia-500" />

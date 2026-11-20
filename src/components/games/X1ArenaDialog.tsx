@@ -743,7 +743,7 @@ export function X1ArenaDialog({
                       um desafio!
                     </div>
                   ) : (
-                    <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                    <div className="space-y-2">
                       {visibleOpenRooms.map((r) => {
                         const roomExpiresAt = r.expiresAt ?? (r.createdAt + 120_000);
                         const roomSecs = Math.max(0, Math.ceil((roomExpiresAt - Date.now()) / 1000));
@@ -841,7 +841,7 @@ export function X1ArenaDialog({
                         uma sala e passar o <b>código de 4 dígitos</b> para o colega ao lado!
                       </div>
                     ) : (
-                      <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                      <div className="space-y-2">
                         {otherOnlinePlayers.map((p) => (
                           <div
                             key={p.playerId}
@@ -890,7 +890,7 @@ export function X1ArenaDialog({
                   <Label className="font-display font-bold">
                     Jogos Habilitados para a Arena X1 (Definidos pela Coordenação)
                   </Label>
-                  <div className="grid sm:grid-cols-2 gap-2 max-h-60 overflow-y-auto pr-1">
+                  <div className="grid sm:grid-cols-2 gap-2">
                     {allowedX1Games.map((id) => {
                       const active = selectedGame === id;
                       const isRobotClash = id === "rpg";

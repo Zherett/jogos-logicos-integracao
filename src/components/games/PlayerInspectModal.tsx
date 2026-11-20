@@ -352,7 +352,7 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
           </DialogTitle>
         </DialogHeader>
 
-        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+        <div className="flex-1 min-h-0 overflow-y-auto px-6 py-4 space-y-4">
           {/* Navegação em Abas da Inspeção de Perfil (Apenas Perfil & Medalhas; Inventário é sempre privado) */}
           <div
             role="tablist"
@@ -698,7 +698,7 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
               )}
 
               {/* Feed de Transações */}
-              <div className="max-h-60 overflow-y-auto space-y-1.5 pr-1">
+              <div className="space-y-1.5">
                 {ledgerEntries.length === 0 ? (
                   <div className="py-6 text-center text-xs text-muted-foreground">
                     Nenhuma movimentação de pontuação registrada com os filtros selecionados.

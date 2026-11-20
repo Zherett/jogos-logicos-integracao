@@ -838,7 +838,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
                   </div>
                 </div>
                 {!packUseAllCards && (
-                  <div className="max-h-40 overflow-y-auto grid grid-cols-2 sm:grid-cols-3 gap-1.5 pt-1">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 pt-1">
                     {cards.map((c) => {
                       const selected = packSelectedCardIds.includes(c.id);
                       return (

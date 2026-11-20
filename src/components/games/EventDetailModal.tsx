@@ -73,7 +73,7 @@ export function EventDetailModal({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[95vw] max-w-lg rounded-3xl p-5 sm:p-6 shadow-2xl border-2 border-amber-500/30">
+      <DialogContent className="w-[95vw] max-w-lg max-h-[90vh] overflow-y-auto rounded-3xl p-5 sm:p-6 shadow-2xl border-2 border-amber-500/30">
         <DialogHeader>
           <div className="flex flex-wrap items-center gap-2">
             <span

@@ -412,11 +412,11 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
           </DialogHeader>
 
           {/* Corpo: Lista de Mensagens ou Visualizador de Mensagem */}
-          <div className="flex-1 overflow-hidden flex flex-col md:flex-row">
+          <div className="flex-1 min-h-0 overflow-hidden flex flex-col md:flex-row">
             {/* Barra lateral de filtros e lista (oculta no mobile quando lendo mensagem) */}
             <div
-              className={`w-full md:w-88 border-r border-slate-200 dark:border-zinc-800 flex flex-col shrink-0 bg-slate-100/70 dark:bg-zinc-950/80 ${
-                activeMessage ? "hidden md:flex" : "flex"
+              className={`w-full md:w-88 border-r border-slate-200 dark:border-zinc-800 flex flex-col min-h-0 bg-slate-100/70 dark:bg-zinc-950/80 ${
+                activeMessage ? "hidden md:flex md:shrink-0" : "flex-1 md:flex-none md:shrink-0"
               }`}
             >
               {/* Filtros em Abas */}
@@ -457,7 +457,7 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
               </div>
 
               {/* Lista com Rolagem — visualmente destacada do fundo da caixa */}
-              <div className="flex-1 overflow-y-auto p-3 space-y-3 bg-slate-100/90 dark:bg-zinc-950/60">
+              <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-3 bg-slate-100/90 dark:bg-zinc-950/60">
                 {filteredMessages.length === 0 ? (
                   <div className="py-16 text-center space-y-2 px-4">
                     <Mail className="mx-auto h-10 w-10 text-slate-400 dark:text-muted-foreground/40" />
@@ -563,7 +563,7 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
             </div>
 
             {/* Painel de Visualização da Mensagem Selecionada */}
-            <div className="flex-1 flex flex-col overflow-y-auto bg-white dark:bg-background p-4 sm:p-6">
+            <div className="flex-1 min-h-0 flex flex-col overflow-y-auto bg-white dark:bg-background p-4 sm:p-6">
               {activeMessage ? (
                 <div className="space-y-4 max-w-2xl mx-auto w-full">
                   {/* Botão de Voltar no Mobile */}

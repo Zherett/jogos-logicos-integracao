@@ -479,7 +479,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
 
   // Modal de confirmação de desistência reutilizável em todas as modalidades
   const forfeitModal = confirmForfeitOpen ? (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm animate-fade-in">
+    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/70 p-4 backdrop-blur-sm animate-fade-in">
       <div className="w-full max-w-sm rounded-3xl border border-destructive/40 bg-card p-6 shadow-2xl space-y-4 text-center">
         <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-destructive/15 text-destructive">
           <LogOut className="h-7 w-7" />
@@ -522,7 +522,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
     const countdownRem = Math.max(0, Math.ceil((endsAt - nowTick) / 1000));
 
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-neutral-950/90 backdrop-blur-md p-4 animate-in fade-in duration-200">
+      <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-neutral-950/90 backdrop-blur-md p-4 animate-in fade-in duration-200">
         <div className="mx-auto max-w-lg w-full rounded-3xl border-2 border-primary/50 bg-card p-6 sm:p-8 text-center space-y-6 shadow-2xl">
           <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/20 border border-primary/40 px-3.5 py-1 text-xs font-black uppercase text-primary animate-pulse">
             <Swords className="h-4 w-4" /> Desafio Aceito • Arena X1

@@ -736,7 +736,7 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
 
       {/* Modal Celebratório de Conquista de Medalha Especial Platina */}
       {unlockedSpecialMedal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-md animate-fade-in">
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/80 p-4 backdrop-blur-md animate-fade-in">
           <div className="relative w-full max-w-md rounded-3xl border-2 border-purple-400/80 bg-gradient-to-b from-slate-900 via-purple-950/40 to-slate-950 p-6 sm:p-7 text-center shadow-2xl animate-pop-in">
             <div className="mx-auto flex h-24 w-24 items-center justify-center rounded-3xl border-2 border-purple-400 bg-purple-500/20 text-purple-300 shadow-xl shadow-purple-500/30">
               <MedalIcon
