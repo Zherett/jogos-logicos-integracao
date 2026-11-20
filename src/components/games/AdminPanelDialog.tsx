@@ -2105,7 +2105,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                       Nenhum confronto registrado na Arena X1 ainda. Conforme os alunos disputarem partidas 1v1, os relatórios aparecerão aqui em tempo real.
                     </div>
                   ) : (
-                    <div className="space-y-2">
+                    <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
                       {x1History.map((m) => (
                         <div
                           key={m.id}
@@ -3163,7 +3163,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                     </div>
 
                     {studentsAuditModalResult.details.length > 0 ? (
-                      <div className="mt-2 space-y-1.5">
+                      <div className="mt-2 max-h-56 overflow-y-auto space-y-1.5 pr-1">
                         {studentsAuditModalResult.details.map((st) => (
                           <div
                             key={st.id}
@@ -4324,7 +4324,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                           Todos os alunos já estavam com 100% de suas medalhas e pontos em dia! Nenhuma pendência ou medalha indevida encontrada.
                         </p>
                       ) : (
-                        <div className="space-y-2">
+                        <div className="max-h-64 overflow-y-auto space-y-2 pr-1">
                           {auditResult.details.map((st) => (
                             <div key={st.studentId} className="rounded-lg border bg-background/80 p-2.5 text-xs space-y-1.5">
                               <div className="flex items-center justify-between">
@@ -4405,7 +4405,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                       medalhas no jogo, as mensagens aparecerão aqui em tempo real.
                     </div>
                   ) : (
-                    <div className="space-y-2">
+                    <div className="max-h-72 overflow-y-auto space-y-2 pr-1">
                       {draft.adminMedalNotifications!.map((notif) => {
                         const rarity = RARITY_INFO[notif.medalRarity];
                         return (
@@ -4463,7 +4463,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                     </span>
                   </p>
 
-                  <div className="space-y-2">
+                  <div className="max-h-72 overflow-y-auto space-y-2 pr-1">
                     {getAllAvailableMedals(draft.customMedals).map((m) => {
                       const pioneer = pioneersMap[m.id];
                       const rarity = RARITY_INFO[m.rarity];
@@ -4822,7 +4822,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                         )}
                       </div>
 
-                      <div className="space-y-2">
+                      <div className="max-h-80 overflow-y-auto space-y-2 pr-1">
                         {filteredAdminMedals.length === 0 ? (
                           <p className="py-6 text-center text-xs text-muted-foreground">
                             Nenhuma medalha encontrada com os filtros selecionados.
@@ -5094,7 +5094,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                       Nenhum aluno cadastrado neste navegador ainda.
                     </p>
                   ) : (
-                    <div className="space-y-1.5">
+                    <div className="max-h-72 overflow-y-auto space-y-1.5 pr-1">
                       {players.map((p) => {
                         const pEff = getEffectivePlayerProgression(
                           p,

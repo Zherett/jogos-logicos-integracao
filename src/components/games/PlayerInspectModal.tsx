@@ -698,7 +698,7 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
               )}
 
               {/* Feed de Transações */}
-              <div className="space-y-1.5">
+              <div className="max-h-64 overflow-y-auto space-y-1.5 pr-1">
                 {ledgerEntries.length === 0 ? (
                   <div className="py-6 text-center text-xs text-muted-foreground">
                     Nenhuma movimentação de pontuação registrada com os filtros selecionados.
