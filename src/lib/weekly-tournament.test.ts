@@ -1,7 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  claimRankedMilestoneReward,
   computeTop5HoldMetrics,
+  countUnlockedRankedMedals,
+  countUnlockedTournamentRanks,
   evaluateTournamentStandings,
   finalizeWeeklyTournamentSeason,
   finalizeRankedSeasonAndAwardMedalsViaInbox,
@@ -842,5 +845,105 @@ describe("Torneio Semanal Ranqueado (Nível 3+) e Regras da Arena X1 (Nível 5+,
         window.localStorage.removeItem("desafios-admin-config-v1");
       }
     }
+  });
+
+  it("contabiliza corretamente os 19 ranks alcançados e as 9 medalhas ranqueadas (incluindo análise retroativa)", () => {
+    const r0 = countUnlockedTournamentRanks(0);
+    assert.equal(r0.totalCount, 19);
+    assert.equal(r0.unlockedCount, 1); // Bronze I
+
+    const rOuro = countUnlockedTournamentRanks(250); // Bronze 3 + Prata 3 + Ouro I = 7 ranks
+    assert.equal(rOuro.unlockedCount, 7);
+    assert.equal(rOuro.unlockedIds.has("ouro_1"), true);
+    assert.equal(rOuro.unlockedIds.has("ouro_2"), false);
+
+    const rMestre = countUnlockedTournamentRanks(900);
+    assert.equal(rMestre.unlockedCount, 19);
+
+    const medalsRetro = countUnlockedRankedMedals({
+      unlockedMedals: [],
+      tournamentMedals: [
+        {
+          id: "tm1",
+          weekKey: "2026-W44",
+          gameId: "logica",
+          rank: 2,
+          tier: "silver",
+          label: "Vice",
+          heldMinutes: 10,
+          bonusXpAwarded: 100,
+          earnedAt: "2026-11-01T23:59:00Z",
+        },
+      ],
+      tournamentPoints: 10,
+      bestTournamentPoints: 200, // Qualifica retroativamente para Bronze III (61+) e Prata III (191+)
+    });
+    assert.equal(medalsRetro.totalCount, 9);
+    assert.equal(medalsRetro.unlockedCount, 3); // top_2_silver + tour_master_bronze + tour_master_prata
+  });
+
+  it("resgata recompensa da trilha ranqueada para o inventário, impede duplicidade na temporada e libera em nova temporada", () => {
+    const baseProfile: any = {
+      id: "p1",
+      nick: "AlunoTeste",
+      nickNormalized: "alunoteste",
+      full_name: "Aluno Teste",
+      school: "Raimundo Bezerra",
+      grade: "6º ano",
+      birthdate: "2014-01-01",
+      xp: 500,
+      level: 4,
+      wins: 10,
+      matchesPlayed: 15,
+      badges: [],
+      seasonId: 1,
+      tournamentPoints: 250,
+      bestTournamentPoints: 250,
+      unopenedPacks: { pack_basico: 1 },
+      claimedRankedMilestones: [],
+    };
+
+    // Bloqueia rank ainda não alcançado (Ouro II requer 311)
+    const lockedRes = claimRankedMilestoneReward({
+      profile: baseProfile,
+      rankId: "ouro_2",
+      seasonId: 1,
+      reward: { type: "card_pack", packId: "pack_basico", quantity: 2 },
+      currentPoints: 250,
+    });
+    assert.equal(lockedRes.ok, false);
+
+    // Resgata Ouro I (241+ pts) -> credita 2x pack_basico direto em unopenedPacks
+    const okRes = claimRankedMilestoneReward({
+      profile: baseProfile,
+      rankId: "ouro_1",
+      seasonId: 1,
+      reward: { type: "card_pack", packId: "pack_basico", quantity: 2 },
+      currentPoints: 250,
+    });
+    assert.equal(okRes.ok, true);
+    assert.equal(okRes.updatedProfile?.unopenedPacks?.pack_basico, 3);
+    assert.deepEqual(okRes.updatedProfile?.claimedRankedMilestones, ["S1:ouro_1"]);
+
+    // Impede resgate duplicado na mesma temporada
+    const dupRes = claimRankedMilestoneReward({
+      profile: okRes.updatedProfile!,
+      rankId: "ouro_1",
+      seasonId: 1,
+      reward: { type: "card_pack", packId: "pack_basico", quantity: 2 },
+      currentPoints: 250,
+    });
+    assert.equal(dupRes.ok, false);
+
+    // Permite resgate na Temporada 2
+    const s2Res = claimRankedMilestoneReward({
+      profile: okRes.updatedProfile!,
+      rankId: "ouro_1",
+      seasonId: 2,
+      reward: { type: "card_pack", packId: "pack_basico", quantity: 1 },
+      currentPoints: 250,
+    });
+    assert.equal(s2Res.ok, true);
+    assert.equal(s2Res.updatedProfile?.unopenedPacks?.pack_basico, 4);
   });
 });

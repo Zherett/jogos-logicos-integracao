@@ -128,6 +128,13 @@ export interface PlatformNoticeSlide {
   createdAt: string;
 }
 
+export interface RankedMilestoneReward {
+  type: "card_pack" | "points";
+  packId?: string;
+  quantity: number;
+  label?: string;
+}
+
 export interface PlatformAdminConfig {
   enabledGames: Record<GameId, boolean>;
   gameCodes: Record<GameId, string>;
@@ -198,6 +205,8 @@ export interface PlatformAdminConfig {
   tournamentEnabled: boolean;
   /** Optional ADM override for the Weekly Tournament game (`null` = automatic weekly rotation). */
   tournamentGameOverride: GameId | null;
+  /** Recompensas configuráveis pelo ADM para cada marco/rank da trilha ranqueada. */
+  rankedMilestoneRewards?: Partial<Record<string, RankedMilestoneReward>>;
   /** Daily XP limit per student (default: 1000 XP/day). Configurable by ADM. */
   dailyXpCap: number;
   /** Nível mínimo (1 a 10) exigido para alunos logados acessarem cada jogo (padrão: 1 para todos). */

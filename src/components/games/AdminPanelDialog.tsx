@@ -167,7 +167,9 @@ import {
   syncPresenceFromUserData,
 } from "@/lib/presence";
 import { TournamentRankBadge } from "./TournamentRankBadge";
+import { RankedPathTrack } from "./RankedPathTrack";
 import { AdminPromoCodesTab } from "./AdminPromoCodesTab";
+import type { RankedMilestoneReward } from "@/lib/game-codes";
 
 const PlayerInspectModal = lazy(() =>
   import("./PlayerInspectModal").then((m) => ({ default: m.PlayerInspectModal })),
@@ -187,6 +189,7 @@ import {
   getWeeklyTournamentSnapshot,
   syncWeeklyTournamentWithPlayFab,
   type AgeStageId,
+  type TournamentRankId,
 } from "@/lib/weekly-tournament";
 
 interface Props {
@@ -1648,6 +1651,43 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                           </span>
                         )}
                       </p>
+
+                      {/* Trilha de Recompensas por Marco/Rank da Ranqueada */}
+                      <details className="pt-2 border-t">
+                        <summary className="cursor-pointer select-none text-xs font-extrabold text-primary hover:underline flex items-center gap-1.5">
+                          🎁 Configurar Recompensas da Trilha de Ranks (Pacotes de Cartas / Pontos)
+                        </summary>
+                        <div className="pt-3">
+                          <RankedPathTrack
+                            mode="admin"
+                            rewardsMap={draft.rankedMilestoneRewards ?? {}}
+                            cardPacks={draft.cardPacks}
+                            onSaveAdminReward={async (
+                              rankId: TournamentRankId,
+                              reward: RankedMilestoneReward | null,
+                            ) => {
+                              const nextRewards = { ...(draft.rankedMilestoneRewards ?? {}) };
+                              if (!reward) {
+                                delete nextRewards[rankId];
+                              } else {
+                                nextRewards[rankId] = reward;
+                              }
+                              const nextCfg = {
+                                ...draft,
+                                rankedMilestoneRewards: nextRewards,
+                              };
+                              setDraft(nextCfg);
+                              await auth.updateAdminConfig(nextCfg);
+                              onConfigSaved?.();
+                              setSavedMsg(
+                                reward
+                                  ? `🎁 Recompensa salva para o rank ${rankId}!`
+                                  : `Recompensa removida do rank ${rankId}.`,
+                              );
+                            }}
+                          />
+                        </div>
+                      </details>
                     </div>
                   )}
                 </div>

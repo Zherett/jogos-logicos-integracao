@@ -4,7 +4,7 @@
 // e sistema de Medalhas de Torneio engatilhado.
 
 import { ALL_GAME_IDS, GAME_NAMES, type GameId } from "./game-storage.ts";
-import { loadAdminConfig } from "./game-codes.ts";
+import { loadAdminConfig, type RankedMilestoneReward } from "./game-codes.ts";
 import {
   grantPlayerTournamentMedal,
   deductPaidTournamentPoints,
@@ -1835,4 +1835,156 @@ export function removePlayerFromTournament(playerId: string, playerNick?: string
   } catch {
     /* ignore */
   }
+}
+
+/* --------------------- Trilha de Ranks, Medalhas e Recompensas --------------------- */
+
+export const RANKED_MASTERY_MEDAL_BY_RANK: Partial<
+  Record<TournamentRankId, { medalId: string; title: string; minPoints: number }>
+> = {
+  bronze_3: { medalId: "tour_master_bronze", title: "Dominador do Bronze", minPoints: 61 },
+  prata_3: { medalId: "tour_master_prata", title: "Dominador da Prata", minPoints: 191 },
+  ouro_3: { medalId: "tour_master_ouro", title: "Dominador do Ouro", minPoints: 381 },
+  platina_4: { medalId: "tour_master_platina", title: "Dominador da Platina", minPoints: 622 },
+  diamante_5: { medalId: "tour_master_diamante", title: "Dominador do Diamante", minPoints: 817 },
+  mestre: { medalId: "tour_master_mestre", title: "Grande Mestre do Torneio", minPoints: 850 },
+};
+
+export const RANKED_MEDAL_IDS: readonly string[] = [
+  "tournament_top_1_gold",
+  "tournament_top_2_silver",
+  "tournament_top_3_bronze",
+  "tour_master_bronze",
+  "tour_master_prata",
+  "tour_master_ouro",
+  "tour_master_platina",
+  "tour_master_diamante",
+  "tour_master_mestre",
+];
+
+/**
+ * Contabiliza quantas das 9 medalhas voltadas à Ranqueada o jogador já conquistou,
+ * analisando retroativamente unlockedMedals, tournamentMedals e bestTournamentPoints.
+ */
+export function countUnlockedRankedMedals(
+  profile?: Pick<
+    PlayerProfile,
+    "unlockedMedals" | "tournamentMedals" | "tournamentPoints" | "bestTournamentPoints"
+  > | null,
+): { unlockedCount: number; totalCount: number; unlockedIds: string[] } {
+  const totalCount = RANKED_MEDAL_IDS.length;
+  if (!profile) return { unlockedCount: 0, totalCount, unlockedIds: [] };
+
+  const unlockedSet = new Set<string>();
+  for (const raw of profile.unlockedMedals ?? []) {
+    const id = typeof raw === "string" ? raw : raw?.medalId;
+    if (id && RANKED_MEDAL_IDS.includes(id)) {
+      unlockedSet.add(id);
+    }
+  }
+
+  for (const tm of profile.tournamentMedals ?? []) {
+    if (!tm || tm.id?.startsWith("projected_")) continue;
+    if (tm.rank === 1) unlockedSet.add("tournament_top_1_gold");
+    else if (tm.rank === 2) unlockedSet.add("tournament_top_2_silver");
+    else if (tm.rank === 3) unlockedSet.add("tournament_top_3_bronze");
+  }
+
+  const peakPts = Math.max(profile.tournamentPoints ?? 0, profile.bestTournamentPoints ?? 0);
+  for (const info of Object.values(RANKED_MASTERY_MEDAL_BY_RANK)) {
+    if (info && peakPts >= info.minPoints) {
+      unlockedSet.add(info.medalId);
+    }
+  }
+
+  const unlockedIds = RANKED_MEDAL_IDS.filter((id) => unlockedSet.has(id));
+  return { unlockedCount: unlockedIds.length, totalCount, unlockedIds };
+}
+
+/**
+ * Retorna quantos dos 19 ranks da trilha o jogador já alcançou.
+ */
+export function countUnlockedTournamentRanks(points: number): {
+  unlockedCount: number;
+  totalCount: number;
+  unlockedIds: Set<TournamentRankId>;
+} {
+  const safePts = Math.max(0, Math.floor(points));
+  const unlockedIds = new Set<TournamentRankId>();
+  for (const r of TOURNAMENT_RANKS) {
+    if (safePts >= r.minPoints) {
+      unlockedIds.add(r.id);
+    }
+  }
+  return {
+    unlockedCount: unlockedIds.size,
+    totalCount: TOURNAMENT_RANKS.length,
+    unlockedIds,
+  };
+}
+
+export function getRankedMilestoneKey(seasonId: number, rankId: TournamentRankId): string {
+  return `S${Math.max(1, Math.floor(seasonId))}:${rankId}`;
+}
+
+export interface ClaimRankedMilestoneResult {
+  ok: boolean;
+  error?: string;
+  updatedProfile?: PlayerProfile;
+  milestoneKey?: string;
+}
+
+/**
+ * Resgata a recompensa configurada pelo ADM para um marco/rank da trilha ranqueada,
+ * creditando imediatamente pacotes de cartas ou pontos no perfil do jogador.
+ */
+export function claimRankedMilestoneReward(args: {
+  profile: PlayerProfile;
+  rankId: TournamentRankId;
+  seasonId: number;
+  reward: RankedMilestoneReward;
+  currentPoints: number;
+}): ClaimRankedMilestoneResult {
+  const rankDef = TOURNAMENT_RANKS.find((r) => r.id === args.rankId);
+  if (!rankDef) {
+    return { ok: false, error: "Rank não encontrado." };
+  }
+  const peakPoints = Math.max(
+    args.currentPoints,
+    args.profile.tournamentPoints ?? 0,
+    args.profile.bestTournamentPoints ?? 0,
+  );
+  if (peakPoints < rankDef.minPoints) {
+    return {
+      ok: false,
+      error: `Alcance ${rankDef.minPoints} pontos no Torneio para desbloquear ${rankDef.name}.`,
+    };
+  }
+
+  const milestoneKey = getRankedMilestoneKey(args.seasonId, args.rankId);
+  const existingClaimed = Array.isArray(args.profile.claimedRankedMilestones)
+    ? args.profile.claimedRankedMilestones
+    : [];
+  if (existingClaimed.includes(milestoneKey)) {
+    return { ok: false, error: "Recompensa deste marco já foi resgatada nesta temporada." };
+  }
+
+  const qty = Math.max(1, Math.floor(args.reward.quantity || 1));
+  const nextProfile: PlayerProfile = {
+    ...args.profile,
+    claimedRankedMilestones: [...existingClaimed, milestoneKey],
+  };
+
+  if (args.reward.type === "card_pack" && args.reward.packId) {
+    const prevPacks = { ...(nextProfile.unopenedPacks ?? {}) };
+    prevPacks[args.reward.packId] = Math.max(0, Number(prevPacks[args.reward.packId]) || 0) + qty;
+    nextProfile.unopenedPacks = prevPacks;
+  } else if (args.reward.type === "points") {
+    nextProfile.pointsBalance = (nextProfile.pointsBalance ?? 0) + qty;
+    nextProfile.careerPoints = (nextProfile.careerPoints ?? 0) + qty;
+  } else {
+    return { ok: false, error: "Configuração de recompensa inválida." };
+  }
+
+  return { ok: true, updatedProfile: nextProfile, milestoneKey };
 }

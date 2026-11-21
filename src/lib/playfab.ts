@@ -290,6 +290,7 @@ export interface PlayerProfile {
   cards?: Record<string, number>;
   unopenedPacks?: Record<string, number>;
   claimedInboxRewardIds?: string[];
+  claimedRankedMilestones?: string[];
   lastDailyLoginPointsDate?: string;
   lastDailyFirstGamePointsDate?: string;
   achievedTournamentTiers?: string[];
@@ -2235,6 +2236,9 @@ function buildAccountFromPlayFabPayload(
     claimedInboxRewardIds: Array.isArray(parsedProfile.claimedInboxRewardIds)
       ? parsedProfile.claimedInboxRewardIds
       : [],
+    claimedRankedMilestones: Array.isArray(parsedProfile.claimedRankedMilestones)
+      ? parsedProfile.claimedRankedMilestones
+      : [],
     lastDailyLoginPointsDate: parsedProfile.lastDailyLoginPointsDate,
     lastDailyFirstGamePointsDate: parsedProfile.lastDailyFirstGamePointsDate,
     achievedLevelsPoints: Array.isArray(parsedProfile.achievedLevelsPoints)
@@ -2956,6 +2960,7 @@ async function pushProfileToPlayFab(account: StoredAccount, sessionTicket?: stri
           cards: p.cards ?? {},
           unopenedPacks: p.unopenedPacks ?? {},
           claimedInboxRewardIds: p.claimedInboxRewardIds ?? [],
+          claimedRankedMilestones: p.claimedRankedMilestones ?? [],
           lastDailyLoginPointsDate: p.lastDailyLoginPointsDate,
           lastDailyFirstGamePointsDate: p.lastDailyFirstGamePointsDate,
           achievedLevelsPoints: p.achievedLevelsPoints ?? [],
@@ -3019,6 +3024,7 @@ async function pushProfileToPlayFab(account: StoredAccount, sessionTicket?: stri
               pointsBalance: p.pointsBalance ?? 0,
               coins: p.coins ?? 0,
               claimedInboxRewardIds: p.claimedInboxRewardIds ?? [],
+          claimedRankedMilestones: p.claimedRankedMilestones ?? [],
               lastDailyLoginPointsDate: p.lastDailyLoginPointsDate,
               lastDailyFirstGamePointsDate: p.lastDailyFirstGamePointsDate,
               achievedLevelsPoints: p.achievedLevelsPoints ?? [],
@@ -3886,6 +3892,13 @@ export async function syncStudentRosterFromPlayFab(
                 ...(Array.isArray(parsed.claimedInboxRewardIds) ? parsed.claimedInboxRewardIds : []),
                 ...(Array.isArray(existing?.profile.claimedInboxRewardIds) ? existing.profile.claimedInboxRewardIds : []),
                 ...(Array.isArray((udProf as any)?.claimedInboxRewardIds) ? (udProf as any).claimedInboxRewardIds : []),
+              ])
+            ),
+            claimedRankedMilestones: Array.from(
+              new Set([
+                ...(Array.isArray(parsed.claimedRankedMilestones) ? parsed.claimedRankedMilestones : []),
+                ...(Array.isArray(existing?.profile.claimedRankedMilestones) ? existing.profile.claimedRankedMilestones : []),
+                ...(Array.isArray((udProf as any)?.claimedRankedMilestones) ? (udProf as any).claimedRankedMilestones : []),
               ])
             ),
             lastDailyLoginPointsDate:
@@ -7573,6 +7586,35 @@ export async function playfabUpdatePlayerCards(args: {
     }
   }
   return nextAcc.profile;
+}
+
+export async function syncActiveProfileChangeToPlayFab(
+  updatedProfile: PlayerProfile,
+): Promise<void> {
+  const session = loadStoredSession();
+  const reg = loadRegistry();
+  const key =
+    (session?.playerId && reg[session.playerId] ? session.playerId : null) ??
+    Object.keys(reg).find(
+      (k) =>
+        reg[k]?.profile?.id === updatedProfile.id ||
+        reg[k]?.profile?.nickNormalized === updatedProfile.nickNormalized,
+    );
+  if (!key || !reg[key]) return;
+  const nextAcc: StoredAccount = {
+    ...reg[key],
+    profile: { ...updatedProfile },
+    updatedAt: new Date().toISOString(),
+  };
+  reg[key] = nextAcc;
+  saveRegistry(reg);
+  if (session?.sessionTicket && isPlayFabConfigured()) {
+    try {
+      await pushProfileToPlayFab(nextAcc, session.sessionTicket);
+    } catch {
+      /* ignore network sync error */
+    }
+  }
 }
 
 export { ALL_GAME_IDS };
