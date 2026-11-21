@@ -392,3 +392,27 @@
   transform: rotateY(180deg);
 }
 
+/* Auras do Perfil (Estática, Pulsante e Bicolor Pulsante) */
+@keyframes profile-aura-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 2px var(--aura-c1), 0 0 12px 1px var(--aura-c1);
+  }
+  50% {
+    box-shadow: 0 0 0 3px var(--aura-c1), 0 0 22px 4px var(--aura-c1);
+  }
+}
+@keyframes profile-aura-bicolor-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 2.5px var(--aura-c1), 0 0 14px 2px var(--aura-c1), 0 0 24px 3px var(--aura-c2);
+  }
+  50% {
+    box-shadow: 0 0 0 3px var(--aura-c2), 0 0 18px 4px var(--aura-c2), 0 0 28px 5px var(--aura-c1);
+  }
+}
+.animate-profile-aura-pulse {
+  animation: profile-aura-pulse 2.2s ease-in-out infinite;
+}
+.animate-profile-aura-bicolor {
+  animation: profile-aura-bicolor-pulse 2.4s ease-in-out infinite;
+}
+

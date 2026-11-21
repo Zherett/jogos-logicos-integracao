@@ -27,12 +27,24 @@ import {
   Ticket,
   Calendar,
   Backpack,
+  BadgeDollarSign,
+  Coins,
+  Palette,
 } from "lucide-react";
 import { canAccessDailyRewardsPreview, getCurrentCycleDay } from "@/lib/daily-rewards";
 import { canAccessPromoCodeRedeem } from "@/lib/promo-codes";
 import { loadSpecialEvents, loadRecurringEvents } from "@/lib/custom-events";
+import { resolveEquippedAura, resolveEquippedAvatar } from "@/lib/cosmetics-catalog";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { getAuraPresentation, PlayerAvatarBadge } from "./PlayerAvatarBadge";
+
+const ShopModal = lazy(() =>
+  import("./ShopModal").then((m) => ({ default: m.ShopModal })),
+);
+const CustomizeProfileModal = lazy(() =>
+  import("./CustomizeProfileModal").then((m) => ({ default: m.CustomizeProfileModal })),
+);
 
 const PromoCodeRedeemDialog = lazy(() =>
   import("./PromoCodeRedeemDialog").then((m) => ({ default: m.PromoCodeRedeemDialog })),
@@ -145,6 +157,8 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
   const [inboxOpen, setInboxOpen] = useState(false);
   const [promoCodeOpen, setPromoCodeOpen] = useState(false);
   const [dailyRewardsOpen, setDailyRewardsOpen] = useState(false);
+  const [shopOpen, setShopOpen] = useState(false);
+  const [customizeOpen, setCustomizeOpen] = useState(false);
   const [inboxCounts, setInboxCounts] = useState({ unreadCount: 0, unclaimedRewardsCount: 0, totalAlerts: 0 });
 
   // Accordion collapsible & profile tab states
@@ -453,6 +467,19 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
             <Trophy className="h-5 w-5 text-amber-500" />
           </Link>
 
+          {/* Loja de Moedas (Oculto para Alunos, visível apenas para ADM / Testes) */}
+          {showDailyRewards && profile && (
+            <button
+              type="button"
+              onClick={() => setShopOpen(true)}
+              className="grid h-11 w-11 place-items-center rounded-2xl border border-amber-500/50 bg-gradient-to-br from-amber-500/20 to-yellow-500/10 text-amber-600 dark:text-amber-400 shadow-sm transition-all hover:bg-amber-500/30 active:scale-95 cursor-pointer"
+              aria-label="Abrir Loja"
+              title="Loja de Moedas (Prévia ADM)"
+            >
+              <BadgeDollarSign className="h-5 w-5" />
+            </button>
+          )}
+
           {/* Recompensa Diária Progressiva (Oculto para Alunos, visível apenas para ADM / Testes) */}
           {showDailyRewards && (
             <button
@@ -570,6 +597,16 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
           />
         </Suspense>
       )}
+      {shopOpen && showDailyRewards && (
+        <Suspense fallback={null}>
+          <ShopModal open={shopOpen} onOpenChange={setShopOpen} />
+        </Suspense>
+      )}
+      {customizeOpen && showDailyRewards && (
+        <Suspense fallback={null}>
+          <CustomizeProfileModal open={customizeOpen} onOpenChange={setCustomizeOpen} />
+        </Suspense>
+      )}
 
       {/* Modal de Perfil do Jogador — Espaçoso, Estável e com Altura Fixa */}
       <Dialog open={profileOpen} onOpenChange={setProfileOpen}>
@@ -638,26 +675,55 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
                 )}
               </div>
 
-              {profileTab === "perfil" && (
+              {profileTab === "perfil" && (() => {
+                const equippedAv = showDailyRewards
+                  ? resolveEquippedAvatar(profile, auth.adminConfig.avatarsCatalog)
+                  : null;
+                const equippedAura = showDailyRewards
+                  ? resolveEquippedAura(profile, auth.adminConfig.aurasCatalog)
+                  : null;
+                const cardAuraPres = getAuraPresentation(equippedAura);
+                return (
                 <div className="space-y-4">
               {/* CARTÃO UNIFICADO DO JOGADOR */}
-              <div className="w-full rounded-3xl border bg-card p-4 sm:p-5 shadow-sm space-y-3.5">
-                    {/* Topo: Ícone do Nível à esquerda e Dados Pessoais à direita no Mobile */}
+              <div
+                className={`w-full rounded-3xl border-2 bg-card p-4 sm:p-5 shadow-sm space-y-3.5 transition-all ${cardAuraPres.className}`}
+                style={cardAuraPres.style}
+              >
+                    {/* Topo: Avatar (Prévia ADM) ou Selo do Nível à esquerda e Dados Pessoais à direita */}
                     <div className="flex flex-row items-center gap-3.5 sm:gap-4">
-                      {/* Selo Grande do Nível */}
-                      <div className="relative grid h-18 w-18 sm:h-20 sm:w-20 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-primary via-primary/95 to-primary/80 text-primary-foreground shadow-md border-2 border-primary/50">
-                        <div className="flex flex-col items-center justify-center leading-none text-center">
-                          <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-wider text-primary-foreground/80">
-                            NÍVEL
-                          </span>
-                          <span className="font-display text-2xl sm:text-3xl font-black">
-                            {progress.level}
+                      {showDailyRewards && equippedAv ? (
+                        <div className="flex flex-col items-center gap-1.5 shrink-0">
+                          <PlayerAvatarBadge
+                            avatar={equippedAv.avatar}
+                            color={equippedAv.color}
+                            aura={equippedAura}
+                            size="lg"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setCustomizeOpen(true)}
+                            className="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 hover:bg-primary/20 px-2 py-0.5 text-[9.5px] font-extrabold text-primary transition-all cursor-pointer"
+                            title="Personalizar Avatar e Aura do Perfil"
+                          >
+                            <Palette className="h-2.5 w-2.5" /> Personalizar
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="relative grid h-18 w-18 sm:h-20 sm:w-20 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-primary via-primary/95 to-primary/80 text-primary-foreground shadow-md border-2 border-primary/50">
+                          <div className="flex flex-col items-center justify-center leading-none text-center">
+                            <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-wider text-primary-foreground/80">
+                              NÍVEL
+                            </span>
+                            <span className="font-display text-2xl sm:text-3xl font-black">
+                              {progress.level}
+                            </span>
+                          </div>
+                          <span className="absolute -bottom-2 rounded-full bg-card px-2 py-0.5 text-[8.5px] sm:text-[9px] font-black text-primary border shadow-xs truncate max-w-[4.6rem] sm:max-w-[4.8rem]">
+                            {progress.title.split(" ")[0]}
                           </span>
                         </div>
-                        <span className="absolute -bottom-2 rounded-full bg-card px-2 py-0.5 text-[8.5px] sm:text-[9px] font-black text-primary border shadow-xs truncate max-w-[4.6rem] sm:max-w-[4.8rem]">
-                          {progress.title.split(" ")[0]}
-                        </span>
-                      </div>
+                      )}
 
                       {/* Informações Pessoais à Direita */}
                       <div className="min-w-0 flex-1 space-y-0.5">
@@ -739,6 +805,25 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
                       >
                         🪙 {profile.careerPoints ?? profile.pointsBalance ?? 0} Pontos
                       </span>
+
+                      {showDailyRewards && (
+                        <>
+                          <span
+                            title="Nível atual e patente na temporada."
+                            className="inline-flex items-center gap-1 rounded-full bg-primary/15 border border-primary/30 px-2.5 py-0.5 text-[10.5px] sm:text-[11px] font-extrabold text-primary"
+                          >
+                            ⭐ Nível {progress.level} • {progress.title.split(" ")[0]}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setShopOpen(true)}
+                            title="Saldo de Moedas para usar na Loja"
+                            className="inline-flex items-center gap-1 rounded-full bg-yellow-500/15 border border-yellow-500/40 px-2.5 py-0.5 text-[10.5px] sm:text-[11px] font-extrabold text-yellow-600 dark:text-yellow-400 hover:bg-yellow-500/25 transition-colors cursor-pointer"
+                          >
+                            <Coins className="h-3 w-3" /> {profile.coins ?? 0} Moedas
+                          </button>
+                        </>
+                      )}
 
                       <span
                         title="Sua colocação oficial na temporada atual do Torneio Semanal da sua Etapa."
@@ -1200,7 +1285,8 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
                 </Button>
               </div>
                 </div>
-              )}
+                );
+              })()}
 
               {/* ABA 2: MEDALHAS (Vitrine fixa de 6 + Catálogo Geral & Eventos) */}
               {profileTab === "medalhas" && (

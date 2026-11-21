@@ -106,12 +106,14 @@ import {
 import {
   autoConvertAllPointsToCoins,
   awardCareerPoints,
+  awardCoins,
   revokeCareerPoints,
   checkAndApplyDailyLoginPoints,
   checkAndApplyFirstGameOfDayPoints,
   checkLevelPromotionPoints,
   checkTournamentTierPromotion,
   ensurePlayerCareerPointsInitialized,
+  MEDAL_COINS_REWARDS,
   MEDAL_POINTS_REWARDS,
   RECORD_PERSONAL_POINTS,
   RECORD_STAGE_MAX_POINTS,
@@ -287,6 +289,10 @@ export interface PlayerProfile {
   pointsBalance?: number;
   careerPoints?: number;
   coins?: number;
+  unlockedAvatars?: string[];
+  equippedAvatar?: { id: string; color?: string };
+  unlockedAuras?: string[];
+  equippedAuraId?: string;
   cards?: Record<string, number>;
   unopenedPacks?: Record<string, number>;
   unopenedChests?: Record<string, number>;
@@ -356,6 +362,10 @@ export interface LeaderboardEntry {
   xpValue?: number;
   wins: number;
   rankTrend?: RankTrendDirection;
+  equippedAvatar?: { id: string; color?: string };
+  equippedAuraId?: string;
+  unlockedAvatars?: string[];
+  unlockedAuras?: string[];
   previousRank?: number;
   isCurrentPlayer?: boolean;
 }
@@ -2226,6 +2236,14 @@ function buildAccountFromPlayFabPayload(
     careerPoints: parsedProfile.careerPoints ?? 0,
     pointsBalance: parsedProfile.pointsBalance ?? 0,
     coins: parsedProfile.coins ?? 0,
+    unlockedAvatars: Array.isArray(parsedProfile.unlockedAvatars)
+      ? parsedProfile.unlockedAvatars
+      : undefined,
+    equippedAvatar: parsedProfile.equippedAvatar,
+    unlockedAuras: Array.isArray(parsedProfile.unlockedAuras)
+      ? parsedProfile.unlockedAuras
+      : undefined,
+    equippedAuraId: parsedProfile.equippedAuraId,
     cards:
       parsedProfile.cards && typeof parsedProfile.cards === "object"
         ? parsedProfile.cards
@@ -2962,6 +2980,10 @@ async function pushProfileToPlayFab(account: StoredAccount, sessionTicket?: stri
           careerPoints: p.careerPoints ?? 0,
           pointsBalance: p.pointsBalance ?? 0,
           coins: p.coins ?? 0,
+          unlockedAvatars: p.unlockedAvatars,
+          equippedAvatar: p.equippedAvatar,
+          unlockedAuras: p.unlockedAuras,
+          equippedAuraId: p.equippedAuraId,
           cards: p.cards ?? {},
           unopenedPacks: p.unopenedPacks ?? {},
           unopenedChests: p.unopenedChests ?? {},
@@ -3029,6 +3051,10 @@ async function pushProfileToPlayFab(account: StoredAccount, sessionTicket?: stri
               careerPoints: p.careerPoints ?? 0,
               pointsBalance: p.pointsBalance ?? 0,
               coins: p.coins ?? 0,
+              unlockedAvatars: p.unlockedAvatars,
+              equippedAvatar: p.equippedAvatar,
+              unlockedAuras: p.unlockedAuras,
+              equippedAuraId: p.equippedAuraId,
               claimedInboxRewardIds: p.claimedInboxRewardIds ?? [],
           claimedRankedMilestones: p.claimedRankedMilestones ?? [],
               lastDailyLoginPointsDate: p.lastDailyLoginPointsDate,
@@ -3893,6 +3919,28 @@ export async function syncStudentRosterFromPlayFab(
               existing?.profile.coins ?? 0,
               (udProf as any)?.coins ?? 0,
             ),
+            unlockedAvatars: Array.from(
+              new Set([
+                ...(Array.isArray(parsed.unlockedAvatars) ? parsed.unlockedAvatars : []),
+                ...(Array.isArray(existing?.profile.unlockedAvatars) ? existing.profile.unlockedAvatars : []),
+                ...(Array.isArray((udProf as any)?.unlockedAvatars) ? (udProf as any).unlockedAvatars : []),
+              ]),
+            ),
+            equippedAvatar:
+              parsed.equippedAvatar ??
+              existing?.profile.equippedAvatar ??
+              (udProf as any)?.equippedAvatar,
+            unlockedAuras: Array.from(
+              new Set([
+                ...(Array.isArray(parsed.unlockedAuras) ? parsed.unlockedAuras : []),
+                ...(Array.isArray(existing?.profile.unlockedAuras) ? existing.profile.unlockedAuras : []),
+                ...(Array.isArray((udProf as any)?.unlockedAuras) ? (udProf as any).unlockedAuras : []),
+              ]),
+            ),
+            equippedAuraId:
+              parsed.equippedAuraId ??
+              existing?.profile.equippedAuraId ??
+              (udProf as any)?.equippedAuraId,
             claimedInboxRewardIds: Array.from(
               new Set([
                 ...(Array.isArray(parsed.claimedInboxRewardIds) ? parsed.claimedInboxRewardIds : []),
@@ -5316,6 +5364,11 @@ export async function playfabRecordMatch(args: {
       medalsBonusXp += MEDAL_XP_REWARDS[m.rarity] ?? 10;
       const ptsReward = MEDAL_POINTS_REWARDS[m.rarity] ?? 20;
       awardCareerPoints(acc.profile, ptsReward, m.title, pointsMultiplier);
+      const coinsReward =
+        cfg.coinRewardsConfig?.medalCoinsByRarity?.[m.rarity] ??
+        MEDAL_COINS_REWARDS[m.rarity] ??
+        5;
+      awardCoins(acc.profile, coinsReward, `Medalha: ${m.title}`);
       try {
         recordScoreLedgerEntry({
           playerId: acc.profile.id,
@@ -5384,6 +5437,11 @@ export async function playfabRecordMatch(args: {
           acc.profile.seasonXp = (acc.profile.seasonXp ?? 0) + extraXp;
           const ptsReward = MEDAL_POINTS_REWARDS[sm.rarity] ?? 20;
           awardCareerPoints(acc.profile, ptsReward, sm.title, pointsMultiplier);
+          const coinsReward =
+            cfg.coinRewardsConfig?.medalCoinsByRarity?.[sm.rarity] ??
+            MEDAL_COINS_REWARDS[sm.rarity] ??
+            5;
+          awardCoins(acc.profile, coinsReward, `Medalha: ${sm.title}`);
         }
       }
       acc.profile.unlockedMedals = currentUnlocked;
@@ -5677,6 +5735,10 @@ function buildLeaderboardFromLocal(
       medalsCount,
       xpValue,
       wins: p.wins ?? 0,
+      equippedAvatar: p.equippedAvatar,
+      equippedAuraId: p.equippedAuraId,
+      unlockedAvatars: p.unlockedAvatars,
+      unlockedAuras: p.unlockedAuras,
       isCurrentPlayer: p.nickNormalized === currentId,
     });
   }

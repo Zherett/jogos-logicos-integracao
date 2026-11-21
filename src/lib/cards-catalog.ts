@@ -277,6 +277,8 @@ export interface CardPackDefinition {
   /** Lista opcional de IDs de cartas permitidas neste pacote. Null/vazio = todas as cartas do catálogo. */
   cardIds?: string[] | null;
   pricePoints?: number;
+  priceCoins?: number;
+  featuredInStore?: boolean;
   icon?: CardPackIconId;
   colorTheme?: CardPackColorId;
   isFoil?: boolean;
@@ -295,6 +297,7 @@ export const DEFAULT_CARD_PACKS: CardPackDefinition[] = [
     probabilities: { comum: 70, incomum: 20, rara: 7, epica: 2.5, lendaria: 0.5 },
     cardIds: null,
     pricePoints: 100,
+    priceCoins: 40,
     enabled: true,
     createdAt: "2026-11-18T00:00:00.000Z",
     updatedAt: "2026-11-18T00:00:00.000Z",
@@ -308,6 +311,7 @@ export const DEFAULT_CARD_PACKS: CardPackDefinition[] = [
     probabilities: { comum: 35, incomum: 45, rara: 14, epica: 4.5, lendaria: 1.5 },
     cardIds: null,
     pricePoints: 200,
+    priceCoins: 65,
     enabled: true,
     createdAt: "2026-11-18T00:00:00.000Z",
     updatedAt: "2026-11-18T00:00:00.000Z",
@@ -321,6 +325,8 @@ export const DEFAULT_CARD_PACKS: CardPackDefinition[] = [
     probabilities: { comum: 15, incomum: 30, rara: 40, epica: 11, lendaria: 4 },
     cardIds: null,
     pricePoints: 350,
+    priceCoins: 110,
+    featuredInStore: true,
     enabled: true,
     createdAt: "2026-11-18T00:00:00.000Z",
     updatedAt: "2026-11-18T00:00:00.000Z",
@@ -334,6 +340,7 @@ export const DEFAULT_CARD_PACKS: CardPackDefinition[] = [
     probabilities: { comum: 5, incomum: 15, rara: 30, epica: 40, lendaria: 10 },
     cardIds: null,
     pricePoints: 600,
+    priceCoins: 180,
     enabled: true,
     createdAt: "2026-11-18T00:00:00.000Z",
     updatedAt: "2026-11-18T00:00:00.000Z",
@@ -347,6 +354,8 @@ export const DEFAULT_CARD_PACKS: CardPackDefinition[] = [
     probabilities: { comum: 0, incomum: 5, rara: 20, epica: 35, lendaria: 40 },
     cardIds: null,
     pricePoints: 1000,
+    priceCoins: 300,
+    featuredInStore: true,
     enabled: true,
     createdAt: "2026-11-18T00:00:00.000Z",
     updatedAt: "2026-11-18T00:00:00.000Z",

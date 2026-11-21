@@ -130,9 +130,10 @@ export interface PlatformNoticeSlide {
 }
 
 export interface RankedMilestoneReward {
-  type: "card_pack" | "points";
+  type: "card_pack" | "points" | "coins";
   packId?: string;
   quantity: number;
+  coinsBonus?: number;
   label?: string;
 }
 
@@ -242,6 +243,16 @@ export interface PlatformAdminConfig {
   cardPacks?: CardPackDefinition[];
   /** Catálogo de baús configuráveis pelo ADM (prévia ADM) */
   chestsCatalog?: ChestDefinition[];
+  /** Catálogo de avatares e auras configuráveis pelo ADM (prévia ADM) */
+  avatarsCatalog?: import("./cosmetics-catalog.ts").AvatarDefinition[];
+  aurasCatalog?: import("./cosmetics-catalog.ts").AuraDefinition[];
+  /** Configuração global de recompensas em moedas (editável pelo ADM) */
+  coinRewardsConfig?: {
+    dailyMissionCoins?: number;
+    weeklyMissionCoins?: number;
+    medalCoinsByRarity?: Partial<Record<string, number>>;
+    levelCoinStep?: number;
+  };
   /** Optional PlayFab Title ID configured via Admin UI. */
   playfabTitleId?: string;
   updatedAt: string;

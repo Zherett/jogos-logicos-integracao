@@ -54,10 +54,11 @@ export const PROMO_CHEST_PRESETS: readonly { id: string; label: string }[] = [
 export interface PromoCodeRewardPayload {
   xp: number;
   points: number;
+  coins?: number;
   chestName?: string;
   chestQuantity?: number;
   rewardItem?: PromoRewardItemPayload;
-  // TODO - COSMÉTICOS & AVATARES: ganchos futuros
+  cosmeticKind?: "avatar" | "aura";
   cosmeticId?: string;
   avatarPieceId?: string;
 }
@@ -608,6 +609,41 @@ export function claimPromoCode(
       });
     } catch {
       /* ignore */
+    }
+  }
+
+  // 3.1 Concede Moedas se houver
+  if (rewards.coins && rewards.coins > 0) {
+    const coinsQty = Math.floor(rewards.coins);
+    student.coins = (student.coins ?? 0) + coinsQty;
+    try {
+      recordScoreLedgerEntry({
+        playerId: student.id,
+        playerNick: student.nick,
+        type: "coins",
+        source: "codigo_promocional",
+        amount: coinsQty,
+        balanceAfter: student.coins,
+        reason: `Resgate de Código: +${coinsQty} Moedas (${target.code})`,
+        metadata: { codeId: target.id, code: target.code, batchName: target.batchName },
+      });
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // 3.2 Concede Cosmético (Avatar ou Aura) se houver
+  if (rewards.cosmeticId) {
+    if (rewards.cosmeticKind === "aura") {
+      const cur = Array.isArray(student.unlockedAuras) ? student.unlockedAuras : [];
+      if (!cur.includes(rewards.cosmeticId)) {
+        student.unlockedAuras = [...cur, rewards.cosmeticId];
+      }
+    } else {
+      const cur = Array.isArray(student.unlockedAvatars) ? student.unlockedAvatars : [];
+      if (!cur.includes(rewards.cosmeticId)) {
+        student.unlockedAvatars = [...cur, rewards.cosmeticId];
+      }
     }
   }
 

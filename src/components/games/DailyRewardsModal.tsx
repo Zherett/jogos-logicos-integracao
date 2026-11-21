@@ -408,9 +408,12 @@ export function DailyRewardsModal({
                         </p>
                       </div>
 
-                      <div className="flex items-center gap-1.5 shrink-0 pl-8 sm:pl-0">
+                      <div className="flex flex-wrap items-center gap-1.5 shrink-0 pl-8 sm:pl-0">
                         <span className="inline-flex items-center gap-1 rounded-lg bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 font-mono text-[11px] font-black text-amber-600 dark:text-amber-400">
                           <Coins className="h-3 w-3" /> +{mission.rewardPoints} pts
+                        </span>
+                        <span className="inline-flex items-center gap-1 rounded-lg bg-yellow-500/15 border border-yellow-500/30 px-2 py-0.5 font-mono text-[11px] font-black text-yellow-600 dark:text-yellow-400">
+                          🪙 +{mission.rewardCoins ?? 5}
                         </span>
                         <span className="inline-flex items-center gap-1 rounded-lg bg-primary/15 border border-primary/30 px-2 py-0.5 font-mono text-[11px] font-black text-primary">
                           <Zap className="h-3 w-3" /> +{mission.rewardXp} XP
@@ -487,9 +490,12 @@ export function DailyRewardsModal({
                         </p>
                       </div>
 
-                      <div className="flex items-center gap-1.5 shrink-0 pl-8 sm:pl-0">
+                      <div className="flex flex-wrap items-center gap-1.5 shrink-0 pl-8 sm:pl-0">
                         <span className="inline-flex items-center gap-1 rounded-lg bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 font-mono text-[11px] font-black text-amber-600 dark:text-amber-400">
                           <Coins className="h-3 w-3" /> +{mission.rewardPoints} pts
+                        </span>
+                        <span className="inline-flex items-center gap-1 rounded-lg bg-yellow-500/15 border border-yellow-500/30 px-2 py-0.5 font-mono text-[11px] font-black text-yellow-600 dark:text-yellow-400">
+                          🪙 +{mission.rewardCoins ?? 5}
                         </span>
                         <span className="inline-flex items-center gap-1 rounded-lg bg-primary/15 border border-primary/30 px-2 py-0.5 font-mono text-[11px] font-black text-primary">
                           <Zap className="h-3 w-3" /> +{mission.rewardXp} XP

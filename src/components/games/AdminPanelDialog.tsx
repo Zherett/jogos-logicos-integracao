@@ -188,6 +188,9 @@ const AdminCardsTab = lazy(() =>
 const AdminChestsTab = lazy(() =>
   import("./AdminChestsTab").then((m) => ({ default: m.AdminChestsTab })),
 );
+const AdminStoreTab = lazy(() =>
+  import("./AdminStoreTab").then((m) => ({ default: m.AdminStoreTab })),
+);
 import {
   AGE_STAGES,
   getTournamentRank,
@@ -218,7 +221,8 @@ type AdminTab =
   | "lixeira"
   | "codigos"
   | "cartas"
-  | "baus";
+  | "baus"
+  | "loja";
 
 function randomGameCode(prefix: string): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -1414,6 +1418,17 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                   }`}
                 >
                   <Gift className="h-4 w-4 text-amber-500" /> Baús
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTab("loja");
+                  }}
+                  className={`flex items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-bold transition-colors ${
+                    tab === "loja" ? "bg-card text-amber-600 dark:text-amber-400 shadow-sm" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  <Coins className="h-4 w-4 text-amber-500" /> Loja &amp; Cosméticos
                 </button>
                 <button
                   type="button"
@@ -5405,6 +5420,22 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                   cardPacks={draft.cardPacks}
                   onSaveChests={async (nextChests) => {
                     const nextCfg = { ...draft, chestsCatalog: nextChests };
+                    setDraft(nextCfg);
+                    await auth.updateAdminConfig(nextCfg);
+                    onConfigSaved?.();
+                  }}
+                  onShowFeedback={(msg) => flashSaved(msg)}
+                />
+              </Suspense>
+            )}
+
+            {/* TAB LOJA & COSMÉTICOS (PRÉVIA ADM) */}
+            {tab === "loja" && (
+              <Suspense fallback={<div className="p-6 text-center text-xs text-muted-foreground">Carregando Loja &amp; Cosméticos...</div>}>
+                <AdminStoreTab
+                  draft={draft}
+                  setDraft={setDraft}
+                  onSaveConfig={async (nextCfg) => {
                     setDraft(nextCfg);
                     await auth.updateAdminConfig(nextCfg);
                     onConfigSaved?.();

@@ -26,6 +26,14 @@ import { CollectibleCardView } from "./CollectibleCardView";
 import { ChestOpeningModal } from "./ChestOpeningModal";
 import { ChestVector } from "./ChestVector";
 import { PackOpeningModal, type PackOpenOutcome } from "./PackOpeningModal";
+import { getAuraPresentation, PlayerAvatarBadge } from "./PlayerAvatarBadge";
+import {
+  getUnlockedAuraIds,
+  getUnlockedAvatarIds,
+  grantCosmeticToProfile,
+  mergeWithDefaultAuras,
+  mergeWithDefaultAvatars,
+} from "@/lib/cosmetics-catalog";
 
 const INVENTORY_SLOTS_COUNT = 12;
 
@@ -33,7 +41,7 @@ export function PlayerItemsInventory() {
   const auth = usePlayerAuth();
   const canViewCards = isAdminOrTestAccount(auth.profile, isAdminUnlockedSession());
 
-  const [activePill, setActivePill] = useState<"mochila" | "album">("mochila");
+  const [activePill, setActivePill] = useState<"mochila" | "album" | "visual">("mochila");
   const [rarityFilter, setRarityFilter] = useState<CardRarity | "todas">("todas");
   const [inspectCard, setInspectCard] = useState<{ card: CardDefinition; count: number } | null>(null);
   const [packToOpen, setPackToOpen] = useState<CardPackDefinition | null>(null);
@@ -56,7 +64,7 @@ export function PlayerItemsInventory() {
     for (const pk of res.outcome.packs) {
       nextPacks[pk.packId] = (Number(nextPacks[pk.packId]) || 0) + pk.quantity;
     }
-    await syncActiveProfileChangeToPlayFab({
+    let updatedProfile = {
       ...auth.profile,
       unopenedChests: res.updatedUnopenedChests,
       unopenedPacks: nextPacks,
@@ -65,7 +73,11 @@ export function PlayerItemsInventory() {
       xp: (auth.profile.xp ?? 0) + res.outcome.xp,
       seasonXp: (auth.profile.seasonXp ?? 0) + res.outcome.xp,
       coins: (auth.profile.coins ?? 0) + res.outcome.coins,
-    });
+    };
+    for (const cosm of res.outcome.cosmetics ?? []) {
+      updatedProfile = grantCosmeticToProfile(updatedProfile, cosm.kind, cosm.itemId).profile;
+    }
+    await syncActiveProfileChangeToPlayFab(updatedProfile);
     await auth.refresh();
     setOpeningChest(chest);
     setChestOutcome(res.outcome);
@@ -178,10 +190,118 @@ export function PlayerItemsInventory() {
               {discoveredCount}/{catalog.length}
             </span>
           </button>
+          <button
+            type="button"
+            onClick={() => setActivePill("visual")}
+            className={`inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-extrabold transition-colors ${
+              activePill === "visual"
+                ? "bg-primary text-primary-foreground border-primary shadow-sm"
+                : "bg-card text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <Palette className="h-3.5 w-3.5" />
+            Visual
+          </button>
         </div>
       )}
 
-      {canViewCards && activePill === "album" ? (
+      {canViewCards && activePill === "visual" ? (() => {
+        const allAvatars = mergeWithDefaultAvatars(auth.adminConfig.avatarsCatalog);
+        const allAuras = mergeWithDefaultAuras(auth.adminConfig.aurasCatalog);
+        const unlockedAvIds = new Set(getUnlockedAvatarIds(auth.profile));
+        const unlockedAuraIds = new Set(getUnlockedAuraIds(auth.profile));
+        const myAvatars = allAvatars.filter((a) => unlockedAvIds.has(a.id));
+        const myAuras = allAuras.filter((a) => unlockedAuraIds.has(a.id));
+
+        return (
+          <div className="space-y-4">
+            <div className="rounded-3xl border bg-card p-4 space-y-3">
+              <div className="font-display text-sm font-black flex items-center justify-between">
+                <span>Seus Avatares Desbloqueados ({myAvatars.length})</span>
+                <span className="text-[10px] font-bold uppercase text-amber-500">Prévia ADM</span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                {myAvatars.map((av) => {
+                  const equipped = (auth.profile?.equippedAvatar?.id ?? "avatar_default") === av.id;
+                  return (
+                    <button
+                      key={av.id}
+                      type="button"
+                      onClick={async () => {
+                        if (!auth.profile) return;
+                        await syncActiveProfileChangeToPlayFab({
+                          ...auth.profile,
+                          equippedAvatar: {
+                            id: av.id,
+                            color: auth.profile.equippedAvatar?.color,
+                          },
+                        });
+                        await auth.refresh();
+                      }}
+                      className={`flex flex-col items-center gap-1.5 rounded-2xl border-2 p-2.5 text-center transition-all cursor-pointer ${
+                        equipped
+                          ? "border-primary bg-primary/10"
+                          : "border-border/60 bg-secondary/20 hover:bg-secondary/40"
+                      }`}
+                    >
+                      <PlayerAvatarBadge
+                        avatar={av}
+                        color={auth.profile?.equippedAvatar?.color}
+                        size="sm"
+                      />
+                      <span className="text-[11px] font-bold truncate w-full">{av.name}</span>
+                      <span className="text-[9.5px] font-bold text-primary">
+                        {equipped ? "Equipado" : "Equipar"}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="rounded-3xl border bg-card p-4 space-y-3">
+              <div className="font-display text-sm font-black">
+                Suas Auras do Perfil ({myAuras.length})
+              </div>
+              {myAuras.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  Você ainda não desbloqueou nenhuma aura. Adquira na Loja de Moedas!
+                </p>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  {myAuras.map((aura) => {
+                    const equipped = auth.profile?.equippedAuraId === aura.id;
+                    const pres = getAuraPresentation(aura);
+                    return (
+                      <button
+                        key={aura.id}
+                        type="button"
+                        onClick={async () => {
+                          if (!auth.profile) return;
+                          await syncActiveProfileChangeToPlayFab({
+                            ...auth.profile,
+                            equippedAuraId: equipped ? undefined : aura.id,
+                          });
+                          await auth.refresh();
+                        }}
+                        className={`flex items-center justify-between gap-2 rounded-2xl border-2 p-3 text-left transition-all cursor-pointer ${
+                          equipped ? "bg-primary/10" : "bg-card hover:bg-secondary/30"
+                        } ${pres.className}`}
+                        style={pres.style}
+                      >
+                        <span className="text-xs font-bold">{aura.name}</span>
+                        <span className="text-[10px] font-black text-primary">
+                          {equipped ? "Equipada (Remover)" : "Equipar"}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })() : canViewCards && activePill === "album" ? (
         <div className="space-y-4">
           {/* Cabeçalho do Álbum */}
           <div className="rounded-3xl border-2 border-primary/30 bg-gradient-to-br from-primary/10 via-card to-purple-500/10 p-4 sm:p-5 space-y-2">

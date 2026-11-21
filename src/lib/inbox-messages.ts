@@ -18,13 +18,15 @@ import {
 import { GAME_NAMES, type GameId } from "./game-storage.ts";
 import { recordScoreLedgerEntry } from "./score-history-ledger.ts";
 
-export type InboxRewardType = "points" | "xp" | "medal" | "future_item";
+export type InboxRewardType = "points" | "xp" | "coins" | "medal" | "cosmetic" | "future_item";
 
 export interface InboxReward {
   id: string;
   type: InboxRewardType;
   pointsAmount?: number;
   medalId?: string;
+  cosmeticKind?: "avatar" | "aura";
+  cosmeticId?: string;
   itemData?: Record<string, unknown>; // Preparado para futuras aquisicoes
   isSecret: boolean;
   claimed: boolean;
@@ -1355,6 +1357,41 @@ export function claimInboxReward(
         });
       } catch {
         /* ignore */
+      }
+    }
+
+    // 1.2 Conceder Moedas se houver
+    if (reward.type === "coins" && reward.pointsAmount && reward.pointsAmount > 0) {
+      const coinsBonus = Math.floor(reward.pointsAmount);
+      profile.coins = (profile.coins ?? 0) + coinsBonus;
+      try {
+        recordScoreLedgerEntry({
+          playerId: profile.id,
+          playerNick: profile.nick,
+          type: "coins",
+          source: "correio",
+          amount: coinsBonus,
+          balanceAfter: profile.coins,
+          reason: `Recompensa Postal: +${coinsBonus} Moedas (${msg.title})`,
+          metadata: { messageId, rewardId: reward.id },
+        });
+      } catch {
+        /* ignore */
+      }
+    }
+
+    // 1.3 Conceder Cosmético (Avatar ou Aura) se houver
+    if (reward.type === "cosmetic" && reward.cosmeticId) {
+      if (reward.cosmeticKind === "aura") {
+        const cur = Array.isArray(profile.unlockedAuras) ? profile.unlockedAuras : [];
+        if (!cur.includes(reward.cosmeticId)) {
+          profile.unlockedAuras = [...cur, reward.cosmeticId];
+        }
+      } else {
+        const cur = Array.isArray(profile.unlockedAvatars) ? profile.unlockedAvatars : [];
+        if (!cur.includes(reward.cosmeticId)) {
+          profile.unlockedAvatars = [...cur, reward.cosmeticId];
+        }
       }
     }
 

@@ -15,6 +15,48 @@ export const MEDAL_POINTS_REWARDS: Record<MedalRarity, number> = {
   secreta: 150,
 };
 
+/** Moedas concedidas por raridade de medalha (padrão configurável pelo ADM) */
+export const MEDAL_COINS_REWARDS: Record<string, number> = {
+  bronze: 5,
+  prata: 10,
+  ouro: 15,
+  platina: 25,
+  diamante: 50,
+  heroi: 100,
+  secreta: 100,
+};
+
+export function getLevelUpCoinsReward(level: number, step = 10): number {
+  const safeLvl = Math.floor(Number(level) || 1);
+  if (safeLvl < 2) return 0;
+  return (safeLvl - 1) * Math.max(0, Math.floor(step));
+}
+
+export function awardCoins(
+  profile: PlayerProfile,
+  amount: number,
+  reason = "Moedas Conquistadas",
+): { profile: PlayerProfile; coinsAwarded: number } {
+  if (!profile) return { profile, coinsAwarded: 0 };
+  const coinsAwarded = Math.max(0, Math.round(Number(amount) || 0));
+  if (coinsAwarded <= 0) return { profile, coinsAwarded: 0 };
+  profile.coins = Math.max(0, (profile.coins ?? 0) + coinsAwarded);
+  try {
+    recordScoreLedgerEntry({
+      playerId: profile.id || profile.nick,
+      playerNick: profile.nick || "Jogador",
+      type: "coins",
+      source: "medalha",
+      amount: coinsAwarded,
+      balanceAfter: profile.coins,
+      reason,
+    });
+  } catch {
+    /* ignore */
+  }
+  return { profile, coinsAwarded };
+}
+
 /** Pontos concedidos ao subir para cada nível (2 a 10) */
 export const LEVEL_POINTS_REWARDS: Record<number, number> = {
   2: 30,
@@ -290,6 +332,7 @@ export function checkLevelPromotionPoints(
   level: number,
   profile: PlayerProfile,
   multiplier = 1,
+  levelCoinStep = 10,
 ): { profile: PlayerProfile; pointsAwarded: number } {
   if (!profile || level < 2 || level > 10) {
     return { profile, pointsAwarded: 0 };
@@ -311,6 +354,10 @@ export function checkLevelPromotionPoints(
           multiplier,
         );
         totalAwarded += pointsAwarded;
+      }
+      const coinsReward = getLevelUpCoinsReward(lvl, levelCoinStep);
+      if (coinsReward > 0) {
+        awardCoins(profile, coinsReward, `Alcance do Nível ${lvl}`);
       }
     }
   }

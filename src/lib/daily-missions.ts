@@ -3,6 +3,8 @@ import type { AdminConfig } from "./game-codes.ts";
 import type { GameStatRow, PlayerProfile } from "./playfab.ts";
 import { getLocalDateKey } from "./player-profile.ts";
 
+export const DEFAULT_DAILY_MISSION_COINS = 5;
+
 export interface DailyMission {
   id: string;
   title: string;
@@ -11,6 +13,7 @@ export interface DailyMission {
   current: number;
   rewardPoints: number;
   rewardXp: number;
+  rewardCoins?: number;
   isPersonalized: boolean;
   gameId?: GameId;
 }
@@ -97,6 +100,22 @@ export function pickLeastPlayedGameForPlayer(args: {
  * e no jogo que ele menos jogou (sempre colocado como a última missão da lista).
  */
 export function generateDailyMissions(args: {
+  profile?: Partial<PlayerProfile> | null;
+  stats?: GameStatRow[];
+  adminConfig?: Partial<AdminConfig> | null;
+  dateKey?: string;
+}): DailyMission[] {
+  const dailyCoins = Math.max(
+    0,
+    Math.floor(
+      (args.adminConfig as { coinRewardsConfig?: { dailyMissionCoins?: number } } | null | undefined)
+        ?.coinRewardsConfig?.dailyMissionCoins ?? DEFAULT_DAILY_MISSION_COINS,
+    ),
+  );
+  return buildDailyMissionsList(args).map((m) => ({ ...m, rewardCoins: dailyCoins }));
+}
+
+function buildDailyMissionsList(args: {
   profile?: Partial<PlayerProfile> | null;
   stats?: GameStatRow[];
   adminConfig?: Partial<AdminConfig> | null;

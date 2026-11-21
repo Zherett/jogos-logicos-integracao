@@ -34,6 +34,8 @@ import {
   type RankingFilterCategory,
 } from "@/lib/player-profile";
 import { StudentNameDisplay } from "./StudentNameDisplay";
+import { PlayerAvatarBadge } from "./PlayerAvatarBadge";
+import { resolveEquippedAura, resolveEquippedAvatar } from "@/lib/cosmetics-catalog";
 import { usePlayerAuth } from "@/lib/player-auth";
 import {
   fetchLeaderboard,
@@ -855,6 +857,19 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
                           {row.rank <= 3 ? <Medal className="h-5 w-5" /> : `${row.rank}º`}
                         </span>
 
+                        {isAdminViewer && (() => {
+                          const rowAv = resolveEquippedAvatar(row, auth.adminConfig.avatarsCatalog);
+                          const rowAura = resolveEquippedAura(row, auth.adminConfig.aurasCatalog);
+                          return (
+                            <PlayerAvatarBadge
+                              avatar={rowAv.avatar}
+                              color={rowAv.color}
+                              aura={rowAura}
+                              size="sm"
+                            />
+                          );
+                        })()}
+
                         <TournamentRankBadge rankId={rowRankDef.id} points={rowPoints} size="xs" />
 
                         <div className="min-w-0 space-y-0.5">
@@ -1029,6 +1044,19 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
                         >
                           {row.rank <= 3 ? <Medal className="h-5 w-5" /> : `${row.rank}º`}
                         </span>
+
+                        {isAdminViewer && (() => {
+                          const rowAv = resolveEquippedAvatar(row, auth.adminConfig.avatarsCatalog);
+                          const rowAura = resolveEquippedAura(row, auth.adminConfig.aurasCatalog);
+                          return (
+                            <PlayerAvatarBadge
+                              avatar={rowAv.avatar}
+                              color={rowAv.color}
+                              aura={rowAura}
+                              size="sm"
+                            />
+                          );
+                        })()}
 
                         <div className="min-w-0 space-y-0.5">
                           <div className="flex flex-wrap items-center gap-1.5">

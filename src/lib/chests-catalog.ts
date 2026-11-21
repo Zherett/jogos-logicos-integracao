@@ -19,11 +19,18 @@ export interface ChestCardPackDrop {
   chancePercent: number; // 1..100
 }
 
+export interface ChestCosmeticDrop {
+  kind: "avatar" | "aura";
+  itemId: string;
+  chancePercent: number; // 1..100
+}
+
 export interface ChestRewardConfig {
   points?: { min: number; max: number };
   xp?: { min: number; max: number };
   coins?: { min: number; max: number };
   cardPacks?: ChestCardPackDrop[];
+  cosmetics?: ChestCosmeticDrop[];
 }
 
 export interface ChestDefinition {
@@ -188,6 +195,7 @@ export interface ChestOpenOutcome {
   xp: number;
   coins: number;
   packs: Array<{ packId: string; quantity: number }>;
+  cosmetics: Array<{ kind: "avatar" | "aura"; itemId: string }>;
 }
 
 function rollRange(range: { min: number; max: number } | undefined, rng: () => number): number {
@@ -207,12 +215,21 @@ export function openChest(
   const xp = rollRange(chest.rewards.xp, rng);
   const coins = rollRange(chest.rewards.coins, rng);
   const packs: Array<{ packId: string; quantity: number }> = [];
+  const cosmetics: Array<{ kind: "avatar" | "aura"; itemId: string }> = [];
 
   for (const drop of chest.rewards.cardPacks ?? []) {
     if (!drop?.packId || drop.quantity <= 0) continue;
     const chance = Math.min(100, Math.max(0, drop.chancePercent));
     if (chance >= 100 || rng() * 100 < chance) {
       packs.push({ packId: drop.packId, quantity: Math.floor(drop.quantity) });
+    }
+  }
+
+  for (const drop of chest.rewards.cosmetics ?? []) {
+    if (!drop?.itemId) continue;
+    const chance = Math.min(100, Math.max(0, drop.chancePercent));
+    if (chance >= 100 || rng() * 100 < chance) {
+      cosmetics.push({ kind: drop.kind, itemId: drop.itemId });
     }
   }
 
@@ -223,6 +240,7 @@ export function openChest(
     xp,
     coins,
     packs,
+    cosmetics,
   };
 }
 

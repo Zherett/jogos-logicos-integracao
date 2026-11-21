@@ -11,6 +11,8 @@ export type WeeklyMissionType =
   | "weekly_ranked_matches"
   | "weekly_daily_missions";
 
+export const DEFAULT_WEEKLY_MISSION_COINS = 10;
+
 export interface WeeklyMission {
   id: string;
   type: WeeklyMissionType;
@@ -20,6 +22,7 @@ export interface WeeklyMission {
   current: number;
   rewardPoints: number;
   rewardXp: number;
+  rewardCoins?: number;
   minLevelRequired: number;
 }
 
@@ -124,6 +127,23 @@ export function getEligibleGamesForWeeklyMissions(args: {
  * Missões de subir ranks na ranqueada aparecem exclusivamente a partir do Nível 4.
  */
 export function generateWeeklyMissions(args: {
+  profile?: Partial<PlayerProfile> | null;
+  adminConfig?: Partial<AdminConfig> | null;
+  now?: Date;
+  weekKey?: string;
+  weekIndex?: number;
+}): WeeklyMission[] {
+  const weeklyCoins = Math.max(
+    0,
+    Math.floor(
+      (args.adminConfig as { coinRewardsConfig?: { weeklyMissionCoins?: number } } | null | undefined)
+        ?.coinRewardsConfig?.weeklyMissionCoins ?? DEFAULT_WEEKLY_MISSION_COINS,
+    ),
+  );
+  return buildWeeklyMissionsList(args).map((m) => ({ ...m, rewardCoins: weeklyCoins }));
+}
+
+function buildWeeklyMissionsList(args: {
   profile?: Partial<PlayerProfile> | null;
   adminConfig?: Partial<AdminConfig> | null;
   now?: Date;

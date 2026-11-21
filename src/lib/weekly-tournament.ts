@@ -1982,8 +1982,14 @@ export function claimRankedMilestoneReward(args: {
   } else if (args.reward.type === "points") {
     nextProfile.pointsBalance = (nextProfile.pointsBalance ?? 0) + qty;
     nextProfile.careerPoints = (nextProfile.careerPoints ?? 0) + qty;
+  } else if (args.reward.type === "coins") {
+    nextProfile.coins = (nextProfile.coins ?? 0) + qty;
   } else {
     return { ok: false, error: "Configuração de recompensa inválida." };
+  }
+
+  if (args.reward.coinsBonus && args.reward.coinsBonus > 0 && args.reward.type !== "coins") {
+    nextProfile.coins = (nextProfile.coins ?? 0) + Math.floor(args.reward.coinsBonus);
   }
 
   return { ok: true, updatedProfile: nextProfile, milestoneKey };
