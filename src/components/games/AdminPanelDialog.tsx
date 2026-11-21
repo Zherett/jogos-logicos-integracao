@@ -1110,6 +1110,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
       activitySeasonName: activitySeasonName.trim() || draft.activitySeasonName,
       activitySeasonStartAt: start.toISOString(),
       activitySeasonEndAt: end ? end.toISOString() : null,
+      seasonEndAt: end ? end.toISOString() : null,
+      scheduledResetAt: end ? end.toISOString() : null,
       activitySeasonDurationDays: activityDurationDays,
     };
     setDraft(updated);

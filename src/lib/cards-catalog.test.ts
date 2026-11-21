@@ -33,8 +33,8 @@ describe("Sistema de Cartas Colecionáveis e Pacotes", () => {
     assert.equal(CARD_RARITIES.length, 5);
     assert.match(CARD_RARITY_META.incomum.borderClass, /emerald/);
     assert.match(CARD_RARITY_META.incomum.cardBgClass, /emerald/);
-    assert.match(CARD_RARITY_META.rara.borderClass, /blue/);
-    assert.match(CARD_RARITY_META.rara.cardBgClass, /blue/);
+    assert.match(CARD_RARITY_META.rara.borderClass, /yellow/);
+    assert.match(CARD_RARITY_META.rara.cardBgClass, /yellow/);
     assert.match(CARD_RARITY_META.epica.borderClass, /purple/);
     assert.match(CARD_RARITY_META.epica.cardBgClass, /purple/);
     assert.match(CARD_RARITY_META.lendaria.borderClass, /red/);

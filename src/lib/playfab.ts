@@ -837,7 +837,7 @@ export function checkAndApplyScheduledReset(options?: {
   }
 
   // 1. Encerramento automático agendado da Temporada Geral de Atividades (BETA / 60 dias)
-  const targetEnd = cfg.seasonEndAt || cfg.scheduledResetAt;
+  const targetEnd = cfg.activitySeasonEndAt || cfg.seasonEndAt || cfg.scheduledResetAt;
   if (targetEnd) {
     const dueTime = new Date(targetEnd).getTime();
     if (!Number.isNaN(dueTime) && Date.now() >= dueTime) {
@@ -1101,7 +1101,7 @@ export async function restoreRankedSeasonToOne(options?: {
  * (aluno logado ou visitante) consegue ler esses dados com GetUserData, sem precisar
  * fazer login na conta do ADM — evitando o bloqueio 429 (limite de logins por conta).
  */
-const ADMIN_CONFIG_OWNER_PLAYFAB_ID = "FB6662558A38ACAD";
+const ADMIN_CONFIG_OWNER_PLAYFAB_ID = "1B2E1517154B2D49";
 const ADMIN_CONFIG_USERDATA_KEY = "PlatformAdminConfig";
 const ADMIN_NOTIFS_USERDATA_KEY = "PlatformAdminMedalsNotifs";
 const ADMIN_INBOX_USERDATA_KEY = "PlatformAdminInbox";

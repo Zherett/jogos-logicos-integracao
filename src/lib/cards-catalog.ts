@@ -62,19 +62,19 @@ export const CARD_RARITY_META: Record<CardRarity, CardRarityMeta> = {
   rara: {
     id: "rara",
     label: "Rara",
-    borderClass: "border-blue-500 dark:border-blue-400",
+    borderClass: "border-yellow-400 dark:border-yellow-400",
     cardBgClass:
-      "bg-gradient-to-br from-sky-400 via-blue-600 to-indigo-800 dark:from-sky-600 dark:via-blue-700 dark:to-indigo-950",
+      "bg-gradient-to-br from-yellow-300 via-amber-500 to-orange-600 dark:from-yellow-500 dark:via-amber-600 dark:to-orange-800",
     gradientVariants: {
-      1: "bg-gradient-to-br from-sky-400 via-blue-600 to-indigo-800 dark:from-sky-600 dark:via-blue-700 dark:to-indigo-950",
-      2: "bg-gradient-to-br from-cyan-400 via-blue-600 to-slate-900 dark:from-cyan-600 dark:via-blue-800 dark:to-slate-950",
-      3: "bg-gradient-to-br from-blue-400 via-indigo-600 to-violet-800 dark:from-blue-600 dark:via-indigo-800 dark:to-violet-950",
+      1: "bg-gradient-to-br from-yellow-300 via-amber-500 to-orange-600 dark:from-yellow-500 dark:via-amber-600 dark:to-orange-800",
+      2: "bg-gradient-to-br from-amber-300 via-yellow-500 to-yellow-800 dark:from-amber-500 dark:via-yellow-600 dark:to-yellow-900",
+      3: "bg-gradient-to-br from-yellow-200 via-yellow-500 to-amber-700 dark:from-yellow-400 dark:via-amber-600 dark:to-amber-900",
     },
     innerBoxClass:
-      "bg-white/95 border-blue-600/35 text-slate-900 dark:bg-slate-950/90 dark:border-blue-400/50 dark:text-slate-100",
+      "bg-white/95 border-amber-500/45 text-slate-900 dark:bg-slate-950/90 dark:border-yellow-400/50 dark:text-slate-100",
     badgeClass:
-      "bg-white/95 text-blue-700 border-blue-600/50 dark:bg-slate-950/95 dark:text-blue-300 dark:border-blue-400/80",
-    glowClass: "shadow-[0_0_20px_-2px_rgba(59,130,246,0.6)] dark:shadow-[0_0_20px_-2px_rgba(59,130,246,0.7)]",
+      "bg-white/95 text-amber-700 border-amber-500/60 dark:bg-slate-950/95 dark:text-yellow-300 dark:border-yellow-400/80",
+    glowClass: "shadow-[0_0_20px_-2px_rgba(250,204,21,0.65)] dark:shadow-[0_0_20px_-2px_rgba(250,204,21,0.75)]",
   },
   epica: {
     id: "epica",
