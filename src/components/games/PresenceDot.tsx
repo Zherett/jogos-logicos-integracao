@@ -6,6 +6,7 @@ export interface PresenceDotProps {
   playfabId?: string;
   nick?: string;
   nickNormalized?: string;
+  activeSessionUpdatedAt?: string;
   status?: PresenceStatus;
   tooltipText?: string;
   size?: "xs" | "sm" | "md";
@@ -19,6 +20,7 @@ export const PresenceDot: React.FC<PresenceDotProps> = ({
   playfabId,
   nick,
   nickNormalized,
+  activeSessionUpdatedAt,
   status: explicitStatus,
   tooltipText: explicitTooltip,
   size = "sm",
@@ -30,6 +32,7 @@ export const PresenceDot: React.FC<PresenceDotProps> = ({
     playfabId,
     nick,
     nickNormalized,
+    activeSessionUpdatedAt,
   });
 
   const status: PresenceStatus = explicitStatus ?? presence.status;

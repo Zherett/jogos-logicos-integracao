@@ -164,6 +164,7 @@ import {
   PRESENCE_UPDATED_EVENT,
   sortStudentsByPresenceAndLevel,
   syncPresenceFromPlayFab,
+  syncPresenceFromUserData,
 } from "@/lib/presence";
 import { TournamentRankBadge } from "./TournamentRankBadge";
 import { AdminPromoCodesTab } from "./AdminPromoCodesTab";
@@ -548,6 +549,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
       .then(async () => {
         if (!active) return;
         refreshRoster();
+        void syncPresenceFromUserData(getAllRegisteredPlayers(), { force: true });
         const notifs = await syncAdminMedalNotificationsFromPlayFab();
         if (!active) return;
         setDraft((prev) => ({ ...prev, adminMedalNotifications: notifs }));
@@ -590,6 +592,9 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
     const presencePoll = window.setInterval(() => {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       void syncPresenceFromPlayFab();
+      if (isPresenceTab) {
+        void syncPresenceFromUserData(getAllRegisteredPlayers());
+      }
       if (isX1Tab) {
         void syncX1WithPlayFabCloud();
       }
@@ -3407,6 +3412,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                                         playfabId={st.playfabId}
                                         nick={st.nick}
                                         nickNormalized={st.nickNormalized}
+                                        activeSessionUpdatedAt={st.activeSessionUpdatedAt}
                                         size="xs"
                                       />
                                       <span className="rounded-full bg-primary/15 px-2 py-0.2 text-[10px] font-bold text-primary">
@@ -5126,6 +5132,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                                   playfabId={p.playfabId}
                                   nick={p.nick}
                                   nickNormalized={p.nickNormalized}
+                                  activeSessionUpdatedAt={p.activeSessionUpdatedAt}
                                   size="xs"
                                 />
                                 <span className="font-normal text-muted-foreground truncate">({p.full_name})</span>

@@ -8,7 +8,6 @@ import {
   clearCachedAdminPlayFabTicket,
   getAdminPlayFabTicket,
   getPlayFabTitleId,
-  getViewerPlayFabTicket,
   isPlayFabConfigured,
   loadStoredSession,
   validateActiveSession,
@@ -581,6 +580,10 @@ export function recordPlayerHeartbeat(
 /* --------------------- Sincronização em Nuvem (PlayFab SharedGroup) --------------------- */
 
 let presenceGroupCreated = false;
+let sharedGroupWriteBlockedUntil = 0;
+let userDataPresenceCursor = 0;
+let inFlightUserDataPresenceSync: Promise<void> | null = null;
+let lastUserDataPresenceSyncAt = 0;
 let lastPresenceCloudSyncAt = 0;
 let inFlightPresenceSync: Promise<void> | null = null;
 let serverClockOffsetMs: number | null = null;
@@ -617,6 +620,7 @@ async function callPresencePlayFab(
   body: Record<string, unknown>,
   canRetry = true,
   overrideTicket?: string,
+  keepalive = false,
 ): Promise<{ data?: Record<string, unknown>; serverDate?: string | null } | null> {
   if (typeof window === "undefined" || !isPlayFabConfigured()) return null;
   const titleId = getPlayFabTitleId();
@@ -633,6 +637,7 @@ async function callPresencePlayFab(
         "X-Authorization": ticket,
       },
       body: JSON.stringify({ TitleId: titleId, ...body }),
+      keepalive,
     });
     const serverDate = res.headers.get("date");
     const json = (await res.json()) as {
@@ -687,7 +692,8 @@ export async function pushPresenceToPlayFab(record: PlayerPresenceRecord): Promi
       activity: record.activity,
     });
 
-    // 1. Sempre grava no UserData público da própria conta logada (permissão garantida no PlayFab)
+    // 1. Fonte principal: UserData público da própria conta logada (o PlayFab sempre permite
+    //    que o jogador escreva nos próprios dados). keepalive garante o envio no pagehide.
     const ownTicket = loadStoredSession()?.sessionTicket;
     if (ownTicket) {
       void callPresencePlayFab(
@@ -698,10 +704,15 @@ export async function pushPresenceToPlayFab(record: PlayerPresenceRecord): Promi
         },
         false,
         ownTicket,
+        Boolean(record.disconnected),
       );
     }
 
-    // 2. Grava também no SharedGroup global para leitura em lote no painel do ADM
+    // 2. Fonte secundária: SharedGroup (só funciona se a conta for membro do grupo).
+    //    Se for recusado, pausa novas tentativas por 10 min para não gerar requisições inúteis.
+    if (record.disconnected) return;
+    const nowMs = Date.now();
+    if (nowMs < sharedGroupWriteBlockedUntil) return;
     if (!presenceGroupCreated) {
       await callPresencePlayFab("CreateSharedGroup", {
         SharedGroupId: PRESENCE_SHARED_GROUP_ID,
@@ -709,18 +720,13 @@ export async function pushPresenceToPlayFab(record: PlayerPresenceRecord): Promi
       presenceGroupCreated = true;
     }
     const key = `pres_${slug || record.playerId}`;
-    const sgBody = {
+    const sgRes = await callPresencePlayFab("UpdateSharedGroupData", {
       SharedGroupId: PRESENCE_SHARED_GROUP_ID,
       Data: { [key]: payloadStr },
       Permission: "Public",
-    };
-    const sgRes = await callPresencePlayFab("UpdateSharedGroupData", sgBody);
-    // Fallback com ticket da conta viewer caso a conta atual não seja membro do SharedGroup
+    });
     if (!sgRes) {
-      const viewerTicket = await getViewerPlayFabTicket();
-      if (viewerTicket && viewerTicket !== ownTicket) {
-        await callPresencePlayFab("UpdateSharedGroupData", sgBody, false, viewerTicket);
-      }
+      sharedGroupWriteBlockedUntil = Date.now() + 10 * 60 * 1000;
     }
   } catch {
     /* ignore network issues */
@@ -730,10 +736,32 @@ export async function pushPresenceToPlayFab(record: PlayerPresenceRecord): Promi
 /**
  * Incorpora um pulso de presença vindo do UserData público de um jogador ao cache local de presença.
  */
-export function applyRemotePresenceHeartbeat(rawJson: string): void {
+export function applyRemotePresenceHeartbeat(rawJson: string, lastUpdated?: string): void {
   if (typeof window === "undefined" || !rawJson) return;
   try {
     const remote = JSON.parse(rawJson) as Partial<PlayerPresenceRecord>;
+
+    // Normaliza o horário pelo relógio do servidor PlayFab (imune a celular com hora errada)
+    if (lastUpdated) {
+      const entryMs = Date.parse(lastUpdated);
+      if (!Number.isNaN(entryMs)) {
+        const nowMs = Date.now();
+        const ageMs = Math.max(0, nowMs + (serverClockOffsetMs ?? 0) - entryMs);
+        const idle =
+          typeof remote.idleMs === "number" && remote.idleMs >= 0
+            ? remote.idleMs
+            : Math.max(0, (remote.lastSeenAt ?? 0) - (remote.lastActiveAt ?? remote.lastSeenAt ?? 0));
+        const seen = Math.max(1, nowMs - ageMs);
+        if (remote.disconnected) {
+          remote.lastSeenAt = 0;
+          remote.lastActiveAt = seen;
+        } else {
+          remote.lastSeenAt = seen;
+          remote.lastActiveAt = Math.max(1, seen - idle);
+        }
+        remote.idleMs = idle;
+      }
+    }
     if (!remote.playerId && !remote.nickNormalized && !remote.nick) return;
     const slug =
       remote.nickNormalized ||
@@ -747,6 +775,15 @@ export function applyRemotePresenceHeartbeat(rawJson: string): void {
     const remoteActive = typeof remote.lastActiveAt === "number" ? remote.lastActiveAt : remoteSeen;
 
     if (existing && existing.lastSeenAt >= remoteSeen && remoteSeen > 0) {
+      return;
+    }
+    // Saída (disconnected) mais antiga que uma evidência online já conhecida não pode sobrescrevê-la
+    if (
+      remote.disconnected &&
+      existing &&
+      !existing.disconnected &&
+      existing.lastSeenAt > (remote.lastActiveAt ?? 0)
+    ) {
       return;
     }
 
@@ -774,6 +811,74 @@ export function applyRemotePresenceHeartbeat(rawJson: string): void {
   } catch {
     /* ignore malformed heartbeat */
   }
+}
+
+const PLAYFAB_ID_REGEX = /^[0-9A-F]{12,20}$/i;
+
+/**
+ * Lê o PresenceHeartbeat público (UserData) de cada aluno informado — fonte principal de presença,
+ * pois cada jogador sempre pode gravar nos próprios dados. Processa em rodízio (até maxPerCycle
+ * alunos por chamada, com concorrência limitada) para não estourar limites de requisição do PlayFab.
+ */
+export async function syncPresenceFromUserData(
+  targets: Array<{ id?: string; playfabId?: string }>,
+  options?: { maxPerCycle?: number; concurrency?: number; force?: boolean },
+): Promise<void> {
+  if (typeof window === "undefined" || !isPlayFabConfigured()) return;
+  const now = Date.now();
+  if (!options?.force && now - lastUserDataPresenceSyncAt < 5000) return;
+  if (inFlightUserDataPresenceSync) return inFlightUserDataPresenceSync;
+
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const t of targets) {
+    const pf = t.playfabId || (t.id && PLAYFAB_ID_REGEX.test(t.id) ? t.id : "");
+    if (pf && !seen.has(pf)) {
+      seen.add(pf);
+      ids.push(pf);
+    }
+  }
+  if (ids.length === 0) return;
+
+  const maxPerCycle = Math.max(1, options?.maxPerCycle ?? 40);
+  const concurrency = Math.max(1, options?.concurrency ?? 6);
+  const start = userDataPresenceCursor % ids.length;
+  const batch: string[] = [];
+  for (let i = 0; i < Math.min(maxPerCycle, ids.length); i++) {
+    batch.push(ids[(start + i) % ids.length]);
+  }
+  userDataPresenceCursor = (start + batch.length) % ids.length;
+  lastUserDataPresenceSyncAt = now;
+
+  inFlightUserDataPresenceSync = (async () => {
+    try {
+      if (serverClockOffsetMs === null || Date.now() - lastServerClockSyncAt > 5 * 60 * 1000) {
+        await syncServerClockOffset();
+      }
+      let idx = 0;
+      const worker = async () => {
+        while (idx < batch.length) {
+          const pfId = batch[idx++];
+          const res = await callPresencePlayFab("GetUserData", {
+            PlayFabId: pfId,
+            Keys: ["PresenceHeartbeat"],
+          });
+          const entry = (
+            res?.data as
+              | { Data?: Record<string, { Value?: string; LastUpdated?: string }> }
+              | undefined
+          )?.Data?.PresenceHeartbeat;
+          if (entry?.Value) {
+            applyRemotePresenceHeartbeat(entry.Value, entry.LastUpdated);
+          }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(concurrency, batch.length) }, worker));
+    } finally {
+      inFlightUserDataPresenceSync = null;
+    }
+  })();
+  return inFlightUserDataPresenceSync;
 }
 
 /**
@@ -1254,7 +1359,12 @@ function subscribeGlobalPresence(cb: () => void): () => void {
  */
 export function usePlayerPresence(
   playerId?: string,
-  hints?: { playfabId?: string; nick?: string; nickNormalized?: string },
+  hints?: {
+    playfabId?: string;
+    nick?: string;
+    nickNormalized?: string;
+    activeSessionUpdatedAt?: string;
+  },
 ): {
   status: PresenceStatus;
   tooltip: string;
@@ -1286,7 +1396,7 @@ export function usePlayerPresence(
 
     refresh();
     return subscribeGlobalPresence(refresh);
-  }, [playerId, hints?.playfabId, hints?.nick, hints?.nickNormalized]);
+  }, [playerId, hints?.playfabId, hints?.nick, hints?.nickNormalized, hints?.activeSessionUpdatedAt]);
 
   const status = computePresenceStatus(data);
   const tooltip = formatPresenceTooltip(status, data);
