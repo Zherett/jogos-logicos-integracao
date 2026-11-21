@@ -143,15 +143,20 @@ export function AdminStoreTab({
           </span>
         </div>
         {auth.profile && (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => void handleGrantSelfTestCoins()}
-            className="h-7 rounded-xl text-[11px] font-bold"
-          >
-            <Coins className="mr-1 h-3.5 w-3.5 text-amber-500" /> +200 Moedas (Teste ADM)
-          </Button>
+          <div className="flex items-center gap-2">
+            <span className="rounded-full border border-amber-500/40 bg-background/80 px-2.5 py-1 font-mono text-[11px] font-black text-amber-600 dark:text-amber-400">
+              Saldo: 🪙 {auth.profile.coins ?? 0}
+            </span>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => void handleGrantSelfTestCoins()}
+              className="h-7 rounded-xl text-[11px] font-bold"
+            >
+              <Coins className="mr-1 h-3.5 w-3.5 text-amber-500" /> +200 Moedas (Teste ADM)
+            </Button>
+          </div>
         )}
       </div>
 

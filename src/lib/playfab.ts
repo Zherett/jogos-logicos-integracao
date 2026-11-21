@@ -2937,14 +2937,16 @@ export function getActiveAccount(): StoredAccount | null {
 
 async function pushProfileToPlayFab(account: StoredAccount, sessionTicket?: string) {
   const ticket = sessionTicket ?? loadStoredSession()?.sessionTicket;
-  if (!ticket || !isPlayFabConfigured()) return;
+  if (!isPlayFabConfigured()) return;
 
   const p = account.profile;
-  await callPlayFabClient(
-    "UpdateUserData",
-    {
-      Data: {
-        PlayerProfile: JSON.stringify({
+  if (ticket) {
+    try {
+      await callPlayFabClient(
+        "UpdateUserData",
+        {
+          Data: {
+            PlayerProfile: JSON.stringify({
           nick: p.nick,
           full_name: abbreviateStudentName(p.full_name),
           school: p.school,
@@ -3007,6 +3009,10 @@ async function pushProfileToPlayFab(account: StoredAccount, sessionTicket?: stri
     },
     ticket,
   );
+    } catch {
+      /* ignore UserData error so roster sync still runs */
+    }
+  }
 
   // Sync into shared student roster for ADM, teachers, and leaderboards across all devices
   try {
@@ -6914,6 +6920,11 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
         }
 
         const mergedStats = Array.from(statMap.values());
+        const existingTs = existing.updatedAt ? Date.parse(existing.updatedAt) : 0;
+        const cloudUpdatedRaw = (cloudProfile as { updatedAt?: string }).updatedAt;
+        const cloudTs = cloudUpdatedRaw ? Date.parse(cloudUpdatedRaw) : 0;
+        const localIsNewer = existingTs > cloudTs;
+
         reg[targetKey] = ensurePlayerSeasonAligned(
           {
             ...existing,
@@ -6930,6 +6941,27 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
               wins: Math.max(existing.profile.wins ?? 0, cloudProfile.wins ?? 0),
               careerPoints: Math.max(existing.profile.careerPoints ?? 0, cloudProfile.careerPoints ?? 0),
               pointsBalance: Math.max(existing.profile.pointsBalance ?? 0, cloudProfile.pointsBalance ?? 0),
+              coins: localIsNewer
+                ? (existing.profile.coins ?? cloudProfile.coins ?? 0)
+                : Math.max(existing.profile.coins ?? 0, cloudProfile.coins ?? 0),
+              unlockedAvatars: Array.from(
+                new Set([
+                  ...(existing.profile.unlockedAvatars ?? []),
+                  ...(cloudProfile.unlockedAvatars ?? []),
+                ]),
+              ),
+              equippedAvatar: localIsNewer
+                ? (existing.profile.equippedAvatar ?? cloudProfile.equippedAvatar)
+                : (cloudProfile.equippedAvatar ?? existing.profile.equippedAvatar),
+              unlockedAuras: Array.from(
+                new Set([
+                  ...(existing.profile.unlockedAuras ?? []),
+                  ...(cloudProfile.unlockedAuras ?? []),
+                ]),
+              ),
+              equippedAuraId: localIsNewer
+                ? (existing.profile.equippedAuraId ?? cloudProfile.equippedAuraId)
+                : (cloudProfile.equippedAuraId ?? existing.profile.equippedAuraId),
               unlockedMedals: Array.from(mergedMedals.values()),
               stats: mergedStats,
             },
