@@ -3,8 +3,10 @@ import { stageForPlayer, type AgeStageId } from "./player-profile.ts";
 import {
   getAdminPlayFabTicket,
   getPlayFabTitleId,
+  getViewerPlayFabTicket,
   loadRegistry,
   loadStoredSession,
+  sanitizeGameBestScore,
 } from "./playfab.ts";
 
 export const GAME_RECORDS_STORAGE_KEY = "desafios-game-records-v1";
@@ -19,6 +21,9 @@ export function isRecordScoreAllowed(gameId: GameId, score: number): boolean {
 
 export function sanitizeRecordsStore(store: AllGameRecords): boolean {
   let changed = false;
+  const reg = typeof window !== "undefined" ? loadRegistry() : {};
+  const regAccounts = Object.values(reg);
+
   for (const key of Object.keys(store)) {
     const rec = store[key];
     if (!rec) continue;
@@ -26,6 +31,38 @@ export function sanitizeRecordsStore(store: AllGameRecords): boolean {
     if (!isRecordScoreAllowed(gameId, rec.score)) {
       delete store[key];
       changed = true;
+      continue;
+    }
+
+    // Se o detentor existe no registro de alunos local/nuvem mas a pontuação real dele no jogo é menor que o recorde órfão, remove
+    if (regAccounts.length > 0 && Array.isArray(rec.holders)) {
+      const validHolders = rec.holders.filter((h) => {
+        const matched =
+          reg[h.playerId] ??
+          regAccounts.find(
+            (a) =>
+              a?.profile &&
+              (a.profile.id === h.playerId ||
+                a.profile.playfabId === h.playerId ||
+                a.profile.nick?.toLowerCase() === h.nick?.toLowerCase()),
+          );
+        if (!matched) return true;
+        if (matched.profile?.deletedAt) return false;
+        const rows = (matched.stats ?? []).filter((s) => s.game_id === gameId);
+        const actualBest =
+          rows.length > 0
+            ? Math.max(...rows.map((r) => sanitizeGameBestScore(gameId, r.best_score)))
+            : 0;
+        return actualBest >= rec.score;
+      });
+      if (validHolders.length !== rec.holders.length) {
+        changed = true;
+        if (validHolders.length === 0) {
+          delete store[key];
+        } else {
+          rec.holders = validHolders;
+        }
+      }
     }
   }
   return changed;
@@ -219,7 +256,7 @@ export function getGameStageRecord(
   stage: AgeStageId,
   records?: AllGameRecords,
 ): StageGameRecord | null {
-  const store = records ?? loadGameRecords();
+  const store = records ?? seedRecordsFromRegistry();
   const key = getRecordKey(gameId, stage);
   const rec = store[key];
   if (!rec || rec.score <= 0 || !Array.isArray(rec.holders) || rec.holders.length === 0) {
@@ -347,10 +384,10 @@ export async function syncGameRecordsWithPlayFab(
   const run = async (): Promise<AllGameRecords> => {
   const session = loadStoredSession();
   const titleId = getPlayFabTitleId();
-  const ticket = (await getAdminPlayFabTicket()) ?? session?.sessionTicket;
+  const ticket = (await getViewerPlayFabTicket()) ?? (await getAdminPlayFabTicket()) ?? session?.sessionTicket;
   if (!ticket || !titleId) return store;
 
-  const groupId = "GameStageRecords_v1";
+  const groupId = "SEMED_GAME_RECORDS_V2";
 
   try {
     // 1. Ensure SharedGroup exists (only once per session)

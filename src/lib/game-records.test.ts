@@ -6,6 +6,7 @@ import {
   getRecordKey,
   type StageGameRecord,
 } from "./game-records.ts";
+import { sanitizeGameBestScore } from "./playfab.ts";
 
 describe("Sistema de Recordes de Pontuação por Jogo e por Etapa", () => {
   it("cria a chave única de jogo e etapa", () => {
@@ -212,5 +213,17 @@ describe("Sistema de Recordes de Pontuação por Jogo e por Etapa", () => {
     const d = new Date("2026-11-04T12:00:00Z");
     const formatted = formatRecordDateBR(d.getTime());
     assert.match(formatted, /\d{2}\/\d{2}\/2026/);
+  });
+
+  it("sanitizeGameBestScore zera pontuações indevidas de Lógica Matemática (> 480) no ranking Por Jogo e preserva scores legítimos", () => {
+    assert.equal(sanitizeGameBestScore("logica", 1185), 0);
+    assert.equal(sanitizeGameBestScore("logica", 1270), 0);
+    assert.equal(sanitizeGameBestScore("logica", 880), 0);
+    assert.equal(sanitizeGameBestScore("logica", 500), 0);
+    assert.equal(sanitizeGameBestScore("logica", 480), 480);
+    assert.equal(sanitizeGameBestScore("logica", 375), 375);
+    assert.equal(sanitizeGameBestScore("logica", 270), 270);
+    // Outros jogos como Batalha de Robôs permitem pontuações > 480 normalmente
+    assert.equal(sanitizeGameBestScore("rpg", 1435), 1435);
   });
 });

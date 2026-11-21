@@ -144,6 +144,19 @@ const REGISTRY_KEY = "desafios-playfab-registry-v1";
 const ADMIN_AUTH_KEY = "desafios-playfab-admin-auth-v1";
 const ADMIN_PIN_KEY = "desafios-playfab-admin-pin-v1";
 export const ROSTER_SHARED_GROUP_ID = "SEMED_STUDENT_ROSTER_V1";
+export const MAX_LEGIT_LOGIC_SCORE = 480;
+
+export function sanitizeGameBestScore(
+  gameId: GameId | string | undefined,
+  score: number | undefined,
+): number {
+  const val =
+    typeof score === "number" && !Number.isNaN(score) ? Math.max(0, Math.floor(score)) : 0;
+  if (gameId === "logica" && val > MAX_LEGIT_LOGIC_SCORE) {
+    return 0;
+  }
+  return val;
+}
 export const ADMIN_CONFIG_SHARED_GROUP_ID = "SEMED_PLATFORM_CONFIG_V1";
 
 /**
@@ -1628,15 +1641,17 @@ export function ensurePlayerSeasonAligned(
           ((s.plays ?? 0) > 0 || (s.best_score ?? 0) > 0 || (s.best_level ?? 1) > 1 || (s.wins ?? 0) > 0),
       )
       .map((s) => {
+        const cleanBestScore = sanitizeGameBestScore(s.game_id, s.best_score);
         const plays = Math.max(1, s.plays ?? 0);
         const hasWinEvidence =
           (s.wins ?? 0) > 0 ||
           (s.flawless_wins ?? 0) >= 1 ||
-          (s.best_score ?? 0) >= 20 ||
+          cleanBestScore >= 20 ||
           (s.best_level ?? 1) >= 2 ||
           plays >= 2;
         return {
           ...s,
+          best_score: cleanBestScore,
           plays,
           wins: Math.max(0, s.wins ?? 0, hasWinEvidence ? 1 : 0),
         };
@@ -3326,16 +3341,20 @@ export async function syncStudentRosterFromPlayFab(
             const statMap = new Map<string, any>();
             for (const s of combinedStats) {
               if (s?.game_id) {
+                const sBest = sanitizeGameBestScore(s.game_id, s.best_score);
                 const sKey = `${s.game_id}__${s.mode || "padrao"}`;
                 const cur = statMap.get(sKey);
-                if (!cur) statMap.set(sKey, { ...s });
+                if (!cur) statMap.set(sKey, { ...s, best_score: sBest });
                 else {
                   statMap.set(sKey, {
                     ...cur,
                     plays: Math.max(cur.plays ?? 0, s.plays ?? 0),
                     wins: Math.max(cur.wins ?? 0, s.wins ?? 0),
                     flawless_wins: Math.max(cur.flawless_wins ?? 0, s.flawless_wins ?? 0),
-                    best_score: Math.max(cur.best_score ?? 0, s.best_score ?? 0),
+                    best_score: Math.max(
+                      sanitizeGameBestScore(s.game_id, cur.best_score),
+                      sBest,
+                    ),
                     best_level: Math.max(cur.best_level ?? 1, s.best_level ?? 1),
                   });
                 }
@@ -3930,10 +3949,14 @@ export async function syncStudentRosterFromPlayFab(
           const statsMap = new Map<string, GameStatRow>();
           for (const st of [...existingStats, ...udStats, ...udProfileStats, ...incomingStats]) {
             if (!st || !st.game_id) continue;
+            const stBest = sanitizeGameBestScore(st.game_id, st.best_score);
+            if ((st.best_score ?? 0) !== stBest) {
+              needsCloudSanitize.add(slug);
+            }
             const key = `${st.game_id}__${st.mode || "padrao"}`;
             const cur = statsMap.get(key);
             if (!cur) {
-              statsMap.set(key, { ...st });
+              statsMap.set(key, { ...st, best_score: stBest });
             } else {
               statsMap.set(key, {
                 game_id: st.game_id,
@@ -3942,7 +3965,10 @@ export async function syncStudentRosterFromPlayFab(
                 wins: Math.max(cur.wins ?? 0, st.wins ?? 0),
                 flawless_wins: Math.max(cur.flawless_wins ?? 0, st.flawless_wins ?? 0),
                 last_wrong: st.last_wrong ?? cur.last_wrong,
-                best_score: Math.max(cur.best_score ?? 0, st.best_score ?? 0),
+                best_score: Math.max(
+                  sanitizeGameBestScore(st.game_id, cur.best_score),
+                  stBest,
+                ),
                 best_level: Math.max(cur.best_level ?? 1, st.best_level ?? 1),
                 last_played_at:
                   (st.last_played_at || "") > (cur.last_played_at || "")
@@ -3955,7 +3981,8 @@ export async function syncStudentRosterFromPlayFab(
           // Reconstruct any missing game rows discovered in PlayFab per-game leaderboards
           const lbGames = leaderboardGameScoresBySlug.get(slug);
           if (lbGames) {
-            for (const [gId, lbScore] of lbGames.entries()) {
+            for (const [gId, rawLbScore] of lbGames.entries()) {
+              const lbScore = sanitizeGameBestScore(gId, rawLbScore);
               if (lbScore <= 0) continue;
               const key = `${gId}__padrao`;
               const cur = statsMap.get(key);
@@ -3975,7 +4002,7 @@ export async function syncStudentRosterFromPlayFab(
                   ...cur,
                   plays: Math.max(1, cur.plays ?? 0),
                   wins: Math.max(cur.wins ?? 0, lbScore >= 20 ? 1 : 0),
-                  best_score: Math.max(cur.best_score ?? 0, lbScore),
+                  best_score: Math.max(sanitizeGameBestScore(gId, cur.best_score), lbScore),
                 });
               }
             }
@@ -5534,11 +5561,14 @@ function syncLoggedInLocalStatsToRegistry(
   let changedLocalStats = false;
   for (const gId of ALL_GAME_IDS) {
     if (cfg.enabledGames[gId] === false) continue;
-    const localBest = browserStats[gId]?.bestScore ?? 0;
+    const localBest = sanitizeGameBestScore(gId, browserStats[gId]?.bestScore);
     const localLevel = browserStats[gId]?.bestLevel ?? 1;
     if (localBest > 0) {
       const existingIdx = activeAcc.stats.findIndex((s) => s.game_id === gId);
-      if (existingIdx >= 0 && localBest > activeAcc.stats[existingIdx].best_score) {
+      if (
+        existingIdx >= 0 &&
+        localBest > sanitizeGameBestScore(gId, activeAcc.stats[existingIdx].best_score)
+      ) {
         activeAcc.stats[existingIdx].best_score = localBest;
         activeAcc.stats[existingIdx].best_level = Math.max(
           activeAcc.stats[existingIdx].best_level,
@@ -5599,8 +5629,11 @@ function buildLeaderboardFromLocal(
       value = Math.max(xpValue, pfStatVal);
     } else if (filter.kind === "game") {
       const gameRows = acc.stats.filter((s) => s.game_id === filter.gameId);
-      const localBest = gameRows.length > 0 ? Math.max(...gameRows.map((g) => g.best_score)) : 0;
-      value = Math.max(localBest, pfStatVal);
+      const localBest =
+        gameRows.length > 0
+          ? Math.max(...gameRows.map((g) => sanitizeGameBestScore(filter.gameId, g.best_score)))
+          : 0;
+      value = Math.max(localBest, sanitizeGameBestScore(filter.gameId, pfStatVal));
     }
 
     if (value <= 0 && filter.kind === "game") continue;
@@ -6783,16 +6816,17 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
         const statMap = new Map<string, GameStatRow>();
         for (const s of [...(existing.stats ?? []), ...(cloudStats ?? [])]) {
           if (!s?.game_id) continue;
+          const sBest = sanitizeGameBestScore(s.game_id, s.best_score);
           const sKey = `${s.game_id}__${s.mode || "padrao"}`;
           const cur = statMap.get(sKey);
-          if (!cur) statMap.set(sKey, { ...s });
+          if (!cur) statMap.set(sKey, { ...s, best_score: sBest });
           else {
             statMap.set(sKey, {
               ...cur,
               plays: Math.max(cur.plays ?? 0, s.plays ?? 0),
               wins: Math.max(cur.wins ?? 0, s.wins ?? 0),
               flawless_wins: Math.max(cur.flawless_wins ?? 0, s.flawless_wins ?? 0),
-              best_score: Math.max(cur.best_score ?? 0, s.best_score ?? 0),
+              best_score: Math.max(sanitizeGameBestScore(s.game_id, cur.best_score), sBest),
               best_level: Math.max(cur.best_level ?? 1, s.best_level ?? 1),
             });
           }
