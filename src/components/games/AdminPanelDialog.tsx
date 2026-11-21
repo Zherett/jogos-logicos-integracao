@@ -79,7 +79,6 @@ import {
 } from "@/lib/game-codes";
 import { usePlayerAuth } from "@/lib/player-auth";
 import {
-  ageFrom,
   levelProgress,
   stageForPlayer,
   SCHOOLS,
@@ -1115,7 +1114,12 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
     };
     setDraft(updated);
     await auth.updateAdminConfig(updated);
-    flashSaved("Configurações da Temporada de Atividades salvas com sucesso!");
+    const cloudErr = getLastAdminCloudSyncError();
+    if (cloudErr) {
+      flashSaved(`⚠️ Salvo localmente, mas falhou ao sincronizar com PlayFab: ${cloudErr}`);
+    } else {
+      flashSaved("Configurações da Temporada de Atividades salvas com sucesso!");
+    }
   };
 
   const executeBetaResetAction = async () => {
@@ -1172,7 +1176,12 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
     };
     setDraft(updated);
     await auth.updateAdminConfig(updated);
-    flashSaved("Configurações da Temporada de Ranqueada salvas com sucesso!");
+    const cloudErr = getLastAdminCloudSyncError();
+    if (cloudErr) {
+      flashSaved(`⚠️ Salvo localmente, mas falhou ao sincronizar com PlayFab: ${cloudErr}`);
+    } else {
+      flashSaved("Configurações da Temporada de Ranqueada salvas com sucesso!");
+    }
   };
 
   const restoreRankedSeasonOneAction = async () => {
@@ -3768,7 +3777,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                           <b className="text-foreground">25 Medalhas Especiais Preservadas:</b> Apenas medalhas Beta Tester, Robôs Raros (Ametista, Rubi, Safira, etc.), Streaks de Login e pioneiros de nível são mantidas permanentemente.
                         </li>
                         <li>
-                          <b className="text-foreground">Conversão de Pontos em Moedas:</b> Todo saldo de pontos dos alunos é convertido em Moedas de Cosméticos. A pontuação histórica no ranking (<code className="font-mono text-[11px]">careerPoints</code>) nunca é perdida!
+                          <b className="text-foreground">Preservação Histórica:</b> A pontuação histórica no ranking (<code className="font-mono text-[11px]">careerPoints</code>) e as moedas já obtidas nunca são perdidas!
                         </li>
                       </ul>
                     ) : (
@@ -3891,31 +3900,6 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                         >
                           +30 Dias
                         </Button>
-                      </div>
-                    </div>
-
-                    {/* Taxa de Conversão de Moedas */}
-                    <div className="flex items-center justify-between gap-3 rounded-2xl border bg-secondary/30 p-3.5">
-                      <div className="text-xs space-y-0.5">
-                        <div className="font-bold text-foreground flex items-center gap-1.5">
-                          <Coins className="h-4 w-4 text-amber-500" />
-                          Taxa de Conversão de Pontos em Moedas
-                        </div>
-                        <div className="text-muted-foreground text-[11px]">
-                          Quantidade de moedas geradas para cada ponto convertido no reset ou resgate voluntário.
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold text-muted-foreground">1 pt =</span>
-                        <Input
-                          type="number"
-                          min={1}
-                          max={100}
-                          value={draft.pointsToCoinsRate ?? 1}
-                          onChange={(e) => setDraft({ ...draft, pointsToCoinsRate: Math.max(1, parseInt(e.target.value) || 1) })}
-                          className="w-18 h-9 text-center font-bold rounded-xl bg-background"
-                        />
-                        <span className="text-xs font-bold text-amber-600 dark:text-amber-400">moeda(s)</span>
                       </div>
                     </div>
 

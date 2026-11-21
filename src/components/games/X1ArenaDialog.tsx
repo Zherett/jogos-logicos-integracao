@@ -689,8 +689,8 @@ export function X1ArenaDialog({
                     </span>
                     <span className="block text-[11px] text-muted-foreground">
                       {onlyMyStage
-                        ? "Pareando apenas com oponentes da sua faixa etária"
-                        : "Exibindo todas as faixas etárias"}
+                        ? "Pareando apenas com oponentes da sua etapa escolar"
+                        : "Exibindo todas as etapas"}
                     </span>
                   </div>
                   <div className="flex items-center gap-1">

@@ -69,12 +69,11 @@ import { awardCareerPoints, RECORD_STAGE_MAX_POINTS } from "@/lib/career-points"
 import integracaoPreto from "@/assets/integracao-preto.jpg";
 import semed from "@/assets/semed.png";
 import {
-  ageFrom,
   getLocalDateKey,
   isAdminOrTestAccount,
   isMatchVictory,
   isX1WindowOpen,
-  stageFromBirthdate,
+  stageForPlayer,
   TOURNAMENT_DAILY_FREE_ENTRIES,
   TOURNAMENT_DAILY_ENTRIES_LIMIT,
   TOURNAMENT_DAILY_EXTRA_XP_CAP,
@@ -165,7 +164,7 @@ function Index() {
       const correct = last?.correct ?? 0;
       const wrong = last?.wrong ?? 0;
       const safeScore = Math.max(0, score);
-      const pStage = stageFromBirthdate(auth.profile.birthdate, new Date(), auth.profile.school).id;
+      const pStage = stageForPlayer(auth.profile.school, null, new Date(), auth.profile.ageStage, auth.profile.grade).id;
       const stageRecRes = recordGameStageScore({
         gameId: gId,
         stage: pStage,
@@ -278,8 +277,7 @@ function Index() {
         fullName: p.full_name,
         school: p.school,
         level: p.level,
-        age: ageFrom(p.birthdate),
-        stage: stageFromBirthdate(p.birthdate, new Date(), p.school).id,
+        stage: stageForPlayer(p.school, null, new Date(), p.ageStage, p.grade).id,
         inRoomCode: activeX1Room?.code ?? null,
         lastActiveAt: getLocalUserLastActiveAt(),
       });

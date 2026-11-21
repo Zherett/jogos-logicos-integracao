@@ -1097,7 +1097,7 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
                               </span>
                             )}
                             <span className="text-[11px]">
-                              • {row.age} anos ({row.stageLabel})
+                              • {row.stageLabel}
                             </span>
                           </div>
                         </div>

@@ -456,8 +456,8 @@ export const AGE_STAGES: readonly AgeStageInfo[] = [
   {
     id: "etapa_1",
     shortLabel: "1ª Etapa",
-    label: "1ª Etapa (Até 12 anos • 5º ano)",
-    ageRangeLabel: "Até 12 anos (a partir de 2014)",
+    label: "1ª Etapa (5º ano)",
+    ageRangeLabel: "5º ano (Ensino Fundamental I)",
     schoolCycleLabel: "5º ano (Raimunda Cruz, Ursulina, Nazaré, Litaiff)",
     emoji: "🌱",
     minAge: 0,
@@ -466,8 +466,8 @@ export const AGE_STAGES: readonly AgeStageInfo[] = [
   {
     id: "etapa_2",
     shortLabel: "2ª Etapa",
-    label: "2ª Etapa (6º ao 9º ano • Raimundo Bezerra, Agenor Smith)",
-    ageRangeLabel: "6º ao 9º ano (2010 a 2013)",
+    label: "2ª Etapa (6º ao 9º ano)",
+    ageRangeLabel: "6º ao 9º ano (Ensino Fundamental II)",
     schoolCycleLabel: "6º ao 9º ano (Raimundo Bezerra, Agenor Smith)",
     emoji: "⚡",
     minAge: 13,
@@ -476,8 +476,8 @@ export const AGE_STAGES: readonly AgeStageInfo[] = [
   {
     id: "etapa_3",
     shortLabel: "3ª Etapa",
-    label: "3ª Etapa (Comunidade / Outro)",
-    ageRangeLabel: "Nascidos antes de 2010",
+    label: "3ª Etapa (Comunidade / Outras Escolas)",
+    ageRangeLabel: "Comunidade / Outras Escolas",
     schoolCycleLabel: "Comunidade / Outro",
     emoji: "🚀",
     minAge: 17,
@@ -547,17 +547,27 @@ export function stageFromBirthdate(
 
 export function stageForPlayer(
   school?: string | null,
-  birthdate?: string | null,
-  now = new Date(),
+  _birthdate?: string | null,
+  _now = new Date(),
   explicitStage?: AgeStageId | null,
+  grade?: string | null,
 ): AgeStageInfo {
+  if (is5thGradeSchool(school) || grade === "5º ano") {
+    return AGE_STAGES[0];
+  }
+  if (
+    isSecondStageSchool(school) ||
+    (grade && ["6º ano", "7º ano", "8º ano", "9º ano"].includes(grade))
+  ) {
+    return AGE_STAGES[1];
+  }
   if (explicitStage && AGE_STAGES.some((s) => s.id === explicitStage)) {
     return getAgeStageInfo(explicitStage);
   }
-  if (!birthdate && (school === "Nenhuma" || school === "Outro")) {
+  if (school === "Nenhuma" || school === "Outro") {
     return AGE_STAGES[2];
   }
-  return stageFromBirthdate(birthdate, now, school);
+  return AGE_STAGES[2];
 }
 
 /**

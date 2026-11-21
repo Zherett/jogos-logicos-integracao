@@ -946,9 +946,6 @@ export function executeActivitySeasonReset(options: {
     acc.profile.dailyXp = 0;
     acc.profile.dailyXpDate = getLocalDateKey();
 
-    // Converte saldo restante de pontos em moedas
-    autoConvertAllPointsToCoins(acc.profile, rate);
-
     if (isBeta) {
       // No fim do Beta: revoga as 120 medalhas de atividades e preserva apenas as 25 especiais
       acc.profile.unlockedMedals = (acc.profile.unlockedMedals ?? []).filter((m) =>
@@ -1106,6 +1103,9 @@ export async function restoreRankedSeasonToOne(options?: {
  */
 const ADMIN_CONFIG_OWNER_PLAYFAB_ID = "FB6662558A38ACAD";
 const ADMIN_CONFIG_USERDATA_KEY = "PlatformAdminConfig";
+const ADMIN_NOTIFS_USERDATA_KEY = "PlatformAdminMedalsNotifs";
+const ADMIN_INBOX_USERDATA_KEY = "PlatformAdminInbox";
+const ADMIN_CATALOGS_USERDATA_KEY = "PlatformAdminCatalogs";
 const REMOTE_CONFIG_CACHE_KEY = "desafios-remote-admin-config-v1";
 const VIEWER_TICKET_KEY = "desafios-playfab-viewer-ticket-v1";
 const VIEWER_USERNAME = "semedvisitante";
@@ -1225,12 +1225,44 @@ function clearViewerTicket() {
 async function readRemoteAdminConfigRaw(ticket: string): Promise<{ raw: string | null; ok: boolean }> {
   const res = await callPlayFabClient<{ Data?: Record<string, { Value: string }> }>(
     "GetUserData",
-    { PlayFabId: ADMIN_CONFIG_OWNER_PLAYFAB_ID, Keys: [ADMIN_CONFIG_USERDATA_KEY] },
+    {
+      PlayFabId: ADMIN_CONFIG_OWNER_PLAYFAB_ID,
+      Keys: [
+        ADMIN_CONFIG_USERDATA_KEY,
+        ADMIN_NOTIFS_USERDATA_KEY,
+        ADMIN_INBOX_USERDATA_KEY,
+        ADMIN_CATALOGS_USERDATA_KEY,
+      ],
+    },
     ticket,
   );
   if (!res.error) {
-    const val = res.data?.Data?.[ADMIN_CONFIG_USERDATA_KEY]?.Value ?? null;
-    if (val) return { raw: val, ok: true };
+    const baseRaw = res.data?.Data?.[ADMIN_CONFIG_USERDATA_KEY]?.Value ?? null;
+    if (baseRaw) {
+      try {
+        const parsed = JSON.parse(baseRaw) as Partial<PlatformAdminConfig>;
+        const notifsRaw = res.data?.Data?.[ADMIN_NOTIFS_USERDATA_KEY]?.Value;
+        if (notifsRaw) {
+          parsed.adminMedalNotifications = JSON.parse(notifsRaw);
+        }
+        const inboxRaw = res.data?.Data?.[ADMIN_INBOX_USERDATA_KEY]?.Value;
+        if (inboxRaw) {
+          parsed.inboxMessages = JSON.parse(inboxRaw);
+        }
+        const catalogsRaw = res.data?.Data?.[ADMIN_CATALOGS_USERDATA_KEY]?.Value;
+        if (catalogsRaw) {
+          const catObj = JSON.parse(catalogsRaw) as Partial<PlatformAdminConfig>;
+          if (catObj.cardsCatalog) parsed.cardsCatalog = catObj.cardsCatalog;
+          if (catObj.cardPacks) parsed.cardPacks = catObj.cardPacks;
+          if (catObj.chestsCatalog) parsed.chestsCatalog = catObj.chestsCatalog;
+          if (catObj.avatarsCatalog) parsed.avatarsCatalog = catObj.avatarsCatalog;
+          if (catObj.aurasCatalog) parsed.aurasCatalog = catObj.aurasCatalog;
+        }
+        return { raw: JSON.stringify(parsed), ok: true };
+      } catch {
+        return { raw: baseRaw, ok: true };
+      }
+    }
   }
   // Fallback secundário para SharedGroup caso exista
   const sgRes = await callPlayFabClient<{ Data?: Record<string, { Value: string }> }>(
@@ -1315,9 +1347,38 @@ export async function pushAdminConfigToPlayFab(config: PlatformAdminConfig): Pro
     return saved;
   }
   const raw = JSON.stringify(saved);
+  // Separa arrays/catálogos pesados em chaves próprias para nunca estourar o limite de 100 KB por chave no PlayFab
+  const {
+    adminMedalNotifications,
+    inboxMessages,
+    cardsCatalog,
+    cardPacks,
+    chestsCatalog,
+    avatarsCatalog,
+    aurasCatalog,
+    ...coreConfig
+  } = saved;
+  const trimmedNotifs = Array.isArray(adminMedalNotifications)
+    ? adminMedalNotifications.slice(0, 200)
+    : [];
+  const trimmedInbox = Array.isArray(inboxMessages) ? inboxMessages.slice(-80) : [];
+  const catalogsPayload = {
+    cardsCatalog,
+    cardPacks,
+    chestsCatalog,
+    avatarsCatalog,
+    aurasCatalog,
+  };
+  const dataPayload: Record<string, string> = {
+    [ADMIN_CONFIG_USERDATA_KEY]: JSON.stringify(coreConfig),
+    [ADMIN_NOTIFS_USERDATA_KEY]: JSON.stringify(trimmedNotifs),
+    [ADMIN_INBOX_USERDATA_KEY]: JSON.stringify(trimmedInbox),
+    [ADMIN_CATALOGS_USERDATA_KEY]: JSON.stringify(catalogsPayload),
+  };
+
   let res = await callPlayFabClient(
     "UpdateUserData",
-    { Data: { [ADMIN_CONFIG_USERDATA_KEY]: raw }, Permission: "Public" },
+    { Data: dataPayload, Permission: "Public" },
     ticket,
   );
   // Se o ticket cacheado do ADM expirou, renova uma vez automaticamente
@@ -1327,7 +1388,7 @@ export async function pushAdminConfigToPlayFab(config: PlatformAdminConfig): Pro
     if (ticket) {
       res = await callPlayFabClient(
         "UpdateUserData",
-        { Data: { [ADMIN_CONFIG_USERDATA_KEY]: raw }, Permission: "Public" },
+        { Data: dataPayload, Permission: "Public" },
         ticket,
       );
     }
