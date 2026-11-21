@@ -35,7 +35,10 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const packs = useMemo(
-    () => mergeWithDefaultCardPacks(auth.adminConfig.cardPacks).filter((p) => p.enabled),
+    () =>
+      mergeWithDefaultCardPacks(auth.adminConfig.cardPacks).filter(
+        (p) => p.enabled && p.showInStore !== false,
+      ),
     [auth.adminConfig.cardPacks],
   );
   const avatars = useMemo(

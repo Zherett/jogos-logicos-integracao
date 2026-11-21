@@ -38,6 +38,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ItemRewardPicker, type SelectedRewardItemValue } from "./ItemRewardPicker";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -206,9 +207,10 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
   // Configurações de Múltiplas Recompensas (Envio Imediato)
   type RewardDraftItem = {
     id: string;
-    type: "points" | "medal" | "future_item";
+    type: "points" | "coins" | "medal" | "future_item";
     pointsAmount: number;
     medalId: string;
+    rewardItem?: SelectedRewardItemValue;
     isSecret: boolean;
   };
   const [rewardsList, setRewardsList] = useState<RewardDraftItem[]>([]);
@@ -463,8 +465,21 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
   const toBroadcastRewards = (items: RewardDraftItem[]) =>
     items.map((item) => ({
       type: item.type,
-      pointsAmount: item.type === "points" ? Number(item.pointsAmount) || 50 : undefined,
+      pointsAmount:
+        item.type === "points" || item.type === "coins"
+          ? Number(item.pointsAmount) || 20
+          : undefined,
       medalId: item.type === "medal" ? item.medalId || availableMedals[0]?.id : undefined,
+      itemData:
+        item.type === "future_item" && item.rewardItem?.itemId
+          ? {
+              itemCategory: item.rewardItem.itemCategory,
+              itemId: item.rewardItem.itemId,
+              itemName: item.rewardItem.itemName,
+              quantity: item.rewardItem.quantity,
+              cosmeticKind: item.rewardItem.cosmeticKind,
+            }
+          : undefined,
       isSecret: item.isSecret,
     }));
 
@@ -2262,6 +2277,25 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                             setRewardsList((prev) =>
                               prev.map((item) =>
                                 item.id === rew.id
+                                  ? { ...item, type: "coins", pointsAmount: item.pointsAmount || 25 }
+                                  : item
+                              )
+                            )
+                          }
+                          className={`flex items-center justify-center gap-1.5 rounded-lg py-1.5 text-xs font-bold transition-all cursor-pointer ${
+                            rew.type === "coins"
+                              ? "bg-yellow-500 text-zinc-950 shadow-xs"
+                              : "text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          <Coins className="h-3.5 w-3.5" /> Moedas
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setRewardsList((prev) =>
+                              prev.map((item) =>
+                                item.id === rew.id
                                   ? {
                                       ...item,
                                       type: "medal",
@@ -2284,7 +2318,18 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                           onClick={() =>
                             setRewardsList((prev) =>
                               prev.map((item) =>
-                                item.id === rew.id ? { ...item, type: "future_item" } : item
+                                item.id === rew.id
+                                  ? {
+                                      ...item,
+                                      type: "future_item",
+                                      rewardItem: item.rewardItem ?? {
+                                        itemCategory: "chest",
+                                        itemId: "",
+                                        itemName: "",
+                                        quantity: 1,
+                                      },
+                                    }
+                                  : item
                               )
                             )
                           }
@@ -2294,11 +2339,39 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                               : "text-muted-foreground hover:text-foreground"
                           }`}
                         >
-                          <Package className="h-3.5 w-3.5" /> Novo Item
+                          <Package className="h-3.5 w-3.5" /> Item
                         </button>
                       </div>
 
                       {/* CONFIGURAÇÃO ESPECÍFICA DO TIPO */}
+                      {rew.type === "coins" && (
+                        <div className="space-y-1.5">
+                          <Label className="text-xs font-bold text-foreground">
+                            Quantidade de Moedas da Loja
+                          </Label>
+                          <div className="flex items-center gap-2">
+                            <Input
+                              type="number"
+                              min={1}
+                              max={5000}
+                              value={rew.pointsAmount}
+                              onChange={(e) =>
+                                setRewardsList((prev) =>
+                                  prev.map((item) =>
+                                    item.id === rew.id
+                                      ? { ...item, pointsAmount: Math.max(1, Number(e.target.value) || 1) }
+                                      : item
+                                  )
+                                )
+                              }
+                              className="h-10 rounded-xl font-bold text-sm w-36"
+                            />
+                            <span className="text-xs text-muted-foreground">
+                              Adicionadas à carteira de moedas do aluno.
+                            </span>
+                          </div>
+                        </div>
+                      )}
                       {rew.type === "points" && (
                         <div className="space-y-1.5">
                           <Label className="text-xs font-bold text-foreground">
@@ -2349,12 +2422,27 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                       )}
 
                       {rew.type === "future_item" && (
-                        <div className="rounded-xl border border-dashed border-primary/40 bg-background/50 p-3 text-center space-y-1">
-                          <Package className="h-5 w-5 text-primary mx-auto opacity-70" />
-                          <div className="text-xs font-bold text-foreground">
-                            Módulo de Itens Futuros (Reservado)
-                          </div>
-                        </div>
+                        <ItemRewardPicker
+                          value={
+                            rew.rewardItem ?? {
+                              itemCategory: "chest",
+                              itemId: "",
+                              itemName: "",
+                              quantity: 1,
+                            }
+                          }
+                          onChange={(nextVal) =>
+                            setRewardsList((prev) =>
+                              prev.map((item) =>
+                                item.id === rew.id ? { ...item, rewardItem: nextVal } : item
+                              )
+                            )
+                          }
+                          chestsCatalog={auth.adminConfig.chestsCatalog}
+                          cardPacks={auth.adminConfig.cardPacks}
+                          avatarsCatalog={auth.adminConfig.avatarsCatalog}
+                          aurasCatalog={auth.adminConfig.aurasCatalog}
+                        />
                       )}
 
                       {/* TOGGLE DE RECOMPENSA SECRETA */}
@@ -4112,6 +4200,9 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                               {rew.type === "points" && (
                                 <span>+{rew.pointsAmount} Pontos Conquistados</span>
                               )}
+                              {rew.type === "coins" && (
+                                <span>+{rew.pointsAmount} Moedas da Loja</span>
+                              )}
                               {rew.type === "medal" && (() => {
                                 const itemData = rew.itemData as any;
                                 const tourMedal = itemData?.tournamentMedal;
@@ -4121,7 +4212,19 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                                 const def = availableMedals.find((m) => m.id === rew.medalId);
                                 return <span>Medalha: {def ? def.title : rew.medalId}</span>;
                               })()}
-                              {rew.type === "future_item" && <span>Item Especial</span>}
+                              {rew.type === "future_item" && (() => {
+                                const idata = rew.itemData as any;
+                                if (idata?.itemName) {
+                                  return (
+                                    <span>
+                                      {idata.itemCategory === "cosmetic"
+                                        ? idata.itemName
+                                        : `${idata.quantity ?? 1}x ${idata.itemName}`}
+                                    </span>
+                                  );
+                                }
+                                return <span>Item Especial</span>;
+                              })()}
                             </div>
                             <div className="text-xs text-muted-foreground">
                               {rew.type === "points"

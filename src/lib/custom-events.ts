@@ -35,7 +35,36 @@ export interface SpecialEvent {
   linkedMedalId?: string | null;
   linkedMedalIds?: string[];
   objectiveDescription?: string | null;
+  rewardObjective?: EventObjectiveConfig;
+  rewards?: EventRewardConfig[];
   createdAt: string;
+}
+
+export type EventObjectiveType =
+  | "matches"
+  | "game_matches"
+  | "ranked_matches"
+  | "distinct_games"
+  | "wins"
+  | "flawless_matches"
+  | "xp";
+
+export interface EventObjectiveConfig {
+  type: EventObjectiveType;
+  target: number;
+  gameId?: GameId;
+  distinctTarget?: number;
+}
+
+export interface EventRewardConfig {
+  id: string;
+  type: "coins" | "xp" | "item";
+  amount?: number;
+  itemCategory?: "chest" | "card_pack" | "cosmetic";
+  itemId?: string;
+  itemName?: string;
+  cosmeticKind?: "avatar" | "aura";
+  quantity?: number;
 }
 
 const SPECIAL_EVENTS_KEY = "desafios-special-events-v1";
@@ -370,6 +399,8 @@ export function createSpecialEvent(args: {
   linkedMedalId?: string | null;
   linkedMedalIds?: string[];
   objectiveDescription?: string | null;
+  rewardObjective?: EventObjectiveConfig;
+  rewards?: EventRewardConfig[];
   now?: Date;
 }): SpecialEvent {
   const now = args.now ?? new Date();
@@ -407,6 +438,8 @@ export function createSpecialEvent(args: {
     linkedMedalId: finalLinkedIds[0] ?? null,
     linkedMedalIds: finalLinkedIds,
     objectiveDescription: args.objectiveDescription?.trim() ?? null,
+    rewardObjective: args.rewardObjective,
+    rewards: args.rewards,
     createdAt: now.toISOString(),
   };
 
@@ -453,7 +486,36 @@ export interface RecurringEvent {
   linkedMedalId?: string | null;
   linkedMedalIds?: string[];
   objectiveDescription?: string | null;
+  rewardObjective?: EventObjectiveConfig;
+  rewards?: EventRewardConfig[];
   createdAt: string;
+}
+
+export type EventObjectiveType =
+  | "matches"
+  | "game_matches"
+  | "ranked_matches"
+  | "distinct_games"
+  | "wins"
+  | "flawless_matches"
+  | "xp";
+
+export interface EventObjectiveConfig {
+  type: EventObjectiveType;
+  target: number;
+  gameId?: GameId;
+  distinctTarget?: number;
+}
+
+export interface EventRewardConfig {
+  id: string;
+  type: "coins" | "xp" | "item";
+  amount?: number;
+  itemCategory?: "chest" | "card_pack" | "cosmetic";
+  itemId?: string;
+  itemName?: string;
+  cosmeticKind?: "avatar" | "aura";
+  quantity?: number;
 }
 
 export const DAYS_OF_WEEK = [
@@ -574,6 +636,8 @@ export function createRecurringEvent(args: {
   linkedMedalId?: string | null;
   linkedMedalIds?: string[];
   objectiveDescription?: string | null;
+  rewardObjective?: EventObjectiveConfig;
+  rewards?: EventRewardConfig[];
   now?: Date;
 }): RecurringEvent {
   const now = args.now ?? new Date();
@@ -599,6 +663,8 @@ export function createRecurringEvent(args: {
     linkedMedalId: finalLinkedIds[0] ?? null,
     linkedMedalIds: finalLinkedIds,
     objectiveDescription: args.objectiveDescription?.trim() ?? null,
+    rewardObjective: args.rewardObjective,
+    rewards: args.rewards,
     createdAt: now.toISOString(),
   };
 
@@ -813,4 +879,63 @@ export function findEventById(
   if (r) return { event: r, isRecurring: true };
 
   return null;
+}
+
+/**
+ * Gera chave única por ativação do evento:
+ * - Evento pontual: única por período (ev_<id>_<startsAt>)
+ * - Evento programado/recorrente: única por dia ativo (rec_<id>_YYYY-MM-DD)
+ */
+export function getEventActivationKey(
+  event: { id: string; startsAt?: string },
+  isRecurring: boolean,
+  now = new Date(),
+): string {
+  if (!isRecurring) {
+    return `ev_${event.id}_${event.startsAt ?? "once"}`;
+  }
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, "0");
+  const d = String(now.getDate()).padStart(2, "0");
+  return `rec_${event.id}_${y}-${m}-${d}`;
+}
+
+export interface EventProgressSnapshot {
+  matches?: number;
+  rankedMatches?: number;
+  wins?: number;
+  flawlessMatches?: number;
+  xp?: number;
+  distinctGames?: string[];
+  matchesByGame?: Record<string, number>;
+}
+
+export function checkEventObjectiveMet(
+  objective: EventObjectiveConfig | undefined,
+  progress: EventProgressSnapshot | undefined,
+): boolean {
+  if (!objective || !progress) return false;
+  const target = Math.max(1, Math.floor(Number(objective.target) || 1));
+  switch (objective.type) {
+    case "matches":
+      return (progress.matches ?? 0) >= target;
+    case "game_matches":
+      return objective.gameId ? (progress.matchesByGame?.[objective.gameId] ?? 0) >= target : false;
+    case "ranked_matches":
+      return (progress.rankedMatches ?? 0) >= target;
+    case "distinct_games": {
+      const distinctCount = progress.distinctGames?.length ?? 0;
+      const dTarget = Math.max(1, Math.floor(Number(objective.distinctTarget || objective.target) || 1));
+      const mTarget = Math.max(1, Math.floor(Number(objective.target) || 1));
+      return distinctCount >= dTarget && (progress.matches ?? 0) >= mTarget;
+    }
+    case "wins":
+      return (progress.wins ?? 0) >= target;
+    case "flawless_matches":
+      return (progress.flawlessMatches ?? 0) >= target;
+    case "xp":
+      return (progress.xp ?? 0) >= target;
+    default:
+      return false;
+  }
 }

@@ -23,13 +23,13 @@ import type { GameStatRow, PlayerProfile } from "@/lib/playfab.ts";
 import type { AdminConfig } from "@/lib/game-codes.ts";
 import { getLocalDateKey } from "@/lib/player-profile.ts";
 import {
-  DAILY_REWARDS_SCHEDULE,
   DAILY_STREAK_BONUS_CAP,
   DAILY_STREAK_BONUS_STEP,
   getCumulativeCheckInDay,
   getCompletedCyclesCount,
   getStreakBonusPoints,
   getDayStatus,
+  resolveDailyRewardsSchedule,
 } from "@/lib/daily-rewards.ts";
 import { generateDailyMissions } from "@/lib/daily-missions.ts";
 import { generateWeeklyMissions } from "@/lib/weekly-missions.ts";
@@ -247,7 +247,7 @@ export function DailyRewardsModal({
 
             {/* Lista dos 7 Dias da Trilha */}
             <div className="space-y-2.5 py-1">
-              {DAILY_REWARDS_SCHEDULE.map((tier) => {
+              {resolveDailyRewardsSchedule((adminConfig as any)?.weeklyRoutineConfig).map((tier) => {
                 const status = getDayStatus(tier.day, currentDay, isTodayClaimed);
                 const isToday = status === "today";
                 const isCollected = status === "collected";
@@ -301,6 +301,11 @@ export function DailyRewardsModal({
                           <span className="inline-flex items-center gap-1 rounded-lg bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 font-mono text-[11px] font-black text-amber-600 dark:text-amber-400">
                             <Coins className="h-3 w-3" /> +{tier.points} pts
                           </span>
+                          {(tier.coins ?? 0) > 0 && (
+                            <span className="inline-flex items-center gap-1 rounded-lg bg-yellow-500/15 border border-yellow-500/30 px-2 py-0.5 font-mono text-[11px] font-black text-yellow-600 dark:text-yellow-400">
+                              🪙 +{tier.coins}
+                            </span>
+                          )}
                           {isToday && streakBonusPoints > 0 && (
                             <span className="inline-flex items-center gap-1 rounded-lg bg-orange-500/15 border border-orange-500/40 px-2 py-0.5 font-mono text-[11px] font-black text-orange-600 dark:text-orange-400">
                               <Flame className="h-3 w-3" /> +{streakBonusPoints} pts Ofensiva

@@ -137,7 +137,9 @@ import {
   ADMIN_NOTIFICATIONS_SHARED_GROUP_ID,
   mergeStudentReads,
   mergeStudentClaims,
+  sendAdminBroadcastMessage,
 } from "./inbox-messages.ts";
+import { checkEventObjectiveMet, getEventActivationKey } from "./custom-events.ts";
 import { invalidatePioneersCache } from "./medal-pioneers.ts";
 import { recordScoreLedgerEntry } from "./score-history-ledger.ts";
 
@@ -298,6 +300,7 @@ export interface PlayerProfile {
   unopenedChests?: Record<string, number>;
   claimedInboxRewardIds?: string[];
   claimedRankedMilestones?: string[];
+  claimedEventRewardKeys?: string[];
   lastDailyLoginPointsDate?: string;
   lastDailyFirstGamePointsDate?: string;
   achievedTournamentTiers?: string[];
@@ -5320,6 +5323,79 @@ export async function playfabRecordMatch(args: {
         }
         if (mode !== "x1_online" && !evProg.distinctGamesPlayed.includes(args.gameId)) {
           evProg.distinctGamesPlayed.push(args.gameId);
+        }
+
+        // Entrega automática de recompensas de evento ao Correio (restrita a ADMs/teste por enquanto)
+        const evWithRewards = ev as typeof ev & {
+          rewardObjective?: import("./custom-events.ts").EventObjectiveConfig;
+          rewards?: import("./custom-events.ts").EventRewardConfig[];
+          isRecurring?: boolean;
+        };
+        if (
+          isAdminOrTestAccount(acc.profile) &&
+          evWithRewards.rewardObjective &&
+          Array.isArray(evWithRewards.rewards) &&
+          evWithRewards.rewards.length > 0
+        ) {
+          const isRec = Boolean(evWithRewards.isRecurring || !("startsAt" in evWithRewards));
+          const actKey = getEventActivationKey(evWithRewards, isRec, nowObj);
+          const alreadyClaimed = acc.profile.claimedEventRewardKeys?.includes(actKey);
+          if (
+            !alreadyClaimed &&
+            checkEventObjectiveMet(evWithRewards.rewardObjective, {
+              matches: evProg.matchesCount,
+              rankedMatches: mode === "torneio_semanal" ? evProg.matchesCount : 0,
+              wins: won ? 1 : 0,
+              flawlessMatches: evProg.flawlessCount,
+              xp: evProg.xpEarned,
+              distinctGames: evProg.distinctGamesPlayed,
+              matchesByGame: evProg.matchesByGame,
+            })
+          ) {
+            acc.profile.claimedEventRewardKeys = [
+              ...(acc.profile.claimedEventRewardKeys ?? []),
+              actKey,
+            ];
+            try {
+              const mailRewards = evWithRewards.rewards.map((r) => {
+                if (r.type === "coins") {
+                  return {
+                    type: "coins" as const,
+                    pointsAmount: Math.max(1, Math.floor(r.amount || 10)),
+                    isSecret: false,
+                  };
+                }
+                if (r.type === "xp") {
+                  return {
+                    type: "xp" as const,
+                    pointsAmount: Math.max(1, Math.floor(r.amount || 20)),
+                    isSecret: false,
+                  };
+                }
+                return {
+                  type: "future_item" as const,
+                  itemData: {
+                    itemCategory: r.itemCategory ?? "chest",
+                    itemId: r.itemId ?? "",
+                    itemName: r.itemName ?? "Item do Evento",
+                    quantity: r.quantity ?? 1,
+                    cosmeticKind: r.cosmeticKind,
+                  },
+                  isSecret: false,
+                };
+              });
+              sendAdminBroadcastMessage({
+                mode: "students",
+                targetStudentIds: [acc.profile.id],
+                title: `🎁 Recompensa do Evento: ${ev.title}`,
+                body: `Parabéns! Você cumpriu o objetivo do evento "${ev.title}" e recebeu sua recompensa especial no Correio.`,
+                category: "recompensa_especial",
+                rewards: mailRewards,
+              });
+            } catch {
+              /* ignore event mail error */
+            }
+          }
         }
       }
 

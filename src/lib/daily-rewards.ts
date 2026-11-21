@@ -13,6 +13,7 @@ export interface DailyRewardTier {
   title: string;
   points: number;
   xp: number;
+  coins?: number;
   milestoneMedalId?: string;
   /** Preparação para o sistema de baús especiais */
   chestReward?: {
@@ -89,6 +90,24 @@ export function getStreakBonusPoints(consecutiveDays?: number): number {
   const safeDays = Math.max(1, Math.floor(consecutiveDays ?? 1));
   const rawBonus = (safeDays - 1) * DAILY_STREAK_BONUS_STEP;
   return Math.min(DAILY_STREAK_BONUS_CAP, Math.max(0, rawBonus));
+}
+
+export function resolveDailyRewardsSchedule(
+  routineConfig?: {
+    dailyTiers?: Array<{ day: number; title: string; points: number; xp: number; coins: number }>;
+  } | null,
+): DailyRewardTier[] {
+  const customMap = new Map((routineConfig?.dailyTiers ?? []).map((t) => [t.day, t]));
+  return DAILY_REWARDS_SCHEDULE.map((base) => {
+    const ov = customMap.get(base.day);
+    return {
+      ...base,
+      title: ov?.title?.trim() || base.title,
+      points: ov ? Math.max(0, Math.floor(ov.points)) : base.points,
+      xp: ov ? Math.max(0, Math.floor(ov.xp)) : base.xp,
+      coins: ov ? Math.max(0, Math.floor(ov.coins)) : 0,
+    };
+  });
 }
 
 /**

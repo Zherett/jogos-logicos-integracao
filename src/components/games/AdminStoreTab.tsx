@@ -482,17 +482,20 @@ export function AdminStoreTab({
 
       {section === "pacotes" && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-          {packs.map((pack) => (
+          {packs.map((pack) => {
+            const visibleInStore = pack.showInStore !== false;
+            return (
             <div
               key={pack.id}
               className={`flex items-center justify-between gap-2.5 rounded-2xl border bg-card p-3 ${
-                !pack.enabled ? "opacity-55" : ""
+                !pack.enabled || !visibleInStore ? "opacity-55" : ""
               }`}
             >
               <div className="min-w-0">
                 <div className="font-display text-xs font-black truncate">{pack.name}</div>
                 <div className="text-[10px] text-muted-foreground">
                   {pack.cardsPerPack} cartas • 🪙 {pack.priceCoins ?? 40} moedas
+                  {!visibleInStore ? " • Oculto na Loja" : ""}
                 </div>
               </div>
               <div className="flex items-center gap-1 shrink-0">
@@ -516,9 +519,20 @@ export function AdminStoreTab({
                 >
                   <Star className="h-3.5 w-3.5" />
                 </Button>
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  onClick={() => void handleUpdatePack(pack.id, { showInStore: !visibleInStore })}
+                  className="h-7 w-7 rounded-lg"
+                  title={visibleInStore ? "Ocultar da loja" : "Exibir na loja"}
+                >
+                  {visibleInStore ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+                </Button>
               </div>
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

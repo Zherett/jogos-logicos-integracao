@@ -253,6 +253,32 @@ export interface PlatformAdminConfig {
     medalCoinsByRarity?: Partial<Record<string, number>>;
     levelCoinStep?: number;
   };
+  /** Verdade absoluta da Rotina Semanal & Diária (editável pelo ADM, repete toda semana) */
+  weeklyRoutineConfig?: {
+    weekStartDay?: number;
+    weekEndDay?: number;
+    dailyLoginCoins?: number;
+    streakPointsStep?: number;
+    streakPointsCap?: number;
+    streakXpStep?: number;
+    streakCoinsStep?: number;
+    streakCoinsCap?: number;
+    dailyTiers?: Array<{
+      day: number;
+      title: string;
+      points: number;
+      xp: number;
+      coins: number;
+    }>;
+    dailyMissionOverrides?: Record<
+      string,
+      { target?: number; points?: number; xp?: number; coins?: number }
+    >;
+    weeklyMissionOverrides?: Record<
+      string,
+      { target?: number; points?: number; xp?: number; coins?: number }
+    >;
+  };
   /** Optional PlayFab Title ID configured via Admin UI. */
   playfabTitleId?: string;
   updatedAt: string;

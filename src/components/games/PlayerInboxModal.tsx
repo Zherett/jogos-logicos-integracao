@@ -704,8 +704,8 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                         <div className="space-y-2.5">
                           {activeRewards.map((rew, idx) => (
                             <div key={rew.id || idx} className="rounded-2xl border bg-background/90 p-3.5 flex items-center gap-3">
-                              {rew.type === "points" && (
-                                <div className="grid h-11 w-11 place-items-center rounded-2xl bg-amber-500/20 text-2xl font-black shrink-0">
+                              {(rew.type === "points" || rew.type === "coins") && (
+                                <div className="grid h-11 w-11 place-items-center rounded-2xl bg-amber-500/20 text-2xl shrink-0">
                                   🪙
                                 </div>
                               )}
@@ -725,6 +725,9 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                                   {rew.type === "points" && (
                                     <span>+{rew.pointsAmount} Pontos Conquistados</span>
                                   )}
+                                  {rew.type === "coins" && (
+                                    <span>+{rew.pointsAmount} Moedas da Loja</span>
+                                  )}
                                   {rew.type === "medal" && (() => {
                                     const itemData = rew.itemData as any;
                                     const tourMedal = itemData?.tournamentMedal;
@@ -740,16 +743,30 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                                       </span>
                                     );
                                   })()}
-                                  {rew.type === "future_item" && (
-                                    <span>Item Especial</span>
-                                  )}
+                                  {rew.type === "future_item" && (() => {
+                                    const idata = rew.itemData as any;
+                                    if (idata?.itemName) {
+                                      return (
+                                        <span>
+                                          {idata.itemCategory === "cosmetic"
+                                            ? idata.itemName
+                                            : `${idata.quantity ?? 1}x ${idata.itemName}`}
+                                        </span>
+                                      );
+                                    }
+                                    return <span>Item Especial</span>;
+                                  })()}
                                 </div>
                                 <div className="text-xs text-muted-foreground">
                                   {rew.type === "points"
                                     ? "Pontos serão somados à sua carteira e Hall da Fama"
-                                    : (rew.itemData as any)?.tournamentMedal
-                                      ? `+${(rew.itemData as any).tournamentMedal.bonusXpAwarded ?? 0} XP Extra e Medalha de Pódio Oficial`
-                                      : "Adicionada à sua galeria de troféus e medalhas"}
+                                    : rew.type === "coins"
+                                      ? "Moedas serão adicionadas à sua carteira da Loja"
+                                      : rew.type === "future_item"
+                                        ? "Será adicionado diretamente ao seu inventário/visual"
+                                        : (rew.itemData as any)?.tournamentMedal
+                                          ? `+${(rew.itemData as any).tournamentMedal.bonusXpAwarded ?? 0} XP Extra e Medalha de Pódio Oficial`
+                                          : "Adicionada à sua galeria de troféus e medalhas"}
                                 </div>
                               </div>
                             </div>

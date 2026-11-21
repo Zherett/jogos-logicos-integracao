@@ -105,14 +105,34 @@ export function generateDailyMissions(args: {
   adminConfig?: Partial<AdminConfig> | null;
   dateKey?: string;
 }): DailyMission[] {
+  const cfgAny = args.adminConfig as
+    | {
+        coinRewardsConfig?: { dailyMissionCoins?: number };
+        weeklyRoutineConfig?: {
+          dailyMissionOverrides?: Record<
+            string,
+            { target?: number; points?: number; xp?: number; coins?: number }
+          >;
+        };
+      }
+    | null
+    | undefined;
   const dailyCoins = Math.max(
     0,
-    Math.floor(
-      (args.adminConfig as { coinRewardsConfig?: { dailyMissionCoins?: number } } | null | undefined)
-        ?.coinRewardsConfig?.dailyMissionCoins ?? DEFAULT_DAILY_MISSION_COINS,
-    ),
+    Math.floor(cfgAny?.coinRewardsConfig?.dailyMissionCoins ?? DEFAULT_DAILY_MISSION_COINS),
   );
-  return buildDailyMissionsList(args).map((m) => ({ ...m, rewardCoins: dailyCoins }));
+  const overrides = cfgAny?.weeklyRoutineConfig?.dailyMissionOverrides ?? {};
+  return buildDailyMissionsList(args).map((m) => {
+    const key = m.isPersonalized ? "personal" : m.id.split("_").pop() || "";
+    const ov = overrides[key];
+    return {
+      ...m,
+      target: ov?.target && ov.target > 0 ? Math.floor(ov.target) : m.target,
+      rewardPoints: ov?.points !== undefined ? Math.max(0, Math.floor(ov.points)) : m.rewardPoints,
+      rewardXp: ov?.xp !== undefined ? Math.max(0, Math.floor(ov.xp)) : m.rewardXp,
+      rewardCoins: ov?.coins !== undefined ? Math.max(0, Math.floor(ov.coins)) : dailyCoins,
+    };
+  });
 }
 
 function buildDailyMissionsList(args: {

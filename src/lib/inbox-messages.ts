@@ -487,12 +487,18 @@ export interface AdminBroadcastDraft {
     type: InboxRewardType;
     pointsAmount?: number;
     medalId?: string;
+    cosmeticKind?: "avatar" | "aura";
+    cosmeticId?: string;
+    itemData?: Record<string, unknown>;
     isSecret: boolean;
   };
   rewards?: Array<{
     type: InboxRewardType;
     pointsAmount?: number;
     medalId?: string;
+    cosmeticKind?: "avatar" | "aura";
+    cosmeticId?: string;
+    itemData?: Record<string, unknown>;
     isSecret: boolean;
   }>;
 }
@@ -688,12 +694,21 @@ export function sendAdminBroadcastMessage(draft: AdminBroadcastDraft): SystemInb
 
   const nowTs = Date.now();
   const rewardsList: InboxReward[] = rawRewards
-    .filter((r) => (r.pointsAmount && r.pointsAmount > 0) || Boolean(r.medalId) || r.type === "future_item")
+    .filter(
+      (r) =>
+        (r.pointsAmount && r.pointsAmount > 0) ||
+        Boolean(r.medalId) ||
+        Boolean(r.cosmeticId) ||
+        (r.type === "future_item" && Boolean(r.itemData?.itemId)),
+    )
     .map((r, idx) => ({
       id: `rew_${nowTs}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
       type: r.type,
       pointsAmount: r.pointsAmount,
       medalId: r.medalId,
+      cosmeticKind: r.cosmeticKind,
+      cosmeticId: r.cosmeticId,
+      itemData: r.itemData,
       isSecret: Boolean(r.isSecret),
       claimed: false,
     }));
@@ -1391,6 +1406,33 @@ export function claimInboxReward(
         const cur = Array.isArray(profile.unlockedAvatars) ? profile.unlockedAvatars : [];
         if (!cur.includes(reward.cosmeticId)) {
           profile.unlockedAvatars = [...cur, reward.cosmeticId];
+        }
+      }
+    }
+
+    // 1.4 Conceder Item (Baú, Pacote de Cartas ou Cosmético) via future_item
+    if (reward.type === "future_item" && reward.itemData) {
+      const cat = String(reward.itemData.itemCategory || "");
+      const itemId = String(reward.itemData.itemId || "");
+      const qty = Math.max(1, Math.floor(Number(reward.itemData.quantity) || 1));
+      if (itemId) {
+        if (cat === "chest") {
+          const prevChests = { ...(profile.unopenedChests ?? {}) };
+          prevChests[itemId] = (Number(prevChests[itemId]) || 0) + qty;
+          profile.unopenedChests = prevChests;
+        } else if (cat === "card_pack") {
+          const prevPacks = { ...(profile.unopenedPacks ?? {}) };
+          prevPacks[itemId] = (Number(prevPacks[itemId]) || 0) + qty;
+          profile.unopenedPacks = prevPacks;
+        } else if (cat === "cosmetic") {
+          const cKind = String(reward.itemData.cosmeticKind || "avatar");
+          if (cKind === "aura") {
+            const cur = Array.isArray(profile.unlockedAuras) ? profile.unlockedAuras : [];
+            if (!cur.includes(itemId)) profile.unlockedAuras = [...cur, itemId];
+          } else {
+            const cur = Array.isArray(profile.unlockedAvatars) ? profile.unlockedAvatars : [];
+            if (!cur.includes(itemId)) profile.unlockedAvatars = [...cur, itemId];
+          }
         }
       }
     }

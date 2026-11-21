@@ -191,6 +191,9 @@ const AdminChestsTab = lazy(() =>
 const AdminStoreTab = lazy(() =>
   import("./AdminStoreTab").then((m) => ({ default: m.AdminStoreTab })),
 );
+const AdminRoutineTab = lazy(() =>
+  import("./AdminRoutineTab").then((m) => ({ default: m.AdminRoutineTab })),
+);
 import {
   AGE_STAGES,
   getTournamentRank,
@@ -222,7 +225,8 @@ type AdminTab =
   | "codigos"
   | "cartas"
   | "baus"
-  | "loja";
+  | "loja"
+  | "rotina";
 
 function randomGameCode(prefix: string): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -1429,6 +1433,17 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                   }`}
                 >
                   <Coins className="h-4 w-4 text-amber-500" /> Loja &amp; Cosméticos
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTab("rotina");
+                  }}
+                  className={`flex items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-bold transition-colors ${
+                    tab === "rotina" ? "bg-card text-primary shadow-sm" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  <Calendar className="h-4 w-4 text-primary" /> Rotina &amp; Missões
                 </button>
                 <button
                   type="button"
@@ -5433,6 +5448,22 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
             {tab === "loja" && (
               <Suspense fallback={<div className="p-6 text-center text-xs text-muted-foreground">Carregando Loja &amp; Cosméticos...</div>}>
                 <AdminStoreTab
+                  draft={draft}
+                  setDraft={setDraft}
+                  onSaveConfig={async (nextCfg) => {
+                    setDraft(nextCfg);
+                    await auth.updateAdminConfig(nextCfg);
+                    onConfigSaved?.();
+                  }}
+                  onShowFeedback={(msg) => flashSaved(msg)}
+                />
+              </Suspense>
+            )}
+
+            {/* TAB ROTINA SEMANAL & DIÁRIA */}
+            {tab === "rotina" && (
+              <Suspense fallback={<div className="p-6 text-center text-xs text-muted-foreground">Carregando Rotina &amp; Missões...</div>}>
+                <AdminRoutineTab
                   draft={draft}
                   setDraft={setDraft}
                   onSaveConfig={async (nextCfg) => {

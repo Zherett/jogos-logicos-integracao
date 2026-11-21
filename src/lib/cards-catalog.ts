@@ -279,6 +279,7 @@ export interface CardPackDefinition {
   pricePoints?: number;
   priceCoins?: number;
   featuredInStore?: boolean;
+  showInStore?: boolean;
   icon?: CardPackIconId;
   colorTheme?: CardPackColorId;
   isFoil?: boolean;

@@ -28,6 +28,8 @@ import {
   type RecurringEvent,
   type EventBonusType,
   type EventScope,
+  type EventObjectiveConfig,
+  type EventRewardConfig,
   formatEventRemainingTime,
   formatDateOnlyBR,
   formatDateTimeBR,
@@ -54,6 +56,7 @@ import {
   formatEventRequirementLabel,
 } from "@/lib/medals-catalog";
 import { MedalIcon } from "./MedalIcon";
+import { EventRewardsEditor } from "./EventRewardsEditor";
 import { type PlatformAdminConfig } from "@/lib/game-codes";
 import { type GameId, ALL_GAME_IDS, GAME_NAMES } from "@/lib/game-storage";
 import { isPlayFabConfigured, getPlayFabTitleId } from "@/lib/playfab";
@@ -192,6 +195,8 @@ export function AdminEventsTab({
   });
   const [evLinkedMedalId, setEvLinkedMedalId] = useState<string>("");
   const [evObjective, setEvObjective] = useState<string>("");
+  const [evRewardObjective, setEvRewardObjective] = useState<EventObjectiveConfig | undefined>(undefined);
+  const [evRewards, setEvRewards] = useState<EventRewardConfig[]>([]);
 
   // Event Medals state for punctual events
   const [evAttachedMedals, setEvAttachedMedals] = useState<MedalDefinition[]>([]);
@@ -230,6 +235,8 @@ export function AdminEventsTab({
   const [recPointsMultiplier, setRecPointsMultiplier] = useState<number>(2);
   const [recLinkedMedal, setRecLinkedMedal] = useState<string>("");
   const [recObjective, setRecObjective] = useState<string>("");
+  const [recRewardObjective, setRecRewardObjective] = useState<EventObjectiveConfig | undefined>(undefined);
+  const [recRewards, setRecRewards] = useState<EventRewardConfig[]>([]);
 
   // Event Medals state for recurring events
   const [recAttachedMedals, setRecAttachedMedals] = useState<MedalDefinition[]>([]);
@@ -308,6 +315,8 @@ export function AdminEventsTab({
     setEvHasPointsMultiplier(Boolean(ev.pointsMultiplier && ev.pointsMultiplier > 1));
     setEvPointsMultiplier(ev.pointsMultiplier || 2);
     setEvObjective(ev.objectiveDescription || "");
+    setEvRewardObjective(ev.rewardObjective);
+    setEvRewards(ev.rewards ?? []);
     setEvLinkedMedalId(ev.linkedMedalId || "");
     setIsCreatingEvent(true);
   }
@@ -382,6 +391,8 @@ export function AdminEventsTab({
           linkedMedalId: linkedIds[0] ?? (evLinkedMedalId || existing.linkedMedalId || null),
           linkedMedalIds: linkedIds.length > 0 ? linkedIds : existing.linkedMedalIds,
           objectiveDescription: evObjective?.trim() || null,
+          rewardObjective: evRewardObjective,
+          rewards: evRewards,
         };
       });
       setSpecialEvents(list);
@@ -391,6 +402,8 @@ export function AdminEventsTab({
       setEvTitle("");
       setEvDesc("");
       setEvObjective("");
+      setEvRewardObjective(undefined);
+      setEvRewards([]);
       setEvAttachedMedals([]);
       const nextCfg = { ...draft, specialEvents: list, customMedals: newCustoms };
       setDraft(nextCfg);
@@ -423,6 +436,8 @@ export function AdminEventsTab({
       linkedMedalId: linkedIds[0] ?? (evLinkedMedalId || null),
       linkedMedalIds: linkedIds,
       objectiveDescription: evObjective || null,
+      rewardObjective: evRewardObjective,
+      rewards: evRewards,
     });
     const updated = loadSpecialEvents();
     setSpecialEvents(updated);
@@ -431,6 +446,8 @@ export function AdminEventsTab({
     setEvTitle("");
     setEvDesc("");
     setEvObjective("");
+    setEvRewardObjective(undefined);
+    setEvRewards([]);
     setEvAttachedMedals([]);
     const nextCfg = { ...draft, specialEvents: updated, customMedals: newCustoms };
     setDraft(nextCfg);
@@ -508,6 +525,8 @@ export function AdminEventsTab({
     setRecHasPointsMultiplier(Boolean(ev.pointsMultiplier && ev.pointsMultiplier > 1));
     setRecPointsMultiplier(ev.pointsMultiplier || 2);
     setRecObjective(ev.objectiveDescription || "");
+    setRecRewardObjective(ev.rewardObjective);
+    setRecRewards(ev.rewards ?? []);
     setRecLinkedMedal(ev.linkedMedalId || "");
     setIsCreatingRecurring(true);
   }
@@ -555,6 +574,8 @@ export function AdminEventsTab({
           linkedMedalId: linkedIds[0] ?? (recLinkedMedal || existing.linkedMedalId || null),
           linkedMedalIds: linkedIds.length > 0 ? linkedIds : existing.linkedMedalIds,
           objectiveDescription: recObjective?.trim() || null,
+          rewardObjective: recRewardObjective,
+          rewards: recRewards,
         };
       });
       setRecurringEvents(list);
@@ -564,6 +585,8 @@ export function AdminEventsTab({
       setRecTitle("");
       setRecDesc("");
       setRecObjective("");
+      setRecRewardObjective(undefined);
+      setRecRewards([]);
       setRecSpecificDates([]);
       setRecDaysOfWeek([6, 0]);
       setRecAttachedMedals([]);
@@ -589,6 +612,8 @@ export function AdminEventsTab({
       linkedMedalId: linkedIds[0] ?? (recLinkedMedal || null),
       linkedMedalIds: linkedIds,
       objectiveDescription: recObjective || null,
+      rewardObjective: recRewardObjective,
+      rewards: recRewards,
     });
     const updated = loadRecurringEvents();
     setRecurringEvents(updated);
@@ -596,6 +621,8 @@ export function AdminEventsTab({
     setRecTitle("");
     setRecDesc("");
     setRecObjective("");
+    setRecRewardObjective(undefined);
+    setRecRewards([]);
     setRecSpecificDates([]);
     setRecDaysOfWeek([6, 0]);
     setRecAttachedMedals([]);
@@ -1543,6 +1570,14 @@ export function AdminEventsTab({
                           )}
                         </div>
 
+                        <EventRewardsEditor
+                          objective={evRewardObjective}
+                          onChangeObjective={setEvRewardObjective}
+                          rewards={evRewards}
+                          onChangeRewards={setEvRewards}
+                          adminConfig={draft}
+                        />
+
                         <div className="flex justify-end gap-2 pt-2">
                           <Button
                             type="button"
@@ -2345,6 +2380,14 @@ export function AdminEventsTab({
                             </div>
                           )}
                         </div>
+
+                        <EventRewardsEditor
+                          objective={recRewardObjective}
+                          onChangeObjective={setRecRewardObjective}
+                          rewards={recRewards}
+                          onChangeRewards={setRecRewards}
+                          adminConfig={draft}
+                        />
 
                         <div className="flex justify-end gap-2 pt-2">
                           <Button

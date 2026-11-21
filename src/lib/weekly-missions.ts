@@ -133,14 +133,33 @@ export function generateWeeklyMissions(args: {
   weekKey?: string;
   weekIndex?: number;
 }): WeeklyMission[] {
+  const cfgAny = args.adminConfig as
+    | {
+        coinRewardsConfig?: { weeklyMissionCoins?: number };
+        weeklyRoutineConfig?: {
+          weeklyMissionOverrides?: Record<
+            string,
+            { target?: number; points?: number; xp?: number; coins?: number }
+          >;
+        };
+      }
+    | null
+    | undefined;
   const weeklyCoins = Math.max(
     0,
-    Math.floor(
-      (args.adminConfig as { coinRewardsConfig?: { weeklyMissionCoins?: number } } | null | undefined)
-        ?.coinRewardsConfig?.weeklyMissionCoins ?? DEFAULT_WEEKLY_MISSION_COINS,
-    ),
+    Math.floor(cfgAny?.coinRewardsConfig?.weeklyMissionCoins ?? DEFAULT_WEEKLY_MISSION_COINS),
   );
-  return buildWeeklyMissionsList(args).map((m) => ({ ...m, rewardCoins: weeklyCoins }));
+  const overrides = cfgAny?.weeklyRoutineConfig?.weeklyMissionOverrides ?? {};
+  return buildWeeklyMissionsList(args).map((m) => {
+    const ov = overrides[m.type];
+    return {
+      ...m,
+      target: ov?.target && ov.target > 0 ? Math.floor(ov.target) : m.target,
+      rewardPoints: ov?.points !== undefined ? Math.max(0, Math.floor(ov.points)) : m.rewardPoints,
+      rewardXp: ov?.xp !== undefined ? Math.max(0, Math.floor(ov.xp)) : m.rewardXp,
+      rewardCoins: ov?.coins !== undefined ? Math.max(0, Math.floor(ov.coins)) : weeklyCoins,
+    };
+  });
 }
 
 function buildWeeklyMissionsList(args: {
