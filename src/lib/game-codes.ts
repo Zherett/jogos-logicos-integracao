@@ -7,6 +7,7 @@ import {
   type CardDefinition,
   type CardPackDefinition,
 } from "./cards-catalog.ts";
+import type { ChestDefinition } from "./chests-catalog.ts";
 import {
   type SpecialEvent,
   type RecurringEvent,
@@ -239,6 +240,8 @@ export interface PlatformAdminConfig {
   cardsCatalog?: CardDefinition[];
   /** Pacotes de cartas (5 padrão + pacotes especiais do ADM) */
   cardPacks?: CardPackDefinition[];
+  /** Catálogo de baús configuráveis pelo ADM (prévia ADM) */
+  chestsCatalog?: ChestDefinition[];
   /** Optional PlayFab Title ID configured via Admin UI. */
   playfabTitleId?: string;
   updatedAt: string;

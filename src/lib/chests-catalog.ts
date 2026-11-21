@@ -1,0 +1,239 @@
+// Catálogo e lógica pura de Baús de Recompensa (browser-safe)
+
+export type ChestRarity = "comum" | "incomum" | "rara" | "epica" | "lendaria";
+
+export interface ChestCardPackDrop {
+  packId: string;
+  quantity: number;
+  chancePercent: number; // 1..100
+}
+
+export interface ChestRewardConfig {
+  points?: { min: number; max: number };
+  xp?: { min: number; max: number };
+  coins?: { min: number; max: number };
+  cardPacks?: ChestCardPackDrop[];
+}
+
+export interface ChestDefinition {
+  id: string;
+  name: string;
+  description: string;
+  rarity: ChestRarity;
+  isDefault?: boolean;
+  enabled: boolean;
+  rewards: ChestRewardConfig;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChestRarityMeta {
+  id: ChestRarity;
+  label: string;
+  borderClass: string;
+  bgClass: string;
+  badgeClass: string;
+  glowClass: string;
+}
+
+export const CHEST_RARITIES: readonly ChestRarity[] = [
+  "comum",
+  "incomum",
+  "rara",
+  "epica",
+  "lendaria",
+] as const;
+
+export const CHEST_RARITY_META: Record<ChestRarity, ChestRarityMeta> = {
+  comum: {
+    id: "comum",
+    label: "Comum",
+    borderClass: "border-slate-400 dark:border-slate-500",
+    bgClass: "bg-gradient-to-br from-slate-100 to-slate-200 dark:from-slate-800 dark:to-slate-900",
+    badgeClass: "bg-slate-200 text-slate-800 dark:bg-slate-800 dark:text-slate-200",
+    glowClass: "shadow-sm",
+  },
+  incomum: {
+    id: "incomum",
+    label: "Incomum",
+    borderClass: "border-emerald-500 dark:border-emerald-400",
+    bgClass: "bg-gradient-to-br from-emerald-50 to-teal-100 dark:from-emerald-950 dark:to-teal-950",
+    badgeClass: "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300",
+    glowClass: "shadow-[0_0_16px_rgba(16,185,129,0.25)]",
+  },
+  rara: {
+    id: "rara",
+    label: "Rara",
+    borderClass: "border-sky-500 dark:border-sky-400",
+    bgClass: "bg-gradient-to-br from-sky-50 to-indigo-100 dark:from-sky-950 dark:to-indigo-950",
+    badgeClass: "bg-sky-500/20 text-sky-700 dark:text-sky-300",
+    glowClass: "shadow-[0_0_18px_rgba(14,165,233,0.3)]",
+  },
+  epica: {
+    id: "epica",
+    label: "Épica",
+    borderClass: "border-purple-500 dark:border-purple-400",
+    bgClass: "bg-gradient-to-br from-purple-50 to-fuchsia-100 dark:from-purple-950 dark:to-fuchsia-950",
+    badgeClass: "bg-purple-500/20 text-purple-700 dark:text-purple-300",
+    glowClass: "shadow-[0_0_20px_rgba(168,85,247,0.35)]",
+  },
+  lendaria: {
+    id: "lendaria",
+    label: "Lendária",
+    borderClass: "border-amber-500 dark:border-amber-400",
+    bgClass: "bg-gradient-to-br from-amber-50 via-orange-100 to-rose-100 dark:from-amber-950 dark:via-orange-950 dark:to-rose-950",
+    badgeClass: "bg-amber-500/25 text-amber-800 dark:text-amber-300",
+    glowClass: "shadow-[0_0_24px_rgba(245,158,11,0.45)]",
+  },
+};
+
+export const DEFAULT_CHESTS: ChestDefinition[] = [
+  {
+    id: "weekly_common",
+    name: "Baú Semanal Comum",
+    description: "Recompensa básica de constância semanal com pontos, XP e chance de pacote de cartas.",
+    rarity: "comum",
+    isDefault: true,
+    enabled: true,
+    rewards: {
+      points: { min: 30, max: 60 },
+      xp: { min: 40, max: 80 },
+      coins: { min: 20, max: 50 },
+      cardPacks: [{ packId: "pack_basico", quantity: 1, chancePercent: 50 }],
+    },
+    createdAt: "2026-11-21T00:00:00.000Z",
+    updatedAt: "2026-11-21T00:00:00.000Z",
+  },
+  {
+    id: "weekly_epic",
+    name: "Grande Baú Semanal",
+    description: "Baú especial do 7º dia consecutivo com alta premiação e pacote garantido.",
+    rarity: "epica",
+    isDefault: true,
+    enabled: true,
+    rewards: {
+      points: { min: 80, max: 150 },
+      xp: { min: 100, max: 180 },
+      coins: { min: 60, max: 120 },
+      cardPacks: [{ packId: "pack_iniciante", quantity: 1, chancePercent: 100 }],
+    },
+    createdAt: "2026-11-21T00:00:00.000Z",
+    updatedAt: "2026-11-21T00:00:00.000Z",
+  },
+  {
+    id: "quantum_logic",
+    name: "Baú de Lógica Quântica",
+    description: "Baú raro com foco em pontos extras e chance de pacotes avançados.",
+    rarity: "rara",
+    isDefault: true,
+    enabled: true,
+    rewards: {
+      points: { min: 60, max: 120 },
+      xp: { min: 80, max: 140 },
+      coins: { min: 40, max: 90 },
+      cardPacks: [{ packId: "pack_avancado", quantity: 1, chancePercent: 75 }],
+    },
+    createdAt: "2026-11-21T00:00:00.000Z",
+    updatedAt: "2026-11-21T00:00:00.000Z",
+  },
+  {
+    id: "event_special",
+    name: "Baú Especial de Evento",
+    description: "Baú lendário reservado para eventos oficiais e premiações especiais da SEMED.",
+    rarity: "lendaria",
+    isDefault: true,
+    enabled: true,
+    rewards: {
+      points: { min: 150, max: 250 },
+      xp: { min: 150, max: 300 },
+      coins: { min: 100, max: 200 },
+      cardPacks: [{ packId: "pack_lendario", quantity: 1, chancePercent: 100 }],
+    },
+    createdAt: "2026-11-21T00:00:00.000Z",
+    updatedAt: "2026-11-21T00:00:00.000Z",
+  },
+];
+
+export function mergeWithDefaultChests(custom?: ChestDefinition[] | null): ChestDefinition[] {
+  const byId = new Map<string, ChestDefinition>();
+  for (const def of DEFAULT_CHESTS) {
+    byId.set(def.id, def);
+  }
+  for (const item of custom ?? []) {
+    if (!item?.id) continue;
+    byId.set(item.id, item);
+  }
+  return Array.from(byId.values());
+}
+
+export interface ChestOpenOutcome {
+  chestId: string;
+  chestName: string;
+  points: number;
+  xp: number;
+  coins: number;
+  packs: Array<{ packId: string; quantity: number }>;
+}
+
+function rollRange(range: { min: number; max: number } | undefined, rng: () => number): number {
+  if (!range) return 0;
+  const min = Math.max(0, Math.floor(Math.min(range.min, range.max)));
+  const max = Math.max(min, Math.floor(Math.max(range.min, range.max)));
+  if (max <= 0) return 0;
+  if (min === max) return min;
+  return min + Math.floor(rng() * (max - min + 1));
+}
+
+export function openChest(
+  chest: ChestDefinition,
+  rng: () => number = Math.random,
+): ChestOpenOutcome {
+  const points = rollRange(chest.rewards.points, rng);
+  const xp = rollRange(chest.rewards.xp, rng);
+  const coins = rollRange(chest.rewards.coins, rng);
+  const packs: Array<{ packId: string; quantity: number }> = [];
+
+  for (const drop of chest.rewards.cardPacks ?? []) {
+    if (!drop?.packId || drop.quantity <= 0) continue;
+    const chance = Math.min(100, Math.max(0, drop.chancePercent));
+    if (chance >= 100 || rng() * 100 < chance) {
+      packs.push({ packId: drop.packId, quantity: Math.floor(drop.quantity) });
+    }
+  }
+
+  return {
+    chestId: chest.id,
+    chestName: chest.name,
+    points,
+    xp,
+    coins,
+    packs,
+  };
+}
+
+export function consumeAndOpenChest(
+  chest: ChestDefinition,
+  currentUnopenedChests: Record<string, number> = {},
+  rng: () => number = Math.random,
+): {
+  ok: boolean;
+  error?: string;
+  outcome?: ChestOpenOutcome;
+  updatedUnopenedChests: Record<string, number>;
+} {
+  const available = Math.max(0, Math.floor(Number(currentUnopenedChests[chest.id]) || 0));
+  if (available <= 0) {
+    return {
+      ok: false,
+      error: "Você não possui este baú disponível na mochila.",
+      updatedUnopenedChests: { ...currentUnopenedChests },
+    };
+  }
+  const outcome = openChest(chest, rng);
+  const updatedUnopenedChests = { ...currentUnopenedChests };
+  const remaining = available - 1;
+  if (remaining > 0) updatedUnopenedChests[chest.id] = remaining;
+  else delete updatedUnopenedChests[chest.id];
+
+  return { ok: true, outcome, updatedUnopenedChests };
+}

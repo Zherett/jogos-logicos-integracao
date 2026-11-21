@@ -12,8 +12,15 @@ import {
   type CardPackDefinition,
   type CardRarity,
 } from "@/lib/cards-catalog";
+import {
+  CHEST_RARITY_META,
+  consumeAndOpenChest,
+  mergeWithDefaultChests,
+  type ChestDefinition,
+  type ChestOpenOutcome,
+} from "@/lib/chests-catalog";
 import { usePlayerAuth } from "@/lib/player-auth";
-import { isAdminUnlockedSession } from "@/lib/playfab";
+import { isAdminUnlockedSession, syncActiveProfileChangeToPlayFab } from "@/lib/playfab";
 import { isAdminOrTestAccount } from "@/lib/player-profile";
 import { CollectibleCardView } from "./CollectibleCardView";
 import { PackOpeningModal, type PackOpenOutcome } from "./PackOpeningModal";
@@ -28,6 +35,37 @@ export function PlayerItemsInventory() {
   const [rarityFilter, setRarityFilter] = useState<CardRarity | "todas">("todas");
   const [inspectCard, setInspectCard] = useState<{ card: CardDefinition; count: number } | null>(null);
   const [packToOpen, setPackToOpen] = useState<CardPackDefinition | null>(null);
+  const [chestOutcome, setChestOutcome] = useState<ChestOpenOutcome | null>(null);
+
+  const chests = useMemo(() => mergeWithDefaultChests(auth.adminConfig.chestsCatalog), [auth.adminConfig.chestsCatalog]);
+  const ownedChests = useMemo(() => {
+    const map = auth.profile?.unopenedChests ?? {};
+    return chests
+      .map((c) => ({ chest: c, qty: Math.max(0, Math.floor(Number(map[c.id]) || 0)) }))
+      .filter((item) => item.qty > 0);
+  }, [chests, auth.profile?.unopenedChests]);
+
+  async function handleOpenChest(chest: ChestDefinition) {
+    if (!auth.profile || !canViewCards) return;
+    const res = consumeAndOpenChest(chest, auth.profile.unopenedChests ?? {});
+    if (!res.ok || !res.outcome) return;
+    const nextPacks = { ...(auth.profile.unopenedPacks ?? {}) };
+    for (const pk of res.outcome.packs) {
+      nextPacks[pk.packId] = (Number(nextPacks[pk.packId]) || 0) + pk.quantity;
+    }
+    await syncActiveProfileChangeToPlayFab({
+      ...auth.profile,
+      unopenedChests: res.updatedUnopenedChests,
+      unopenedPacks: nextPacks,
+      pointsBalance: (auth.profile.pointsBalance ?? 0) + res.outcome.points,
+      careerPoints: (auth.profile.careerPoints ?? 0) + res.outcome.points,
+      xp: (auth.profile.xp ?? 0) + res.outcome.xp,
+      seasonXp: (auth.profile.seasonXp ?? 0) + res.outcome.xp,
+      coins: (auth.profile.coins ?? 0) + res.outcome.coins,
+    });
+    await auth.refresh();
+    setChestOutcome(res.outcome);
+  }
 
   const slots = Array.from({ length: INVENTORY_SLOTS_COUNT }, (_, idx) => idx + 1);
   const catalog = useMemo(() => auth.adminConfig.cardsCatalog ?? [], [auth.adminConfig.cardsCatalog]);
@@ -268,6 +306,51 @@ export function PlayerItemsInventory() {
             </div>
           </div>
 
+          {/* Baús Fechados (Prévia Restrita ADM) */}
+          {canViewCards && ownedChests.length > 0 && (
+            <div className="rounded-3xl border-2 border-amber-500/30 bg-card p-4 space-y-3">
+              <div className="flex items-center justify-between text-xs font-bold">
+                <span className="flex items-center gap-1.5 text-foreground">
+                  <Gift className="h-4 w-4 text-amber-500" /> Baús na Mochila (Prévia ADM)
+                </span>
+                <span className="font-mono text-amber-600 dark:text-amber-400">
+                  {ownedChests.reduce((sum, i) => sum + i.qty, 0)} fechado(s)
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {ownedChests.map(({ chest, qty }) => {
+                  const meta = CHEST_RARITY_META[chest.rarity] ?? CHEST_RARITY_META.comum;
+                  return (
+                    <div
+                      key={chest.id}
+                      className={`flex items-center justify-between gap-3 rounded-2xl border-2 p-3 ${meta.borderClass} ${meta.bgClass}`}
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-display text-xs font-black text-foreground truncate">
+                            {chest.name}
+                          </span>
+                          <span className="rounded-full bg-background/80 px-2 py-0.2 font-mono text-[10px] font-black">
+                            x{qty}
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-muted-foreground truncate">{chest.description}</p>
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={() => void handleOpenChest(chest)}
+                        className="rounded-xl text-xs font-bold shrink-0"
+                      >
+                        Abrir
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Grade de Slots de Inventário */}
           <div className="rounded-3xl border bg-card p-4 space-y-3">
             <div className="flex items-center justify-between text-xs font-bold">
@@ -314,6 +397,59 @@ export function PlayerItemsInventory() {
         onConfirmOpen={confirmOpenPack}
         onClose={() => setPackToOpen(null)}
       />
+
+      {/* Modal de Recompensas ao Abrir Baú (Prévia ADM) */}
+      <Dialog open={Boolean(chestOutcome)} onOpenChange={(v) => !v && setChestOutcome(null)}>
+        <DialogContent className="max-h-[85vh] overflow-y-auto rounded-3xl sm:max-w-sm text-center">
+          <DialogHeader>
+            <DialogTitle className="flex items-center justify-center gap-2 font-display text-lg font-black">
+              <Gift className="h-5 w-5 text-amber-500" /> {chestOutcome?.chestName} Aberto!
+            </DialogTitle>
+          </DialogHeader>
+          {chestOutcome && (
+            <div className="space-y-3 py-2 text-xs">
+              <div className="grid grid-cols-3 gap-2">
+                <div className="rounded-xl border bg-secondary/40 p-2.5">
+                  <div className="text-[10px] text-muted-foreground">Pontos</div>
+                  <div className="font-display text-base font-black text-primary">
+                    +{chestOutcome.points}
+                  </div>
+                </div>
+                <div className="rounded-xl border bg-secondary/40 p-2.5">
+                  <div className="text-[10px] text-muted-foreground">XP</div>
+                  <div className="font-display text-base font-black text-emerald-500">
+                    +{chestOutcome.xp}
+                  </div>
+                </div>
+                <div className="rounded-xl border bg-secondary/40 p-2.5">
+                  <div className="text-[10px] text-muted-foreground">Moedas</div>
+                  <div className="font-display text-base font-black text-amber-500">
+                    +{chestOutcome.coins}
+                  </div>
+                </div>
+              </div>
+              {chestOutcome.packs.length > 0 && (
+                <div className="rounded-xl border border-primary/30 bg-primary/10 p-2.5 font-bold text-primary">
+                  📦 Pacotes Recebidos:{" "}
+                  {chestOutcome.packs
+                    .map((pk) => {
+                      const pName = packs.find((p) => p.id === pk.packId)?.name ?? pk.packId;
+                      return `${pk.quantity}x ${pName}`;
+                    })
+                    .join(", ")}
+                </div>
+              )}
+              <Button
+                type="button"
+                onClick={() => setChestOutcome(null)}
+                className="w-full rounded-xl font-bold"
+              >
+                Coletar Tudo
+              </Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

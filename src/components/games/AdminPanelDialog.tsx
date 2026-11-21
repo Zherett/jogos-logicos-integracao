@@ -43,6 +43,7 @@ import {
   CheckCircle2,
   Search,
   Ticket,
+  Gift,
 } from "lucide-react";
 import {
   computeSeasonDates,
@@ -184,6 +185,9 @@ const AdminEventsTab = lazy(() =>
 const AdminCardsTab = lazy(() =>
   import("./AdminCardsTab").then((m) => ({ default: m.AdminCardsTab })),
 );
+const AdminChestsTab = lazy(() =>
+  import("./AdminChestsTab").then((m) => ({ default: m.AdminChestsTab })),
+);
 import {
   AGE_STAGES,
   getTournamentRank,
@@ -213,7 +217,8 @@ type AdminTab =
   | "sistema"
   | "lixeira"
   | "codigos"
-  | "cartas";
+  | "cartas"
+  | "baus";
 
 function randomGameCode(prefix: string): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -1398,6 +1403,17 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                   }`}
                 >
                   <Sparkles className="h-4 w-4 text-emerald-500" /> Cartas &amp; Pacotes
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTab("baus");
+                  }}
+                  className={`flex items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-bold transition-colors ${
+                    tab === "baus" ? "bg-card text-amber-600 dark:text-amber-400 shadow-sm" : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  <Gift className="h-4 w-4 text-amber-500" /> Baús
                 </button>
                 <button
                   type="button"
@@ -5377,6 +5393,23 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                     onConfigSaved?.(nextCfg);
                     flashSaved("Catálogo de Cartas e Pacotes salvo!");
                   }}
+                />
+              </Suspense>
+            )}
+
+            {/* TAB BAÚS (PRÉVIA ADM) */}
+            {tab === "baus" && (
+              <Suspense fallback={<div className="p-6 text-center text-xs text-muted-foreground">Carregando Baús...</div>}>
+                <AdminChestsTab
+                  chestsCatalog={draft.chestsCatalog}
+                  cardPacks={draft.cardPacks}
+                  onSaveChests={async (nextChests) => {
+                    const nextCfg = { ...draft, chestsCatalog: nextChests };
+                    setDraft(nextCfg);
+                    await auth.updateAdminConfig(nextCfg);
+                    onConfigSaved?.();
+                  }}
+                  onShowFeedback={(msg) => flashSaved(msg)}
                 />
               </Suspense>
             )}

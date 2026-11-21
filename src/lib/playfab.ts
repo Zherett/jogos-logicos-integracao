@@ -289,6 +289,7 @@ export interface PlayerProfile {
   coins?: number;
   cards?: Record<string, number>;
   unopenedPacks?: Record<string, number>;
+  unopenedChests?: Record<string, number>;
   claimedInboxRewardIds?: string[];
   claimedRankedMilestones?: string[];
   lastDailyLoginPointsDate?: string;
@@ -2233,6 +2234,10 @@ function buildAccountFromPlayFabPayload(
       parsedProfile.unopenedPacks && typeof parsedProfile.unopenedPacks === "object"
         ? parsedProfile.unopenedPacks
         : {},
+    unopenedChests:
+      parsedProfile.unopenedChests && typeof parsedProfile.unopenedChests === "object"
+        ? parsedProfile.unopenedChests
+        : {},
     claimedInboxRewardIds: Array.isArray(parsedProfile.claimedInboxRewardIds)
       ? parsedProfile.claimedInboxRewardIds
       : [],
@@ -2959,6 +2964,7 @@ async function pushProfileToPlayFab(account: StoredAccount, sessionTicket?: stri
           coins: p.coins ?? 0,
           cards: p.cards ?? {},
           unopenedPacks: p.unopenedPacks ?? {},
+          unopenedChests: p.unopenedChests ?? {},
           claimedInboxRewardIds: p.claimedInboxRewardIds ?? [],
           claimedRankedMilestones: p.claimedRankedMilestones ?? [],
           lastDailyLoginPointsDate: p.lastDailyLoginPointsDate,
@@ -7547,6 +7553,7 @@ export async function runGlobalStudentsIntegrityAudit(
 export async function playfabUpdatePlayerCards(args: {
   cards: Record<string, number>;
   unopenedPacks?: Record<string, number>;
+  unopenedChests?: Record<string, number>;
   requireServerSync?: boolean;
 }): Promise<PlayerProfile | null> {
   const session = loadStoredSession();
