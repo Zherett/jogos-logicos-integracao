@@ -614,3 +614,69 @@ export function playCardMagicReveal(opts: { isEpicOrHigher?: boolean; isFoil?: b
     /* ignore */
   }
 }
+
+/** Som metálico de fechadura destrancando ao completar a barrinha do baú. */
+export function playChestUnlock() {
+  if (isSoundMuted()) return;
+  const ctx = getAudioContext();
+  if (!ctx) return;
+  try {
+    const now = ctx.currentTime;
+    [520, 780].forEach((freq, idx) => {
+      const t = now + idx * 0.065;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(freq, t);
+      osc.frequency.exponentialRampToValueAtTime(freq * 1.35, t + 0.07);
+      gain.gain.setValueAtTime(0.001, t);
+      gain.gain.linearRampToValueAtTime(0.14, t + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.11);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.12);
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Som suave da tampa do baú subindo e se separando do corpo. */
+export function playChestLidOpen() {
+  playFilteredNoise({
+    duration: 0.24,
+    freqStart: 420,
+    freqEnd: 1650,
+    q: 1.2,
+    filterType: "bandpass",
+    vol: 0.12,
+  });
+}
+
+/** Acorde brilhante quando a bolinha '?' se transforma no modal de premiação do baú. */
+export function playChestReveal() {
+  if (isSoundMuted()) return;
+  const ctx = getAudioContext();
+  if (!ctx) return;
+  try {
+    const now = ctx.currentTime;
+    const notes = [523.25, 659.25, 783.99, 1046.5];
+    notes.forEach((freq, idx) => {
+      const t = now + idx * 0.06;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, t);
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.linearRampToValueAtTime(0.09, t + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.38);
+    });
+  } catch {
+    /* ignore */
+  }
+}

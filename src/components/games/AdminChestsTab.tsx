@@ -13,18 +13,24 @@ import {
   Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ChestOpeningModal } from "@/components/games/ChestOpeningModal";
+import { ChestVector } from "@/components/games/ChestVector";
 import { mergeWithDefaultCardPacks, type CardPackDefinition } from "@/lib/cards-catalog";
 import {
   CHEST_RARITIES,
   CHEST_RARITY_META,
+  CHEST_SHAPES,
+  DEFAULT_CHEST_METAL_COLOR,
+  DEFAULT_CHEST_OPEN_DURATION_MS,
+  DEFAULT_CHEST_PRIMARY_COLOR,
   mergeWithDefaultChests,
   openChest,
   type ChestDefinition,
   type ChestOpenOutcome,
   type ChestRarity,
+  type ChestShape,
 } from "@/lib/chests-catalog";
 import { usePlayerAuth } from "@/lib/player-auth";
 import { syncActiveProfileChangeToPlayFab } from "@/lib/playfab";
@@ -62,9 +68,14 @@ export function AdminChestsTab({
   const [packId, setPackId] = useState<string>(packs[0]?.id ?? "");
   const [packQty, setPackQty] = useState(1);
   const [packChance, setPackChance] = useState(50);
+  const [primaryColor, setPrimaryColor] = useState(DEFAULT_CHEST_PRIMARY_COLOR);
+  const [metalColor, setMetalColor] = useState(DEFAULT_CHEST_METAL_COLOR);
+  const [shape, setShape] = useState<ChestShape>("padrao");
+  const [openDurationMs, setOpenDurationMs] = useState(DEFAULT_CHEST_OPEN_DURATION_MS);
   const [saving, setSaving] = useState(false);
 
-  const [previewOutcome, setPreviewOutcome] = useState<ChestOpenOutcome | null>(null);
+  const [simChest, setSimChest] = useState<ChestDefinition | null>(null);
+  const [simOutcome, setSimOutcome] = useState<ChestOpenOutcome | null>(null);
 
   function resetForm() {
     setEditingId(null);
@@ -80,6 +91,10 @@ export function AdminChestsTab({
     setPackId(packs[0]?.id ?? "");
     setPackQty(1);
     setPackChance(50);
+    setPrimaryColor(DEFAULT_CHEST_PRIMARY_COLOR);
+    setMetalColor(DEFAULT_CHEST_METAL_COLOR);
+    setShape("padrao");
+    setOpenDurationMs(DEFAULT_CHEST_OPEN_DURATION_MS);
   }
 
   function startEdit(c: ChestDefinition) {
@@ -97,6 +112,10 @@ export function AdminChestsTab({
     setPackId(firstPack?.packId ?? "");
     setPackQty(firstPack?.quantity ?? 1);
     setPackChance(firstPack?.chancePercent ?? 50);
+    setPrimaryColor(c.primaryColor ?? DEFAULT_CHEST_PRIMARY_COLOR);
+    setMetalColor(c.metalColor ?? DEFAULT_CHEST_METAL_COLOR);
+    setShape(c.shape ?? "padrao");
+    setOpenDurationMs(c.openDurationMs ?? DEFAULT_CHEST_OPEN_DURATION_MS);
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -113,6 +132,10 @@ export function AdminChestsTab({
         name: cleanName,
         description: description.trim() || "Baú de recompensas configurado pelo ADM.",
         rarity,
+        primaryColor,
+        metalColor,
+        shape,
+        openDurationMs,
         isDefault: existing?.isDefault,
         enabled: existing?.enabled ?? true,
         rewards: {
@@ -355,18 +378,89 @@ export function AdminChestsTab({
           </div>
         </div>
 
+        {/* Aparência Vetorial e Tempo de Abertura */}
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 rounded-2xl border bg-secondary/30 p-3">
+          <div className="space-y-1">
+            <Label className="text-[11px] font-bold">Cor da Madeira</Label>
+            <div className="flex items-center gap-2">
+              <input
+                type="color"
+                value={primaryColor}
+                onChange={(e) => setPrimaryColor(e.target.value)}
+                className="h-8 w-10 cursor-pointer rounded-lg border bg-background p-0.5"
+              />
+              <span className="font-mono text-[10px] text-muted-foreground uppercase">
+                {primaryColor}
+              </span>
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <Label className="text-[11px] font-bold">Cor do Metal</Label>
+            <div className="flex items-center gap-2">
+              <input
+                type="color"
+                value={metalColor}
+                onChange={(e) => setMetalColor(e.target.value)}
+                className="h-8 w-10 cursor-pointer rounded-lg border bg-background p-0.5"
+              />
+              <span className="font-mono text-[10px] text-muted-foreground uppercase">
+                {metalColor}
+              </span>
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <Label className="text-[11px] font-bold">Formato do Baú</Label>
+            <select
+              value={shape}
+              onChange={(e) => setShape(e.target.value as ChestShape)}
+              className="h-8 w-full rounded-lg border bg-background px-2.5 text-xs font-bold"
+            >
+              {CHEST_SHAPES.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="space-y-1">
+            <Label className="text-[11px] font-bold flex items-center justify-between">
+              <span>Tempo da Barra</span>
+              <span className="text-primary">{(openDurationMs / 1000).toFixed(1)}s</span>
+            </Label>
+            <input
+              type="range"
+              min={1000}
+              max={5000}
+              step={250}
+              value={openDurationMs}
+              onChange={(e) => setOpenDurationMs(Number(e.target.value))}
+              className="w-full accent-primary cursor-pointer h-8"
+            />
+          </div>
+        </div>
+
         {/* Prévia Visual + Botão Salvar */}
         <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
           <div
-            className={`flex items-center gap-2.5 rounded-2xl border-2 px-3 py-2 ${rarityMeta.borderClass} ${rarityMeta.bgClass}`}
+            className={`flex items-center gap-3 rounded-2xl border-2 px-3 py-2 ${rarityMeta.borderClass} ${rarityMeta.bgClass}`}
           >
-            <Gift className="h-5 w-5 text-foreground shrink-0" />
+            <ChestVector
+              primaryColor={primaryColor}
+              metalColor={metalColor}
+              shape={shape}
+              size="sm"
+              className="shrink-0"
+            />
             <div className="text-xs">
               <div className="font-display font-black text-foreground">
                 {name.trim() || "Prévia do Baú"}
               </div>
               <div className="text-[10px] text-muted-foreground">
-                {rarityMeta.label} • {ptsMin}-{ptsMax} pts • {xpMin}-{xpMax} XP
+                {rarityMeta.label} • {ptsMin}-{ptsMax} pts • {xpMin}-{xpMax} XP •{" "}
+                {(openDurationMs / 1000).toFixed(1)}s
               </div>
             </div>
           </div>
@@ -399,8 +493,15 @@ export function AdminChestsTab({
                   !c.enabled ? "opacity-55 grayscale" : ""
                 }`}
               >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
+                <div className="flex items-start gap-2.5">
+                  <ChestVector
+                    primaryColor={c.primaryColor}
+                    metalColor={c.metalColor}
+                    shape={c.shape}
+                    size="sm"
+                    className="shrink-0 mt-0.5"
+                  />
+                  <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5 flex-wrap">
                       <span className="font-display text-sm font-black text-foreground truncate">
                         {c.name}
@@ -443,7 +544,10 @@ export function AdminChestsTab({
                     type="button"
                     size="sm"
                     variant="secondary"
-                    onClick={() => setPreviewOutcome(openChest(c))}
+                    onClick={() => {
+                      setSimChest(c);
+                      setSimOutcome(openChest(c));
+                    }}
                     className="h-7 rounded-lg text-[11px] font-bold"
                   >
                     <Sparkles className="mr-1 h-3 w-3" /> Simular Abertura
@@ -498,58 +602,17 @@ export function AdminChestsTab({
         </div>
       </div>
 
-      {/* Modal de Simulação de Abertura (Prévia ADM) */}
-      <Dialog open={Boolean(previewOutcome)} onOpenChange={(v) => !v && setPreviewOutcome(null)}>
-        <DialogContent className="max-h-[85vh] overflow-y-auto rounded-3xl sm:max-w-sm text-center">
-          <DialogHeader>
-            <DialogTitle className="flex items-center justify-center gap-2 font-display text-lg font-black">
-              <Gift className="h-5 w-5 text-amber-500" /> Simulação: {previewOutcome?.chestName}
-            </DialogTitle>
-          </DialogHeader>
-          {previewOutcome && (
-            <div className="space-y-3 py-2 text-xs">
-              <div className="grid grid-cols-3 gap-2">
-                <div className="rounded-xl border bg-secondary/40 p-2.5">
-                  <div className="text-[10px] text-muted-foreground">Pontos</div>
-                  <div className="font-display text-base font-black text-primary">
-                    +{previewOutcome.points}
-                  </div>
-                </div>
-                <div className="rounded-xl border bg-secondary/40 p-2.5">
-                  <div className="text-[10px] text-muted-foreground">XP</div>
-                  <div className="font-display text-base font-black text-emerald-500">
-                    +{previewOutcome.xp}
-                  </div>
-                </div>
-                <div className="rounded-xl border bg-secondary/40 p-2.5">
-                  <div className="text-[10px] text-muted-foreground">Moedas</div>
-                  <div className="font-display text-base font-black text-amber-500">
-                    +{previewOutcome.coins}
-                  </div>
-                </div>
-              </div>
-              {previewOutcome.packs.length > 0 && (
-                <div className="rounded-xl border border-primary/30 bg-primary/10 p-2.5 font-bold text-primary">
-                  📦 Pacotes Sorteados:{" "}
-                  {previewOutcome.packs
-                    .map((pk) => {
-                      const pName = packs.find((p) => p.id === pk.packId)?.name ?? pk.packId;
-                      return `${pk.quantity}x ${pName}`;
-                    })
-                    .join(", ")}
-                </div>
-              )}
-              <Button
-                type="button"
-                onClick={() => setPreviewOutcome(null)}
-                className="w-full rounded-xl font-bold"
-              >
-                Fechar Simulação
-              </Button>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
+      {/* Modal Animado de Simulação de Abertura (Prévia ADM) */}
+      <ChestOpeningModal
+        chest={simChest}
+        outcome={simOutcome}
+        packsCatalog={packs}
+        isSimulation
+        onClose={() => {
+          setSimChest(null);
+          setSimOutcome(null);
+        }}
+      />
     </div>
   );
 }

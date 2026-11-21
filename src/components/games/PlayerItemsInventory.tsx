@@ -23,6 +23,8 @@ import { usePlayerAuth } from "@/lib/player-auth";
 import { isAdminUnlockedSession, syncActiveProfileChangeToPlayFab } from "@/lib/playfab";
 import { isAdminOrTestAccount } from "@/lib/player-profile";
 import { CollectibleCardView } from "./CollectibleCardView";
+import { ChestOpeningModal } from "./ChestOpeningModal";
+import { ChestVector } from "./ChestVector";
 import { PackOpeningModal, type PackOpenOutcome } from "./PackOpeningModal";
 
 const INVENTORY_SLOTS_COUNT = 12;
@@ -35,6 +37,7 @@ export function PlayerItemsInventory() {
   const [rarityFilter, setRarityFilter] = useState<CardRarity | "todas">("todas");
   const [inspectCard, setInspectCard] = useState<{ card: CardDefinition; count: number } | null>(null);
   const [packToOpen, setPackToOpen] = useState<CardPackDefinition | null>(null);
+  const [openingChest, setOpeningChest] = useState<ChestDefinition | null>(null);
   const [chestOutcome, setChestOutcome] = useState<ChestOpenOutcome | null>(null);
 
   const chests = useMemo(() => mergeWithDefaultChests(auth.adminConfig.chestsCatalog), [auth.adminConfig.chestsCatalog]);
@@ -64,6 +67,7 @@ export function PlayerItemsInventory() {
       coins: (auth.profile.coins ?? 0) + res.outcome.coins,
     });
     await auth.refresh();
+    setOpeningChest(chest);
     setChestOutcome(res.outcome);
   }
 
@@ -325,16 +329,25 @@ export function PlayerItemsInventory() {
                       key={chest.id}
                       className={`flex items-center justify-between gap-3 rounded-2xl border-2 p-3 ${meta.borderClass} ${meta.bgClass}`}
                     >
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-display text-xs font-black text-foreground truncate">
-                            {chest.name}
-                          </span>
-                          <span className="rounded-full bg-background/80 px-2 py-0.2 font-mono text-[10px] font-black">
-                            x{qty}
-                          </span>
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <ChestVector
+                          primaryColor={chest.primaryColor}
+                          metalColor={chest.metalColor}
+                          shape={chest.shape}
+                          size="sm"
+                          className="shrink-0"
+                        />
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-display text-xs font-black text-foreground truncate">
+                              {chest.name}
+                            </span>
+                            <span className="rounded-full bg-background/80 px-2 py-0.2 font-mono text-[10px] font-black">
+                              x{qty}
+                            </span>
+                          </div>
+                          <p className="text-[10px] text-muted-foreground truncate">{chest.description}</p>
                         </div>
-                        <p className="text-[10px] text-muted-foreground truncate">{chest.description}</p>
                       </div>
                       <Button
                         type="button"
@@ -398,58 +411,16 @@ export function PlayerItemsInventory() {
         onClose={() => setPackToOpen(null)}
       />
 
-      {/* Modal de Recompensas ao Abrir Baú (Prévia ADM) */}
-      <Dialog open={Boolean(chestOutcome)} onOpenChange={(v) => !v && setChestOutcome(null)}>
-        <DialogContent className="max-h-[85vh] overflow-y-auto rounded-3xl sm:max-w-sm text-center">
-          <DialogHeader>
-            <DialogTitle className="flex items-center justify-center gap-2 font-display text-lg font-black">
-              <Gift className="h-5 w-5 text-amber-500" /> {chestOutcome?.chestName} Aberto!
-            </DialogTitle>
-          </DialogHeader>
-          {chestOutcome && (
-            <div className="space-y-3 py-2 text-xs">
-              <div className="grid grid-cols-3 gap-2">
-                <div className="rounded-xl border bg-secondary/40 p-2.5">
-                  <div className="text-[10px] text-muted-foreground">Pontos</div>
-                  <div className="font-display text-base font-black text-primary">
-                    +{chestOutcome.points}
-                  </div>
-                </div>
-                <div className="rounded-xl border bg-secondary/40 p-2.5">
-                  <div className="text-[10px] text-muted-foreground">XP</div>
-                  <div className="font-display text-base font-black text-emerald-500">
-                    +{chestOutcome.xp}
-                  </div>
-                </div>
-                <div className="rounded-xl border bg-secondary/40 p-2.5">
-                  <div className="text-[10px] text-muted-foreground">Moedas</div>
-                  <div className="font-display text-base font-black text-amber-500">
-                    +{chestOutcome.coins}
-                  </div>
-                </div>
-              </div>
-              {chestOutcome.packs.length > 0 && (
-                <div className="rounded-xl border border-primary/30 bg-primary/10 p-2.5 font-bold text-primary">
-                  📦 Pacotes Recebidos:{" "}
-                  {chestOutcome.packs
-                    .map((pk) => {
-                      const pName = packs.find((p) => p.id === pk.packId)?.name ?? pk.packId;
-                      return `${pk.quantity}x ${pName}`;
-                    })
-                    .join(", ")}
-                </div>
-              )}
-              <Button
-                type="button"
-                onClick={() => setChestOutcome(null)}
-                className="w-full rounded-xl font-bold"
-              >
-                Coletar Tudo
-              </Button>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
+      {/* Modal Animado de Abertura de Baú (Prévia ADM) */}
+      <ChestOpeningModal
+        chest={openingChest}
+        outcome={chestOutcome}
+        packsCatalog={packs}
+        onClose={() => {
+          setOpeningChest(null);
+          setChestOutcome(null);
+        }}
+      />
     </div>
   );
 }

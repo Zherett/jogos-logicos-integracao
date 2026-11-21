@@ -1,6 +1,17 @@
 // Catálogo e lógica pura de Baús de Recompensa (browser-safe)
 
 export type ChestRarity = "comum" | "incomum" | "rara" | "epica" | "lendaria";
+export type ChestShape = "padrao" | "largo" | "compacto";
+
+export const DEFAULT_CHEST_PRIMARY_COLOR = "#8B4513";
+export const DEFAULT_CHEST_METAL_COLOR = "#94A3B8";
+export const DEFAULT_CHEST_OPEN_DURATION_MS = 2000;
+
+export const CHEST_SHAPES: readonly { id: ChestShape; label: string }[] = [
+  { id: "padrao", label: "Padrão" },
+  { id: "largo", label: "Largo" },
+  { id: "compacto", label: "Compacto" },
+] as const;
 
 export interface ChestCardPackDrop {
   packId: string;
@@ -20,6 +31,10 @@ export interface ChestDefinition {
   name: string;
   description: string;
   rarity: ChestRarity;
+  primaryColor?: string;
+  metalColor?: string;
+  shape?: ChestShape;
+  openDurationMs?: number;
   isDefault?: boolean;
   enabled: boolean;
   rewards: ChestRewardConfig;
