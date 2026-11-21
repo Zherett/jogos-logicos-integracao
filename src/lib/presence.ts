@@ -401,7 +401,9 @@ function buildPresenceIndexMap(store: PresenceStore): Map<string, PlayerPresence
   const put = (key: string | undefined | null, rec: PlayerPresenceRecord) => {
     if (!key) return;
     const cur = map.get(key);
-    if (!cur || rec.lastSeenAt > cur.lastSeenAt) {
+    const recTs = Math.max(rec.lastSeenAt || 0, rec.lastActiveAt || 0);
+    const curTs = cur ? Math.max(cur.lastSeenAt || 0, cur.lastActiveAt || 0) : -1;
+    if (!cur || recTs > curTs) {
       map.set(key, rec);
     }
   };
@@ -1184,6 +1186,30 @@ function getX1PresenceIndexMap(): Map<string, PlayerPresenceRecord> | null {
   }
 }
 
+export function getLatestProfileActivityMs(profileLike?: {
+  activeSessionUpdatedAt?: string;
+  updatedAt?: string;
+  stats?: Array<{ last_played_at?: string }>;
+  lastKnownActivityAt?: string | number;
+} | null): number {
+  if (!profileLike) return 0;
+  let maxMs = 0;
+  const consider = (raw?: string | number) => {
+    if (!raw) return;
+    const ms = typeof raw === "number" ? raw : Date.parse(raw);
+    if (!Number.isNaN(ms) && ms > maxMs) {
+      maxMs = ms;
+    }
+  };
+  consider(profileLike.lastKnownActivityAt);
+  consider(profileLike.activeSessionUpdatedAt);
+  consider(profileLike.updatedAt);
+  for (const s of profileLike.stats ?? []) {
+    consider(s?.last_played_at);
+  }
+  return maxMs;
+}
+
 /**
  * Obtem os dados de presenca de um jogador, checando o storage local por ID, PlayFabId ou Nick,
  * e tambem a loja do lobby X1 (que sincroniza com o PlayFab na nuvem).
@@ -1195,6 +1221,9 @@ export function getPlayerPresenceData(
     nick?: string;
     nickNormalized?: string;
     activeSessionUpdatedAt?: string;
+    updatedAt?: string;
+    stats?: Array<{ last_played_at?: string }>;
+    lastKnownActivityAt?: string | number;
   },
 ): PlayerPresenceRecord | null {
   if (!playerId && !hints?.nickNormalized && !hints?.nick && !hints?.playfabId) {
@@ -1224,7 +1253,9 @@ export function getPlayerPresenceData(
   if (cachedPresenceIndexMap) {
     for (const k of candidateKeys) {
       const candidate = cachedPresenceIndexMap.get(k);
-      if (candidate && (!rec || candidate.lastSeenAt > rec.lastSeenAt)) {
+      const candTs = candidate ? Math.max(candidate.lastSeenAt || 0, candidate.lastActiveAt || 0) : -1;
+      const recTs = rec ? Math.max(rec.lastSeenAt || 0, rec.lastActiveAt || 0) : -1;
+      if (candidate && (!rec || candTs > recTs)) {
         rec = candidate;
       }
     }
@@ -1247,25 +1278,23 @@ export function getPlayerPresenceData(
     }
   }
 
-  if (hints?.activeSessionUpdatedAt) {
-    const sessionMs = Date.parse(hints.activeSessionUpdatedAt);
-    if (!Number.isNaN(sessionMs) && sessionMs > 0) {
-      if (!rec) {
-        rec = {
-          playerId: cleanId || slugHint,
-          playfabId: hints.playfabId,
-          nick: hints.nick,
-          nickNormalized: slugHint,
-          lastSeenAt: 0,
-          lastActiveAt: sessionMs,
-          disconnected: true,
-        };
-      } else if ((!rec.lastActiveAt || sessionMs > rec.lastActiveAt) && computePresenceStatus(rec) === "offline") {
-        rec = {
-          ...rec,
-          lastActiveAt: sessionMs,
-        };
-      }
+  const latestActivityMs = getLatestProfileActivityMs(hints);
+  if (latestActivityMs > 0) {
+    if (!rec) {
+      rec = {
+        playerId: cleanId || slugHint,
+        playfabId: hints?.playfabId,
+        nick: hints?.nick,
+        nickNormalized: slugHint,
+        lastSeenAt: 0,
+        lastActiveAt: latestActivityMs,
+        disconnected: true,
+      };
+    } else if ((!rec.lastActiveAt || latestActivityMs > rec.lastActiveAt) && computePresenceStatus(rec) === "offline") {
+      rec = {
+        ...rec,
+        lastActiveAt: latestActivityMs,
+      };
     }
   }
 
@@ -1280,6 +1309,9 @@ export type PresenceTargetInput =
       nick?: string;
       nickNormalized?: string;
       activeSessionUpdatedAt?: string;
+      updatedAt?: string;
+      stats?: Array<{ last_played_at?: string }>;
+      lastKnownActivityAt?: string | number;
     };
 
 /**
@@ -1350,6 +1382,9 @@ export function getPlayerPresenceStatus(
           nick: item.nick,
           nickNormalized: item.nickNormalized,
           activeSessionUpdatedAt: item.activeSessionUpdatedAt,
+          updatedAt: item.updatedAt,
+          stats: item.stats,
+          lastKnownActivityAt: item.lastKnownActivityAt,
         });
   return computePresenceStatus(data, now);
 }
@@ -1434,6 +1469,7 @@ export function usePlayerPresence(
     nick?: string;
     nickNormalized?: string;
     activeSessionUpdatedAt?: string;
+    lastKnownActivityAt?: string | number;
   },
 ): {
   status: PresenceStatus;
@@ -1466,7 +1502,14 @@ export function usePlayerPresence(
 
     refresh();
     return subscribeGlobalPresence(refresh);
-  }, [playerId, hints?.playfabId, hints?.nick, hints?.nickNormalized, hints?.activeSessionUpdatedAt]);
+  }, [
+    playerId,
+    hints?.playfabId,
+    hints?.nick,
+    hints?.nickNormalized,
+    hints?.activeSessionUpdatedAt,
+    hints?.lastKnownActivityAt,
+  ]);
 
   const status = computePresenceStatus(data);
   const tooltip = formatPresenceTooltip(status, data);

@@ -417,6 +417,13 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                     playfabId={profile.playfabId}
                     nick={profile.nick}
                     nickNormalized={profile.nickNormalized}
+                    activeSessionUpdatedAt={profile.activeSessionUpdatedAt}
+                    lastKnownActivityAt={
+                      Math.max(
+                        profile.activeSessionUpdatedAt ? Date.parse(profile.activeSessionUpdatedAt) || 0 : 0,
+                        ...(profile.stats ?? []).map((s) => (s.last_played_at ? Date.parse(s.last_played_at) || 0 : 0)),
+                      ) || undefined
+                    }
                     size="sm"
                     showTimeAgoText
                   />

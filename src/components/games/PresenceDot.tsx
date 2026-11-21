@@ -7,6 +7,7 @@ export interface PresenceDotProps {
   nick?: string;
   nickNormalized?: string;
   activeSessionUpdatedAt?: string;
+  lastKnownActivityAt?: string | number;
   status?: PresenceStatus;
   tooltipText?: string;
   size?: "xs" | "sm" | "md";
@@ -21,6 +22,7 @@ export const PresenceDot: React.FC<PresenceDotProps> = ({
   nick,
   nickNormalized,
   activeSessionUpdatedAt,
+  lastKnownActivityAt,
   status: explicitStatus,
   tooltipText: explicitTooltip,
   size = "sm",
@@ -33,6 +35,7 @@ export const PresenceDot: React.FC<PresenceDotProps> = ({
     nick,
     nickNormalized,
     activeSessionUpdatedAt,
+    lastKnownActivityAt,
   });
 
   const status: PresenceStatus = explicitStatus ?? presence.status;

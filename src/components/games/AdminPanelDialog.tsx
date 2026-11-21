@@ -160,6 +160,7 @@ import { PresenceDot } from "./PresenceDot";
 import { PlayerActivityBadge } from "./PlayerActivityBadge";
 import {
   computePresenceSummary,
+  getLatestProfileActivityMs,
   getPlayerPresenceStatus,
   PRESENCE_UPDATED_EVENT,
   sortStudentsByPresenceAndLevel,
@@ -3453,6 +3454,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                                         nick={st.nick}
                                         nickNormalized={st.nickNormalized}
                                         activeSessionUpdatedAt={st.activeSessionUpdatedAt}
+                                        lastKnownActivityAt={getLatestProfileActivityMs(st)}
                                         size="xs"
                                       />
                                       <span className="rounded-full bg-primary/15 px-2 py-0.2 text-[10px] font-bold text-primary">
@@ -5173,6 +5175,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                                   nick={p.nick}
                                   nickNormalized={p.nickNormalized}
                                   activeSessionUpdatedAt={p.activeSessionUpdatedAt}
+                                  lastKnownActivityAt={getLatestProfileActivityMs(p)}
                                   size="xs"
                                 />
                                 <span className="font-normal text-muted-foreground truncate">({p.full_name})</span>
