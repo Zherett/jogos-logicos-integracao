@@ -119,7 +119,7 @@ import {
   FLAWLESS_MATCH_POINTS,
   RANKED_WIN_POINTS,
 } from "./career-points.ts";
-import { removePlayerFromPresence } from "./presence.ts";
+import { applyRemotePresenceHeartbeat, removePlayerFromPresence } from "./presence.ts";
 import {
   deductTournamentRecordPoints,
   removePlayerFromTournament,
@@ -1072,7 +1072,7 @@ function storeCachedRemoteConfig(raw: string) {
 }
 
 /** Ticket de leitura reaproveitado por até 20h no dispositivo (com fallback anti-429). */
-async function getViewerPlayFabTicket(): Promise<string | null> {
+export async function getViewerPlayFabTicket(): Promise<string | null> {
   if (cachedViewerTicket && Date.now() - cachedViewerTicketTime < VIEWER_TICKET_TTL_MS) {
     return cachedViewerTicket;
   }
@@ -2529,6 +2529,46 @@ export async function playfabSignIn(
           normalizedPassword,
           cfg,
         );
+
+        // Reconcilia possíveis alterações feitas pelo ADM no ROSTER_SHARED_GROUP_ID enquanto o aluno estava desconectado
+        try {
+          const cloudKey = getStudentRosterCloudKey(account.profile);
+          const rosterRes = await callPlayFabClient<{
+            Data?: Record<string, { Value: string }>;
+          }>(
+            "GetSharedGroupData",
+            { SharedGroupId: ROSTER_SHARED_GROUP_ID, Keys: [cloudKey] },
+            res.data.SessionTicket,
+          );
+          const rawRoster = rosterRes.data?.Data?.[cloudKey]?.Value;
+          if (rawRoster) {
+            const rProf = JSON.parse(rawRoster) as Partial<PlayerProfile> & { updatedAt?: string };
+            const rosterTs = rProf.updatedAt ? Date.parse(rProf.updatedAt) : 0;
+            const udTs = account.updatedAt ? Date.parse(account.updatedAt) : 0;
+            if (rosterTs > udTs) {
+              if (rProf.full_name) account.profile.full_name = abbreviateStudentName(rProf.full_name);
+              if (rProf.school && isValidSchool(rProf.school)) account.profile.school = rProf.school;
+              if (rProf.grade !== undefined) account.profile.grade = rProf.grade;
+              if (rProf.turma !== undefined) account.profile.turma = rProf.turma;
+              if (typeof rProf.pointsBalance === "number") account.profile.pointsBalance = rProf.pointsBalance;
+              if (typeof rProf.careerPoints === "number") account.profile.careerPoints = Math.max(account.profile.careerPoints ?? 0, rProf.careerPoints);
+              if (typeof rProf.xp === "number") account.profile.xp = Math.max(account.profile.xp ?? 0, rProf.xp);
+              if (typeof rProf.seasonXp === "number") account.profile.seasonXp = Math.max(account.profile.seasonXp ?? 0, rProf.seasonXp);
+              if (Array.isArray(rProf.unlockedMedals)) {
+                const mMap = new Map<string, PlayerUnlockedMedal>();
+                for (const m of [...(account.profile.unlockedMedals ?? []), ...rProf.unlockedMedals]) {
+                  if (!m?.medalId) continue;
+                  const prev = mMap.get(m.medalId);
+                  if (!prev) mMap.set(m.medalId, { ...m });
+                  else mMap.set(m.medalId, { ...prev, count: Math.max(prev.count ?? 1, m.count ?? 1) });
+                }
+                account.profile.unlockedMedals = Array.from(mMap.values());
+              }
+            }
+          }
+        } catch {
+          /* ignore optional roster merge on signIn */
+        }
         if (
           account.profile.deletedAt &&
           !account.profile.isAdmin &&
@@ -2928,6 +2968,7 @@ async function pushProfileToPlayFab(account: StoredAccount, sessionTicket?: stri
               stats: account.stats ?? [],
               isAdmin: p.isAdmin,
               seasonId: p.seasonId,
+              activeSessionUpdatedAt: p.activeSessionUpdatedAt,
               updatedAt: account.updatedAt,
             }),
           },
@@ -6616,7 +6657,7 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
       knownPfId
         ? callPlayFabClient<{ Data?: Record<string, { Value: string }> }>(
             "GetUserData",
-            { PlayFabId: knownPfId, Keys: ["PlayerProfile", "GameStats"] },
+            { PlayFabId: knownPfId, Keys: ["PlayerProfile", "GameStats", "PresenceHeartbeat"] },
             ticket,
           )
         : Promise.resolve(null),
@@ -6640,10 +6681,20 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
 
     if (userDataRes.status === "fulfilled" && userDataRes.value?.data?.Data) {
       const ud = userDataRes.value.data.Data;
+      if (ud.PresenceHeartbeat?.Value) {
+        applyRemotePresenceHeartbeat(ud.PresenceHeartbeat.Value);
+      }
       if (ud.PlayerProfile?.Value) {
         try {
-          const udProf = JSON.parse(ud.PlayerProfile.Value) as Partial<PlayerProfile>;
-          cloudProfile = cloudProfile ? { ...cloudProfile, ...udProf } : udProf;
+          const udProf = JSON.parse(ud.PlayerProfile.Value) as Partial<PlayerProfile> & { updatedAt?: string };
+          const rosterUpdatedAt = (cloudProfile as { updatedAt?: string } | undefined)?.updatedAt;
+          const rosterTs = rosterUpdatedAt ? Date.parse(rosterUpdatedAt) : 0;
+          const udTs = udProf.updatedAt ? Date.parse(udProf.updatedAt) : 0;
+          cloudProfile = cloudProfile
+            ? rosterTs > udTs
+              ? { ...udProf, ...cloudProfile }
+              : { ...cloudProfile, ...udProf }
+            : udProf;
         } catch {
           /* ignore */
         }
@@ -6727,6 +6778,9 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
           cfg,
         );
         saveRegistry(reg);
+        if (loadStoredSession()?.playerId === targetKey) {
+          syncLocalBrowserFromAccount(reg[targetKey]);
+        }
         invalidatePioneersCache();
         return reg[targetKey].profile;
       }

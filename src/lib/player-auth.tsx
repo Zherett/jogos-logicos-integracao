@@ -40,6 +40,8 @@ import {
   pushAdminConfigToPlayFab,
   setAdminUnlockedSession,
   syncAdminConfigFromPlayFab,
+  syncSinglePlayerFromPlayFab,
+  isPlayFabConfigured,
   grantSpecialRobotMedal,
   grantSpaceQuestAuraMedal,
   type SpaceQuestMedalId,
@@ -152,6 +154,17 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
       setProfile({ ...active.profile });
       setUnlocked([...active.unlocked]);
       setStats([...active.stats]);
+      if (isPlayFabConfigured()) {
+        const targetId = active.profile.nickNormalized || active.profile.id;
+        void syncSinglePlayerFromPlayFab(targetId).then(() => {
+          const synced = getActiveAccount();
+          if (synced) {
+            setProfile({ ...synced.profile });
+            setUnlocked([...synced.unlocked]);
+            setStats([...synced.stats]);
+          }
+        });
+      }
     } else {
       setProfile(null);
       setUnlocked([]);
@@ -168,11 +181,25 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let lastFocusSync = Date.now();
     const onFocus = () => {
-      if (Date.now() - lastFocusSync < 60_000) return; // no máximo 1 consulta por minuto
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      if (Date.now() - lastFocusSync < 30_000) return; // no máximo 1 consulta a cada 30s
       lastFocusSync = Date.now();
       void syncAdminConfigFromPlayFab().then((cfg) => setAdminConfig(cfg));
+      const active = getActiveAccount();
+      if (active && isPlayFabConfigured()) {
+        const targetId = active.profile.nickNormalized || active.profile.id;
+        void syncSinglePlayerFromPlayFab(targetId).then(() => {
+          const synced = getActiveAccount();
+          if (synced) {
+            setProfile({ ...synced.profile });
+            setUnlocked([...synced.unlocked]);
+            setStats([...synced.stats]);
+          }
+        });
+      }
     };
     window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
     const id = window.setInterval(() => {
       const cfg = loadAdminConfig();
       if (cfg.scheduledResetAt && Date.now() >= new Date(cfg.scheduledResetAt).getTime()) {
@@ -181,6 +208,7 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
     }, 15_000);
     return () => {
       window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
       window.clearInterval(id);
     };
   }, [loadState]);

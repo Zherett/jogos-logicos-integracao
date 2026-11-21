@@ -8,6 +8,7 @@ import {
   clearCachedAdminPlayFabTicket,
   getAdminPlayFabTicket,
   getPlayFabTitleId,
+  getViewerPlayFabTicket,
   isPlayFabConfigured,
   loadStoredSession,
   validateActiveSession,
@@ -615,12 +616,13 @@ async function callPresencePlayFab(
   endpoint: string,
   body: Record<string, unknown>,
   canRetry = true,
+  overrideTicket?: string,
 ): Promise<{ data?: Record<string, unknown>; serverDate?: string | null } | null> {
   if (typeof window === "undefined" || !isPlayFabConfigured()) return null;
   const titleId = getPlayFabTitleId();
   if (!titleId) return null;
   const session = loadStoredSession();
-  let ticket = (await getAdminPlayFabTicket()) ?? session?.sessionTicket;
+  const ticket = overrideTicket ?? (await getAdminPlayFabTicket()) ?? session?.sessionTicket;
   if (!ticket) return null;
 
   try {
@@ -641,7 +643,7 @@ async function callPresencePlayFab(
     };
 
     // Renovação automática caso o ticket em cache tenha expirado ou sido invalidado no PlayFab
-    if (res.status === 401 || json.errorCode === 1089 || json.error === "NotAuthorized") {
+    if (!overrideTicket && (res.status === 401 || json.errorCode === 1089 || json.error === "NotAuthorized")) {
       clearCachedAdminPlayFabTicket();
       if (canRetry) {
         return callPresencePlayFab(endpoint, body, false);
@@ -649,7 +651,12 @@ async function callPresencePlayFab(
       return null;
     }
 
-    if (json.error) return null;
+    if (json.error) {
+      if (endpoint === "UpdateSharedGroupData") {
+        console.warn("Aviso ao atualizar presença no SharedGroup:", json.error, json.errorCode);
+      }
+      return null;
+    }
     return { data: json.data, serverDate };
   } catch {
     return null;
@@ -657,43 +664,115 @@ async function callPresencePlayFab(
 }
 
 /**
- * Envia o pulso de presença do jogador atual para o SharedGroup global no PlayFab.
+ * Envia o pulso de presença do jogador atual para o UserData público e para o SharedGroup global no PlayFab.
  */
 export async function pushPresenceToPlayFab(record: PlayerPresenceRecord): Promise<void> {
   if (typeof window === "undefined" || !isPlayFabConfigured()) return;
   try {
+    const slug =
+      record.nickNormalized ||
+      (record.nick ? nickSlug(record.nick) : nickSlug(record.playerId));
+    const payloadStr = JSON.stringify({
+      playerId: record.playerId,
+      playfabId: record.playfabId,
+      nick: record.nick,
+      nickNormalized: slug,
+      lastSeenAt: record.lastSeenAt,
+      lastActiveAt: record.lastActiveAt,
+      idleMs:
+        typeof record.idleMs === "number"
+          ? record.idleMs
+          : Math.max(0, record.lastSeenAt - record.lastActiveAt),
+      disconnected: Boolean(record.disconnected),
+      activity: record.activity,
+    });
+
+    // 1. Sempre grava no UserData público da própria conta logada (permissão garantida no PlayFab)
+    const ownTicket = loadStoredSession()?.sessionTicket;
+    if (ownTicket) {
+      void callPresencePlayFab(
+        "UpdateUserData",
+        {
+          Data: { PresenceHeartbeat: payloadStr },
+          Permission: "Public",
+        },
+        false,
+        ownTicket,
+      );
+    }
+
+    // 2. Grava também no SharedGroup global para leitura em lote no painel do ADM
     if (!presenceGroupCreated) {
       await callPresencePlayFab("CreateSharedGroup", {
         SharedGroupId: PRESENCE_SHARED_GROUP_ID,
       });
       presenceGroupCreated = true;
     }
-    const slug =
-      record.nickNormalized ||
-      (record.nick ? nickSlug(record.nick) : nickSlug(record.playerId));
     const key = `pres_${slug || record.playerId}`;
-    await callPresencePlayFab("UpdateSharedGroupData", {
+    const sgBody = {
       SharedGroupId: PRESENCE_SHARED_GROUP_ID,
-      Data: {
-        [key]: JSON.stringify({
-          playerId: record.playerId,
-          playfabId: record.playfabId,
-          nick: record.nick,
-          nickNormalized: slug,
-          lastSeenAt: record.lastSeenAt,
-          lastActiveAt: record.lastActiveAt,
-          idleMs:
-            typeof record.idleMs === "number"
-              ? record.idleMs
-              : Math.max(0, record.lastSeenAt - record.lastActiveAt),
-          disconnected: Boolean(record.disconnected),
-          activity: record.activity,
-        }),
-      },
+      Data: { [key]: payloadStr },
       Permission: "Public",
-    });
+    };
+    const sgRes = await callPresencePlayFab("UpdateSharedGroupData", sgBody);
+    // Fallback com ticket da conta viewer caso a conta atual não seja membro do SharedGroup
+    if (!sgRes) {
+      const viewerTicket = await getViewerPlayFabTicket();
+      if (viewerTicket && viewerTicket !== ownTicket) {
+        await callPresencePlayFab("UpdateSharedGroupData", sgBody, false, viewerTicket);
+      }
+    }
   } catch {
     /* ignore network issues */
+  }
+}
+
+/**
+ * Incorpora um pulso de presença vindo do UserData público de um jogador ao cache local de presença.
+ */
+export function applyRemotePresenceHeartbeat(rawJson: string): void {
+  if (typeof window === "undefined" || !rawJson) return;
+  try {
+    const remote = JSON.parse(rawJson) as Partial<PlayerPresenceRecord>;
+    if (!remote.playerId && !remote.nickNormalized && !remote.nick) return;
+    const slug =
+      remote.nickNormalized ||
+      (remote.nick ? nickSlug(remote.nick) : "");
+    const pId = remote.playerId || (slug ? `pf_${slug}` : "");
+    if (!pId) return;
+
+    const store = loadPresenceStore();
+    const existing = store.players[pId] || (slug ? store.players[slug] : undefined);
+    const remoteSeen = typeof remote.lastSeenAt === "number" ? remote.lastSeenAt : 0;
+    const remoteActive = typeof remote.lastActiveAt === "number" ? remote.lastActiveAt : remoteSeen;
+
+    if (existing && existing.lastSeenAt >= remoteSeen && remoteSeen > 0) {
+      return;
+    }
+
+    const rec: PlayerPresenceRecord = {
+      playerId: pId,
+      playfabId: remote.playfabId,
+      nick: remote.nick,
+      nickNormalized: slug,
+      lastSeenAt: remote.disconnected ? 0 : remoteSeen,
+      lastActiveAt: remoteActive,
+      idleMs: remote.idleMs ?? 0,
+      disconnected: Boolean(remote.disconnected),
+      activity: remote.activity,
+    };
+
+    store.players[pId] = rec;
+    if (slug) {
+      store.players[slug] = rec;
+      store.players[`pf_${slug}`] = rec;
+    }
+    if (remote.playfabId) {
+      store.players[remote.playfabId] = rec;
+    }
+    savePresenceStore(store);
+  } catch {
+    /* ignore malformed heartbeat */
   }
 }
 
@@ -936,7 +1015,12 @@ function getX1PresenceIndexMap(): Map<string, PlayerPresenceRecord> | null {
  */
 export function getPlayerPresenceData(
   playerId: string,
-  hints?: { playfabId?: string; nick?: string; nickNormalized?: string },
+  hints?: {
+    playfabId?: string;
+    nick?: string;
+    nickNormalized?: string;
+    activeSessionUpdatedAt?: string;
+  },
 ): PlayerPresenceRecord | null {
   if (!playerId && !hints?.nickNormalized && !hints?.nick && !hints?.playfabId) {
     return null;
@@ -988,6 +1072,28 @@ export function getPlayerPresenceData(
     }
   }
 
+  if (hints?.activeSessionUpdatedAt) {
+    const sessionMs = Date.parse(hints.activeSessionUpdatedAt);
+    if (!Number.isNaN(sessionMs) && sessionMs > 0) {
+      if (!rec) {
+        rec = {
+          playerId: cleanId || slugHint,
+          playfabId: hints.playfabId,
+          nick: hints.nick,
+          nickNormalized: slugHint,
+          lastSeenAt: 0,
+          lastActiveAt: sessionMs,
+          disconnected: true,
+        };
+      } else if ((!rec.lastActiveAt || sessionMs > rec.lastActiveAt) && computePresenceStatus(rec) === "offline") {
+        rec = {
+          ...rec,
+          lastActiveAt: sessionMs,
+        };
+      }
+    }
+  }
+
   return rec ?? null;
 }
 
@@ -998,6 +1104,7 @@ export type PresenceTargetInput =
       playfabId?: string;
       nick?: string;
       nickNormalized?: string;
+      activeSessionUpdatedAt?: string;
     };
 
 /**
@@ -1067,6 +1174,7 @@ export function getPlayerPresenceStatus(
           playfabId: item.playfabId,
           nick: item.nick,
           nickNormalized: item.nickNormalized,
+          activeSessionUpdatedAt: item.activeSessionUpdatedAt,
         });
   return computePresenceStatus(data, now);
 }
