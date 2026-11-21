@@ -6,8 +6,10 @@ import { nickSlug } from "./player-profile.ts";
 import { GAME_NAMES, type GameId } from "./game-storage.ts";
 import {
   clearCachedAdminPlayFabTicket,
+  clearExpiredStoredSessionTicket,
   getAdminPlayFabTicket,
   getPlayFabTitleId,
+  getViewerPlayFabTicket,
   isPlayFabConfigured,
   loadStoredSession,
   validateActiveSession,
@@ -59,7 +61,8 @@ export const PRESENCE_DISCONNECT_MAX_AGE_MS = 2 * 60 * 1000; // 2 minutos sem he
 
 const PRESENCE_STORAGE_KEY = "desafios-presence-store-v1";
 const LOCAL_LAST_ACTIVE_KEY = "desafios-local-last-active-v1";
-export const PRESENCE_SHARED_GROUP_ID = "SEMED_PRESENCE_V2";
+export const PRESENCE_SHARED_GROUP_ID = "SEMED_PRESENCE_V3";
+export const LEGACY_PRESENCE_SHARED_GROUP_ID = "SEMED_PRESENCE_V2";
 export const PRESENCE_UPDATED_EVENT = "desafios:presence-updated";
 
 /**
@@ -580,7 +583,8 @@ export function recordPlayerHeartbeat(
 /* --------------------- Sincronização em Nuvem (PlayFab SharedGroup) --------------------- */
 
 let presenceGroupCreated = false;
-let sharedGroupWriteBlockedUntil = 0;
+let preferViewerTicketForSharedGroup = false;
+let legacyPresenceFetched = false;
 let userDataPresenceCursor = 0;
 let inFlightUserDataPresenceSync: Promise<void> | null = null;
 let lastUserDataPresenceSyncAt = 0;
@@ -647,19 +651,25 @@ async function callPresencePlayFab(
       errorMessage?: string;
     };
 
-    // Renovação automática caso o ticket em cache tenha expirado ou sido invalidado no PlayFab
-    if (!overrideTicket && (res.status === 401 || json.errorCode === 1089 || json.error === "NotAuthorized")) {
+    // Renovação automática caso o ticket em cache ou na sessão tenha expirado ou sido invalidado no PlayFab
+    const isAuthFailure =
+      res.status === 401 ||
+      json.errorCode === 1074 ||
+      json.errorCode === 1089 ||
+      json.error === "NotAuthenticated" ||
+      json.error === "InvalidSessionTicket" ||
+      (!overrideTicket && json.error === "NotAuthorized");
+
+    if (isAuthFailure) {
       clearCachedAdminPlayFabTicket();
-      if (canRetry) {
-        return callPresencePlayFab(endpoint, body, false);
+      clearExpiredStoredSessionTicket(ticket);
+      if (!overrideTicket && canRetry) {
+        return callPresencePlayFab(endpoint, body, false, undefined, keepalive);
       }
       return null;
     }
 
     if (json.error) {
-      if (endpoint === "UpdateSharedGroupData") {
-        console.warn("Aviso ao atualizar presença no SharedGroup:", json.error, json.errorCode);
-      }
       return null;
     }
     return { data: json.data, serverDate };
@@ -692,10 +702,11 @@ export async function pushPresenceToPlayFab(record: PlayerPresenceRecord): Promi
       activity: record.activity,
     });
 
-    // 1. Fonte principal: UserData público da própria conta logada (o PlayFab sempre permite
-    //    que o jogador escreva nos próprios dados). keepalive garante o envio no pagehide.
+    const isExit = Boolean(record.disconnected);
+
+    // 1. Grava no UserData público da própria conta logada (se o sessionTicket do aluno estiver válido)
     const ownTicket = loadStoredSession()?.sessionTicket;
-    if (ownTicket) {
+    if (ownTicket && !ownTicket.startsWith("admin-")) {
       void callPresencePlayFab(
         "UpdateUserData",
         {
@@ -704,29 +715,64 @@ export async function pushPresenceToPlayFab(record: PlayerPresenceRecord): Promi
         },
         false,
         ownTicket,
-        Boolean(record.disconnected),
+        isExit,
       );
     }
 
-    // 2. Fonte secundária: SharedGroup (só funciona se a conta for membro do grupo).
-    //    Se for recusado, pausa novas tentativas por 10 min para não gerar requisições inúteis.
-    if (record.disconnected) return;
-    const nowMs = Date.now();
-    if (nowMs < sharedGroupWriteBlockedUntil) return;
-    if (!presenceGroupCreated) {
-      await callPresencePlayFab("CreateSharedGroup", {
-        SharedGroupId: PRESENCE_SHARED_GROUP_ID,
-      });
-      presenceGroupCreated = true;
-    }
+    // 2. Grava no SharedGroup global SEMED_PRESENCE_V3 (onde a conta de serviço semedvisitante e o ADM são membros)
     const key = `pres_${slug || record.playerId}`;
-    const sgRes = await callPresencePlayFab("UpdateSharedGroupData", {
+    const sgBody = {
       SharedGroupId: PRESENCE_SHARED_GROUP_ID,
       Data: { [key]: payloadStr },
       Permission: "Public",
-    });
+    };
+
+    if (!presenceGroupCreated && !isExit) {
+      const createRes = await callPresencePlayFab("CreateSharedGroup", {
+        SharedGroupId: PRESENCE_SHARED_GROUP_ID,
+      });
+      if (createRes) {
+        void callPresencePlayFab("AddSharedGroupMembers", {
+          SharedGroupId: PRESENCE_SHARED_GROUP_ID,
+          PlayFabIds: ["FB6662558A38ACAD", "1B2E1517154B2D49"],
+        });
+      }
+      presenceGroupCreated = true;
+    }
+
+    if (preferViewerTicketForSharedGroup) {
+      const viewerTicket = await getViewerPlayFabTicket();
+      if (viewerTicket) {
+        const directRes = await callPresencePlayFab("UpdateSharedGroupData", sgBody, false, viewerTicket, isExit);
+        if (directRes) return;
+        await callPresencePlayFab("CreateSharedGroup", { SharedGroupId: PRESENCE_SHARED_GROUP_ID }, false, viewerTicket);
+        await callPresencePlayFab("UpdateSharedGroupData", sgBody, false, viewerTicket, isExit);
+        return;
+      }
+    }
+
+    const sgRes = await callPresencePlayFab(
+      "UpdateSharedGroupData",
+      sgBody,
+      true,
+      undefined,
+      isExit,
+    );
     if (!sgRes) {
-      sharedGroupWriteBlockedUntil = Date.now() + 10 * 60 * 1000;
+      const viewerTicket = await getViewerPlayFabTicket();
+      if (viewerTicket && viewerTicket !== ownTicket) {
+        await callPresencePlayFab("CreateSharedGroup", { SharedGroupId: PRESENCE_SHARED_GROUP_ID }, false, viewerTicket);
+        const retryRes = await callPresencePlayFab(
+          "UpdateSharedGroupData",
+          sgBody,
+          false,
+          viewerTicket,
+          isExit,
+        );
+        if (retryRes) {
+          preferViewerTicketForSharedGroup = true;
+        }
+      }
     }
   } catch {
     /* ignore network issues */
@@ -909,7 +955,31 @@ export async function syncPresenceFromPlayFab(force = false): Promise<void> {
         Data?: Record<string, { Value: string; LastUpdated?: string }>;
       } | undefined;
 
-      if (!resData?.Data) return;
+      const combinedData: Record<string, { Value: string; LastUpdated?: string }> = {
+        ...(resData?.Data ?? {}),
+      };
+
+      // Na primeira sincronização (ou quando V3 ainda não tem todas as chaves históricas), mescla o histórico legado V2
+      if (!legacyPresenceFetched) {
+        legacyPresenceFetched = true;
+        const legacyRes = await callPresencePlayFab("GetSharedGroupData", {
+          SharedGroupId: LEGACY_PRESENCE_SHARED_GROUP_ID,
+        });
+        const legacyData = (
+          legacyRes?.data as {
+            Data?: Record<string, { Value: string; LastUpdated?: string }>;
+          } | undefined
+        )?.Data;
+        if (legacyData) {
+          for (const [k, v] of Object.entries(legacyData)) {
+            if (!combinedData[k]) {
+              combinedData[k] = v;
+            }
+          }
+        }
+      }
+
+      if (Object.keys(combinedData).length === 0) return;
 
       const store = loadPresenceStore();
       const localSessionId = loadStoredSession()?.playerId;
@@ -922,7 +992,7 @@ export async function syncPresenceFromPlayFab(force = false): Promise<void> {
       }
       const curServerNow = syncNow + (serverClockOffsetMs ?? 0);
 
-      for (const [key, entry] of Object.entries(resData.Data)) {
+      for (const [key, entry] of Object.entries(combinedData)) {
         if (!entry?.Value) continue;
         try {
           const remote = JSON.parse(entry.Value) as Partial<PlayerPresenceRecord>;

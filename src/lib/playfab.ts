@@ -438,6 +438,27 @@ export function setCachedAdminPlayFabTicket(ticket: string | null) {
   }
 }
 
+export function clearExpiredStoredSessionTicket(failedTicket?: string | null): void {
+  if (typeof window === "undefined") return;
+  try {
+    const sess = loadStoredSession();
+    if (
+      sess?.sessionTicket &&
+      (!failedTicket || sess.sessionTicket === failedTicket || sess.sessionTicket.startsWith("admin-"))
+    ) {
+      saveStoredSession({ ...sess, sessionTicket: undefined });
+    }
+    const rawViewer = window.localStorage.getItem(VIEWER_TICKET_KEY);
+    if (rawViewer && failedTicket && rawViewer.includes(failedTicket)) {
+      cachedViewerTicket = null;
+      cachedViewerTicketTime = 0;
+      window.localStorage.removeItem(VIEWER_TICKET_KEY);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 export async function getAdminPlayFabTicket(): Promise<string | null> {
   if (cachedAdminTicket && Date.now() - cachedAdminTicketTime < ADMIN_TICKET_TTL_MS) {
     return cachedAdminTicket;
@@ -458,8 +479,11 @@ export async function getAdminPlayFabTicket(): Promise<string | null> {
     }
   }
   // Nunca autentica automaticamente com credenciais administrativas no cliente.
-  // Para operações em SharedGroupData público, utiliza a sessão do próprio usuário logado ou visitante.
-  return loadStoredSession()?.sessionTicket ?? (await getViewerPlayFabTicket());
+  // Para operações em SharedGroupData público, utiliza a sessão do próprio usuário logado (se válida) ou visitante.
+  const storedTicket = loadStoredSession()?.sessionTicket;
+  const validStoredTicket =
+    storedTicket && !storedTicket.startsWith("admin-") ? storedTicket : null;
+  return validStoredTicket ?? (await getViewerPlayFabTicket());
 }
 
 export function isSpecialAdminAccount(p?: {
@@ -707,6 +731,7 @@ export async function callPlayFabClient<T>(
   endpoint: string,
   body: Record<string, unknown>,
   sessionTicket?: string,
+  canRetryAuth = true,
 ): Promise<{ data: T | null; error: string | null; errorCode?: string }> {
   const titleId = getPlayFabTitleId();
   if (!titleId) {
@@ -729,6 +754,25 @@ export async function callPlayFabClient<T>(
     );
     const json = (await response.json()) as PlayFabResponse<T>;
     if (!response.ok || json.error) {
+      const isAuthExpired =
+        response.status === 401 ||
+        json.errorCode === 1074 ||
+        json.errorCode === 1089 ||
+        json.error === "NotAuthenticated" ||
+        json.error === "InvalidSessionTicket";
+
+      if (isAuthExpired && sessionTicket && canRetryAuth) {
+        clearCachedAdminPlayFabTicket();
+        clearExpiredStoredSessionTicket(sessionTicket);
+        // Para endpoints de leitura/SharedGroup, renova com ticket de visitante e tenta novamente
+        if (endpoint !== "UpdateUserData") {
+          const fallbackTk = await getViewerPlayFabTicket();
+          if (fallbackTk && fallbackTk !== sessionTicket) {
+            return callPlayFabClient<T>(endpoint, body, fallbackTk, false);
+          }
+        }
+      }
+
       return {
         data: null,
         error: json.errorMessage || json.error || "Não foi possível conectar ao servidor da plataforma.",
