@@ -242,7 +242,9 @@ describe("Presença online/offline na nuvem (fluxo aluno → ADM)", () => {
   it("preserva o sessionTicket do aluno após múltiplos pulsos e sincroniza troca imediata de atividade (Jogo Nv.1 → Perfil → Ranking)", async () => {
     // Cria o grupo antes como ADM para que o aluno comum receba NotAuthorized (1075) ao tentar com seu próprio ticket
     loginAs("TK_ADMIN", "admin");
-    await pushPresenceToPlayFab(rec({ playerId: "admin", nick: "Admin", nickNormalized: "admin" }));
+    await pushPresenceToPlayFab(
+      rec({ playerId: "admin", playfabId: "FB6662558A38ACAD", nick: "Admin", nickNormalized: "admin" }),
+    );
 
     loginAs("TK_ALUNO", "alunoteste");
     // 1. Entrou em Lógica Matemática Nível 1

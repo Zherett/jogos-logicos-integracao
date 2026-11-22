@@ -817,8 +817,8 @@ function shouldKeepExistingPresence(
     }
     return false;
   }
-  // Registro online: nunca sobrescreve um heartbeat mais recente
-  if (!existing.disconnected && existing.lastSeenAt >= incoming.lastSeenAt && incoming.lastSeenAt > 0) {
+  // Registro online: nunca sobrescreve um heartbeat estritamente mais recente
+  if (!existing.disconnected && existing.lastSeenAt > incoming.lastSeenAt && incoming.lastSeenAt > 0) {
     return true;
   }
   // Se o registro existente é offline, só sobrescreve se o heartbeat online for mais recente que o disconnect
