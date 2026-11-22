@@ -241,6 +241,8 @@ export interface PlatformAdminConfig {
   cardsCatalog?: CardDefinition[];
   /** Indica se a duplicação automática inicial (Normal <-> Foil) já foi executada */
   foilDuplicatesSeededV2?: boolean;
+  /** Chance percentual (0..100) de uma carta sorteada vir em versão Foil quando houver par (padrão: 30) */
+  cardFoilChancePercent?: number;
   /** Pacotes de cartas (5 padrão + pacotes especiais do ADM) */
   cardPacks?: CardPackDefinition[];
   /** Catálogo de baús configuráveis pelo ADM (prévia ADM) */

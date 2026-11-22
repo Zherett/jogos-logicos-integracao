@@ -25,6 +25,7 @@ import {
   CARD_RARITIES,
   CARD_RARITY_META,
   createCardBatch,
+  DEFAULT_CARD_FOIL_CHANCE_PERCENT,
   editCardDefinition,
   generateMissingFoilDuplicates,
   mergeWithDefaultCardPacks,
@@ -313,7 +314,8 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
 
   async function confirmTestOpenPack(pack: CardPackDefinition): Promise<PackOpenOutcome | null> {
     const currentCards = auth.profile?.cards ?? {};
-    const res = openCardPack(pack, cards, currentCards);
+    const foilChance = draft.cardFoilChancePercent ?? DEFAULT_CARD_FOIL_CHANCE_PERCENT;
+    const res = openCardPack(pack, cards, currentCards, Math.random, foilChance);
     if (res.error) {
       setPackError(res.error);
       setPackToTestOpen(null);

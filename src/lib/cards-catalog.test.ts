@@ -8,6 +8,7 @@ import {
   consumeAndOpenCardPack,
   createCardBatch,
   createCardDefinition,
+  DEFAULT_CARD_FOIL_CHANCE_PERCENT,
   DEFAULT_CARD_PACKS,
   editCardDefinition,
   generateMissingFoilDuplicates,
@@ -255,5 +256,39 @@ describe("Sistema de Cartas Colecionáveis e Pacotes", () => {
     assert.equal(reverseSeed.addedCount, 1);
     assert.equal(reverseSeed.updatedCatalog.length, 2);
     assert.ok(reverseSeed.updatedCatalog.some((c) => !c.isFoil && c.name === "Carta Foil Legada"));
+  });
+
+  it("sorteia cartas com chance padrão de 30% Foil e 70% Normal (e aceita override de evento)", () => {
+    assert.equal(DEFAULT_CARD_FOIL_CHANCE_PERCENT, 30);
+
+    const turingPair = createCardBatch({
+      name: "Alan Turing",
+      description: "Pai da computação",
+      rarity: "lendaria",
+      imageUrl: "https://example.com/turing.png",
+      createNormal: true,
+      createFoil: true,
+    }).cards;
+
+    const pack = {
+      ...DEFAULT_CARD_PACKS[0],
+      cardsPerPack: 1,
+      probabilities: { comum: 0, incomum: 0, rara: 0, epica: 0, lendaria: 100 },
+    };
+
+    // rng fixo em 0.25 -> 25 < 30 => Foil
+    const foilDraw = openCardPack(pack, turingPair, {}, () => 0.25);
+    assert.equal(foilDraw.drawnCards.length, 1);
+    assert.equal(foilDraw.drawnCards[0].isFoil, true);
+
+    // rng fixo em 0.35 -> 35 >= 30 => Normal
+    const normalDraw = openCardPack(pack, turingPair, {}, () => 0.35);
+    assert.equal(normalDraw.drawnCards.length, 1);
+    assert.equal(normalDraw.drawnCards[0].isFoil, false);
+
+    // Override de evento aumentando chance Foil para 80%: rng 0.50 -> 50 < 80 => Foil
+    const eventDraw = openCardPack(pack, turingPair, {}, () => 0.50, 80);
+    assert.equal(eventDraw.drawnCards.length, 1);
+    assert.equal(eventDraw.drawnCards[0].isFoil, true);
   });
 });

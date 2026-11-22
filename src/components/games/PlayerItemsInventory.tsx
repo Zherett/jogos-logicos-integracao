@@ -6,6 +6,7 @@ import {
   CARD_RARITIES,
   CARD_RARITY_META,
   consumeAndOpenCardPack,
+  DEFAULT_CARD_FOIL_CHANCE_PERCENT,
   mergeWithDefaultCardPacks,
   openCardPack,
   type CardDefinition,
@@ -114,9 +115,10 @@ export function PlayerItemsInventory() {
   async function confirmOpenPack(pack: CardPackDefinition): Promise<PackOpenOutcome | null> {
     const unopenedMap = auth.profile?.unopenedPacks ?? {};
     const hasStock = (Number(unopenedMap[pack.id]) || 0) > 0;
+    const foilChance = auth.adminConfig.cardFoilChancePercent ?? DEFAULT_CARD_FOIL_CHANCE_PERCENT;
 
     if (hasStock) {
-      const res = consumeAndOpenCardPack(pack, catalog, ownedCardsMap, unopenedMap);
+      const res = consumeAndOpenCardPack(pack, catalog, ownedCardsMap, unopenedMap, Math.random, foilChance);
       if (res.error) {
         return { drawn: [], newlyDiscovered: [], error: res.error };
       }
@@ -140,7 +142,7 @@ export function PlayerItemsInventory() {
     }
 
     // Modo teste ADM (sem estoque de pacotes fechados)
-    const res = openCardPack(pack, catalog, ownedCardsMap);
+    const res = openCardPack(pack, catalog, ownedCardsMap, Math.random, foilChance);
     if (res.error) {
       return { drawn: [], newlyDiscovered: [], error: res.error };
     }

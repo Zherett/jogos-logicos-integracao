@@ -622,6 +622,8 @@ function pickRarityWithFallback(
   return null;
 }
 
+export const DEFAULT_CARD_FOIL_CHANCE_PERCENT = 30;
+
 export interface OpenPackResult {
   drawnCards: CardDefinition[];
   updatedCardsMap: Record<string, number>;
@@ -629,11 +631,45 @@ export interface OpenPackResult {
   error?: string;
 }
 
+function pickCardVariantByFoilChance(
+  candidates: CardDefinition[],
+  foilChancePercent: number,
+  rng: () => number,
+): CardDefinition | null {
+  if (candidates.length === 0) return null;
+  const groupsMap = new Map<string, { normal: CardDefinition[]; foil: CardDefinition[] }>();
+  for (const c of candidates) {
+    const key = c.name.trim().toLowerCase() || c.id;
+    let group = groupsMap.get(key);
+    if (!group) {
+      group = { normal: [], foil: [] };
+      groupsMap.set(key, group);
+    }
+    if (c.isFoil) group.foil.push(c);
+    else group.normal.push(c);
+  }
+
+  const groups = Array.from(groupsMap.values());
+  const chosenGroup = groups[Math.floor(rng() * groups.length) % groups.length];
+  if (!chosenGroup) return null;
+
+  if (chosenGroup.normal.length > 0 && chosenGroup.foil.length > 0) {
+    const clampedFoil = Math.max(0, Math.min(100, Number(foilChancePercent)));
+    const rollFoil = rng() * 100 < clampedFoil;
+    const pool = rollFoil ? chosenGroup.foil : chosenGroup.normal;
+    return pool[Math.floor(rng() * pool.length) % pool.length];
+  }
+
+  const fallbackPool = chosenGroup.foil.length > 0 ? chosenGroup.foil : chosenGroup.normal;
+  return fallbackPool[Math.floor(rng() * fallbackPool.length) % fallbackPool.length] ?? null;
+}
+
 export function openCardPack(
   pack: CardPackDefinition,
   allCards: CardDefinition[],
   currentCardsMap: Record<string, number> = {},
   rng: () => number = Math.random,
+  foilChancePercent = DEFAULT_CARD_FOIL_CHANCE_PERCENT,
 ): OpenPackResult {
   const pool = resolvePackCardPool(pack, allCards);
   if (pool.length === 0) {
@@ -660,8 +696,8 @@ export function openCardPack(
     const rarity = pickRarityWithFallback(pack.probabilities, byRarity, rng);
     if (!rarity) break;
     const candidates = byRarity.get(rarity) ?? [];
-    if (candidates.length === 0) continue;
-    const picked = candidates[Math.floor(rng() * candidates.length) % candidates.length];
+    const picked = pickCardVariantByFoilChance(candidates, foilChancePercent, rng);
+    if (!picked) continue;
     drawnCards.push(picked);
     const prevCount = updatedCardsMap[picked.id] ?? 0;
     if (prevCount === 0) {
@@ -691,6 +727,7 @@ export function consumeAndOpenCardPack(
   currentCardsMap: Record<string, number> = {},
   currentUnopenedPacks: Record<string, number> = {},
   rng: () => number = Math.random,
+  foilChancePercent = DEFAULT_CARD_FOIL_CHANCE_PERCENT,
 ): ConsumePackResult {
   const available = Math.max(0, Math.floor(Number(currentUnopenedPacks[pack.id]) || 0));
   if (available <= 0) {
@@ -703,7 +740,7 @@ export function consumeAndOpenCardPack(
     };
   }
 
-  const openRes = openCardPack(pack, allCards, currentCardsMap, rng);
+  const openRes = openCardPack(pack, allCards, currentCardsMap, rng, foilChancePercent);
   if (openRes.error || openRes.drawnCards.length === 0) {
     return {
       ...openRes,
