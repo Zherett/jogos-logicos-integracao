@@ -24,6 +24,7 @@ import {
   playfabSignIn,
   playfabUpdatePlayerCards,
   ROSTER_SHARED_GROUP_ID,
+  syncAdminConfigFromPlayFab,
   syncSinglePlayerFromPlayFab,
   syncStudentRosterFromPlayFab,
 } from "./playfab.ts";
@@ -722,7 +723,7 @@ describe("Presença online/offline na nuvem (fluxo aluno → ADM)", () => {
     const sixteenDaysAgoIso = new Date(now - 16.5 * 86_400_000).toISOString();
     const sixDaysAgoIso = new Date(now - 6.5 * 86_400_000).toISOString();
     const fiveDaysAgoIso = new Date(now - 5.5 * 86_400_000).toISOString();
-    const oneHourAgoIso = new Date(now - 3_600_000).toISOString();
+    const oneHourAgoIso = new Date(now - 65 * 60_000).toISOString();
 
     pf.groups.set(LEGACY_PRESENCE_SHARED_GROUP_ID, {
       members: new Set(["1B2E1517154B2D49"]),
@@ -868,5 +869,113 @@ describe("Presença online/offline na nuvem (fluxo aluno → ADM)", () => {
     // Kaylon no V3 (1h atrás) NÃO foi sobrescrito pelo V2 (5 dias atrás)
     const kaylonPres = getPlayerPresenceData("PF_KAYLON", { nick: "kaylon", nickNormalized: "kaylon" });
     assert.equal(formatPresenceTimeAgo(kaylonPres, now), "Online há 1 hora");
+  });
+
+  it("sessão ADM (JOSINEY) NÃO expira após syncAdminConfig, 401 de visitante ou nova aba, e abre pacotes de cartas com persistência na nuvem", async () => {
+    let expiredEvents = 0;
+    const prevDispatch = (globalThis as any).window.dispatchEvent;
+    (globalThis as any).window.dispatchEvent = (ev: Event) => {
+      if (ev?.type === CLOUD_SESSION_EXPIRED_EVENT) expiredEvents++;
+      return prevDispatch ? prevDispatch(ev) : true;
+    };
+
+    try {
+      // 1. Login oficial do ADM JOSINEY (cai no fallback admin-josiney-session-ticket quando LoginWithPlayFab falha)
+      const signRes = await playfabSignIn("JOSINEY", "SEMED2620ZZ");
+      assert.equal(signRes.error, null);
+      assert.equal(hasValidCloudSessionTicket(), true);
+
+      // 2. Rotinas em segundo plano após login (syncAdminConfig + chamada direta com admin-*)
+      await syncAdminConfigFromPlayFab();
+      await callPlayFabClient("GetUserData", { PlayFabId: "FB6662558A38ACAD", Keys: ["PlayerProfile"] }, "admin-josiney-session-ticket");
+
+      // 3. Erro 401 em um ticket antigo do visitante NUNCA deve apagar a sessão do JOSINEY
+      clearExpiredStoredSessionTicket("TK_VIEWER_EXPIRADO");
+
+      // 4. Simula abertura de nova aba (sessionStorage zerado)
+      (globalThis as any).window.sessionStorage.clear();
+      assert.equal(hasValidCloudSessionTicket(), true);
+      assert.equal(expiredEvents, 0);
+
+      // 5. Garante que NENHUMA requisição HTTP enviou "admin-josiney-session-ticket" para o PlayFab
+      const leakedAdminCalls = pf.calls.filter((c) => c.ticket.startsWith("admin-"));
+      assert.equal(leakedAdminCalls.length, 0);
+
+      // 6. Abrir pacote de cartas com requireServerSync: true funciona e grava no ROSTER_SHARED_GROUP_ID
+      const opened = await playfabUpdatePlayerCards({
+        cards: { carta_rara_1: 1 },
+        unopenedPacks: { pack_basico: 0 },
+        packsOpenedDelta: 1,
+        requireServerSync: true,
+      });
+      assert.equal(opened?.cards?.carta_rara_1, 1);
+      assert.equal(opened?.unopenedPacks?.pack_basico, 0);
+      assert.equal(pf.groups.get(ROSTER_SHARED_GROUP_ID)?.data.has("stu_josiney"), true);
+    } finally {
+      (globalThis as any).window.dispatchEvent = prevDispatch;
+    }
+  });
+
+  it("jogador comum recém-logado NÃO recebe falso aviso de sessão expirada ao usar Ranking, Presença, Nova Aba ou Pacotes (só expira se o próprio ticket vencer)", async () => {
+    let expiredEvents = 0;
+    const prevDispatch = (globalThis as any).window.dispatchEvent;
+    (globalThis as any).window.dispatchEvent = (ev: Event) => {
+      if (ev?.type === CLOUD_SESSION_EXPIRED_EVENT) expiredEvents++;
+      return prevDispatch ? prevDispatch(ev) : true;
+    };
+
+    try {
+      pf.users.set("alunonormal", {
+        password: "200114",
+        playfabId: "PF_ALUNO_COMUM",
+        ticket: "TK_ALUNO_COMUM",
+        displayName: "AlunoNormal",
+      });
+
+      // Cria SharedGroups como ADM antes para forçar 401 NotAuthorized (1075) se o aluno tocar neles
+      await callPlayFabClient("CreateSharedGroup", { SharedGroupId: ROSTER_SHARED_GROUP_ID }, "TK_ADMIN");
+      await callPlayFabClient("CreateSharedGroup", { SharedGroupId: PRESENCE_SHARED_GROUP_ID }, "TK_ADMIN");
+
+      // 1. Login do aluno comum
+      const loginRes = await playfabSignIn("AlunoNormal", "200114");
+      assert.equal(loginRes.error, null);
+      assert.equal(hasValidCloudSessionTicket(), true);
+
+      // 2. Fluxo completo pós-login: config, presença (com NotAuthorized no SharedGroup), perfil e erro 401 de ticket visitante
+      await syncAdminConfigFromPlayFab();
+      await pushPresenceToPlayFab(
+        rec({
+          playerId: "PF_ALUNO_COMUM",
+          playfabId: "PF_ALUNO_COMUM",
+          nick: "AlunoNormal",
+          nickNormalized: "alunonormal",
+        }),
+      );
+      await syncSinglePlayerFromPlayFab("AlunoNormal");
+      clearExpiredStoredSessionTicket("TK_VIEWER_EXPIRADO");
+
+      // 3. Simula nova aba / F5 (sessionStorage vazio) -> sessão do aluno comum continua 100% válida!
+      (globalThis as any).window.sessionStorage.clear();
+      assert.equal(hasValidCloudSessionTicket(), true);
+      assert.equal(expiredEvents, 0);
+
+      // 4. Abre pacote de cartas com requireServerSync: true normalmente
+      const opened = await playfabUpdatePlayerCards({
+        cards: { carta_comum_1: 2 },
+        unopenedPacks: { pack_basico: 0 },
+        packsOpenedDelta: 1,
+        requireServerSync: true,
+      });
+      assert.equal(opened?.cards?.carta_comum_1, 2);
+      assert.equal(expiredEvents, 0);
+      assert.equal(hasValidCloudSessionTicket(), true);
+
+      // 5. Apenas quando o PRÓPRIO ticket do aluno vencer (401 NotAuthenticated) é que dispara sessão expirada
+      clearExpiredStoredSessionTicket("TK_ALUNO_COMUM");
+      assert.equal(expiredEvents, 1);
+      assert.equal(hasValidCloudSessionTicket(), false);
+    } finally {
+      (globalThis as any).window.dispatchEvent = prevDispatch;
+    }
   });
 });

@@ -534,9 +534,12 @@ export function clearExpiredStoredSessionTicket(failedTicket?: string | null): v
   if (typeof window === "undefined") return;
   try {
     const sess = loadStoredSession();
+    const isActiveAdminPlaceholder =
+      Boolean(sess?.sessionTicket?.startsWith("admin-")) && isAdminUnlockedSession();
     if (
       sess?.sessionTicket &&
-      (!failedTicket || sess.sessionTicket === failedTicket || sess.sessionTicket.startsWith("admin-"))
+      !isActiveAdminPlaceholder &&
+      (!failedTicket || sess.sessionTicket === failedTicket)
     ) {
       saveStoredSession({ ...sess, sessionTicket: undefined });
       window.dispatchEvent(new CustomEvent(CLOUD_SESSION_EXPIRED_EVENT));
@@ -599,10 +602,26 @@ export function isSpecialAdminAccount(p?: {
   );
 }
 
+const ADMIN_AUTH_PERSIST_KEY = "desafios-admin-auth-until-v1";
+const ADMIN_AUTH_TTL_MS = 24 * 60 * 60 * 1000;
+
 export function isAdminUnlockedSession(): boolean {
   if (typeof window === "undefined") return false;
   try {
-    return window.sessionStorage.getItem(ADMIN_AUTH_KEY) === "1";
+    if (window.sessionStorage.getItem(ADMIN_AUTH_KEY) === "1") {
+      return true;
+    }
+    const rawUntil = window.localStorage.getItem(ADMIN_AUTH_PERSIST_KEY);
+    const until = rawUntil ? Number(rawUntil) : 0;
+    if (until > Date.now()) {
+      const sess = loadStoredSession();
+      const pid = sess?.playerId?.toLowerCase();
+      if (pid === "josiney" || pid === "quemuel" || pid === "admin") {
+        window.sessionStorage.setItem(ADMIN_AUTH_KEY, "1");
+        return true;
+      }
+    }
+    return false;
   } catch {
     return false;
   }
@@ -611,8 +630,13 @@ export function isAdminUnlockedSession(): boolean {
 export function setAdminUnlockedSession(unlocked: boolean) {
   if (typeof window === "undefined") return;
   try {
-    if (unlocked) window.sessionStorage.setItem(ADMIN_AUTH_KEY, "1");
-    else window.sessionStorage.removeItem(ADMIN_AUTH_KEY);
+    if (unlocked) {
+      window.sessionStorage.setItem(ADMIN_AUTH_KEY, "1");
+      window.localStorage.setItem(ADMIN_AUTH_PERSIST_KEY, String(Date.now() + ADMIN_AUTH_TTL_MS));
+    } else {
+      window.sessionStorage.removeItem(ADMIN_AUTH_KEY);
+      window.localStorage.removeItem(ADMIN_AUTH_PERSIST_KEY);
+    }
   } catch {
     /* ignore */
   }
@@ -831,11 +855,28 @@ export async function callPlayFabClient<T>(
     return { data: null, error: "Servidor da nuvem indisponível no momento." };
   }
   try {
+    let effectiveTicket = sessionTicket;
+    if (effectiveTicket?.startsWith("admin-")) {
+      // Blindagem central: nunca envia marcador local "admin-*" para a API do PlayFab (que responderia HTTP 401).
+      if (
+        endpoint === "UpdateUserData" ||
+        endpoint === "UpdatePlayerStatistics" ||
+        endpoint === "ExecuteCloudScript" ||
+        endpoint === "LinkCustomID"
+      ) {
+        return { data: null, error: null };
+      }
+      effectiveTicket = (await getViewerPlayFabTicket()) ?? undefined;
+      if (!effectiveTicket) {
+        return { data: null, error: "Servidor da nuvem indisponível no momento." };
+      }
+    }
+
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
     };
-    if (sessionTicket) {
-      headers["X-Authorization"] = sessionTicket;
+    if (effectiveTicket) {
+      headers["X-Authorization"] = effectiveTicket;
     }
     const response = await fetch(
       `https://${titleId}.playfabapi.com/Client/${endpoint}`,
@@ -859,20 +900,20 @@ export async function callPlayFabClient<T>(
           json.error === "InvalidSessionTicket" ||
           (response.status === 401 && !json.error));
 
-      if (isAuthExpired && sessionTicket && canRetryAuth) {
+      if (isAuthExpired && effectiveTicket && canRetryAuth) {
         clearCachedAdminPlayFabTicket();
-        clearExpiredStoredSessionTicket(sessionTicket);
+        clearExpiredStoredSessionTicket(effectiveTicket);
         // Para endpoints de leitura/SharedGroup, renova com ticket de visitante e tenta novamente
         if (endpoint !== "UpdateUserData") {
           const fallbackTk = await getViewerPlayFabTicket();
-          if (fallbackTk && fallbackTk !== sessionTicket) {
+          if (fallbackTk && fallbackTk !== effectiveTicket) {
             return callPlayFabClient<T>(endpoint, body, fallbackTk, false);
           }
         }
-      } else if (isNotAuthorized && sessionTicket && canRetryAuth && endpoint !== "UpdateUserData") {
+      } else if (isNotAuthorized && effectiveTicket && canRetryAuth && endpoint !== "UpdateUserData") {
         // Sem apagar o sessionTicket do jogador, tenta novamente com a conta compartilhada semedvisitante
         const fallbackTk = await getViewerPlayFabTicket();
-        if (fallbackTk && fallbackTk !== sessionTicket) {
+        if (fallbackTk && fallbackTk !== effectiveTicket) {
           return callPlayFabClient<T>(endpoint, body, fallbackTk, false);
         }
       }
@@ -1372,9 +1413,12 @@ export async function syncAdminConfigFromPlayFab(sessionTicket?: string): Promis
     const localCfg = loadAdminConfig();
     if (!isPlayFabConfigured()) return checkAndApplyScheduledReset({ fromCloudSync: true });
 
-    // 1. Sessão do próprio aluno; 2. ticket de visitante (cacheado por dispositivo).
+    // 1. Sessão do próprio aluno (nunca marcador admin-*); 2. ticket de visitante (cacheado por dispositivo).
     const candidates: Array<() => Promise<string | null>> = [
-      async () => sessionTicket ?? loadStoredSession()?.sessionTicket ?? null,
+      async () => {
+        const tk = sessionTicket ?? loadStoredSession()?.sessionTicket ?? null;
+        return tk && !tk.startsWith("admin-") ? tk : null;
+      },
       () => getViewerPlayFabTicket(),
     ];
 
@@ -3302,9 +3346,9 @@ async function pushProfileToPlayFab(
   // Usa a conta compartilhada semedvisitante (membro do ROSTER_SHARED_GROUP_ID) para evitar HTTP 401 NotAuthorized
   try {
     const rosterTicket = (await getViewerPlayFabTicket()) ?? (await getAdminPlayFabTicket()) ?? ticket;
-    if (rosterTicket) {
+    if (rosterTicket && !rosterTicket.startsWith("admin-")) {
       await callPlayFabClient("CreateSharedGroup", { SharedGroupId: ROSTER_SHARED_GROUP_ID }, rosterTicket);
-      await callPlayFabClient(
+      const rosterRes = await callPlayFabClient(
         "UpdateSharedGroupData",
         {
           SharedGroupId: ROSTER_SHARED_GROUP_ID,
@@ -3375,8 +3419,16 @@ async function pushProfileToPlayFab(
         },
         rosterTicket,
       );
+      if (options?.requireUserDataSync && isAdminSessionActive && rosterRes.error) {
+        throw new Error(rosterRes.error || "Falha ao sincronizar com a nuvem.");
+      }
+    } else if (options?.requireUserDataSync && isAdminSessionActive) {
+      throw new Error("Sem conexão com a nuvem no momento. Tente novamente em instantes.");
     }
-  } catch {
+  } catch (err) {
+    if (options?.requireUserDataSync && isAdminSessionActive) {
+      throw err instanceof Error ? err : new Error("Falha ao sincronizar com a nuvem.");
+    }
     /* ignore network issues with shared group */
   }
 }
@@ -4752,7 +4804,8 @@ export async function pushAdminMedalNotificationToPlayFab(
 ): Promise<void> {
   if (!isPlayFabConfigured()) return;
   try {
-    const ticket = sessionTicket ?? loadStoredSession()?.sessionTicket ?? (await getAdminPlayFabTicket());
+    const rawTk = sessionTicket ?? loadStoredSession()?.sessionTicket;
+    const ticket = (rawTk && !rawTk.startsWith("admin-") ? rawTk : null) ?? (await getAdminPlayFabTicket());
     if (!ticket) return;
     await callPlayFabClient(
       "UpdateSharedGroupData",
@@ -4969,7 +5022,7 @@ export async function pushInboxReadToPlayFab(
 
     // Também espelha nos dados pessoais do aluno caso tenha sessão ativa
     const studentTicket = sessionTicket ?? loadStoredSession()?.sessionTicket;
-    if (studentTicket) {
+    if (studentTicket && !studentTicket.startsWith("admin-")) {
       void callPlayFabClient(
         "UpdateUserData",
         {
@@ -5047,7 +5100,7 @@ export async function pushInboxClaimToPlayFab(
     }
 
     const studentTicket = sessionTicket ?? loadStoredSession()?.sessionTicket;
-    if (studentTicket) {
+    if (studentTicket && !studentTicket.startsWith("admin-")) {
       void callPlayFabClient(
         "UpdateUserData",
         {
@@ -5097,8 +5150,9 @@ export async function savePlayerProfile(
       updatedAt: new Date().toISOString(),
     };
     const session = loadStoredSession();
+    const isAdminSessionActive = isSpecialAdminAccount(nextAcc.profile) && isAdminUnlockedSession();
     if (options?.requireServerSync && isPlayFabConfigured()) {
-      if (!session?.sessionTicket || session.sessionTicket.startsWith("admin-")) {
+      if (!session?.sessionTicket || (session.sessionTicket.startsWith("admin-") && !isAdminSessionActive)) {
         throw new Error("Sua sessão expirou. Faça login novamente para resgatar esta recompensa com segurança.");
       }
       await pushProfileToPlayFab(nextAcc, session.sessionTicket, { requireUserDataSync: true });
@@ -6061,53 +6115,55 @@ export async function playfabRecordMatch(args: {
 
   // Sync with Azure PlayFab Statistics & UserData
   if (session.sessionTicket && isPlayFabConfigured()) {
-    const sSlug = schoolSlug(acc.profile.school);
-    const sId = cfg.seasonId;
-    const playerStage = stageForPlayer(acc.profile.school, acc.profile.birthdate, new Date(), acc.profile.ageStage);
-    const bestGameScore = Math.max(
-      safeScore,
-      ...acc.stats.filter((s) => s.game_id === args.gameId).map((s) => s.best_score),
-    );
-    const medalsTotal = (acc.profile.unlockedMedals ?? []).reduce(
-      (sum, m) => sum + (m.count ?? 1),
-      0,
-    );
-    const statistics = [
-      { StatisticName: "XP_Total", Value: acc.profile.xp },
-      { StatisticName: "Medals_Total", Value: medalsTotal },
-      { StatisticName: `XP_Season_S${sId}`, Value: acc.profile.seasonXp },
-      { StatisticName: `XP_Season_S${sId}_${playerStage.id}`, Value: acc.profile.seasonXp },
-      { StatisticName: `Best_${args.gameId}`, Value: bestGameScore },
-      { StatisticName: `Best_${args.gameId}_S${sId}`, Value: bestGameScore },
-      { StatisticName: `Best_${args.gameId}_S${sId}_${playerStage.id}`, Value: bestGameScore },
-      { StatisticName: `School_${sSlug}_XP`, Value: acc.profile.seasonXp },
-    ];
+    if (!session.sessionTicket.startsWith("admin-")) {
+      const sSlug = schoolSlug(acc.profile.school);
+      const sId = cfg.seasonId;
+      const playerStage = stageForPlayer(acc.profile.school, acc.profile.birthdate, new Date(), acc.profile.ageStage);
+      const bestGameScore = Math.max(
+        safeScore,
+        ...acc.stats.filter((s) => s.game_id === args.gameId).map((s) => s.best_score),
+      );
+      const medalsTotal = (acc.profile.unlockedMedals ?? []).reduce(
+        (sum, m) => sum + (m.count ?? 1),
+        0,
+      );
+      const statistics = [
+        { StatisticName: "XP_Total", Value: acc.profile.xp },
+        { StatisticName: "Medals_Total", Value: medalsTotal },
+        { StatisticName: `XP_Season_S${sId}`, Value: acc.profile.seasonXp },
+        { StatisticName: `XP_Season_S${sId}_${playerStage.id}`, Value: acc.profile.seasonXp },
+        { StatisticName: `Best_${args.gameId}`, Value: bestGameScore },
+        { StatisticName: `Best_${args.gameId}_S${sId}`, Value: bestGameScore },
+        { StatisticName: `Best_${args.gameId}_S${sId}_${playerStage.id}`, Value: bestGameScore },
+        { StatisticName: `School_${sSlug}_XP`, Value: acc.profile.seasonXp },
+      ];
 
-    // Try CloudScript first; fall back to direct UpdatePlayerStatistics
-    const csRes = await callPlayFabClient(
-      "ExecuteCloudScript",
-      {
-        FunctionName: "RecordMatchResult",
-        FunctionParameter: {
-          gameId: args.gameId,
-          mode,
-          score: safeScore,
-          level: safeLevel,
-          correct: args.correct,
-          wrong,
-          earnedXp,
-          statistics,
+      // Try CloudScript first; fall back to direct UpdatePlayerStatistics
+      const csRes = await callPlayFabClient(
+        "ExecuteCloudScript",
+        {
+          FunctionName: "RecordMatchResult",
+          FunctionParameter: {
+            gameId: args.gameId,
+            mode,
+            score: safeScore,
+            level: safeLevel,
+            correct: args.correct,
+            wrong,
+            earnedXp,
+            statistics,
+          },
         },
-      },
-      session.sessionTicket,
-    );
-
-    if (csRes.error) {
-      await callPlayFabClient(
-        "UpdatePlayerStatistics",
-        { Statistics: statistics },
         session.sessionTicket,
       );
+
+      if (csRes.error) {
+        await callPlayFabClient(
+          "UpdatePlayerStatistics",
+          { Statistics: statistics },
+          session.sessionTicket,
+        );
+      }
     }
 
     await pushProfileToPlayFab(acc, session.sessionTicket);
@@ -6385,6 +6441,11 @@ export async function fetchLeaderboard(
       statName = `School_${schoolSlug(filter.school)}_XP`;
     }
 
+    const lbTicket =
+      session.sessionTicket && !session.sessionTicket.startsWith("admin-")
+        ? session.sessionTicket
+        : (await getViewerPlayFabTicket()) ?? undefined;
+
     const [lbRes, aroundRes] = await Promise.allSettled([
       callPlayFabClient<{
         Leaderboard?: {
@@ -6403,26 +6464,28 @@ export async function fetchLeaderboard(
             ShowDisplayName: true,
           },
         },
-        session.sessionTicket,
+        lbTicket,
       ),
-      callPlayFabClient<{
-        Leaderboard?: {
-          PlayFabId: string;
-          DisplayName?: string;
-          StatValue: number;
-          Position: number;
-        }[];
-      }>(
-        "GetLeaderboardAroundPlayer",
-        {
-          StatisticName: statName,
-          MaxResultsCount: 5,
-          ProfileConstraints: {
-            ShowDisplayName: true,
-          },
-        },
-        session.sessionTicket,
-      ),
+      session.sessionTicket && !session.sessionTicket.startsWith("admin-")
+        ? callPlayFabClient<{
+            Leaderboard?: {
+              PlayFabId: string;
+              DisplayName?: string;
+              StatValue: number;
+              Position: number;
+            }[];
+          }>(
+            "GetLeaderboardAroundPlayer",
+            {
+              StatisticName: statName,
+              MaxResultsCount: 5,
+              ProfileConstraints: {
+                ShowDisplayName: true,
+              },
+            },
+            lbTicket,
+          )
+        : Promise.resolve({ data: null, error: null }),
     ]);
 
     const mergedRows = [

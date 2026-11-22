@@ -656,7 +656,8 @@ async function callPresencePlayFab(
   const titleId = getPlayFabTitleId();
   if (!titleId) return null;
   const session = loadStoredSession();
-  const ticket = overrideTicket ?? (await getAdminPlayFabTicket()) ?? session?.sessionTicket;
+  const rawTicket = overrideTicket ?? (await getAdminPlayFabTicket()) ?? session?.sessionTicket;
+  const ticket = rawTicket?.startsWith("admin-") ? (await getViewerPlayFabTicket()) : rawTicket;
   if (!ticket) return null;
 
   try {
