@@ -31,19 +31,23 @@ import {
   X1_MINADO_TURN_SELECT_TIMEOUT_SEC,
   answerX1MinadoQuestion,
   closeX1Room,
-  finishX1RoomByTimeout,
+  confirmX1HostReady,
+  consolidateAndFinishX1ByTimeout,
   forfeitX1DisconnectedOpponent,
   forfeitX1Match,
   generateDeterministicRobotClashQuestion,
   getX1Room,
+  getX1ServerNow,
   openX1MinadoCard,
   startX1MatchAfterCountdown,
   submitX1RobotClashAnswer,
   subscribeX1Updates,
+  syncX1ServerClockOffset,
   syncX1WithPlayFabCloud,
   timeoutX1MinadoQuestion,
   timeoutX1MinadoTurnSelection,
   touchX1MatchHeartbeat,
+  triggerX1CountdownFallbackIfStuck,
   updateX1PlayerProgress,
   type X1Room,
 } from "@/lib/x1-challenge";
@@ -85,27 +89,28 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
   const finishedCloseAtRef = useRef<number | null>(null);
   const [myQuestionIdx, setMyQuestionIdx] = useState(() => me.currentQuestionIdx ?? 0);
   const [confirmForfeitOpen, setConfirmForfeitOpen] = useState(false);
+  const [isConsolidatingFinal, setIsConsolidatingFinal] = useState(false);
+  const timeoutTriggeredRef = useRef(false);
+  const raceLockRef = useRef(false);
+  const minadoAnswerLockRef = useRef(false);
+  const hostReadySentRef = useRef(false);
 
   const arenaTheme = getX1ArenaTheme(room.seed);
   const hostAvatar = resolvePlayerAvatar(room.host.avatar, room.seed, "left");
   const guestAvatar = resolvePlayerAvatar(room.guest?.avatar, room.seed, "right");
 
-  // Cleanup imediato por desistência ao recarregar ou fechar a aba durante partida ativa
+  // Calibra relógio UTC do servidor PlayFab ao montar o overlay da partida
   useEffect(() => {
-    const handleBeforeUnload = () => {
-      if (room.status === "playing" || room.status === "countdown") {
-        forfeitX1Match(room.code, myId, true);
-      }
-    };
-    window.addEventListener("beforeunload", handleBeforeUnload);
-    window.addEventListener("pagehide", handleBeforeUnload);
-    return () => {
-      window.removeEventListener("beforeunload", handleBeforeUnload);
-      window.removeEventListener("pagehide", handleBeforeUnload);
-    };
-  }, [room.status, room.code, myId]);
+    void syncX1ServerClockOffset();
+  }, []);
 
-  // Heartbeat contínuo na partida para detectar desconexão real do oponente
+  // Sincroniza índice da questão caso a sala seja restaurada após F5/minimização no celular
+  useEffect(() => {
+    const remoteIdx = me.currentQuestionIdx ?? 0;
+    setMyQuestionIdx((cur) => (remoteIdx > cur ? remoteIdx : cur));
+  }, [me.currentQuestionIdx]);
+
+  // Heartbeat contínuo na partida para detectar desconexão real do oponente (W.O. apenas por botão Desistir ou ausência > 45s)
   useEffect(() => {
     if (room.status !== "playing") return;
     touchX1MatchHeartbeat(room.code, myId);
@@ -133,6 +138,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
   };
 
   // Real-time updates subscription (BroadcastChannel, localStorage, PlayFab SharedGroup)
+  // Polling ultra-ágil (600ms) durante o handshake/countdown e 1.2s durante partida ativa
   useEffect(() => {
     const refresh = () => {
       const latest = getX1Room(initialRoom.code);
@@ -140,40 +146,84 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
     };
     const unsub = subscribeX1Updates(refresh);
     void syncX1WithPlayFabCloud(initialRoom.code).then(refresh);
+    const pollMs = room.status === "countdown" ? 600 : 1200;
     const cloudInterval = window.setInterval(() => {
       void syncX1WithPlayFabCloud(initialRoom.code).then(refresh);
-    }, 1200);
+    }, pollMs);
 
     return () => {
       unsub();
       window.clearInterval(cloudInterval);
     };
-  }, [initialRoom.code]);
+  }, [initialRoom.code, room.status]);
 
-  // Synchronized countdown timer (10s) transition to playing
+  // Handshake de prontidão + contagem regressiva simultânea (10s) baseada no relógio UTC do servidor PlayFab
   useEffect(() => {
-    if (room.status !== "countdown") return;
+    if (room.status !== "countdown") {
+      hostReadySentRef.current = false;
+      return;
+    }
+
+    // Se sou o Anfitrião e ainda não confirmei o handshake, confirmo e fixo `countdownEndsAtServerMs` UTC
+    if (isHost && !room.hostReady && !hostReadySentRef.current) {
+      hostReadySentRef.current = true;
+      void confirmX1HostReady(room.code).then((updated) => {
+        if (updated) setRoom({ ...updated });
+      });
+    }
+
     const interval = window.setInterval(() => {
       const now = Date.now();
       setNowTick(now);
-      const endsAt = room.countdownEndsAt ?? (now + 10_000);
-      if (now >= endsAt) {
-        const started = startX1MatchAfterCountdown(room.code);
-        if (started) setRoom({ ...started });
+
+      if (room.countdownEndsAtServerMs) {
+        if (getX1ServerNow(now) >= room.countdownEndsAtServerMs) {
+          const started = startX1MatchAfterCountdown(room.code);
+          if (started) setRoom({ ...started });
+        }
+        return;
       }
-    }, 250);
+
+      if (room.hostReady !== false && room.countdownEndsAt) {
+        if (now >= room.countdownEndsAt) {
+          const started = startX1MatchAfterCountdown(room.code);
+          if (started) setRoom({ ...started });
+        }
+        return;
+      }
+
+      // Fallback de segurança caso o host demore > 5s para confirmar handshake por oscilação de rede
+      if (!isHost && room.guestJoinedAtServerMs && getX1ServerNow(now) - room.guestJoinedAtServerMs >= 5000) {
+        void triggerX1CountdownFallbackIfStuck(room.code, 5000).then((updated) => {
+          if (updated) setRoom({ ...updated });
+        });
+      }
+    }, 100);
     return () => window.clearInterval(interval);
-  }, [room.status, room.code, room.countdownEndsAt]);
+  }, [
+    room.status,
+    room.code,
+    room.hostReady,
+    room.countdownEndsAtServerMs,
+    room.countdownEndsAt,
+    room.guestJoinedAtServerMs,
+    isHost,
+  ]);
 
-  // Main match timer (decrescente quando durationSec > 0; crescente sem limite no Campo Minado)
+  // Main match timer sincronizado pelo relógio UTC do servidor PlayFab (evita vantagem de tempo entre aparelhos)
   useEffect(() => {
-    if (room.status !== "playing") return;
+    if (room.status !== "playing") {
+      timeoutTriggeredRef.current = false;
+      setIsConsolidatingFinal(false);
+      return;
+    }
 
-    const timer = window.setInterval(() => {
+    const computeAndCheck = () => {
       const now = Date.now();
       setNowTick(now);
-      const start = room.startedAt ?? room.createdAt;
-      const elapsed = Math.max(0, Math.floor((now - start) / 1000));
+      const elapsed = room.startedAtServerMs
+        ? Math.max(0, Math.floor((getX1ServerNow(now) - room.startedAtServerMs) / 1000))
+        : Math.max(0, Math.floor((now - (room.startedAt ?? room.createdAt)) / 1000));
 
       if (room.durationSec <= 0) {
         setSecondsLeft(elapsed);
@@ -183,62 +233,72 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
       const rem = Math.max(0, room.durationSec - elapsed);
       setSecondsLeft(rem);
 
-      if (rem <= 0) {
-        const finishedRoom = finishX1RoomByTimeout(room.code);
-        if (finishedRoom) setRoom({ ...finishedRoom });
+      if (rem <= 0 && !timeoutTriggeredRef.current) {
+        timeoutTriggeredRef.current = true;
+        setIsConsolidatingFinal(true);
+        void consolidateAndFinishX1ByTimeout(room.code, myId).then((finishedRoom) => {
+          setIsConsolidatingFinal(false);
+          if (finishedRoom) setRoom({ ...finishedRoom });
+        });
       }
-    }, 500);
+    };
+
+    computeAndCheck();
+    const timer = window.setInterval(computeAndCheck, 250);
 
     return () => window.clearInterval(timer);
-  }, [room.status, room.code, room.durationSec, room.startedAt, room.createdAt]);
+  }, [room.status, room.code, room.durationSec, room.startedAtServerMs, room.startedAt, room.createdAt, myId]);
 
-  // Campo Minado active question timer (20s)
+  // Campo Minado active question timer (20s sincronizado pelo relógio UTC)
   useEffect(() => {
     if (room.gameId !== "minado" || room.status !== "playing") return;
     const activeQ = room.minadoState?.activeQuestion;
     if (!activeQ || activeQ.answered) return;
 
-    // O jogador que abriu a carta dispara o timeout em expiresAt; o oponente aguarda +5s de margem caso haja desconexão
     const isMyActiveQuestion = activeQ.openedBy === myId;
-    const effectiveDeadline = isMyActiveQuestion ? activeQ.expiresAt : activeQ.expiresAt + 5_000;
+    const marginMs = isMyActiveQuestion ? 0 : 5_000;
 
     const timer = window.setInterval(() => {
       const now = Date.now();
       setNowTick(now);
-      if (now >= effectiveDeadline) {
+      const expired = activeQ.expiresAtServerMs
+        ? getX1ServerNow(now) >= activeQ.expiresAtServerMs + marginMs
+        : now >= activeQ.expiresAt + marginMs;
+      if (expired) {
         playWrong();
         const updated = timeoutX1MinadoQuestion(room.code);
         if (updated.room) setRoom({ ...updated.room });
       }
-    }, 400);
+    }, 300);
 
     return () => window.clearInterval(timer);
   }, [room.gameId, room.status, room.minadoState?.activeQuestion, room.code, myId]);
 
-  // Campo Minado turn selection timer (25s sem abrir carta)
+  // Campo Minado turn selection timer (25s sem abrir carta, sincronizado pelo relógio UTC)
   useEffect(() => {
     if (room.gameId !== "minado" || room.status !== "playing") return;
     const minado = room.minadoState;
     if (!minado || minado.activeQuestion) return;
 
-    const turnStartedAt = minado.turnStartedAt || room.startedAt || room.createdAt;
     const isMyTurn = minado.currentTurnPlayerId === myId;
-    const deadline =
-      turnStartedAt +
-      X1_MINADO_TURN_SELECT_TIMEOUT_SEC * 1000 +
-      (isMyTurn ? 0 : 3000);
+    const marginMs = isMyTurn ? 0 : 3000;
+    const turnStartedAt = minado.turnStartedAt || room.startedAt || room.createdAt;
+    const turnStartedAtServerMs = minado.turnStartedAtServerMs ?? room.startedAtServerMs ?? null;
 
     const timer = window.setInterval(() => {
       const now = Date.now();
       setNowTick(now);
-      if (now >= deadline) {
+      const expired = turnStartedAtServerMs
+        ? getX1ServerNow(now) >= turnStartedAtServerMs + X1_MINADO_TURN_SELECT_TIMEOUT_SEC * 1000 + marginMs
+        : now >= turnStartedAt + X1_MINADO_TURN_SELECT_TIMEOUT_SEC * 1000 + marginMs;
+      if (expired) {
         playWrong();
         setMinadoFeedback("⏱️ Tempo de escolha esgotado! (−2 pts, vez passada)");
         window.setTimeout(() => setMinadoFeedback(null), 2200);
         const updated = timeoutX1MinadoTurnSelection(room.code);
         if (updated.room) setRoom({ ...updated.room });
       }
-    }, 400);
+    }, 350);
 
     return () => window.clearInterval(timer);
   }, [
@@ -247,6 +307,8 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
     room.minadoState?.activeQuestion,
     room.minadoState?.currentTurnPlayerId,
     room.minadoState?.turnStartedAt,
+    room.minadoState?.turnStartedAtServerMs,
+    room.startedAtServerMs,
     room.startedAt,
     room.createdAt,
     room.code,
@@ -312,7 +374,14 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
   // Robot battle answer handler com trava anti-duplo-clique
   const handleRobotAnswer = useCallback(
     (chosen: boolean) => {
-      if (room.status !== "playing" || stunned || answerCooling || answerLockRef.current) return;
+      if (
+        room.status !== "playing" ||
+        isConsolidatingFinal ||
+        stunned ||
+        answerCooling ||
+        answerLockRef.current
+      )
+        return;
       answerLockRef.current = true;
       setAnswerCooling(true);
 
@@ -370,23 +439,49 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
       const nextQ = generateDeterministicRobotClashQuestion(room.seed, nextStep);
       setQuestion(nextQ);
     },
-    [room.status, room.code, room.seed, stunned, answerCooling, question, myId, isHost, me.correct, me.wrong],
+    [
+      room.status,
+      room.code,
+      room.seed,
+      isConsolidatingFinal,
+      stunned,
+      answerCooling,
+      question,
+      myId,
+      isHost,
+      me.correct,
+      me.wrong,
+    ],
   );
 
-  // Score-race deterministic question answer handler (Logica / Porcentagem)
+  // Score-race deterministic question answer handler (Logica / Porcentagem) com trava anti-duplo-clique
   const handleRaceAnswer = useCallback(
     (chosenAnswer: string) => {
-      if (room.status !== "playing" || !room.questionList || stunned) return;
+      if (
+        room.status !== "playing" ||
+        isConsolidatingFinal ||
+        !room.questionList ||
+        stunned ||
+        raceLockRef.current
+      )
+        return;
       const curQ = room.questionList[myQuestionIdx];
       if (!curQ) return;
 
+      raceLockRef.current = true;
       const isCorrect = chosenAnswer === curQ.answer;
       if (isCorrect) {
         playCorrect();
+        window.setTimeout(() => {
+          raceLockRef.current = false;
+        }, 160);
       } else {
         playWrong();
         setStunned(true);
-        window.setTimeout(() => setStunned(false), 600);
+        window.setTimeout(() => {
+          setStunned(false);
+          raceLockRef.current = false;
+        }, 600);
       }
 
       const nextIdx = myQuestionIdx + 1;
@@ -412,7 +507,18 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
         setRoom({ ...updated });
       }
     },
-    [room.status, room.questionList, room.code, myQuestionIdx, myId, me.score, me.correct, me.wrong, stunned],
+    [
+      room.status,
+      room.questionList,
+      room.code,
+      isConsolidatingFinal,
+      myQuestionIdx,
+      myId,
+      me.score,
+      me.correct,
+      me.wrong,
+      stunned,
+    ],
   );
 
   // Campo Minado card click handler (com animação suave de virar a carta)
@@ -452,9 +558,18 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
     }, 320);
   };
 
-  // Campo Minado question answer handler
+  // Campo Minado question answer handler com trava anti-duplo-clique
   const handleMinadoAnswer = (chosenOpt: string) => {
-    if (room.status !== "playing" || !room.minadoState?.activeQuestion) return;
+    if (
+      room.status !== "playing" ||
+      !room.minadoState?.activeQuestion ||
+      minadoAnswerLockRef.current
+    )
+      return;
+    minadoAnswerLockRef.current = true;
+    window.setTimeout(() => {
+      minadoAnswerLockRef.current = false;
+    }, 350);
     const isCorrect = chosenOpt === room.minadoState.activeQuestion.answer;
     if (isCorrect) {
       playCorrect();
@@ -515,11 +630,17 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
   ) : null;
 
   // ==========================================
-  // 1. TELA DE CONTAGEM REGRESSIVA SINCRONIZADA (10s)
+  // 1. TELA DE CONTAGEM REGRESSIVA SINCRONIZADA (10s UTC)
   // ==========================================
   if (room.status === "countdown") {
-    const endsAt = room.countdownEndsAt ?? (nowTick + 10_000);
-    const countdownRem = Math.max(0, Math.ceil((endsAt - nowTick) / 1000));
+    const waitingHandshake =
+      !room.countdownEndsAtServerMs &&
+      (room.hostReady === false || !room.countdownEndsAt);
+    const countdownRem = waitingHandshake
+      ? null
+      : room.countdownEndsAtServerMs
+        ? Math.max(0, Math.ceil((room.countdownEndsAtServerMs - getX1ServerNow(nowTick)) / 1000))
+        : Math.max(0, Math.ceil(((room.countdownEndsAt ?? nowTick + 10_000) - nowTick) / 1000));
 
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-neutral-950/90 backdrop-blur-md p-4 animate-in fade-in duration-200">
@@ -551,16 +672,29 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
             </div>
           </div>
 
-          {/* Contador Regressivo Gigante */}
+          {/* Contador Regressivo Gigante Sincronizado */}
           <div className="relative py-4">
-            <div className="mx-auto grid h-24 w-24 place-items-center rounded-3xl border-4 border-primary bg-primary/10 text-primary shadow-xl shadow-primary/20 animate-bounce">
-              <span className="font-mono text-5xl font-black">
-                {countdownRem > 0 ? countdownRem : "VAI!"}
-              </span>
-            </div>
-            <p className="mt-3 text-xs font-bold text-muted-foreground">
-              A partida começará simultaneamente para os dois jogadores!
-            </p>
+            {waitingHandshake ? (
+              <>
+                <div className="mx-auto grid h-24 w-24 place-items-center rounded-3xl border-4 border-primary/60 bg-primary/10 text-primary shadow-xl shadow-primary/20">
+                  <Loader2 className="h-10 w-10 animate-spin" />
+                </div>
+                <p className="mt-3 text-xs font-bold text-primary">
+                  Sincronizando relógios com {opponent?.nick ?? "o oponente"}...
+                </p>
+              </>
+            ) : (
+              <>
+                <div className="mx-auto grid h-24 w-24 place-items-center rounded-3xl border-4 border-primary bg-primary/10 text-primary shadow-xl shadow-primary/20 animate-bounce">
+                  <span className="font-mono text-5xl font-black">
+                    {countdownRem !== null && countdownRem > 0 ? countdownRem : "VAI!"}
+                  </span>
+                </div>
+                <p className="mt-3 text-xs font-bold text-muted-foreground">
+                  Relógios sincronizados! A partida começará simultaneamente nos dois aparelhos.
+                </p>
+              </>
+            )}
           </div>
 
           <div className="pt-1">
@@ -724,15 +858,30 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
     const isMyTurn = mState.currentTurnPlayerId === myId;
     const activeQ = mState.activeQuestion;
     const isQActive = Boolean(activeQ && !activeQ.answered);
-    const qSecsLeft = activeQ ? Math.max(0, Math.ceil((activeQ.expiresAt - nowTick) / 1000)) : 0;
+    const qSecsLeft = activeQ
+      ? activeQ.expiresAtServerMs
+        ? Math.max(0, Math.ceil((activeQ.expiresAtServerMs - getX1ServerNow(nowTick)) / 1000))
+        : Math.max(0, Math.ceil((activeQ.expiresAt - nowTick) / 1000))
+      : 0;
     const turnStartedAt = mState.turnStartedAt || room.startedAt || room.createdAt;
+    const turnStartedAtServerMs = mState.turnStartedAtServerMs ?? room.startedAtServerMs ?? null;
     const turnSelectLeftSec = !isQActive
-      ? Math.max(
-          0,
-          Math.ceil(
-            (turnStartedAt + X1_MINADO_TURN_SELECT_TIMEOUT_SEC * 1000 - nowTick) / 1000,
-          ),
-        )
+      ? turnStartedAtServerMs
+        ? Math.max(
+            0,
+            Math.ceil(
+              (turnStartedAtServerMs +
+                X1_MINADO_TURN_SELECT_TIMEOUT_SEC * 1000 -
+                getX1ServerNow(nowTick)) /
+                1000,
+            ),
+          )
+        : Math.max(
+            0,
+            Math.ceil(
+              (turnStartedAt + X1_MINADO_TURN_SELECT_TIMEOUT_SEC * 1000 - nowTick) / 1000,
+            ),
+          )
       : 0;
 
     return (
@@ -986,6 +1135,12 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
           </div>
         </div>
 
+        {isConsolidatingFinal && (
+          <div className="flex items-center justify-center gap-2 rounded-2xl border border-amber-500/40 bg-amber-500/15 px-4 py-2 text-center font-display text-xs sm:text-sm font-extrabold text-amber-600 dark:text-amber-300">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            <span>Tempo esgotado! Apurando placar final sincronizado...</span>
+          </div>
+        )}
         {banner && (
           <div className="animate-pop-in rounded-2xl bg-accent/15 px-4 py-2 text-center font-display text-xs sm:text-sm font-extrabold">
             {banner}
@@ -1104,7 +1259,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
           <Button
             type="button"
             size="lg"
-            disabled={stunned || answerCooling}
+            disabled={stunned || answerCooling || isConsolidatingFinal}
             onClick={() => handleRobotAnswer(true)}
             className="h-16 sm:h-20 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-display text-xl sm:text-2xl font-extrabold shadow-lg"
           >
@@ -1113,7 +1268,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
           <Button
             type="button"
             size="lg"
-            disabled={stunned || answerCooling}
+            disabled={stunned || answerCooling || isConsolidatingFinal}
             onClick={() => handleRobotAnswer(false)}
             className="h-16 sm:h-20 rounded-2xl bg-rose-600 hover:bg-rose-500 text-white font-display text-xl sm:text-2xl font-extrabold shadow-lg"
           >
@@ -1148,7 +1303,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
           </span>
           <span className="font-display text-xs font-extrabold text-muted-foreground">VS</span>
           <span className="rounded-xl bg-red-500/15 px-3 py-1 font-display text-xs font-extrabold text-red-500">
-            🔴 {room.guest?.nick ?? "Oponente"}: {room.guest?.score ?? 0} pts (Q{Math.min(totalQ, oppQIdx + 1)}/{totalQ})
+            🔴 {room.guest?.nick ?? "Oponente"}: {room.guest?.score ?? 0} pts (Q{Math.min(totalQ, (room.guest?.currentQuestionIdx ?? 0) + 1)}/{totalQ})
           </span>
         </div>
 
@@ -1167,6 +1322,13 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
           </Button>
         </div>
       </div>
+
+      {isConsolidatingFinal && (
+        <div className="flex items-center justify-center gap-2 rounded-2xl border border-amber-500/40 bg-amber-500/15 px-4 py-2 text-center font-display text-xs sm:text-sm font-extrabold text-amber-600 dark:text-amber-300">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          <span>Tempo esgotado! Apurando placar final sincronizado...</span>
+        </div>
+      )}
 
       {/* Barra de Progresso Comparativo */}
       <div className="rounded-2xl border bg-secondary/20 p-3 space-y-2">
@@ -1205,7 +1367,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
                 key={opt}
                 type="button"
                 size="lg"
-                disabled={stunned}
+                disabled={stunned || isConsolidatingFinal}
                 onClick={() => handleRaceAnswer(opt)}
                 className="h-14 sm:h-16 rounded-2xl font-display text-lg font-extrabold hover:scale-[1.02] transition-transform"
               >

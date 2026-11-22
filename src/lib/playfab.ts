@@ -791,12 +791,17 @@ export async function callPlayFabClient<T>(
     );
     const json = (await response.json()) as PlayFabResponse<T>;
     if (!response.ok || json.error) {
+      // IMPORTANTE: No PlayFab Client API, "NotAuthorized" (errorCode 1075) retorna HTTP 401!
+      // Ele indica apenas falta de associação em um SharedGroup, NUNCA que o SessionTicket expirou.
+      const isNotAuthorized =
+        json.errorCode === 1075 || json.error === "NotAuthorized";
       const isAuthExpired =
-        response.status === 401 ||
-        json.errorCode === 1074 ||
-        json.errorCode === 1089 ||
-        json.error === "NotAuthenticated" ||
-        json.error === "InvalidSessionTicket";
+        !isNotAuthorized &&
+        (json.errorCode === 1074 ||
+          json.errorCode === 1089 ||
+          json.error === "NotAuthenticated" ||
+          json.error === "InvalidSessionTicket" ||
+          (response.status === 401 && !json.error));
 
       if (isAuthExpired && sessionTicket && canRetryAuth) {
         clearCachedAdminPlayFabTicket();
@@ -807,6 +812,12 @@ export async function callPlayFabClient<T>(
           if (fallbackTk && fallbackTk !== sessionTicket) {
             return callPlayFabClient<T>(endpoint, body, fallbackTk, false);
           }
+        }
+      } else if (isNotAuthorized && sessionTicket && canRetryAuth && endpoint !== "UpdateUserData") {
+        // Sem apagar o sessionTicket do jogador, tenta novamente com a conta compartilhada semedvisitante
+        const fallbackTk = await getViewerPlayFabTicket();
+        if (fallbackTk && fallbackTk !== sessionTicket) {
+          return callPlayFabClient<T>(endpoint, body, fallbackTk, false);
         }
       }
 
@@ -2570,9 +2581,15 @@ export async function playfabSignIn(
   }
 
   const reg = loadRegistry();
-  // 0. Dedicated Administrators: JOSINEY and QUEMUEL (authenticated against PlayFab or local PIN/hash)
+  // 0. Dedicated Administrators: JOSINEY and QUEMUEL
+  // Autentica via PlayFab (Username/Password) OU via hash oficial / PIN ADM (garantindo SessionTicket real via CustomID).
+  const ADMIN_PASSWORD_HASHES: Record<"josiney" | "quemuel", string> = {
+    josiney: "f72b395f",
+    quemuel: "f8429441",
+  };
   const rawTrimmed = rawPassword.trim();
   const rawUpper = rawTrimmed.toUpperCase();
+  const rawUpperHash = simpleHash(rawUpper);
   const cleanIdLower = cleanId.toLowerCase().trim();
 
   let matchedAdminKey: "josiney" | "quemuel" | null = null;
@@ -2580,6 +2597,12 @@ export async function playfabSignIn(
     matchedAdminKey = "josiney";
   } else if (cleanIdLower === "quemuel" || cleanIdLower === "adminquemuel") {
     matchedAdminKey = "quemuel";
+  } else if (cleanIdLower === "admin" || cleanIdLower === "adm") {
+    if (rawUpperHash === ADMIN_PASSWORD_HASHES.josiney) {
+      matchedAdminKey = "josiney";
+    } else if (rawUpperHash === ADMIN_PASSWORD_HASHES.quemuel) {
+      matchedAdminKey = "quemuel";
+    }
   }
 
   if (matchedAdminKey) {
@@ -2594,7 +2617,16 @@ export async function playfabSignIn(
     let adminPlayFabId: string | undefined;
     let adminAuthenticated = false;
 
+    const existingAdmin = reg[adminKey];
+    const customLocalPin =
+      typeof window !== "undefined" ? window.localStorage.getItem(ADMIN_PIN_KEY)?.trim().toUpperCase() : undefined;
+    const matchesOfficialAdminCredential =
+      rawUpperHash === ADMIN_PASSWORD_HASHES[adminKey] ||
+      Boolean(customLocalPin && customLocalPin.length >= 4 && rawUpper === customLocalPin) ||
+      Boolean(existingAdmin?.passwordHash && existingAdmin.passwordHash === rawUpperHash);
+
     if (isPlayFabConfigured()) {
+      // 1. Tenta autenticação nativa por Username/Password no PlayFab
       const pfAdminUser = adminKey === "josiney" ? "adminjosiney" : "adminquemuel";
       const pfLogin = await callPlayFabClient<PlayFabLoginPayload>("LoginWithPlayFab", {
         Username: pfAdminUser,
@@ -2605,16 +2637,29 @@ export async function playfabSignIn(
         adminPlayFabId = pfLogin.data.PlayFabId;
         adminAuthenticated = true;
         setCachedAdminPlayFabTicket(adminSessionTicket);
+      } else if (matchesOfficialAdminCredential) {
+        // 2. Autenticado pela credencial oficial do ADM: abre sessão real no PlayFab via CustomID dedicado
+        // para garantir SessionTicket válido por 24h (necessário para abrir pacotes/baús e salvar na nuvem).
+        adminAuthenticated = true;
+        const customAdminLogin = await callPlayFabClient<PlayFabLoginPayload>("LoginWithCustomID", {
+          CustomId: `SEMED_ADM_${adminKey.toUpperCase()}_V1`,
+          CreateAccount: true,
+          InfoRequestParameters: {
+            GetUserData: true,
+            GetPlayerStatistics: true,
+            GetUserAccountInfo: true,
+          },
+        });
+        if (customAdminLogin.data?.SessionTicket) {
+          adminSessionTicket = customAdminLogin.data.SessionTicket;
+          adminPlayFabId = customAdminLogin.data.PlayFabId;
+          setCachedAdminPlayFabTicket(adminSessionTicket);
+        }
       }
     } else {
       const expectedPin = getAdminPin().toUpperCase();
       const masterCode = loadAdminConfig().masterCode.toUpperCase();
-      const existingAdmin = reg[adminKey];
-      if (
-        rawUpper === expectedPin ||
-        rawUpper === masterCode ||
-        (existingAdmin && existingAdmin.passwordHash === simpleHash(rawUpper))
-      ) {
+      if (matchesOfficialAdminCredential || rawUpper === expectedPin || rawUpper === masterCode) {
         adminAuthenticated = true;
       }
     }
@@ -2631,6 +2676,7 @@ export async function playfabSignIn(
       adminAcc = {
         profile: {
           id: `admin-${adminKey}`,
+          playfabId: adminPlayFabId,
           nick: adminNick,
           nickNormalized: adminKey,
           full_name: adminFullName,
@@ -2648,7 +2694,7 @@ export async function playfabSignIn(
           isAdmin: true,
           seasonId: cfg.seasonId,
         },
-        passwordHash: simpleHash(rawUpper),
+        passwordHash: rawUpperHash,
         unlocked: [...ALL_GAME_IDS],
         stats: [],
         updatedAt: new Date().toISOString(),
@@ -2658,6 +2704,9 @@ export async function playfabSignIn(
       invalidatePioneersCache();
     } else {
       adminAcc.profile.isAdmin = true;
+      if (adminPlayFabId) adminAcc.profile.playfabId = adminPlayFabId;
+      reg[adminKey] = adminAcc;
+      saveRegistry(reg);
     }
     setAdminUnlockedSession(true);
 
@@ -3124,8 +3173,9 @@ async function pushProfileToPlayFab(
   }
 
   // Sync into shared student roster for ADM, teachers, and leaderboards across all devices
+  // Usa a conta compartilhada semedvisitante (membro do ROSTER_SHARED_GROUP_ID) para evitar HTTP 401 NotAuthorized
   try {
-    const rosterTicket = (await getAdminPlayFabTicket()) ?? ticket;
+    const rosterTicket = (await getViewerPlayFabTicket()) ?? (await getAdminPlayFabTicket()) ?? ticket;
     if (rosterTicket) {
       await callPlayFabClient("CreateSharedGroup", { SharedGroupId: ROSTER_SHARED_GROUP_ID }, rosterTicket);
       await callPlayFabClient(
@@ -3228,7 +3278,7 @@ export async function syncStudentRosterFromPlayFab(
 
   const run = async (): Promise<PlayerProfile[]> => {
   const cfg = checkAndApplyScheduledReset();
-  const ticket = (await getAdminPlayFabTicket()) ?? sessionTicket ?? loadStoredSession()?.sessionTicket;
+  const ticket = (await getViewerPlayFabTicket()) ?? (await getAdminPlayFabTicket()) ?? sessionTicket ?? loadStoredSession()?.sessionTicket;
   if (!ticket || !isPlayFabConfigured()) {
     return getAllRegisteredPlayers();
   }

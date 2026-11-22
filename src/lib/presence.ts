@@ -677,14 +677,17 @@ async function callPresencePlayFab(
     };
 
     // Renovação automática caso o ticket em cache ou na sessão tenha expirado ou sido invalidado no PlayFab
-    // IMPORTANTE: "NotAuthorized" (1075) em SharedGroup significa apenas que o aluno não é membro do grupo,
-    // NÃO que o sessionTicket expirou — nunca apagar o sessionTicket do aluno por NotAuthorized!
+    // IMPORTANTE: No PlayFab, "NotAuthorized" (1075) retorna HTTP 401 e significa apenas que o aluno
+    // não é membro do SharedGroup, NÃO que o sessionTicket expirou — nunca apagar o sessionTicket por NotAuthorized!
+    const isNotAuthorized =
+      json.errorCode === 1075 || json.error === "NotAuthorized";
     const isExpiredTicket =
-      res.status === 401 ||
-      json.errorCode === 1074 ||
-      json.errorCode === 1089 ||
-      json.error === "NotAuthenticated" ||
-      json.error === "InvalidSessionTicket";
+      !isNotAuthorized &&
+      (json.errorCode === 1074 ||
+        json.errorCode === 1089 ||
+        json.error === "NotAuthenticated" ||
+        json.error === "InvalidSessionTicket" ||
+        (res.status === 401 && !json.error));
 
     if (isExpiredTicket) {
       clearCachedAdminPlayFabTicket();
@@ -695,7 +698,7 @@ async function callPresencePlayFab(
       return null;
     }
 
-    if (!overrideTicket && json.error === "NotAuthorized") {
+    if (!overrideTicket && isNotAuthorized) {
       clearCachedAdminPlayFabTicket();
       return null;
     }

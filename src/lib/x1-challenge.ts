@@ -12,8 +12,10 @@ import {
 import type { PlayerAvatarConfig } from "./avatar.ts";
 import {
   clearCachedAdminPlayFabTicket,
+  clearExpiredStoredSessionTicket,
   getAdminPlayFabTicket,
   getPlayFabTitleId,
+  getViewerPlayFabTicket,
   isPlayFabConfigured,
   loadStoredSession,
 } from "./playfab.ts";
@@ -60,6 +62,7 @@ export interface X1OnlinePlayer {
   age?: number;
   stage?: AgeStageId;
   lastSeenAt: number; // epoch ms
+  lastSeenServerMs?: number; // epoch ms calibrado no relógio UTC do PlayFab
   lastActiveAt?: number; // epoch ms
   /** Timestamp local de quando o pulso deste jogador foi observado/recebido (imune a skew de relógio) */
   receivedAt?: number;
@@ -79,6 +82,8 @@ export interface X1PlayerSideState {
   hp: number;
   maxHp: number;
   finished: boolean;
+  /** Timestamp oficial UTC do servidor PlayFab no instante em que o jogador completou todas as questões (nunca sobrescrito por heartbeat) */
+  finishedAtServerMs?: number | null;
   currentQuestionIdx?: number;
   updatedAt: number;
   lastSeenAt?: number;
@@ -129,6 +134,8 @@ export interface X1MinadoActiveQuestion {
   options: string[];
   answer: string;
   expiresAt: number;
+  /** Deadline oficial no relógio UTC do servidor PlayFab (20s) */
+  expiresAtServerMs?: number;
   answered?: boolean;
 }
 
@@ -139,6 +146,10 @@ export interface X1MinadoState {
   currentTurnPlayerId: string;
   activeQuestion?: X1MinadoActiveQuestion | null;
   turnStartedAt: number;
+  /** Início do turno no relógio UTC do servidor PlayFab */
+  turnStartedAtServerMs?: number;
+  /** Contador monotônico de turnos/ações para impedir conflitos na mesclagem de timeout de 25s */
+  turnSeq?: number;
 }
 
 export interface X1RpgEvent {
@@ -166,10 +177,21 @@ export interface X1Room {
   seed: number;
   createdAt: number;
   expiresAt?: number;
+  /** Handshake de prontidão: ambos confirmam presença antes de disparar o cronômetro simultâneo */
+  hostReady?: boolean;
+  guestReady?: boolean;
+  /** Momento oficial UTC em que o desafiante entrou (fallback de segurança caso o host demore) */
+  guestJoinedAtServerMs?: number | null;
   countdownEndsAt?: number | null;
+  /** Timestamp absoluto UTC do servidor PlayFab para término simultâneo da contagem (0 = VAI!) */
+  countdownEndsAtServerMs?: number | null;
   startedAt: number | null;
+  /** Timestamp absoluto UTC do servidor PlayFab para início simultâneo do cronômetro de partida */
+  startedAtServerMs?: number | null;
   finishedAt: number | null;
   autoCloseAt?: number | null;
+  /** Preenchido apenas em W.O./desistência explícita para preservar o vencedor sem recalcular por pontos */
+  forfeitByPlayerId?: string | null;
   durationSec: number;
   /** Blue share (0..100) for the 1v1 Tug-of-War bar (50 = balanced center) */
   blueShare: number;
@@ -961,8 +983,13 @@ export function resolveX1Winner(room: X1Room): string | "draw" {
     return room.host.wrong < room.guest.wrong ? room.host.playerId : room.guest.playerId;
   }
   // Desempate por velocidade quando ambos concluíram todas as questões com a mesma pontuação/acertos/erros
-  if (room.host.finished && room.guest.finished && room.host.updatedAt !== room.guest.updatedAt) {
-    return room.host.updatedAt < room.guest.updatedAt ? room.host.playerId : room.guest.playerId;
+  // Prioriza finishedAtServerMs (calibrado no relógio UTC do servidor PlayFab e imutável após finalizar)
+  if (room.host.finished && room.guest.finished) {
+    const hostDoneAt = room.host.finishedAtServerMs ?? room.host.updatedAt;
+    const guestDoneAt = room.guest.finishedAtServerMs ?? room.guest.updatedAt;
+    if (hostDoneAt !== guestDoneAt) {
+      return hostDoneAt < guestDoneAt ? room.host.playerId : room.guest.playerId;
+    }
   }
   return "draw";
 }
@@ -973,10 +1000,10 @@ let channel: BroadcastChannel | null = null;
 const listeners = new Set<() => void>();
 
 function getChannel(): BroadcastChannel | null {
-  if (typeof window === "undefined" || typeof BroadcastChannel === "undefined") return null;
+  if (typeof window === "undefined" || typeof window.BroadcastChannel === "undefined") return null;
   if (!channel) {
     try {
-      channel = new BroadcastChannel(X1_CHANNEL_NAME);
+      channel = new window.BroadcastChannel(X1_CHANNEL_NAME);
       channel.onmessage = () => {
         notifyListeners();
       };
@@ -1045,23 +1072,384 @@ function getRoomStatusRank(status: X1RoomStatus): number {
  */
 const localOppObservedAt = new Map<string, number>();
 
+/* --------------------- Calibração de Relógio UTC (PlayFab GetTime) --------------------- */
+
+let x1ServerClockOffsetMs: number | null = null;
+let x1LastClockSyncAt = 0;
+let inFlightX1ClockSync: Promise<number> | null = null;
+
+/** Retorna o instante atual estimado no relógio oficial UTC do PlayFab. */
+export function getX1ServerNow(localNow = Date.now()): number {
+  return localNow + (x1ServerClockOffsetMs ?? 0);
+}
+
+export function getX1ServerClockOffsetMs(): number {
+  return x1ServerClockOffsetMs ?? 0;
+}
+
+export function isX1ServerClockCalibrated(): boolean {
+  return x1ServerClockOffsetMs !== null;
+}
+
+/** Utilitário para testes determinísticos simulando relógios dessincronizados entre dispositivos. */
+export function __setX1ServerClockOffsetForTests(offsetMs: number | null): void {
+  x1ServerClockOffsetMs = offsetMs;
+  x1LastClockSyncAt = offsetMs === null ? 0 : Date.now();
+}
+
+/**
+ * Calibra a diferença de relógio entre o dispositivo e o servidor PlayFab (`Client/GetTime`),
+ * compensando metade do RTT para precisão sub-segundo na contagem regressiva simultânea do X1.
+ */
+export async function syncX1ServerClockOffset(force = false): Promise<number> {
+  if (typeof window === "undefined" || !isPlayFabConfigured()) return x1ServerClockOffsetMs ?? 0;
+  const now = Date.now();
+  if (!force && x1ServerClockOffsetMs !== null && now - x1LastClockSyncAt < 3 * 60_000) {
+    return x1ServerClockOffsetMs;
+  }
+  if (inFlightX1ClockSync) return inFlightX1ClockSync;
+
+  inFlightX1ClockSync = (async () => {
+    try {
+      const t0 = Date.now();
+      const data = await callPlayFabSharedGroup("GetTime", {});
+      const t1 = Date.now();
+      const timeStr = (data as { Time?: string } | null)?.Time;
+      if (timeStr) {
+        const serverMs = Date.parse(timeStr);
+        if (!Number.isNaN(serverMs)) {
+          const rtt = Math.max(0, t1 - t0);
+          const estimatedServerAtT1 = serverMs + Math.round(rtt / 2);
+          x1ServerClockOffsetMs = estimatedServerAtT1 - t1;
+          x1LastClockSyncAt = t1;
+          return x1ServerClockOffsetMs;
+        }
+      }
+    } catch {
+      /* ignore */
+    } finally {
+      inFlightX1ClockSync = null;
+    }
+    return x1ServerClockOffsetMs ?? 0;
+  })();
+
+  return inFlightX1ClockSync;
+}
+
+function serverMsToLocalMs(serverMs: number): number {
+  return serverMs - (x1ServerClockOffsetMs ?? 0);
+}
+
 function markOpponentObserved(code: string, playerId: string | undefined, at: number) {
   if (!playerId) return;
   localOppObservedAt.set(`${code}:${playerId}`, at);
+}
+
+function mergeScoreRaceSides(base: X1Room, local: X1Room, remote: X1Room, now: number) {
+  if (!local.guest || !remote.guest || !base.guest) return;
+  const localHostProgress = (local.host.correct + local.host.wrong) * 1000 + (local.host.currentQuestionIdx ?? 0);
+  const remoteHostProgress = (remote.host.correct + remote.host.wrong) * 1000 + (remote.host.currentQuestionIdx ?? 0);
+  const pickRemoteHost =
+    remoteHostProgress > localHostProgress ||
+    (remoteHostProgress === localHostProgress && Boolean(remote.host.finished) && !local.host.finished);
+  base.host = structuredClone(pickRemoteHost ? remote.host : local.host);
+  if (local.host.finished || remote.host.finished) {
+    base.host.finished = true;
+    const hFin = [local.host.finishedAtServerMs, remote.host.finishedAtServerMs].filter(
+      (v): v is number => typeof v === "number" && v > 0,
+    );
+    if (hFin.length > 0) base.host.finishedAtServerMs = Math.min(...hFin);
+  }
+  base.host.avatar = local.host.avatar ?? remote.host.avatar;
+  base.host.lastSeenAt = Math.max(local.host.lastSeenAt ?? 0, remote.host.lastSeenAt ?? 0) || undefined;
+
+  const localGuestProgress = (local.guest.correct + local.guest.wrong) * 1000 + (local.guest.currentQuestionIdx ?? 0);
+  const remoteGuestProgress = (remote.guest.correct + remote.guest.wrong) * 1000 + (remote.guest.currentQuestionIdx ?? 0);
+  const pickRemoteGuest =
+    remoteGuestProgress > localGuestProgress ||
+    (remoteGuestProgress === localGuestProgress && Boolean(remote.guest.finished) && !local.guest.finished);
+  base.guest = structuredClone(pickRemoteGuest ? remote.guest : local.guest);
+  if (local.guest.finished || remote.guest.finished) {
+    base.guest.finished = true;
+    const gFin = [local.guest.finishedAtServerMs, remote.guest.finishedAtServerMs].filter(
+      (v): v is number => typeof v === "number" && v > 0,
+    );
+    if (gFin.length > 0) base.guest.finishedAtServerMs = Math.min(...gFin);
+  }
+  base.guest.avatar = local.guest.avatar ?? remote.guest.avatar;
+  base.guest.lastSeenAt = Math.max(local.guest.lastSeenAt ?? 0, remote.guest.lastSeenAt ?? 0) || undefined;
+
+  base.blueShare = computeScoreRaceBlueShare(base.host.score, base.guest.score);
+  if (base.host.finished && base.guest.finished && base.status !== "finished") {
+    base.status = "finished";
+    base.finishedAt = base.finishedAt ?? now;
+  }
+  if (base.status === "finished" && !base.forfeitByPlayerId) {
+    base.winnerId = resolveX1Winner(base);
+    recordX1MatchFinished(base);
+  }
+}
+
+function mergeRpgSides(
+  base: X1Room,
+  local: X1Room,
+  remote: X1Room,
+  remoteIsNewer: boolean,
+  now: number,
+) {
+  if (!local.guest || !remote.guest) return;
+  const mergedHostAvatar = local.host.avatar ?? remote.host.avatar;
+  const mergedGuestAvatar = local.guest.avatar ?? remote.guest.avatar;
+  const mergedHostLastSeen = Math.max(local.host.lastSeenAt ?? 0, remote.host.lastSeenAt ?? 0) || undefined;
+  const mergedGuestLastSeen = Math.max(local.guest.lastSeenAt ?? 0, remote.guest.lastSeenAt ?? 0) || undefined;
+
+  const eventMap = new Map<string, X1RpgEvent>();
+  for (const ev of local.rpgEvents ?? []) {
+    if (ev?.id) eventMap.set(ev.id, ev);
+  }
+  for (const ev of remote.rpgEvents ?? []) {
+    if (ev?.id && !eventMap.has(ev.id)) eventMap.set(ev.id, ev);
+  }
+
+  if (eventMap.size > 0) {
+    const sortedEvents = Array.from(eventMap.values()).sort((a, b) => {
+      if (a.seq !== b.seq) return a.seq - b.seq;
+      return a.role === b.role ? 0 : a.role === "host" ? -1 : 1;
+    });
+
+    const guestSeed = base.guest ?? local.guest ?? remote.guest;
+    if (!guestSeed) return;
+    const wasFinishedExternally = (base.status as X1RoomStatus) === "finished";
+    const forfeitWinner = base.forfeitByPlayerId ? base.winnerId : null;
+    let simRoom: X1Room = {
+      ...base,
+      status: "playing",
+      blueShare: 50,
+      finishedAt: null,
+      winnerId: null,
+      rpgEvents: [],
+      host: {
+        ...base.host,
+        score: 0,
+        correct: 0,
+        wrong: 0,
+        hp: base.host.maxHp || X1_ROBOT_INITIAL_HP,
+        avatar: mergedHostAvatar,
+        lastSeenAt: mergedHostLastSeen,
+      },
+      guest: {
+        ...guestSeed,
+        score: 0,
+        correct: 0,
+        wrong: 0,
+        hp: guestSeed.maxHp || X1_ROBOT_INITIAL_HP,
+        avatar: mergedGuestAvatar,
+        lastSeenAt: mergedGuestLastSeen,
+      },
+    };
+
+    for (const ev of sortedEvents) {
+      if (simRoom.status === "finished") break;
+      simRoom = applyX1RobotBattleAnswer({
+        room: simRoom,
+        role: ev.role,
+        isCorrect: ev.isCorrect,
+      }).room;
+    }
+
+    simRoom.rpgEvents = sortedEvents;
+    if (forfeitWinner) {
+      simRoom.status = "finished";
+      simRoom.finishedAt = base.finishedAt ?? now;
+      simRoom.winnerId = forfeitWinner;
+    } else if (wasFinishedExternally && simRoom.status !== "finished") {
+      simRoom.status = "finished";
+      simRoom.finishedAt = base.finishedAt ?? now;
+      simRoom.winnerId = resolveX1Winner(simRoom);
+    }
+    base.host = simRoom.host;
+    base.guest = simRoom.guest;
+    base.blueShare = simRoom.blueShare;
+    base.rpgEvents = simRoom.rpgEvents;
+    base.status = simRoom.status;
+    base.finishedAt = simRoom.finishedAt;
+    base.winnerId = simRoom.winnerId;
+    if (base.status === "finished") {
+      recordX1MatchFinished(base);
+    }
+  } else {
+    const other = remoteIsNewer ? local : remote;
+    const dHostCorrect = Math.max(0, other.host.correct - base.host.correct);
+    const dHostWrong = Math.max(0, other.host.wrong - base.host.wrong);
+    const dGuestCorrect = Math.max(0, (other.guest?.correct ?? 0) - (base.guest?.correct ?? 0));
+    const dGuestWrong = Math.max(0, (other.guest?.wrong ?? 0) - (base.guest?.wrong ?? 0));
+
+    const hostAnsweredMoreLocally =
+      local.host.correct + local.host.wrong > remote.host.correct + remote.host.wrong;
+    const guestAnsweredMoreLocally =
+      local.guest.correct + local.guest.wrong > remote.guest.correct + remote.guest.wrong;
+
+    base.host = structuredClone(hostAnsweredMoreLocally ? local.host : remote.host);
+    base.guest = structuredClone(guestAnsweredMoreLocally ? local.guest : remote.guest);
+
+    base.host.hp = Math.min(local.host.hp, remote.host.hp);
+    base.guest.hp = Math.min(local.guest.hp, remote.guest.hp);
+    base.host.score = Math.max(local.host.score, remote.host.score);
+    base.guest.score = Math.max(local.guest.score, remote.guest.score);
+    base.host.correct = Math.max(local.host.correct, remote.host.correct);
+    base.guest.correct = Math.max(local.guest.correct, remote.guest.correct);
+    base.host.wrong = Math.max(local.host.wrong, remote.host.wrong);
+    base.guest.wrong = Math.max(local.guest.wrong, remote.guest.wrong);
+    base.host.avatar = mergedHostAvatar;
+    base.guest.avatar = mergedGuestAvatar;
+    base.host.lastSeenAt = mergedHostLastSeen;
+    base.guest.lastSeenAt = mergedGuestLastSeen;
+
+    const shareDelta =
+      dHostCorrect * 18 - dHostWrong * 10 - dGuestCorrect * 18 + dGuestWrong * 10;
+    if (shareDelta !== 0) {
+      base.blueShare = Math.max(0, Math.min(100, base.blueShare + shareDelta));
+    }
+
+    if (base.host.hp <= 0 || base.guest.hp <= 0) {
+      base.status = "finished";
+      base.finishedAt = base.finishedAt ?? now;
+      base.winnerId = base.forfeitByPlayerId
+        ? base.winnerId
+        : base.host.hp <= 0
+          ? base.guest.playerId
+          : base.host.playerId;
+      base.blueShare = base.host.hp <= 0 ? 0 : 100;
+      recordX1MatchFinished(base);
+    } else if (base.status === "finished" && !base.forfeitByPlayerId) {
+      base.winnerId = resolveX1Winner(base);
+      recordX1MatchFinished(base);
+    }
+  }
+}
+
+function mergeMinadoSides(
+  base: X1Room,
+  local: X1Room,
+  remote: X1Room,
+  remoteIsNewer: boolean,
+  now: number,
+) {
+  if (!local.minadoState || !remote.minadoState || !local.guest || !remote.guest) return;
+  const localRevCards = Object.keys(local.minadoState.revealed).length;
+  const remoteRevCards = Object.keys(remote.minadoState.revealed).length;
+  const localTurnSeq = local.minadoState.turnSeq ?? 0;
+  const remoteTurnSeq = remote.minadoState.turnSeq ?? 0;
+  const localHasActiveQ = Boolean(
+    local.minadoState.activeQuestion && !local.minadoState.activeQuestion.answered,
+  );
+  const remoteHasActiveQ = Boolean(
+    remote.minadoState.activeQuestion && !remote.minadoState.activeQuestion.answered,
+  );
+
+  // Prioridade: 1) mais cartas reveladas; 2) maior turnSeq (preserva timeout de 25s sem perder turno);
+  // 3) pergunta recém-aberta; 4) revisão mais nova.
+  const preferRemoteMinado =
+    remoteRevCards > localRevCards ||
+    (remoteRevCards === localRevCards &&
+      (remoteTurnSeq > localTurnSeq ||
+        (remoteTurnSeq === localTurnSeq &&
+          ((remoteHasActiveQ && !localHasActiveQ) ||
+            (remoteHasActiveQ === localHasActiveQ && remoteIsNewer)))));
+
+  if (preferRemoteMinado) {
+    base.minadoState = structuredClone(remote.minadoState);
+    base.host = structuredClone(remote.host);
+    base.guest = structuredClone(remote.guest);
+  } else {
+    base.minadoState = structuredClone(local.minadoState);
+    base.host = structuredClone(local.host);
+    base.guest = structuredClone(local.guest);
+  }
+
+  base.minadoState.gridSize =
+    base.minadoState.gridSize ??
+    local.minadoState.gridSize ??
+    remote.minadoState.gridSize ??
+    base.minadoGridSize ??
+    6;
+  base.minadoState.turnSeq = Math.max(localTurnSeq, remoteTurnSeq);
+  base.host.avatar = local.host.avatar ?? remote.host.avatar;
+  base.guest.avatar = local.guest.avatar ?? remote.guest.avatar;
+  base.host.lastSeenAt =
+    Math.max(local.host.lastSeenAt ?? 0, remote.host.lastSeenAt ?? 0) || undefined;
+  base.guest.lastSeenAt =
+    Math.max(local.guest.lastSeenAt ?? 0, remote.guest.lastSeenAt ?? 0) || undefined;
+
+  // Sincroniza turnStartedAt pelo relógio UTC do servidor quando disponível; senão ancora localmente
+  if (base.minadoState.turnStartedAtServerMs) {
+    base.minadoState.turnStartedAt = serverMsToLocalMs(base.minadoState.turnStartedAtServerMs);
+  } else {
+    const turnChanged =
+      base.minadoState.currentTurnPlayerId !== local.minadoState.currentTurnPlayerId ||
+      Object.keys(base.minadoState.revealed).length !== Object.keys(local.minadoState.revealed).length ||
+      (base.minadoState.turnSeq ?? 0) !== (local.minadoState.turnSeq ?? 0);
+    if (turnChanged || !local.minadoState.turnStartedAt) {
+      base.minadoState.turnStartedAt = now;
+    } else {
+      base.minadoState.turnStartedAt = local.minadoState.turnStartedAt;
+    }
+  }
+
+  const activeQ = base.minadoState.activeQuestion;
+  if (activeQ && !activeQ.answered) {
+    if (activeQ.expiresAtServerMs) {
+      activeQ.expiresAt = serverMsToLocalMs(activeQ.expiresAtServerMs);
+    } else {
+      const localQ = local.minadoState.activeQuestion;
+      if (localQ && localQ.cardId === activeQ.cardId && localQ.expiresAt) {
+        activeQ.expiresAt = localQ.expiresAt;
+      } else {
+        activeQ.expiresAt = now + 20_000;
+      }
+    }
+  }
+
+  if (
+    Object.keys(base.minadoState.revealed).length >= base.minadoState.board.length &&
+    (base.status as X1RoomStatus) !== "finished"
+  ) {
+    base.status = "finished";
+    base.finishedAt = base.finishedAt ?? now;
+    base.winnerId = resolveX1Winner(base);
+    recordX1MatchFinished(base);
+  } else if (base.status === "finished" && !base.forfeitByPlayerId) {
+    base.winnerId = resolveX1Winner(base);
+    recordX1MatchFinished(base);
+  }
 }
 
 export function mergeX1RoomStates(local: X1Room | undefined, remote: X1Room, now = Date.now()): X1Room {
   if (!local) {
     const copy: X1Room = structuredClone(remote);
     if (copy.status === "countdown") {
-      // Ancora a contagem regressiva no relógio local ao receber a sala pela primeira vez
-      const rem = (copy.countdownEndsAt ?? 0) - now;
-      if (rem <= 0 || rem > (X1_COUNTDOWN_DURATION_SEC + 1) * 1000) {
-        copy.countdownEndsAt = now + X1_COUNTDOWN_DURATION_SEC * 1000;
+      if (copy.countdownEndsAtServerMs) {
+        copy.countdownEndsAt = serverMsToLocalMs(copy.countdownEndsAtServerMs);
+      } else if (copy.hostReady !== false) {
+        // Fallback legado sem timestamp UTC do servidor: ancora localmente se fora do intervalo
+        const rem = (copy.countdownEndsAt ?? 0) - now;
+        if (rem <= 0 || rem > (X1_COUNTDOWN_DURATION_SEC + 1) * 1000) {
+          copy.countdownEndsAt = now + X1_COUNTDOWN_DURATION_SEC * 1000;
+        }
       }
     } else if (copy.status === "playing") {
-      if (!copy.startedAt || Math.abs(now - copy.startedAt) > (copy.durationSec + 15) * 1000) {
+      if (copy.startedAtServerMs) {
+        copy.startedAt = serverMsToLocalMs(copy.startedAtServerMs);
+      } else if (!copy.startedAt || Math.abs(now - copy.startedAt) > (copy.durationSec + 15) * 1000) {
         copy.startedAt = now;
+      }
+      if (copy.minadoState?.turnStartedAtServerMs) {
+        copy.minadoState.turnStartedAt = serverMsToLocalMs(copy.minadoState.turnStartedAtServerMs);
+      }
+      if (copy.minadoState?.activeQuestion?.expiresAtServerMs) {
+        copy.minadoState.activeQuestion.expiresAt = serverMsToLocalMs(
+          copy.minadoState.activeQuestion.expiresAtServerMs,
+        );
       }
       markOpponentObserved(copy.code, copy.host.playerId, now);
       markOpponentObserved(copy.code, copy.guest?.playerId, now);
@@ -1075,29 +1463,88 @@ export function mergeX1RoomStates(local: X1Room | undefined, remote: X1Room, now
   // 1. Se o estado remoto avançou de fase (ex: waiting -> countdown -> playing -> finished -> cancelled)
   if (remoteRank > localRank) {
     const merged: X1Room = structuredClone(remote);
+    const awaitingHandshake =
+      remote.hostReady === false && !local.hostReady && !remote.countdownEndsAtServerMs;
+    if (local.hostReady || remote.hostReady) {
+      merged.hostReady = true;
+    } else if (remote.hostReady === false) {
+      merged.hostReady = false;
+    }
+    if (local.guestReady || remote.guestReady) {
+      merged.guestReady = true;
+    }
+    merged.guestJoinedAtServerMs = remote.guestJoinedAtServerMs ?? local.guestJoinedAtServerMs ?? null;
+    merged.forfeitByPlayerId = remote.forfeitByPlayerId ?? local.forfeitByPlayerId ?? null;
+
     if (local.status === "waiting" && merged.status === "countdown") {
-      // Anfitrião acabou de receber a entrada do Desafiante: inicia os 10s sincronizados no relógio local
-      merged.countdownEndsAt = now + X1_COUNTDOWN_DURATION_SEC * 1000;
+      if (merged.countdownEndsAtServerMs) {
+        const localFromServer = serverMsToLocalMs(merged.countdownEndsAtServerMs);
+        const rem = localFromServer - now;
+        if (isX1ServerClockCalibrated() || (rem > 0 && rem <= (X1_COUNTDOWN_DURATION_SEC + 2) * 1000)) {
+          // Timestamp oficial UTC válido: sincroniza sem reiniciar os 10s!
+          merged.countdownEndsAt = localFromServer;
+        } else {
+          merged.countdownEndsAt = now + X1_COUNTDOWN_DURATION_SEC * 1000;
+        }
+      } else if (awaitingHandshake) {
+        // Handshake pendente (aguardando host confirmar prontidão via confirmX1HostReady)
+        merged.countdownEndsAt = null;
+      } else {
+        // Modo legado/offline sem handshake pendente: ancora 10s no relógio local
+        merged.countdownEndsAt = now + X1_COUNTDOWN_DURATION_SEC * 1000;
+      }
     } else if (local.status !== "playing" && merged.status === "playing") {
-      // Ancora o início da partida no relógio local para que ambos contem a mesma duração relativa
-      merged.startedAt = now;
+      if (merged.startedAtServerMs) {
+        merged.startedAt = serverMsToLocalMs(merged.startedAtServerMs);
+      } else if (local.countdownEndsAtServerMs) {
+        merged.startedAtServerMs = local.countdownEndsAtServerMs;
+        merged.startedAt = serverMsToLocalMs(local.countdownEndsAtServerMs);
+      } else {
+        merged.startedAt = now;
+      }
       if (merged.minadoState) {
-        merged.minadoState.turnStartedAt = now;
+        merged.minadoState.turnStartedAt = merged.minadoState.turnStartedAtServerMs
+          ? serverMsToLocalMs(merged.minadoState.turnStartedAtServerMs)
+          : (merged.startedAt ?? now);
       }
       markOpponentObserved(merged.code, merged.host.playerId, now);
       markOpponentObserved(merged.code, merged.guest?.playerId, now);
     } else if (merged.status === "finished") {
-      recordX1MatchFinished(merged);
+      // CRÍTICO: ao receber "finished" vindo da nuvem enquanto estávamos em "playing",
+      // SEMPRE mescla pontuações e eventos locais recentes antes de fixar o vencedor (exceto W.O./forfeit explícito)!
+      if (local.status === "playing" && local.guest && remote.guest) {
+        if (merged.gameId === "rpg") {
+          mergeRpgSides(merged, local, remote, true, now);
+        } else if (merged.gameId === "minado" && local.minadoState && remote.minadoState) {
+          mergeMinadoSides(merged, local, remote, true, now);
+        } else if (merged.gameId !== "minado") {
+          mergeScoreRaceSides(merged, local, remote, now);
+        }
+      } else {
+        recordX1MatchFinished(merged);
+      }
     }
     return merged;
   }
 
-  // 2. Se o estado local já está em uma fase mais avançada que o remoto (ex: local já é playing e nuvem ainda é countdown)
+  // 2. Se o estado local já está em uma fase mais avançada que o remoto (ex: local já é playing/finished)
   if (localRank > remoteRank) {
     const merged: X1Room = structuredClone(local);
-    // Ainda assim, se o remoto trouxe dados do guest que faltavam, preserva o guest
+    merged.hostReady = Boolean(local.hostReady || remote.hostReady);
+    merged.guestReady = Boolean(local.guestReady || remote.guestReady);
     if (!merged.guest && remote.guest) {
       merged.guest = structuredClone(remote.guest);
+    }
+    // Se local está "finished" e remoto ainda chegou com jogadas de "playing" dos últimos segundos,
+    // consolida as jogadas do oponente para evitar perda de pontuação no fim do tempo!
+    if (merged.status === "finished" && remote.status === "playing" && local.guest && remote.guest) {
+      if (merged.gameId === "rpg") {
+        mergeRpgSides(merged, local, remote, false, now);
+      } else if (merged.gameId === "minado" && local.minadoState && remote.minadoState) {
+        mergeMinadoSides(merged, local, remote, false, now);
+      } else if (merged.gameId !== "minado") {
+        mergeScoreRaceSides(merged, local, remote, now);
+      }
     }
     return merged;
   }
@@ -1111,6 +1558,11 @@ export function mergeX1RoomStates(local: X1Room | undefined, remote: X1Room, now
   const remoteIsNewer = remoteRev > localRev || (remoteRev === localRev && remoteTime > localTime);
   const base: X1Room = structuredClone(remoteIsNewer ? remote : local);
   base.revision = Math.max(localRev, remoteRev);
+  base.hostReady = Boolean(local.hostReady || remote.hostReady);
+  base.guestReady = Boolean(local.guestReady || remote.guestReady);
+  base.guestJoinedAtServerMs =
+    local.guestJoinedAtServerMs ?? remote.guestJoinedAtServerMs ?? null;
+  base.forfeitByPlayerId = local.forfeitByPlayerId ?? remote.forfeitByPlayerId ?? null;
 
   // Registra observação local sempre que o estado remoto traz qualquer pulso ou atualização de jogador
   if ((remote.host.lastSeenAt ?? 0) > (local.host.lastSeenAt ?? 0) || remote.host.updatedAt > local.host.updatedAt) {
@@ -1124,222 +1576,36 @@ export function mergeX1RoomStates(local: X1Room | undefined, remote: X1Room, now
     markOpponentObserved(remote.code, remote.guest.playerId, now);
   }
 
-  // Preserva o countdownEndsAt e startedAt locais para evitar saltos de relógio na mesma fase
-  if (local.status === "countdown" && local.countdownEndsAt) {
+  // Sincronização exata de countdownEndsAtServerMs e startedAtServerMs (sem drift nem reinício!)
+  const canonicalCountdownServerMs =
+    local.countdownEndsAtServerMs && remote.countdownEndsAtServerMs
+      ? Math.min(local.countdownEndsAtServerMs, remote.countdownEndsAtServerMs)
+      : (local.countdownEndsAtServerMs ?? remote.countdownEndsAtServerMs ?? null);
+  if (canonicalCountdownServerMs) {
+    base.countdownEndsAtServerMs = canonicalCountdownServerMs;
+    base.countdownEndsAt = serverMsToLocalMs(canonicalCountdownServerMs);
+  } else if (local.status === "countdown" && local.countdownEndsAt) {
     base.countdownEndsAt = local.countdownEndsAt;
   }
-  if (local.status === "playing" && local.startedAt) {
+
+  const canonicalStartServerMs =
+    local.startedAtServerMs && remote.startedAtServerMs
+      ? Math.min(local.startedAtServerMs, remote.startedAtServerMs)
+      : (local.startedAtServerMs ?? remote.startedAtServerMs ?? null);
+  if (canonicalStartServerMs) {
+    base.startedAtServerMs = canonicalStartServerMs;
+    base.startedAt = serverMsToLocalMs(canonicalStartServerMs);
+  } else if (local.status === "playing" && local.startedAt) {
     base.startedAt = local.startedAt;
   }
 
-  if (base.status === "playing" && local.guest && remote.guest) {
+  if ((base.status === "playing" || base.status === "finished") && local.guest && remote.guest) {
     if (base.gameId !== "rpg" && base.gameId !== "minado") {
-      // Na corrida de questões, cada jogador é autoritativo sobre seu próprio lado
-      const localHostProgress = (local.host.correct + local.host.wrong) * 1000 + (local.host.currentQuestionIdx ?? 0);
-      const remoteHostProgress = (remote.host.correct + remote.host.wrong) * 1000 + (remote.host.currentQuestionIdx ?? 0);
-      base.host = structuredClone(remoteHostProgress > localHostProgress ? remote.host : local.host);
-
-      const localGuestProgress = (local.guest.correct + local.guest.wrong) * 1000 + (local.guest.currentQuestionIdx ?? 0);
-      const remoteGuestProgress = (remote.guest.correct + remote.guest.wrong) * 1000 + (remote.guest.currentQuestionIdx ?? 0);
-      base.guest = structuredClone(remoteGuestProgress > localGuestProgress ? remote.guest : local.guest);
-
-      base.blueShare = computeScoreRaceBlueShare(base.host.score, base.guest.score);
-      if (base.host.finished && base.guest.finished) {
-        base.status = "finished";
-        base.finishedAt = base.finishedAt ?? now;
-        base.winnerId = resolveX1Winner(base);
-        recordX1MatchFinished(base);
-      }
+      mergeScoreRaceSides(base, local, remote, now);
     } else if (base.gameId === "rpg") {
-      // Preserva avatar e último pulso de atividade de cada jogador
-      const mergedHostAvatar = local.host.avatar ?? remote.host.avatar;
-      const mergedGuestAvatar = local.guest.avatar ?? remote.guest.avatar;
-      const mergedHostLastSeen = Math.max(local.host.lastSeenAt ?? 0, remote.host.lastSeenAt ?? 0) || undefined;
-      const mergedGuestLastSeen = Math.max(local.guest.lastSeenAt ?? 0, remote.guest.lastSeenAt ?? 0) || undefined;
-
-      // Deduplica e ordena deterministicamente os eventos de resposta (CRDT G-Set)
-      const eventMap = new Map<string, X1RpgEvent>();
-      for (const ev of local.rpgEvents ?? []) {
-        if (ev?.id) eventMap.set(ev.id, ev);
-      }
-      for (const ev of remote.rpgEvents ?? []) {
-        if (ev?.id && !eventMap.has(ev.id)) eventMap.set(ev.id, ev);
-      }
-
-      if (eventMap.size > 0) {
-        const sortedEvents = Array.from(eventMap.values()).sort((a, b) => {
-          if (a.seq !== b.seq) return a.seq - b.seq;
-          return a.role === b.role ? 0 : a.role === "host" ? -1 : 1;
-        });
-
-        const guestSeed = base.guest ?? local.guest ?? remote.guest;
-        if (!guestSeed) return base;
-        const wasFinishedExternally = (base.status as X1RoomStatus) === "finished";
-        let simRoom: X1Room = {
-          ...base,
-          status: "playing",
-          blueShare: 50,
-          finishedAt: null,
-          winnerId: null,
-          rpgEvents: [],
-          host: {
-            ...base.host,
-            score: 0,
-            correct: 0,
-            wrong: 0,
-            hp: base.host.maxHp || X1_ROBOT_INITIAL_HP,
-            avatar: mergedHostAvatar,
-            lastSeenAt: mergedHostLastSeen,
-          },
-          guest: {
-            ...guestSeed,
-            score: 0,
-            correct: 0,
-            wrong: 0,
-            hp: guestSeed.maxHp || X1_ROBOT_INITIAL_HP,
-            avatar: mergedGuestAvatar,
-            lastSeenAt: mergedGuestLastSeen,
-          },
-        };
-
-        for (const ev of sortedEvents) {
-          if (simRoom.status === "finished") break;
-          simRoom = applyX1RobotBattleAnswer({
-            room: simRoom,
-            role: ev.role,
-            isCorrect: ev.isCorrect,
-          }).room;
-        }
-
-        simRoom.rpgEvents = sortedEvents;
-        // Preserva encerramento por timeout/W.O. caso tenha sido finalizado externamente
-        if (wasFinishedExternally && simRoom.status !== "finished") {
-          simRoom.status = "finished";
-          simRoom.finishedAt = base.finishedAt ?? now;
-          simRoom.winnerId = base.winnerId ?? resolveX1Winner(simRoom);
-        }
-        base.host = simRoom.host;
-        base.guest = simRoom.guest;
-        base.blueShare = simRoom.blueShare;
-        base.rpgEvents = simRoom.rpgEvents;
-        base.status = simRoom.status;
-        base.finishedAt = simRoom.finishedAt;
-        base.winnerId = simRoom.winnerId;
-        if (base.status === "finished") {
-          recordX1MatchFinished(base);
-        }
-      } else {
-        // Fallback legado para salas sem rpgEvents explícitos
-        const other = remoteIsNewer ? local : remote;
-        const dHostCorrect = Math.max(0, other.host.correct - base.host.correct);
-        const dHostWrong = Math.max(0, other.host.wrong - base.host.wrong);
-        const dGuestCorrect = Math.max(0, (other.guest?.correct ?? 0) - (base.guest?.correct ?? 0));
-        const dGuestWrong = Math.max(0, (other.guest?.wrong ?? 0) - (base.guest?.wrong ?? 0));
-
-        const hostAnsweredMoreLocally =
-          local.host.correct + local.host.wrong > remote.host.correct + remote.host.wrong;
-        const guestAnsweredMoreLocally =
-          local.guest.correct + local.guest.wrong > remote.guest.correct + remote.guest.wrong;
-
-        base.host = structuredClone(hostAnsweredMoreLocally ? local.host : remote.host);
-        base.guest = structuredClone(guestAnsweredMoreLocally ? local.guest : remote.guest);
-
-        base.host.hp = Math.min(local.host.hp, remote.host.hp);
-        base.guest.hp = Math.min(local.guest.hp, remote.guest.hp);
-        base.host.score = Math.max(local.host.score, remote.host.score);
-        base.guest.score = Math.max(local.guest.score, remote.guest.score);
-        base.host.correct = Math.max(local.host.correct, remote.host.correct);
-        base.guest.correct = Math.max(local.guest.correct, remote.guest.correct);
-        base.host.wrong = Math.max(local.host.wrong, remote.host.wrong);
-        base.guest.wrong = Math.max(local.guest.wrong, remote.guest.wrong);
-        base.host.avatar = mergedHostAvatar;
-        base.guest.avatar = mergedGuestAvatar;
-        base.host.lastSeenAt = mergedHostLastSeen;
-        base.guest.lastSeenAt = mergedGuestLastSeen;
-
-        const shareDelta =
-          dHostCorrect * 18 - dHostWrong * 10 - dGuestCorrect * 18 + dGuestWrong * 10;
-        if (shareDelta !== 0) {
-          base.blueShare = Math.max(0, Math.min(100, base.blueShare + shareDelta));
-        }
-
-        if (base.host.hp <= 0 || base.guest.hp <= 0) {
-          base.status = "finished";
-          base.finishedAt = base.finishedAt ?? now;
-          base.winnerId = base.host.hp <= 0 ? base.guest.playerId : base.host.playerId;
-          base.blueShare = base.host.hp <= 0 ? 0 : 100;
-          recordX1MatchFinished(base);
-        }
-      }
+      mergeRpgSides(base, local, remote, remoteIsNewer, now);
     } else if (base.gameId === "minado" && local.minadoState && remote.minadoState) {
-      // No Campo Minado por turnos, vence o estado com mais cartas reveladas;
-      // em empate de cartas reveladas, preserva carta recém-aberta (activeQuestion) contra sync ocioso.
-      const localRevCards = Object.keys(local.minadoState.revealed).length;
-      const remoteRevCards = Object.keys(remote.minadoState.revealed).length;
-      const localHasActiveQ = Boolean(
-        local.minadoState.activeQuestion && !local.minadoState.activeQuestion.answered,
-      );
-      const remoteHasActiveQ = Boolean(
-        remote.minadoState.activeQuestion && !remote.minadoState.activeQuestion.answered,
-      );
-      const preferRemoteMinado =
-        remoteRevCards > localRevCards ||
-        (remoteRevCards === localRevCards &&
-          ((remoteHasActiveQ && !localHasActiveQ) ||
-            (remoteHasActiveQ === localHasActiveQ && remoteIsNewer)));
-
-      if (preferRemoteMinado) {
-        base.minadoState = structuredClone(remote.minadoState);
-        base.host = structuredClone(remote.host);
-        base.guest = structuredClone(remote.guest);
-      } else {
-        base.minadoState = structuredClone(local.minadoState);
-        base.host = structuredClone(local.host);
-        base.guest = structuredClone(local.guest);
-      }
-
-      base.minadoState.gridSize =
-        base.minadoState.gridSize ??
-        local.minadoState.gridSize ??
-        remote.minadoState.gridSize ??
-        base.minadoGridSize ??
-        6;
-      base.host.avatar = local.host.avatar ?? remote.host.avatar;
-      base.guest.avatar = local.guest.avatar ?? remote.guest.avatar;
-      base.host.lastSeenAt =
-        Math.max(local.host.lastSeenAt ?? 0, remote.host.lastSeenAt ?? 0) || undefined;
-      base.guest.lastSeenAt =
-        Math.max(local.guest.lastSeenAt ?? 0, remote.guest.lastSeenAt ?? 0) || undefined;
-
-      // Ancora turnStartedAt e cronômetro de 20s no relógio local para evitar drift (ex.: 24s vs 19s)
-      const turnChanged =
-        base.minadoState.currentTurnPlayerId !== local.minadoState.currentTurnPlayerId ||
-        Object.keys(base.minadoState.revealed).length !== Object.keys(local.minadoState.revealed).length;
-      if (turnChanged || !local.minadoState.turnStartedAt) {
-        base.minadoState.turnStartedAt = now;
-      } else {
-        base.minadoState.turnStartedAt = local.minadoState.turnStartedAt;
-      }
-
-      const activeQ = base.minadoState.activeQuestion;
-      if (activeQ && !activeQ.answered) {
-        const localQ = local.minadoState.activeQuestion;
-        if (localQ && localQ.cardId === activeQ.cardId && localQ.expiresAt) {
-          activeQ.expiresAt = localQ.expiresAt;
-        } else {
-          activeQ.expiresAt = now + 20_000;
-        }
-      }
-
-      if (
-        Object.keys(base.minadoState.revealed).length >= base.minadoState.board.length &&
-        (base.status as X1RoomStatus) !== "finished"
-      ) {
-        base.status = "finished";
-        base.finishedAt = base.finishedAt ?? now;
-        base.winnerId = resolveX1Winner(base);
-        recordX1MatchFinished(base);
-      }
+      mergeMinadoSides(base, local, remote, remoteIsNewer, now);
     }
   }
 
@@ -1367,10 +1633,20 @@ function loadStore(): X1LobbyStore {
       const expiresAt = r.expiresAt ?? r.createdAt + X1_ROOM_EXPIRATION_MS;
       if (r.status === "waiting" && now >= expiresAt) continue;
       if (r.status === "finished" && r.autoCloseAt && now >= r.autoCloseAt) continue;
-      if (r.status === "countdown" && r.countdownEndsAt && now >= r.countdownEndsAt) {
-        r.status = "playing";
-        r.startedAt = r.startedAt ?? now;
-        r.revision = (r.revision ?? 1) + 1;
+      if (r.status === "countdown" && r.hostReady !== false) {
+        const countdownDone = r.countdownEndsAtServerMs
+          ? getX1ServerNow(now) >= r.countdownEndsAtServerMs
+          : Boolean(r.countdownEndsAt && now >= r.countdownEndsAt);
+        if (countdownDone) {
+          r.status = "playing";
+          if (r.countdownEndsAtServerMs) {
+            r.startedAtServerMs = r.startedAtServerMs ?? r.countdownEndsAtServerMs;
+            r.startedAt = r.startedAt ?? serverMsToLocalMs(r.startedAtServerMs);
+          } else {
+            r.startedAt = r.startedAt ?? now;
+          }
+          r.revision = (r.revision ?? 1) + 1;
+        }
       }
       rooms[code] = r;
     }
@@ -1419,11 +1695,21 @@ function loadStore(): X1LobbyStore {
       }
       // 3. Fallback de descarte após 15 minutos
       if (now - r.createdAt < 15 * 60_000) {
-        // Transição automática da contagem regressiva para jogo ativo
-        if (r.status === "countdown" && r.countdownEndsAt && now >= r.countdownEndsAt) {
-          r.status = "playing";
-          r.startedAt = r.startedAt ?? now;
-          r.revision = (r.revision ?? 1) + 1;
+        // Transição automática da contagem regressiva para jogo ativo (respeitando handshake e relógio UTC)
+        if (r.status === "countdown" && r.hostReady !== false) {
+          const countdownDone = r.countdownEndsAtServerMs
+            ? getX1ServerNow(now) >= r.countdownEndsAtServerMs
+            : Boolean(r.countdownEndsAt && now >= r.countdownEndsAt);
+          if (countdownDone) {
+            r.status = "playing";
+            if (r.countdownEndsAtServerMs) {
+              r.startedAtServerMs = r.startedAtServerMs ?? r.countdownEndsAtServerMs;
+              r.startedAt = r.startedAt ?? serverMsToLocalMs(r.startedAtServerMs);
+            } else {
+              r.startedAt = r.startedAt ?? now;
+            }
+            r.revision = (r.revision ?? 1) + 1;
+          }
         }
         rooms[code] = r;
       }
@@ -1465,30 +1751,130 @@ let inFlightCloudSyncPromise: Promise<void> | null = null;
 let queuedSyncRoomCode: string | null | undefined = undefined;
 let lastLobbyCloudSyncAt = 0;
 
+interface X1SideCloudSnapshot {
+  role: "host" | "guest";
+  side: X1PlayerSideState;
+  rpgEvents?: X1RpgEvent[];
+  revision: number;
+  updatedAtServerMs: number;
+}
+
+/**
+ * Reconstitui o estado remoto mais recente combinando a chave `Room` com as chaves isoladas
+ * `HostState` e `GuestState` (evita "Lost Update" quando ambos jogam simultaneamente).
+ */
+function hydrateRemoteRoomWithSideStates(
+  data?: Record<string, { Value: string; LastUpdated?: string }> | null,
+): X1Room | null {
+  if (!data?.Room?.Value) return null;
+  let room: X1Room;
+  try {
+    room = JSON.parse(data.Room.Value) as X1Room;
+  } catch {
+    return null;
+  }
+
+  const applySideSnap = (rawVal?: string) => {
+    if (!rawVal) return;
+    try {
+      const snap = JSON.parse(rawVal) as Partial<X1SideCloudSnapshot>;
+      if (!snap?.side || (snap.role !== "host" && snap.role !== "guest")) return;
+
+      if (snap.role === "host") {
+        const curProg = (room.host.correct + room.host.wrong) * 1000 + (room.host.currentQuestionIdx ?? 0);
+        const snapProg = (snap.side.correct + snap.side.wrong) * 1000 + (snap.side.currentQuestionIdx ?? 0);
+        if (
+          snapProg > curProg ||
+          (snapProg === curProg && Boolean(snap.side.finished) && !room.host.finished) ||
+          (snap.side.lastSeenAt ?? 0) > (room.host.lastSeenAt ?? 0)
+        ) {
+          if (snapProg > curProg || (snapProg === curProg && Boolean(snap.side.finished) && !room.host.finished)) {
+            room.host = {
+              ...room.host,
+              ...snap.side,
+              avatar: snap.side.avatar ?? room.host.avatar,
+            };
+          } else {
+            room.host.lastSeenAt = Math.max(room.host.lastSeenAt ?? 0, snap.side.lastSeenAt ?? 0);
+          }
+        }
+      } else if (snap.role === "guest" && room.guest) {
+        const curProg = (room.guest.correct + room.guest.wrong) * 1000 + (room.guest.currentQuestionIdx ?? 0);
+        const snapProg = (snap.side.correct + snap.side.wrong) * 1000 + (snap.side.currentQuestionIdx ?? 0);
+        if (
+          snapProg > curProg ||
+          (snapProg === curProg && Boolean(snap.side.finished) && !room.guest.finished) ||
+          (snap.side.lastSeenAt ?? 0) > (room.guest.lastSeenAt ?? 0)
+        ) {
+          if (snapProg > curProg || (snapProg === curProg && Boolean(snap.side.finished) && !room.guest.finished)) {
+            room.guest = {
+              ...room.guest,
+              ...snap.side,
+              avatar: snap.side.avatar ?? room.guest.avatar,
+            };
+          } else {
+            room.guest.lastSeenAt = Math.max(room.guest.lastSeenAt ?? 0, snap.side.lastSeenAt ?? 0);
+          }
+        }
+      }
+
+      if (room.gameId === "rpg" && Array.isArray(snap.rpgEvents) && snap.rpgEvents.length > 0) {
+        const evMap = new Map<string, X1RpgEvent>();
+        for (const ev of room.rpgEvents ?? []) {
+          if (ev?.id) evMap.set(ev.id, ev);
+        }
+        for (const ev of snap.rpgEvents) {
+          if (ev?.id && !evMap.has(ev.id)) evMap.set(ev.id, ev);
+        }
+        room.rpgEvents = Array.from(evMap.values());
+      }
+      if (typeof snap.revision === "number") {
+        room.revision = Math.max(room.revision ?? 1, snap.revision);
+      }
+    } catch {
+      /* ignore malformed side snapshot */
+    }
+  };
+
+  applySideSnap(data.HostState?.Value);
+  applySideSnap(data.GuestState?.Value);
+  return room;
+}
+
 async function callPlayFabSharedGroup(
   endpoint: string,
   body: Record<string, unknown>,
   allowRetry = true,
   keepalive = false,
 ): Promise<Record<string, unknown> | null> {
-  if (!isPlayFabConfigured()) return null;
+  if (typeof window === "undefined" || !isPlayFabConfigured()) return null;
   const session = loadStoredSession();
   const titleId = getPlayFabTitleId();
   let syncCachedTicket: string | null = null;
   if (keepalive && typeof window !== "undefined") {
     try {
-      const raw = window.localStorage.getItem("desafios-playfab-admin-ticket-v1");
-      if (raw) {
-        const parsed = JSON.parse(raw) as { ticket?: string };
-        if (parsed.ticket) syncCachedTicket = parsed.ticket;
+      const rawViewer = window.localStorage.getItem("desafios-playfab-viewer-ticket-v1");
+      if (rawViewer) {
+        const parsedV = JSON.parse(rawViewer) as { ticket?: string };
+        if (parsedV.ticket) syncCachedTicket = parsedV.ticket;
+      }
+      if (!syncCachedTicket) {
+        const raw = window.localStorage.getItem("desafios-playfab-admin-ticket-v1");
+        if (raw) {
+          const parsed = JSON.parse(raw) as { ticket?: string };
+          if (parsed.ticket) syncCachedTicket = parsed.ticket;
+        }
       }
     } catch {
       /* ignore */
     }
   }
+  // IMPORTANTE: Usa a conta compartilhada de serviço (`semedvisitante` via getViewerPlayFabTicket)
+  // como ticket primário para SharedGroups do X1 (`X1_LOBBY_SEMED_V2` e `x1_room_*`),
+  // impedindo 403 NotAuthorized quando dois alunos diferentes acessam a mesma sala!
   const ticket = keepalive
     ? (syncCachedTicket ?? session?.sessionTicket ?? null)
-    : ((await getAdminPlayFabTicket()) ?? session?.sessionTicket);
+    : ((await getViewerPlayFabTicket()) ?? (await getAdminPlayFabTicket()) ?? session?.sessionTicket);
   if (!ticket || !titleId) return null;
 
   try {
@@ -1509,16 +1895,32 @@ async function callPlayFabSharedGroup(
 
     if ((!res.ok || json.error) && allowRetry) {
       const errName = String(json.error ?? "");
-      // Renova ticket ADM se expirou ou ficou inválido
-      if (
-        res.status === 401 ||
-        errName.includes("NotAuthenticated") ||
-        errName.includes("InvalidSessionTicket") ||
-        errName.includes("NotAuthorized")
-      ) {
+      const isNotAuthorized =
+        res.status === 403 || json.errorCode === 1075 || errName.includes("NotAuthorized");
+      const isAuthErr =
+        !isNotAuthorized &&
+        (json.errorCode === 1074 ||
+          json.errorCode === 1089 ||
+          errName.includes("NotAuthenticated") ||
+          errName.includes("InvalidSessionTicket") ||
+          (res.status === 401 && !errName));
+
+      if (isAuthErr) {
         clearCachedAdminPlayFabTicket();
-        const freshTicket = await getAdminPlayFabTicket();
-        if (freshTicket) {
+        clearExpiredStoredSessionTicket(ticket);
+        const freshTicket = (await getViewerPlayFabTicket()) ?? (await getAdminPlayFabTicket());
+        if (freshTicket && freshTicket !== ticket) {
+          return callPlayFabSharedGroup(endpoint, body, false);
+        }
+      } else if (isNotAuthorized) {
+        clearCachedAdminPlayFabTicket();
+        const freshViewer = await getViewerPlayFabTicket();
+        if (freshViewer && freshViewer !== ticket) {
+          return callPlayFabSharedGroup(endpoint, body, false);
+        }
+        // Se um grupo antigo foi criado por outra conta e não inclui semedvisitante, tenta fallback com admin ticket
+        const fallbackAdmin = await getAdminPlayFabTicket();
+        if (fallbackAdmin && fallbackAdmin !== ticket) {
           return callPlayFabSharedGroup(endpoint, body, false);
         }
       }
@@ -1534,6 +1936,10 @@ async function callPlayFabSharedGroup(
       }
     }
 
+    if (!res.ok || json.error) {
+      return null;
+    }
+
     return json.data ?? null;
   } catch {
     return null;
@@ -1547,7 +1953,14 @@ async function ensureSharedGroupExists(groupId: string): Promise<void> {
 }
 
 async function runSyncX1WithPlayFabCloud(activeRoomCode?: string | null): Promise<void> {
-  if (!isPlayFabConfigured()) return;
+  if (typeof window === "undefined" || !isPlayFabConfigured()) return;
+
+  // Garante calibração inicial do relógio UTC do servidor PlayFab antes de normalizar timers do X1
+  if (x1ServerClockOffsetMs === null) {
+    await syncX1ServerClockOffset();
+  } else if (Date.now() - x1LastClockSyncAt > 3 * 60_000) {
+    void syncX1ServerClockOffset();
+  }
 
   let activeRoomStatus: X1RoomStatus | null = null;
 
@@ -1557,7 +1970,7 @@ async function runSyncX1WithPlayFabCloud(activeRoomCode?: string | null): Promis
     const roomGroupId = `x1_room_${cleanCode.toLowerCase()}`;
     const remoteRoomData = (await callPlayFabSharedGroup("GetSharedGroupData", {
       SharedGroupId: roomGroupId,
-    })) as { Data?: Record<string, { Value: string }> } | null;
+    })) as { Data?: Record<string, { Value: string; LastUpdated?: string }> } | null;
 
     // Recarrega o store APÓS o await para nunca sobrescrever ações locais feitas durante a requisição
     const storeAfterRoom = loadStore();
@@ -1566,9 +1979,10 @@ async function runSyncX1WithPlayFabCloud(activeRoomCode?: string | null): Promis
     let shouldPushMergedBack = false;
     let roomToPush: X1Room | null = null;
 
-    if (remoteRoomData?.Data?.Room?.Value) {
+    const hydratedRemoteRoom = hydrateRemoteRoomWithSideStates(remoteRoomData?.Data);
+    if (hydratedRemoteRoom) {
       try {
-        const remoteRoom = JSON.parse(remoteRoomData.Data.Room.Value) as X1Room;
+        const remoteRoom = hydratedRemoteRoom;
         if (remoteRoom.status === "cancelled" || storeAfterRoom.deletedRooms[cleanCode]) {
           if (storeAfterRoom.rooms[cleanCode]) {
             delete storeAfterRoom.rooms[cleanCode];
@@ -1618,9 +2032,13 @@ async function runSyncX1WithPlayFabCloud(activeRoomCode?: string | null): Promis
     }
   }
 
-  // Durante partida ativa ("playing"), evita trafegar o LobbySnapshot global a cada 1.2s (sincroniza o lobby a cada 8s)
+  // Durante partida ativa ("playing") ou contagem ("countdown"), evita trafegar o LobbySnapshot global em alta frequência
   const nowCheck = Date.now();
-  if (activeRoomCode && activeRoomStatus === "playing" && nowCheck - lastLobbyCloudSyncAt < 8_000) {
+  if (
+    activeRoomCode &&
+    (activeRoomStatus === "playing" || activeRoomStatus === "countdown") &&
+    nowCheck - lastLobbyCloudSyncAt < 8_000
+  ) {
     return;
   }
   lastLobbyCloudSyncAt = nowCheck;
@@ -1641,6 +2059,10 @@ async function runSyncX1WithPlayFabCloud(activeRoomCode?: string | null): Promis
     try {
       const remoteStore = JSON.parse(remoteLobby.Data.LobbySnapshot.Value) as Partial<X1LobbyStore>;
       const now = Date.now();
+      const serverNow = getX1ServerNow(now);
+      const lobbyLastUpdatedMs = remoteLobby.Data.LobbySnapshot.LastUpdated
+        ? Date.parse(remoteLobby.Data.LobbySnapshot.LastUpdated)
+        : NaN;
 
       // Mescla tombstones de salas canceladas/deletadas para nunca ressuscitá-las
       for (const [delCode, delAt] of Object.entries(remoteStore.deletedRooms ?? {})) {
@@ -1657,13 +2079,27 @@ async function runSyncX1WithPlayFabCloud(activeRoomCode?: string | null): Promis
       }
 
       for (const [id, p] of Object.entries(remoteStore.players ?? {})) {
-        // Tolera diferença de relógio entre dispositivos (até 24h) e ancora `receivedAt` no relógio local
-        if (Math.abs(now - p.lastSeenAt) <= 24 * 60 * 60_000) {
+        // Verifica frescor real pelo relógio UTC do servidor (impede listar alunos offline há horas como "Online na Arena X1")
+        const hasServerSeen = typeof p.lastSeenServerMs === "number" && p.lastSeenServerMs > 0;
+        let ageMs: number;
+        if (hasServerSeen) {
+          ageMs = Math.max(0, serverNow - (p.lastSeenServerMs as number));
+        } else if (!Number.isNaN(lobbyLastUpdatedMs) && serverNow - lobbyLastUpdatedMs > 120_000) {
+          ageMs = serverNow - lobbyLastUpdatedMs;
+        } else {
+          ageMs = Math.abs(now - p.lastSeenAt);
+        }
+
+        if (ageMs <= 120_000) {
           const local = store.players[id];
-          if (!local || p.lastSeenAt > local.lastSeenAt) {
+          const remoteTs = hasServerSeen ? (p.lastSeenServerMs as number) : p.lastSeenAt;
+          const localTs = local
+            ? (local.lastSeenServerMs ?? local.lastSeenAt)
+            : 0;
+          if (!local || remoteTs > localTs) {
             store.players[id] = {
               ...p,
-              receivedAt: now,
+              receivedAt: Math.max(1, now - ageMs),
             };
             changed = true;
           }
@@ -1855,8 +2291,61 @@ export async function syncX1WithPlayFabCloud(activeRoomCode?: string | null): Pr
   return inFlightCloudSyncPromise;
 }
 
+/**
+ * Envia SOMENTE a chave isolada do lado do jogador (`HostState` ou `GuestState`) no SharedGroup da sala,
+ * eliminando sobrescritas cegas ("Lost Update") quando os dois jogadores respondem simultaneamente.
+ */
+async function pushPlayerSideToPlayFab(
+  room: X1Room,
+  role: "host" | "guest",
+  keepalive = false,
+): Promise<void> {
+  if (typeof window === "undefined" || !isPlayFabConfigured()) return;
+  const cleanCode = room.code.trim().toUpperCase();
+  const roomGroupId = `x1_room_${cleanCode.toLowerCase()}`;
+  const currentStore = loadStore();
+  if (currentStore.deletedRooms?.[cleanCode]) return;
+  const latestRoom = currentStore.rooms[cleanCode];
+  if (!latestRoom || latestRoom.status === "cancelled") return;
+
+  const side = role === "host" ? latestRoom.host : latestRoom.guest;
+  if (!side) return;
+
+  const sideKey = role === "host" ? "HostState" : "GuestState";
+  const sideEvents =
+    latestRoom.gameId === "rpg"
+      ? (latestRoom.rpgEvents ?? []).filter((ev) => ev.role === role)
+      : undefined;
+
+  const payload: X1SideCloudSnapshot = {
+    role,
+    side,
+    rpgEvents: sideEvents,
+    revision: latestRoom.revision ?? 1,
+    updatedAtServerMs: getX1ServerNow(),
+  };
+
+  if (!keepalive) {
+    await ensureSharedGroupExists(roomGroupId);
+  }
+  await callPlayFabSharedGroup(
+    "UpdateSharedGroupData",
+    {
+      SharedGroupId: roomGroupId,
+      Data: { [sideKey]: JSON.stringify(payload) },
+      Permission: "Public",
+    },
+    !keepalive,
+    keepalive,
+  );
+  // Se a jogada concluiu a partida (ex: HP=0 ou ambos terminaram), atualiza também `Room` imediatamente
+  if (latestRoom.status === "finished" && !keepalive) {
+    await pushRoomToPlayFab(latestRoom, false);
+  }
+}
+
 async function pushRoomToPlayFab(room: X1Room, keepalive = false): Promise<void> {
-  if (!isPlayFabConfigured()) return;
+  if (typeof window === "undefined" || !isPlayFabConfigured()) return;
   const cleanCode = room.code.trim().toUpperCase();
   const roomGroupId = `x1_room_${cleanCode.toLowerCase()}`;
   if (!keepalive) {
@@ -1956,6 +2445,7 @@ export function heartbeatOnlinePlayer(player: {
   store.players[player.playerId] = {
     ...player,
     lastSeenAt: now,
+    lastSeenServerMs: getX1ServerNow(now),
     lastActiveAt,
   };
   saveStore(store);
@@ -2246,6 +2736,7 @@ export function cancelAllWaitingRoomsForHost(
 export function joinX1Room(args: {
   code: string;
   guest: { playerId: string; nick: string; school: string; level: number; avatar?: PlayerAvatarConfig };
+  awaitHostHandshake?: boolean;
 }): { room: X1Room | null; error: string | null } {
   const clean = args.code.trim().toUpperCase();
   const store = loadStore();
@@ -2270,6 +2761,8 @@ export function joinX1Room(args: {
   }
 
   const now = Date.now();
+  const serverNow = getX1ServerNow(now);
+  const useCloudHandshake = Boolean(args.awaitHostHandshake);
   room.revision = (room.revision ?? 1) + 10;
   room.host.updatedAt = Math.max(room.host.updatedAt, now);
   room.guest = {
@@ -2284,15 +2777,31 @@ export function joinX1Room(args: {
     hp: X1_ROBOT_INITIAL_HP,
     maxHp: X1_ROBOT_INITIAL_HP,
     finished: false,
+    finishedAtServerMs: null,
     currentQuestionIdx: 0,
     updatedAt: now,
     lastSeenAt: now,
   };
 
-  // Inicia contagem regressiva sincronizada de 10 segundos
+  // Inicia contagem regressiva sincronizada de 10 segundos:
+  // - No modo online PlayFab, aguarda handshake rápido do Anfitrião (hostReady) para definir o
+  //   timestamp absoluto UTC `countdownEndsAtServerMs`, garantindo início 100% simultâneo nos dois aparelhos.
+  // - No modo local/testes offline, inicia imediatamente a contagem.
   room.status = "countdown";
-  room.countdownEndsAt = now + X1_COUNTDOWN_DURATION_SEC * 1000;
+  room.guestReady = true;
+  room.guestJoinedAtServerMs = serverNow;
+  if (useCloudHandshake) {
+    room.hostReady = false;
+    room.countdownEndsAtServerMs = null;
+    room.countdownEndsAt = null;
+  } else {
+    room.hostReady = true;
+    room.countdownEndsAtServerMs = serverNow + X1_COUNTDOWN_DURATION_SEC * 1000;
+    room.countdownEndsAt = now + X1_COUNTDOWN_DURATION_SEC * 1000;
+  }
   room.startedAt = null;
+  room.startedAtServerMs = null;
+  room.forfeitByPlayerId = null;
   room.blueShare = 50;
 
   // Inicializa o tabuleiro ou lista determinística de questões para a partida
@@ -2307,6 +2816,8 @@ export function joinX1Room(args: {
       currentTurnPlayerId: firstPlayerId,
       activeQuestion: null,
       turnStartedAt: now + X1_COUNTDOWN_DURATION_SEC * 1000,
+      turnStartedAtServerMs: serverNow + X1_COUNTDOWN_DURATION_SEC * 1000,
+      turnSeq: 0,
     };
   } else if (room.gameId !== "rpg") {
     room.questionList = generateDeterministicQuestionList(room.seed, room.gameId);
@@ -2322,6 +2833,85 @@ export function joinX1Room(args: {
 }
 
 /**
+ * Handshake do Anfitrião: ao detectar que o Desafiante entrou, confirma presença (`hostReady = true`)
+ * e fixa o instante absoluto oficial UTC (`countdownEndsAtServerMs`) no relógio do PlayFab,
+ * garantindo que ambos os aparelhos contem regressivamente e entrem em `playing` juntos.
+ */
+export async function confirmX1HostReady(code: string): Promise<X1Room | null> {
+  const clean = code.trim().toUpperCase();
+  if (!clean) return null;
+  if (isPlayFabConfigured()) {
+    await syncX1ServerClockOffset();
+  }
+  const store = loadStore();
+  const room = store.rooms[clean];
+  if (!room || room.status !== "countdown" || !room.guest) return room ?? null;
+
+  if (room.hostReady && room.countdownEndsAtServerMs) {
+    return room;
+  }
+
+  const now = Date.now();
+  const serverNow = getX1ServerNow(now);
+  // Margem de +800ms para o pacote viajar até o Desafiante, mas ambos usam o MESMO timestamp absoluto UTC
+  const targetStartServerMs =
+    room.countdownEndsAtServerMs ?? serverNow + X1_COUNTDOWN_DURATION_SEC * 1000;
+  room.hostReady = true;
+  room.guestReady = true;
+  room.countdownEndsAtServerMs = targetStartServerMs;
+  room.countdownEndsAt = serverMsToLocalMs(targetStartServerMs);
+  if (room.minadoState) {
+    room.minadoState.turnStartedAtServerMs = targetStartServerMs;
+    room.minadoState.turnStartedAt = serverMsToLocalMs(targetStartServerMs);
+  }
+  room.revision = (room.revision ?? 1) + 2;
+  store.rooms[clean] = room;
+  saveStore(store);
+  await pushRoomToPlayFab(room);
+  return room;
+}
+
+/**
+ * Fallback de segurança (5s): se o Anfitrião demorar a responder ao handshake por oscilação de rede,
+ * destrava a contagem usando o relógio UTC do servidor para a sala nunca ficar presa em "Conectando...".
+ */
+export async function triggerX1CountdownFallbackIfStuck(
+  code: string,
+  maxWaitMs = 5000,
+): Promise<X1Room | null> {
+  const clean = code.trim().toUpperCase();
+  if (!clean) return null;
+  if (isPlayFabConfigured()) {
+    await syncX1ServerClockOffset();
+  }
+  const store = loadStore();
+  const room = store.rooms[clean];
+  if (!room || room.status !== "countdown" || room.countdownEndsAtServerMs) {
+    return room ?? null;
+  }
+  const now = Date.now();
+  const serverNow = getX1ServerNow(now);
+  const joinedAt = room.guestJoinedAtServerMs ?? serverNow;
+  if (serverNow - joinedAt < maxWaitMs) {
+    return room;
+  }
+  const targetStartServerMs = serverNow + X1_COUNTDOWN_DURATION_SEC * 1000;
+  room.hostReady = true;
+  room.guestReady = true;
+  room.countdownEndsAtServerMs = targetStartServerMs;
+  room.countdownEndsAt = serverMsToLocalMs(targetStartServerMs);
+  if (room.minadoState) {
+    room.minadoState.turnStartedAtServerMs = targetStartServerMs;
+    room.minadoState.turnStartedAt = serverMsToLocalMs(targetStartServerMs);
+  }
+  room.revision = (room.revision ?? 1) + 2;
+  store.rooms[clean] = room;
+  saveStore(store);
+  await pushRoomToPlayFab(room);
+  return room;
+}
+
+/**
  * Transiciona explicitamente uma sala de "countdown" para "playing" e sincroniza na nuvem.
  */
 export function startX1MatchAfterCountdown(code: string): X1Room | null {
@@ -2331,10 +2921,16 @@ export function startX1MatchAfterCountdown(code: string): X1Room | null {
   if (!room) return null;
   if (room.status === "countdown") {
     const now = Date.now();
+    const serverNow = getX1ServerNow(now);
+    const officialStartServerMs = room.countdownEndsAtServerMs ?? serverNow;
     room.status = "playing";
-    room.startedAt = room.startedAt ?? now;
+    room.hostReady = true;
+    room.guestReady = true;
+    room.startedAtServerMs = room.startedAtServerMs ?? officialStartServerMs;
+    room.startedAt = room.startedAt ?? serverMsToLocalMs(room.startedAtServerMs);
     if (room.minadoState) {
-      room.minadoState.turnStartedAt = now;
+      room.minadoState.turnStartedAtServerMs = room.startedAtServerMs;
+      room.minadoState.turnStartedAt = room.startedAt ?? now;
     }
     room.revision = (room.revision ?? 1) + 1;
     store.rooms[clean] = room;
@@ -2351,16 +2947,20 @@ export async function fetchX1RoomFromCloud(code: string): Promise<X1Room | null>
   const clean = code.trim().toUpperCase();
   if (!clean || !isPlayFabConfigured()) return null;
 
+  if (x1ServerClockOffsetMs === null) {
+    await syncX1ServerClockOffset();
+  }
+
   const roomGroupId = `x1_room_${clean.toLowerCase()}`;
 
-  // 1. Consulta o SharedGroup direto da sala
+  // 1. Consulta o SharedGroup direto da sala (Room + HostState + GuestState)
   try {
     const remoteRoomData = (await callPlayFabSharedGroup("GetSharedGroupData", {
       SharedGroupId: roomGroupId,
-    })) as { Data?: Record<string, { Value: string }> } | null;
+    })) as { Data?: Record<string, { Value: string; LastUpdated?: string }> } | null;
 
-    if (remoteRoomData?.Data?.Room?.Value) {
-      const remoteRoom = JSON.parse(remoteRoomData.Data.Room.Value) as X1Room;
+    const remoteRoom = hydrateRemoteRoomWithSideStates(remoteRoomData?.Data);
+    if (remoteRoom) {
       const store = loadStore();
       store.deletedRooms = store.deletedRooms ?? {};
       if (remoteRoom.status === "cancelled" || store.deletedRooms[clean]) {
@@ -2414,12 +3014,17 @@ export async function joinX1RoomAsync(args: {
     };
   }
 
-  // Sincroniza estado mais recente da nuvem PlayFab (verifica se o anfitrião não cancelou a sala)
+  // Sincroniza relógio UTC e estado mais recente da nuvem PlayFab (verifica se o anfitrião não cancelou a sala)
   if (isPlayFabConfigured()) {
+    await syncX1ServerClockOffset();
     await fetchX1RoomFromCloud(clean);
   }
 
-  const res = joinX1Room(args);
+  // Só inicia contagem imediata no modo local; no navegador com PlayFab aguarda handshake rápido do anfitrião
+  const res = joinX1Room({
+    ...args,
+    awaitHostHandshake: typeof window !== "undefined" && isPlayFabConfigured(),
+  });
   if (res.room && isPlayFabConfigured()) {
     await pushRoomToPlayFab(res.room);
   }
@@ -2448,6 +3053,7 @@ export function updateX1PlayerProgress(args: {
   if (!side) return room;
 
   const now = Date.now();
+  const serverNow = getX1ServerNow(now);
   room.revision = (room.revision ?? 1) + 1;
   side.score = Math.max(0, Number.isFinite(args.score) ? args.score : side.score);
   side.correct = Math.max(0, args.correct);
@@ -2455,7 +3061,12 @@ export function updateX1PlayerProgress(args: {
   if (args.currentQuestionIdx !== undefined) {
     side.currentQuestionIdx = args.currentQuestionIdx;
   }
-  if (args.finished) side.finished = true;
+  if (args.finished && !side.finished) {
+    side.finished = true;
+    side.finishedAtServerMs = side.finishedAtServerMs ?? serverNow;
+  } else if (args.finished) {
+    side.finished = true;
+  }
   side.updatedAt = now;
   side.lastSeenAt = now;
 
@@ -2471,7 +3082,7 @@ export function updateX1PlayerProgress(args: {
 
   store.rooms[clean] = room;
   saveStore(store);
-  void pushRoomToPlayFab(room);
+  void pushPlayerSideToPlayFab(room, isHost ? "host" : "guest");
   return room;
 }
 
@@ -2502,7 +3113,7 @@ export function submitX1RobotClashAnswer(args: {
   if (res.room.status === "finished") {
     recordX1MatchFinished(res.room);
   }
-  void pushRoomToPlayFab(res.room);
+  void pushPlayerSideToPlayFab(res.room, role);
   return res;
 }
 
@@ -2551,6 +3162,7 @@ export function openX1MinadoCard(
   if (!me || !opp) return { room, error: "Jogadores inválidos." };
 
   const now = Date.now();
+  const serverNow = getX1ServerNow(now);
   room.revision = (room.revision ?? 1) + 1;
   me.updatedAt = now;
 
@@ -2570,6 +3182,8 @@ export function openX1MinadoCard(
     };
     minado.currentTurnPlayerId = opp.playerId;
     minado.turnStartedAt = now;
+    minado.turnStartedAtServerMs = serverNow;
+    minado.turnSeq = (minado.turnSeq ?? 0) + 1;
 
     if (Object.keys(minado.revealed).length >= minado.board.length) {
       room.status = "finished";
@@ -2591,6 +3205,7 @@ export function openX1MinadoCard(
       options: card.options,
       answer: card.answer,
       expiresAt: now + 20_000,
+      expiresAtServerMs: serverNow + 20_000,
       answered: false,
     };
   }
@@ -2657,6 +3272,8 @@ export function answerX1MinadoQuestion(
   minado.activeQuestion = null;
   minado.currentTurnPlayerId = opp.playerId;
   minado.turnStartedAt = now;
+  minado.turnStartedAtServerMs = getX1ServerNow(now);
+  minado.turnSeq = (minado.turnSeq ?? 0) + 1;
 
   if (Object.keys(minado.revealed).length >= minado.board.length) {
     room.status = "finished";
@@ -2708,6 +3325,8 @@ export function timeoutX1MinadoQuestion(
   minado.activeQuestion = null;
   minado.currentTurnPlayerId = opp.playerId;
   minado.turnStartedAt = now;
+  minado.turnStartedAtServerMs = getX1ServerNow(now);
+  minado.turnSeq = (minado.turnSeq ?? 0) + 1;
 
   if (Object.keys(minado.revealed).length >= minado.board.length) {
     room.status = "finished";
@@ -2739,7 +3358,12 @@ export function timeoutX1MinadoTurnSelection(
   if (minado.activeQuestion) return { room };
 
   const now = Date.now();
-  const elapsed = now - (minado.turnStartedAt || now);
+  const serverNow = getX1ServerNow(now);
+  const elapsedLocal = now - (minado.turnStartedAt || now);
+  const elapsedServer = minado.turnStartedAtServerMs
+    ? serverNow - minado.turnStartedAtServerMs
+    : elapsedLocal;
+  const elapsed = Math.max(elapsedLocal, elapsedServer);
   if (elapsed < (X1_MINADO_TURN_SELECT_TIMEOUT_SEC - 1) * 1000) {
     return { room };
   }
@@ -2756,6 +3380,8 @@ export function timeoutX1MinadoTurnSelection(
 
   minado.currentTurnPlayerId = opp.playerId;
   minado.turnStartedAt = now;
+  minado.turnStartedAtServerMs = serverNow;
+  minado.turnSeq = (minado.turnSeq ?? 0) + 1;
 
   store.rooms[room.code] = room;
   saveStore(store);
@@ -2782,6 +3408,34 @@ export function finishX1RoomByTimeout(code: string): X1Room | null {
     void pushRoomToPlayFab(room);
   }
   return room;
+}
+
+/**
+ * Encerramento justo ao zerar o cronômetro:
+ * 1) Envia o último progresso local (`HostState` ou `GuestState`) imediatamente;
+ * 2) Aguarda breve janela de consolidação para receber as últimas respostas do oponente;
+ * 3) Faz leitura fresca da nuvem (`syncX1WithPlayFabCloud`) e só então fixa o vencedor oficial!
+ */
+export async function consolidateAndFinishX1ByTimeout(
+  code: string,
+  myPlayerId: string,
+  graceMs = 1100,
+): Promise<X1Room | null> {
+  const clean = code.trim().toUpperCase();
+  const initial = getX1Room(clean);
+  if (!initial) return null;
+  if (initial.durationSec <= 0) return initial;
+
+  if (isPlayFabConfigured()) {
+    const myRole: "host" | "guest" = initial.host.playerId === myPlayerId ? "host" : "guest";
+    await pushPlayerSideToPlayFab(initial, myRole, false);
+    if (graceMs > 0) {
+      await new Promise((r) => setTimeout(r, graceMs));
+    }
+    await syncX1WithPlayFabCloud(clean);
+  }
+
+  return finishX1RoomByTimeout(clean);
 }
 
 export function closeX1Room(code: string) {
@@ -2830,6 +3484,7 @@ export function forfeitX1Match(
 
   if (winnerId) {
     room.winnerId = winnerId;
+    room.forfeitByPlayerId = forfeitingPlayerId;
     room.status = "finished";
     room.revision = (room.revision ?? 1) + 20;
     room.finishedAt = Date.now();
@@ -2847,7 +3502,8 @@ export function forfeitX1Match(
 
 /**
  * Atualiza o heartbeat do jogador dentro da partida ativa e sincroniza com a nuvem
- * para evitar falsos W.O.s entre dispositivos.
+ * para evitar falsos W.O.s entre dispositivos (sem sobrescrever `updatedAt` de quem já concluiu
+ * e sem sobrescrever o estado do oponente na nuvem).
  */
 export function touchX1MatchHeartbeat(code: string, playerId: string): X1Room | null {
   const clean = code.trim().toUpperCase();
@@ -2856,20 +3512,27 @@ export function touchX1MatchHeartbeat(code: string, playerId: string): X1Room | 
   if (!room || room.status !== "playing") return room ?? null;
 
   const now = Date.now();
+  let role: "host" | "guest";
   if (room.host.playerId === playerId) {
+    role = "host";
     room.host.lastSeenAt = now;
-    room.host.updatedAt = Math.max(room.host.updatedAt, now);
+    if (!room.host.finished) {
+      room.host.updatedAt = Math.max(room.host.updatedAt, now);
+    }
   } else if (room.guest?.playerId === playerId) {
+    role = "guest";
     room.guest.lastSeenAt = now;
-    room.guest.updatedAt = Math.max(room.guest.updatedAt, now);
+    if (!room.guest.finished) {
+      room.guest.updatedAt = Math.max(room.guest.updatedAt, now);
+    }
   } else {
     return room;
   }
 
-  // Não incrementa `revision` em pulsos de presença para não sobrescrever jogadas/respostas recentes na mesclagem
+  // Não incrementa `revision` em pulsos de presença e grava SOMENTE a chave isolada do próprio jogador
   store.rooms[clean] = room;
   saveStore(store);
-  void pushRoomToPlayFab(room);
+  void pushPlayerSideToPlayFab(room, role);
   return room;
 }
 

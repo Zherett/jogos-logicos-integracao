@@ -286,12 +286,12 @@ function Index() {
       }
     };
     pulse();
-    const id = window.setInterval(pulse, activeX1Room?.code ? 5000 : 25000);
+    const id = window.setInterval(pulse, activeX1Room?.code ? 5000 : 10000);
     return () => window.clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth.profile?.id, activeX1Room?.code, view, x1Open]);
 
-  // Persiste e restaura sala X1 ativa em caso de F5 acidental
+  // Persiste e restaura sala X1 ativa em caso de F5 acidental ou retorno do celular
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (activeX1Room?.code && (activeX1Room.status === "countdown" || activeX1Room.status === "playing")) {
@@ -305,18 +305,35 @@ function Index() {
     if (typeof window === "undefined" || !auth.profile || activeX1Room) return;
     const savedCode = window.sessionStorage.getItem("desafios-active-x1-room-code");
     if (!savedCode) return;
-    const existing = getX1Room(savedCode);
     const myId = auth.profile.id;
-    if (
-      existing &&
-      (existing.status === "countdown" || existing.status === "playing") &&
-      (existing.host.playerId === myId || existing.guest?.playerId === myId)
-    ) {
-      setActiveX1Room(existing);
-      setView(existing.gameId);
-    } else {
-      window.sessionStorage.removeItem("desafios-active-x1-room-code");
+    let cancelled = false;
+
+    const tryRestore = (candidate: X1Room | null): boolean => {
+      if (
+        candidate &&
+        (candidate.status === "countdown" || candidate.status === "playing") &&
+        (candidate.host.playerId === myId || candidate.guest?.playerId === myId)
+      ) {
+        setActiveX1Room(candidate);
+        setView(candidate.gameId);
+        return true;
+      }
+      return false;
+    };
+
+    const existing = getX1Room(savedCode);
+    if (!tryRestore(existing)) {
+      void syncX1WithPlayFabCloud(savedCode).then(() => {
+        if (cancelled) return;
+        const fetched = getX1Room(savedCode);
+        if (!tryRestore(fetched)) {
+          window.sessionStorage.removeItem("desafios-active-x1-room-code");
+        }
+      });
     }
+    return () => {
+      cancelled = true;
+    };
   }, [auth.profile?.id, activeX1Room]);
 
   // Monitor incoming X1 challenge invites in real-time
@@ -347,7 +364,7 @@ function Index() {
 
     checkInvites();
     const unsub = subscribeX1Updates(checkInvites);
-    const pollId = window.setInterval(checkInvites, 25000);
+    const pollId = window.setInterval(checkInvites, 10000);
 
     const handleReject = (e: Event) => {
       const detail = (e as CustomEvent).detail as

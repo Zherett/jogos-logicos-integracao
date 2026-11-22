@@ -13,8 +13,11 @@ import {
   type PlayerPresenceRecord,
 } from "./presence.ts";
 import {
+  callPlayFabClient,
   clearExpiredStoredSessionTicket,
   CLOUD_SESSION_EXPIRED_EVENT,
+  hasValidCloudSessionTicket,
+  playfabSignIn,
   playfabUpdatePlayerCards,
 } from "./playfab.ts";
 
@@ -59,8 +62,17 @@ function createFakePlayFab() {
     const body = JSON.parse(String(init?.body ?? "{}"));
     calls.push({ endpoint, ticket, keepalive: Boolean((init as any)?.keepalive), body });
 
-    if (endpoint === "LoginWithPlayFab" && body.Username === "semedvisitante") {
-      return ok({ PlayFabId: "1B2E1517154B2D49", SessionTicket: "TK_VIEWER" });
+    if (endpoint === "LoginWithPlayFab") {
+      if (body.Username === "semedvisitante") {
+        return ok({ PlayFabId: "1B2E1517154B2D49", SessionTicket: "TK_VIEWER" });
+      }
+      return fail("InvalidUsernameOrPassword", 1142, 401);
+    }
+    if (endpoint === "LoginWithCustomID") {
+      return ok({
+        PlayFabId: `PF_${body.CustomId}`,
+        SessionTicket: `TK_${body.CustomId}`,
+      });
     }
 
     const me = tickets[ticket];
@@ -88,7 +100,7 @@ function createFakePlayFab() {
       case "UpdateSharedGroupData": {
         const g = groups.get(body.SharedGroupId);
         if (!g) return fail("SharedGroupNotFound", 1175);
-        if (!g.members.has(me)) return fail("NotAuthorized", 1075);
+        if (!g.members.has(me)) return fail("NotAuthorized", 1075, 401);
         for (const [k, v] of Object.entries(body.Data ?? {})) {
           g.data.set(k, { Value: String(v), LastUpdated: nowIso });
         }
@@ -411,5 +423,43 @@ describe("Presença online/offline na nuvem (fluxo aluno → ADM)", () => {
     } finally {
       (globalThis as any).window.dispatchEvent = prevDispatch;
     }
+  });
+
+  it("HTTP 401 com NotAuthorized (1075) em SharedGroup NUNCA apaga o sessionTicket do jogador recém-logado", async () => {
+    // Cria grupo como ADM para que o aluno comum receba HTTP 401 NotAuthorized (1075)
+    loginAs("TK_ADMIN", "admin");
+    await callPlayFabClient("CreateSharedGroup", { SharedGroupId: "SEMED_STUDENT_ROSTER_V1" }, "TK_ADMIN");
+
+    loginAs("TK_ALUNO", "alunoteste");
+    assert.equal(hasValidCloudSessionTicket(), true);
+
+    await callPlayFabClient(
+      "UpdateSharedGroupData",
+      { SharedGroupId: "SEMED_STUDENT_ROSTER_V1", Data: { stu_alunoteste: "{}" } },
+      "TK_ALUNO",
+    );
+
+    // O sessionTicket do aluno deve permanecer 100% intacto!
+    const sess = JSON.parse(storage.getItem(SESSION_KEY) || "{}");
+    assert.equal(sess.sessionTicket, "TK_ALUNO");
+    assert.equal(hasValidCloudSessionTicket(), true);
+  });
+
+  it("contas ADM JOSINEY e QUEMUEL autenticam com suas credenciais oficiais e obtêm SessionTicket válido do PlayFab", async () => {
+    const resJ = await playfabSignIn("JOSINEY", "SEMED2620ZZ");
+    assert.equal(resJ.error, null);
+    assert.equal(resJ.account?.profile.nick, "JOSINEY");
+    assert.equal(resJ.account?.profile.isAdmin, true);
+    assert.equal(hasValidCloudSessionTicket(), true);
+
+    const resQ = await playfabSignIn("QUEMUEL", "SEMED2620QQ");
+    assert.equal(resQ.error, null);
+    assert.equal(resQ.account?.profile.nick, "QUEMUEL");
+    assert.equal(resQ.account?.profile.isAdmin, true);
+    assert.equal(hasValidCloudSessionTicket(), true);
+
+    const resWrong = await playfabSignIn("JOSINEY", "SENHA_ERRADA");
+    assert.equal(resWrong.account, null);
+    assert.ok(resWrong.error);
   });
 });

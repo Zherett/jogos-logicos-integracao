@@ -1,12 +1,14 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  __setX1ServerClockOffsetForTests,
   applyX1RobotBattleAnswer,
   buildX1Board,
   cancelAllWaitingRoomsForHost,
   cancelWaitingX1Room,
   clearX1MatchHistory,
   computeScoreRaceBlueShare,
+  confirmX1HostReady,
   createX1Room,
   finishX1RoomByTimeout,
   forfeitX1DisconnectedOpponent,
@@ -17,6 +19,7 @@ import {
   getX1DurationForGame,
   getX1LobbySnapshot,
   getX1Room,
+  getX1ServerNow,
   heartbeatOnlinePlayer,
   joinX1Room,
   loadX1HistoryMeta,
@@ -30,6 +33,7 @@ import {
   startX1MatchAfterCountdown,
   timeoutX1MinadoTurnSelection,
   touchX1MatchHeartbeat,
+  updateX1PlayerProgress,
   X1_COUNTDOWN_DURATION_SEC,
   X1_MATCH_DISCONNECT_TIMEOUT_MS,
   X1_MINADO_TURN_SELECT_TIMEOUT_SEC,
@@ -699,5 +703,168 @@ describe("Arena de Desafio X1 Online (1v1 Versus Mode)", () => {
     const touched = touchX1MatchHeartbeat(r.code, "g_sync")!;
     assert.equal(touched.revision ?? 1, prevRev);
     assert.ok((touched.guest?.lastSeenAt ?? 0) > 0);
+  });
+
+  it("contagem regressiva simultânea (handshake + UTC): Host (+45s) e Guest (-30s) chegam em VAI! exatamente no mesmo instante", async () => {
+    try {
+      const realServerTime = 1_750_000_000_000;
+      const hostLocalNow = realServerTime + 45_000; // Relógio do Host 45s adiantado
+      const guestLocalNow = realServerTime - 30_000; // Relógio do Guest 30s atrasado
+
+      // 1. Guest entra com awaitHostHandshake=true -> aguarda confirmação do Host (countdownEndsAt ainda null)
+      const created = createX1Room({
+        host: { playerId: "h_sim", nick: "HostSim", school: "SEMED", level: 7 },
+        gameId: "logica",
+      });
+      __setX1ServerClockOffsetForTests(realServerTime - guestLocalNow); // +30s offset no Guest
+      const joined = joinX1Room({
+        code: created.code,
+        guest: { playerId: "g_sim", nick: "GuestSim", school: "SEMED", level: 7 },
+        awaitHostHandshake: true,
+      });
+      assert.ok(joined.room);
+      assert.equal(joined.room!.hostReady, false);
+      assert.equal(joined.room!.countdownEndsAtServerMs, null);
+
+      // 2. Host recebe a sala e confirma prontidão (calibrado com offset -45s)
+      __setX1ServerClockOffsetForTests(realServerTime - hostLocalNow);
+      const hostConfirmed = await confirmX1HostReady(created.code);
+      assert.ok(hostConfirmed);
+      assert.equal(hostConfirmed!.hostReady, true);
+      assert.ok(typeof hostConfirmed!.countdownEndsAtServerMs === "number");
+      const targetStartUtc = hostConfirmed!.countdownEndsAtServerMs!;
+
+      // 3. Guest recebe a sala confirmada 800ms depois (no relógio UTC real)
+      __setX1ServerClockOffsetForTests(realServerTime - guestLocalNow);
+      const guestMerged = mergeX1RoomStates(joined.room!, hostConfirmed!, guestLocalNow + 800);
+      // NÃO pode ter reiniciado os 10s! Ambos devem apontar para o MESMO timestamp absoluto UTC!
+      assert.equal(guestMerged.countdownEndsAtServerMs, targetStartUtc);
+
+      // No mesmo instante real (realServerTime + 4000ms), ambos veem exatamente o mesmo tempo restante!
+      const checkUtc = realServerTime + 4000;
+      __setX1ServerClockOffsetForTests(realServerTime - hostLocalNow);
+      const hostRemMs = hostConfirmed!.countdownEndsAtServerMs! - getX1ServerNow(hostLocalNow + 4000);
+      __setX1ServerClockOffsetForTests(realServerTime - guestLocalNow);
+      const guestRemMs = guestMerged.countdownEndsAtServerMs! - getX1ServerNow(guestLocalNow + 4000);
+      assert.equal(hostRemMs, guestRemMs);
+      assert.ok(checkUtc > 0);
+    } finally {
+      __setX1ServerClockOffsetForTests(null);
+    }
+  });
+
+  it("encerramento por timeout preserva últimas respostas do oponente no merge (sem descartar pontos finais) e W.O. explícito preserva vencedor", () => {
+    const base = makeSampleRoom();
+    base.gameId = "logica";
+    base.status = "playing";
+    base.host.score = 60;
+    base.host.correct = 4;
+    base.guest!.score = 30;
+    base.guest!.correct = 2;
+
+    // Host encerra por timeout usando snapshot desatualizado do Guest (30 pts) -> acha que Host venceu
+    const hostFinished: X1Room = structuredClone(base);
+    hostFinished.status = "finished";
+    hostFinished.finishedAt = Date.now();
+    hostFinished.winnerId = hostFinished.host.playerId;
+
+    // Guest tinha acabado de responder mais 3 questões (75 pts) nos últimos 1.2s
+    const guestStillPlaying: X1Room = structuredClone(base);
+    guestStillPlaying.guest!.score = 75;
+    guestStillPlaying.guest!.correct = 5;
+    guestStillPlaying.guest!.currentQuestionIdx = 5;
+
+    // Tanto Guest recebendo hostFinished quanto Host recebendo guestStillPlaying devem convergir para Guest (75 > 60)!
+    const mergedOnGuest = mergeX1RoomStates(guestStillPlaying, hostFinished);
+    const mergedOnHost = mergeX1RoomStates(hostFinished, guestStillPlaying);
+    assert.equal(mergedOnGuest.guest?.score, 75);
+    assert.equal(mergedOnHost.guest?.score, 75);
+    assert.equal(mergedOnGuest.winnerId, "guest_2");
+    assert.equal(mergedOnHost.winnerId, "guest_2");
+
+    // Já em desistência explícita (W.O.), mesmo que o desistente tivesse mais pontos, o oponente continua vencedor
+    const guestForfeited: X1Room = structuredClone(guestStillPlaying);
+    guestForfeited.status = "finished";
+    guestForfeited.forfeitByPlayerId = "guest_2";
+    guestForfeited.winnerId = "host_1";
+    const mergedWo = mergeX1RoomStates(guestStillPlaying, guestForfeited);
+    assert.equal(mergedWo.winnerId, "host_1");
+  });
+
+  it("desempate por velocidade usa finishedAtServerMs imutável e não é corrompido por touchX1MatchHeartbeat", () => {
+    try {
+      const baseUtc = 1_760_000_000_000;
+      const created = createX1Room({
+        host: { playerId: "h_spd", nick: "HostSpd", school: "SEMED", level: 7 },
+        gameId: "logica",
+      });
+      joinX1Room({
+        code: created.code,
+        guest: { playerId: "g_spd", nick: "GuestSpd", school: "SEMED", level: 7 },
+      });
+      startX1MatchAfterCountdown(created.code);
+
+      // Host termina todas as questões em baseUtc + 40s
+      __setX1ServerClockOffsetForTests(baseUtc + 40_000 - Date.now());
+      updateX1PlayerProgress({
+        code: created.code,
+        playerId: "h_spd",
+        score: 300,
+        correct: 20,
+        wrong: 5,
+        currentQuestionIdx: 25,
+        finished: true,
+      });
+
+      // Heartbeat do Host roda 15s depois enquanto espera o Guest: NÃO pode alterar updatedAt nem finishedAtServerMs!
+      __setX1ServerClockOffsetForTests(baseUtc + 55_000 - Date.now());
+      const afterHb = touchX1MatchHeartbeat(created.code, "h_spd")!;
+      assert.equal(afterHb.host.finished, true);
+      const hostFinServer = afterHb.host.finishedAtServerMs!;
+
+      // Guest termina 20s depois do Host empatado em pontos/acertos/erros
+      __setX1ServerClockOffsetForTests(baseUtc + 60_000 - Date.now());
+      const finalRoom = updateX1PlayerProgress({
+        code: created.code,
+        playerId: "g_spd",
+        score: 300,
+        correct: 20,
+        wrong: 5,
+        currentQuestionIdx: 25,
+        finished: true,
+      })!;
+
+      assert.equal(finalRoom.status, "finished");
+      assert.ok(hostFinServer < finalRoom.guest!.finishedAtServerMs!);
+      assert.equal(finalRoom.winnerId, "h_spd");
+    } finally {
+      __setX1ServerClockOffsetForTests(null);
+    }
+  });
+
+  it("Campo Minado 1v1: turnSeq impede perda de timeout de 25s na mesclagem mesmo com mesmo número de cartas reveladas", () => {
+    const created = createX1Room({
+      host: { playerId: "m_h2", nick: "MinH2", school: "SEMED", level: 6 },
+      gameId: "minado",
+    });
+    joinX1Room({
+      code: created.code,
+      guest: { playerId: "m_g2", nick: "MinG2", school: "SEMED", level: 6 },
+    });
+    const started = startX1MatchAfterCountdown(created.code)!;
+    const staleLocal = structuredClone(started);
+    const initialTurn = started.minadoState!.currentTurnPlayerId;
+
+    // Estoura os 25s no aparelho ativo -> turnSeq vai de 0 para 1 e passa a vez
+    started.minadoState!.turnStartedAt = Date.now() - (X1_MINADO_TURN_SELECT_TIMEOUT_SEC + 2) * 1000;
+    started.minadoState!.turnStartedAtServerMs =
+      Date.now() - (X1_MINADO_TURN_SELECT_TIMEOUT_SEC + 2) * 1000;
+    const timedOut = timeoutX1MinadoTurnSelection(created.code).room!;
+    assert.equal((timedOut.minadoState?.turnSeq ?? 0) > (staleLocal.minadoState?.turnSeq ?? 0), true);
+
+    // Mesmo se staleLocal tiver revision igual/alta, o estado com turnSeq maior vence
+    staleLocal.revision = (timedOut.revision ?? 1) + 5;
+    const merged = mergeX1RoomStates(staleLocal, timedOut);
+    assert.notEqual(merged.minadoState?.currentTurnPlayerId, initialTurn);
   });
 });

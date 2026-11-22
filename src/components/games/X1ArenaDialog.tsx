@@ -42,6 +42,7 @@ import {
   closeX1Room,
   cancelAllWaitingRoomsForHost,
   cancelWaitingX1Room,
+  confirmX1HostReady,
   createX1Room,
   dismissX1Invite,
   getX1LobbySnapshot,
@@ -53,6 +54,7 @@ import {
   sanitizeX1AvailableGames,
   sanitizeX1MinadoGridSize,
   subscribeX1Updates,
+  syncX1ServerClockOffset,
   syncX1WithPlayFabCloud,
   type X1Room,
 } from "@/lib/x1-challenge";
@@ -135,9 +137,11 @@ export function X1ArenaDialog({
     return () => window.removeEventListener("desafios:x1-invite-rejected", handleRejected);
   }, [open, waitingRoomCode, profile?.id, profile?.nick]);
 
-  // Keep player presence heartbeat active and listen for room updates (fast 1.2s polling when waiting for challenger)
+  // Keep player presence heartbeat active and listen for room updates (fast 700ms polling when waiting for challenger)
   useEffect(() => {
     if (!open || !profile) return;
+
+    void syncX1ServerClockOffset();
 
     const sendHeartbeat = () => {
       const pStage = stageForPlayer(profile.school, profile.birthdate, new Date(), profile.ageStage);
@@ -159,7 +163,7 @@ export function X1ArenaDialog({
 
     sendHeartbeat();
     const unsub = subscribeX1Updates(() => setTick((t) => t + 1));
-    const pollMs = waitingRoomCode ? 1200 : 2500;
+    const pollMs = waitingRoomCode ? 700 : 2500;
     const timer = window.setInterval(sendHeartbeat, pollMs);
 
     return () => {
@@ -168,7 +172,7 @@ export function X1ArenaDialog({
     };
   }, [open, profile, waitingRoomCode]);
 
-  // Watch waiting room: check 2-min expiry and when guest joins (countdown/playing), launch X1 match!
+  // Watch waiting room: check 2-min expiry and when guest joins (countdown/playing), confirm host handshake & launch X1 match!
   useEffect(() => {
     if (!waitingRoomCode) return;
     const room = getX1Room(waitingRoomCode);
@@ -189,6 +193,9 @@ export function X1ArenaDialog({
       matchStartedRef.current = true;
       waitingRoomCodeRef.current = null;
       setWaitingRoomCode(null);
+      if (room.status === "countdown" && !room.hostReady) {
+        void confirmX1HostReady(room.code);
+      }
       onOpenChange(false);
       onStartX1Match(room);
     }
