@@ -902,6 +902,9 @@ export async function callPlayFabClient<T>(
 
       if (isAuthExpired && effectiveTicket && canRetryAuth) {
         clearCachedAdminPlayFabTicket();
+        if (effectiveTicket === cachedViewerTicket) {
+          clearViewerTicket();
+        }
         clearExpiredStoredSessionTicket(effectiveTicket);
         // Para endpoints de leitura/SharedGroup, renova com ticket de visitante e tenta novamente
         if (endpoint !== "UpdateUserData") {
@@ -911,6 +914,10 @@ export async function callPlayFabClient<T>(
           }
         }
       } else if (isNotAuthorized && effectiveTicket && canRetryAuth && endpoint !== "UpdateUserData") {
+        // Se o ticket em uso era de visitante ou fallback não-canônico ("semedv..."), invalida o cache antes de renovar
+        if (effectiveTicket === cachedViewerTicket || !isCanonicalViewerTicket(effectiveTicket)) {
+          clearViewerTicket();
+        }
         // Sem apagar o sessionTicket do jogador, tenta novamente com a conta compartilhada semedvisitante
         const fallbackTk = await getViewerPlayFabTicket();
         if (fallbackTk && fallbackTk !== effectiveTicket) {
@@ -1260,21 +1267,45 @@ function storeCachedRemoteConfig(raw: string) {
   }
 }
 
-/** Ticket de leitura reaproveitado por até 20h no dispositivo (com fallback anti-429). */
+function isCanonicalViewerTicket(ticket: string | null | undefined): boolean {
+  if (!ticket) return false;
+  // No PlayFab real, o SessionTicket sempre começa com "<PlayFabId>-<TitleId>-...".
+  // Apenas a conta oficial semedvisitante (1B2E1517154B2D49) é membro dos SharedGroups.
+  // Tickets aleatórios de fallback ("semedv...") têm outro PlayFabId e não devem ficar cacheados.
+  if (ticket.includes("-")) {
+    return ticket.toUpperCase().startsWith(`${ADMIN_CONFIG_OWNER_PLAYFAB_ID.toUpperCase()}-`);
+  }
+  return true;
+}
+
+/** Ticket de leitura/serviço reaproveitado por até 20h no dispositivo (sempre priorizando semedvisitante). */
 export async function getViewerPlayFabTicket(): Promise<string | null> {
-  if (cachedViewerTicket && Date.now() - cachedViewerTicketTime < VIEWER_TICKET_TTL_MS) {
+  if (
+    cachedViewerTicket &&
+    isCanonicalViewerTicket(cachedViewerTicket) &&
+    Date.now() - cachedViewerTicketTime < VIEWER_TICKET_TTL_MS
+  ) {
     return cachedViewerTicket;
+  }
+  if (cachedViewerTicket && !isCanonicalViewerTicket(cachedViewerTicket)) {
+    cachedViewerTicket = null;
+    cachedViewerTicketTime = 0;
   }
   if (typeof window !== "undefined") {
     try {
       const raw = window.localStorage.getItem(VIEWER_TICKET_KEY);
       if (raw) {
         const cached = JSON.parse(raw) as { ticket: string; at: number };
-        if (cached.ticket && Date.now() - cached.at < VIEWER_TICKET_TTL_MS) {
+        if (
+          cached.ticket &&
+          isCanonicalViewerTicket(cached.ticket) &&
+          Date.now() - cached.at < VIEWER_TICKET_TTL_MS
+        ) {
           cachedViewerTicket = cached.ticket;
           cachedViewerTicketTime = cached.at;
           return cached.ticket;
         }
+        window.localStorage.removeItem(VIEWER_TICKET_KEY);
       }
     } catch {
       /* ignore */
@@ -1295,7 +1326,7 @@ export async function getViewerPlayFabTicket(): Promise<string | null> {
           RequireBothUsernameAndEmail: false,
         });
       }
-      // Fallback caso muitos celulares abram simultaneamente e atinjam rate limit na conta padrão
+      // Fallback transitório (apenas leitura, nunca persistido em cache como ticket oficial de escrita)
       if (!res.data?.SessionTicket) {
         const uniqueUser = `semedv${Math.random().toString(36).slice(2, 10)}`;
         res = await callPlayFabClient<PlayFabLoginPayload>("RegisterPlayFabUser", {
@@ -1305,7 +1336,7 @@ export async function getViewerPlayFabTicket(): Promise<string | null> {
         });
       }
       const ticket = res.data?.SessionTicket ?? null;
-      if (ticket) {
+      if (ticket && isCanonicalViewerTicket(ticket)) {
         cachedViewerTicket = ticket;
         cachedViewerTicketTime = Date.now();
         if (typeof window !== "undefined") {
@@ -3252,6 +3283,7 @@ async function pushProfileToPlayFab(
     throw new Error("Sua sessão expirou. Faça login novamente para salvar suas recompensas com segurança.");
   }
 
+  let userDataSynced = false;
   if (ticket && !ticket.startsWith("admin-")) {
     try {
       const udRes = await callPlayFabClient(
@@ -3329,11 +3361,13 @@ async function pushProfileToPlayFab(
     },
     ticket,
   );
-      if (options?.requireUserDataSync && udRes.error) {
+      if (!udRes.error) {
+        userDataSynced = true;
+      } else if (options?.requireUserDataSync && !isAdminSessionActive) {
         throw new Error(udRes.error || "Falha ao sincronizar recompensa com o servidor.");
       }
     } catch (err) {
-      if (options?.requireUserDataSync) {
+      if (options?.requireUserDataSync && !isAdminSessionActive) {
         throw err instanceof Error
           ? err
           : new Error("Sua sessão expirou ou está sem conexão. Faça login novamente para resgatar.");
@@ -3347,86 +3381,104 @@ async function pushProfileToPlayFab(
   try {
     const rosterTicket = (await getViewerPlayFabTicket()) ?? (await getAdminPlayFabTicket()) ?? ticket;
     if (rosterTicket && !rosterTicket.startsWith("admin-")) {
-      await callPlayFabClient("CreateSharedGroup", { SharedGroupId: ROSTER_SHARED_GROUP_ID }, rosterTicket);
-      const rosterRes = await callPlayFabClient(
-        "UpdateSharedGroupData",
-        {
-          SharedGroupId: ROSTER_SHARED_GROUP_ID,
-          Data: {
-            [getStudentRosterCloudKey(p)]: JSON.stringify({
-              id: p.id,
-              playfabId: p.playfabId,
-              nick: p.nick,
-              nickNormalized: p.nickNormalized,
-              full_name: abbreviateStudentName(p.full_name),
-              school: p.school,
-              grade: p.grade,
-              turma: p.turma ?? null,
-              ageStage: p.ageStage ?? stageForPlayer(p.school, p.birthdate, new Date()).id,
-              xp: p.xp,
-              seasonXp: p.seasonXp,
-              level: p.level,
-              levelStageProgress: p.levelStageProgress,
-              wins: p.wins,
-              x1Wins: p.x1Wins ?? 0,
-              weeklyX1Wins: p.weeklyX1Wins ?? 0,
-              weeklyX1WeekKey: p.weeklyX1WeekKey,
-              tournamentPoints: p.tournamentPoints ?? 0,
-              bestTournamentPoints: p.bestTournamentPoints ?? 0,
-              tournamentRankId: p.tournamentRankId ?? "bronze_1",
-              tournamentWeekKey: p.tournamentWeekKey,
-              matchesPlayed: p.matchesPlayed,
-              distinctGamesPlayed: p.distinctGamesPlayed ?? 0,
-              streakDays: getPlayerStreakDays(p),
-              lastActiveDate: p.lastActiveDate,
-              activeDates: p.activeDates ?? [],
-              tournamentMedals: p.tournamentMedals ?? [],
-              unlockedMedals: p.unlockedMedals ?? [],
-              badges: p.badges ?? [],
-              careerPoints: p.careerPoints ?? 0,
-              pointsBalance: p.pointsBalance ?? 0,
-              coins: p.coins ?? 0,
-              lifetimeCoins: Math.max(p.lifetimeCoins ?? 0, p.coins ?? 0),
-              peakCoins: Math.max(p.peakCoins ?? 0, p.coins ?? 0),
-              coinsSpentTotal: p.coinsSpentTotal ?? 0,
-              purchasedCosmeticIds: p.purchasedCosmeticIds ?? [],
-              chestsOpenedTotal: p.chestsOpenedTotal ?? 0,
-              packsOpenedTotal: p.packsOpenedTotal ?? 0,
-              unlockedAvatars: p.unlockedAvatars,
-              equippedAvatar: p.equippedAvatar,
-              unlockedAuras: p.unlockedAuras,
-              equippedAuraId: p.equippedAuraId,
-              cards: p.cards ?? {},
-              unopenedPacks: p.unopenedPacks ?? {},
-              unopenedChests: p.unopenedChests ?? {},
-              claimedInboxRewardIds: p.claimedInboxRewardIds ?? [],
-          claimedRankedMilestones: p.claimedRankedMilestones ?? [],
-              lastDailyLoginPointsDate: p.lastDailyLoginPointsDate,
-              lastDailyFirstGamePointsDate: p.lastDailyFirstGamePointsDate,
-              achievedLevelsPoints: p.achievedLevelsPoints ?? [],
-              achievedTournamentTiers: p.achievedTournamentTiers ?? [],
-              eventProgress: p.eventProgress,
-              stats: account.stats ?? [],
-              isAdmin: p.isAdmin,
-              seasonId: p.seasonId,
-              activeSessionId: p.activeSessionId,
-              activeSessionUpdatedAt: p.activeSessionUpdatedAt,
-              lastKnownActivityAt: resolvedLastKnownActivityAt,
-              updatedAt: account.updatedAt,
-            }),
-          },
-          Permission: "Public",
+      const rosterPayload = {
+        SharedGroupId: ROSTER_SHARED_GROUP_ID,
+        Data: {
+          [getStudentRosterCloudKey(p)]: JSON.stringify({
+            id: p.id,
+            playfabId: p.playfabId,
+            nick: p.nick,
+            nickNormalized: p.nickNormalized,
+            full_name: abbreviateStudentName(p.full_name),
+            school: p.school,
+            grade: p.grade,
+            turma: p.turma ?? null,
+            ageStage: p.ageStage ?? stageForPlayer(p.school, p.birthdate, new Date()).id,
+            xp: p.xp,
+            seasonXp: p.seasonXp,
+            level: p.level,
+            levelStageProgress: p.levelStageProgress,
+            wins: p.wins,
+            x1Wins: p.x1Wins ?? 0,
+            weeklyX1Wins: p.weeklyX1Wins ?? 0,
+            weeklyX1WeekKey: p.weeklyX1WeekKey,
+            tournamentPoints: p.tournamentPoints ?? 0,
+            bestTournamentPoints: p.bestTournamentPoints ?? 0,
+            tournamentRankId: p.tournamentRankId ?? "bronze_1",
+            tournamentWeekKey: p.tournamentWeekKey,
+            matchesPlayed: p.matchesPlayed,
+            distinctGamesPlayed: p.distinctGamesPlayed ?? 0,
+            streakDays: getPlayerStreakDays(p),
+            lastActiveDate: p.lastActiveDate,
+            activeDates: p.activeDates ?? [],
+            tournamentMedals: p.tournamentMedals ?? [],
+            unlockedMedals: p.unlockedMedals ?? [],
+            badges: p.badges ?? [],
+            careerPoints: p.careerPoints ?? 0,
+            pointsBalance: p.pointsBalance ?? 0,
+            coins: p.coins ?? 0,
+            lifetimeCoins: Math.max(p.lifetimeCoins ?? 0, p.coins ?? 0),
+            peakCoins: Math.max(p.peakCoins ?? 0, p.coins ?? 0),
+            coinsSpentTotal: p.coinsSpentTotal ?? 0,
+            purchasedCosmeticIds: p.purchasedCosmeticIds ?? [],
+            chestsOpenedTotal: p.chestsOpenedTotal ?? 0,
+            packsOpenedTotal: p.packsOpenedTotal ?? 0,
+            unlockedAvatars: p.unlockedAvatars,
+            equippedAvatar: p.equippedAvatar,
+            unlockedAuras: p.unlockedAuras,
+            equippedAuraId: p.equippedAuraId,
+            cards: p.cards ?? {},
+            unopenedPacks: p.unopenedPacks ?? {},
+            unopenedChests: p.unopenedChests ?? {},
+            claimedInboxRewardIds: p.claimedInboxRewardIds ?? [],
+            claimedRankedMilestones: p.claimedRankedMilestones ?? [],
+            lastDailyLoginPointsDate: p.lastDailyLoginPointsDate,
+            lastDailyFirstGamePointsDate: p.lastDailyFirstGamePointsDate,
+            achievedLevelsPoints: p.achievedLevelsPoints ?? [],
+            achievedTournamentTiers: p.achievedTournamentTiers ?? [],
+            eventProgress: p.eventProgress,
+            stats: account.stats ?? [],
+            isAdmin: p.isAdmin,
+            seasonId: p.seasonId,
+            activeSessionId: p.activeSessionId,
+            activeSessionUpdatedAt: p.activeSessionUpdatedAt,
+            lastKnownActivityAt: resolvedLastKnownActivityAt,
+            updatedAt: account.updatedAt,
+          }),
         },
+        Permission: "Public",
+      };
+      let rosterRes = await callPlayFabClient(
+        "UpdateSharedGroupData",
+        rosterPayload,
         rosterTicket,
       );
-      if (options?.requireUserDataSync && isAdminSessionActive && rosterRes.error) {
+      if (
+        rosterRes.errorCode === "SharedGroupNotFound" ||
+        (rosterRes.error && /SharedGroupNotFound|not found/i.test(rosterRes.error))
+      ) {
+        await callPlayFabClient("CreateSharedGroup", { SharedGroupId: ROSTER_SHARED_GROUP_ID }, rosterTicket);
+        rosterRes = await callPlayFabClient(
+          "UpdateSharedGroupData",
+          rosterPayload,
+          rosterTicket,
+        );
+      }
+      if (
+        options?.requireUserDataSync &&
+        isAdminSessionActive &&
+        !userDataSynced &&
+        rosterRes.error &&
+        rosterRes.errorCode !== "NotAuthorized" &&
+        !/NotAuthorized/i.test(rosterRes.error)
+      ) {
         throw new Error(rosterRes.error || "Falha ao sincronizar com a nuvem.");
       }
-    } else if (options?.requireUserDataSync && isAdminSessionActive) {
+    } else if (options?.requireUserDataSync && isAdminSessionActive && !userDataSynced) {
       throw new Error("Sem conexão com a nuvem no momento. Tente novamente em instantes.");
     }
   } catch (err) {
-    if (options?.requireUserDataSync && isAdminSessionActive) {
+    if (options?.requireUserDataSync && isAdminSessionActive && !userDataSynced) {
       throw err instanceof Error ? err : new Error("Falha ao sincronizar com a nuvem.");
     }
     /* ignore network issues with shared group */
@@ -7468,6 +7520,14 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
             mergedActiveSess,
             udProfileLastUpdated,
           );
+          const mergedCloudCards: Record<string, number> = {};
+          for (const src of [cloudProfile?.cards, udProf.cards]) {
+            if (!src || typeof src !== "object") continue;
+            for (const [ck, cv] of Object.entries(src)) {
+              const qty = Math.max(0, Math.floor(Number(cv) || 0));
+              if (qty > 0) mergedCloudCards[ck] = Math.max(mergedCloudCards[ck] ?? 0, qty);
+            }
+          }
           cloudProfile = cloudProfile
             ? {
                 ...(rosterTs > udTs ? { ...udProf, ...cloudProfile } : { ...cloudProfile, ...udProf }),
@@ -7478,6 +7538,9 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
                 wins: Math.max(cloudProfile.wins ?? 0, udProf.wins ?? 0),
                 careerPoints: Math.max(cloudProfile.careerPoints ?? 0, udProf.careerPoints ?? 0),
                 pointsBalance: Math.max(cloudProfile.pointsBalance ?? 0, udProf.pointsBalance ?? 0),
+                packsOpenedTotal: Math.max(cloudProfile.packsOpenedTotal ?? 0, udProf.packsOpenedTotal ?? 0),
+                chestsOpenedTotal: Math.max(cloudProfile.chestsOpenedTotal ?? 0, udProf.chestsOpenedTotal ?? 0),
+                cards: mergedCloudCards,
                 activeSessionUpdatedAt: mergedActiveSess,
                 lastKnownActivityAt: mergedLastKnown,
               }
@@ -7553,8 +7616,24 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
         const mergedStats = Array.from(statMap.values());
         const existingTs = existing.updatedAt ? Date.parse(existing.updatedAt) : 0;
         const cloudUpdatedRaw = (cloudProfile as { updatedAt?: string }).updatedAt;
-        const cloudTs = cloudUpdatedRaw ? Date.parse(cloudUpdatedRaw) : 0;
+        const cloudTs = cloudUpdatedRaw
+          ? Date.parse(cloudUpdatedRaw)
+          : udProfileLastUpdated
+            ? Date.parse(udProfileLastUpdated)
+            : 0;
         const localIsNewer = existingTs > cloudTs;
+        const localPacksNewer =
+          localIsNewer || (existing.profile.packsOpenedTotal ?? 0) > (cloudProfile.packsOpenedTotal ?? 0);
+        const localChestsNewer =
+          localIsNewer || (existing.profile.chestsOpenedTotal ?? 0) > (cloudProfile.chestsOpenedTotal ?? 0);
+        const mergedCards: Record<string, number> = {};
+        for (const src of [existing.profile.cards, cloudProfile.cards]) {
+          if (!src || typeof src !== "object") continue;
+          for (const [ck, cv] of Object.entries(src)) {
+            const qty = Math.max(0, Math.floor(Number(cv) || 0));
+            if (qty > 0) mergedCards[ck] = Math.max(mergedCards[ck] ?? 0, qty);
+          }
+        }
         const mergedActiveSessionUpdatedAt = pickLatestIsoTimestamp(
           existing.profile.activeSessionUpdatedAt,
           cloudProfile.activeSessionUpdatedAt,
@@ -7577,6 +7656,7 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
         reg[targetKey] = ensurePlayerSeasonAligned(
           {
             ...existing,
+            updatedAt: localIsNewer ? existing.updatedAt : (cloudUpdatedRaw ?? existing.updatedAt),
             stats: mergedStats,
             profile: {
               ...existing.profile,
@@ -7593,6 +7673,39 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
               coins: localIsNewer
                 ? (existing.profile.coins ?? cloudProfile.coins ?? 0)
                 : Math.max(existing.profile.coins ?? 0, cloudProfile.coins ?? 0),
+              packsOpenedTotal: Math.max(
+                existing.profile.packsOpenedTotal ?? 0,
+                cloudProfile.packsOpenedTotal ?? 0,
+              ),
+              chestsOpenedTotal: Math.max(
+                existing.profile.chestsOpenedTotal ?? 0,
+                cloudProfile.chestsOpenedTotal ?? 0,
+              ),
+              cards: mergedCards,
+              unopenedPacks: localPacksNewer
+                ? (existing.profile.unopenedPacks ?? cloudProfile.unopenedPacks ?? {})
+                : (cloudProfile.unopenedPacks ?? existing.profile.unopenedPacks ?? {}),
+              unopenedChests: localChestsNewer
+                ? (existing.profile.unopenedChests ?? cloudProfile.unopenedChests ?? {})
+                : (cloudProfile.unopenedChests ?? existing.profile.unopenedChests ?? {}),
+              claimedInboxRewardIds: Array.from(
+                new Set([
+                  ...(existing.profile.claimedInboxRewardIds ?? []),
+                  ...(cloudProfile.claimedInboxRewardIds ?? []),
+                ]),
+              ),
+              claimedRankedMilestones: Array.from(
+                new Set([
+                  ...(existing.profile.claimedRankedMilestones ?? []),
+                  ...(cloudProfile.claimedRankedMilestones ?? []),
+                ]),
+              ),
+              purchasedCosmeticIds: Array.from(
+                new Set([
+                  ...(existing.profile.purchasedCosmeticIds ?? []),
+                  ...(cloudProfile.purchasedCosmeticIds ?? []),
+                ]),
+              ),
               unlockedAvatars: Array.from(
                 new Set([
                   ...(existing.profile.unlockedAvatars ?? []),
@@ -8389,7 +8502,11 @@ export async function playfabUpdatePlayerCards(args: {
   reg[session.playerId] = nextAcc;
   saveRegistry(reg);
 
-  if (session.sessionTicket && !session.sessionTicket.startsWith("admin-") && isPlayFabConfigured()) {
+  if (
+    session.sessionTicket &&
+    (!session.sessionTicket.startsWith("admin-") || isAdminSessionActive) &&
+    isPlayFabConfigured()
+  ) {
     try {
       await pushProfileToPlayFab(nextAcc, session.sessionTicket);
     } catch {
@@ -8433,7 +8550,11 @@ export async function syncActiveProfileChangeToPlayFab(
 
   reg[key] = nextAcc;
   saveRegistry(reg);
-  if (session?.sessionTicket && !session.sessionTicket.startsWith("admin-") && isPlayFabConfigured()) {
+  if (
+    session?.sessionTicket &&
+    (!session.sessionTicket.startsWith("admin-") || isAdminSessionActive) &&
+    isPlayFabConfigured()
+  ) {
     try {
       await pushProfileToPlayFab(nextAcc, session.sessionTicket);
     } catch {

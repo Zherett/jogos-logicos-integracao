@@ -901,16 +901,31 @@ describe("Presença online/offline na nuvem (fluxo aluno → ADM)", () => {
       const leakedAdminCalls = pf.calls.filter((c) => c.ticket.startsWith("admin-"));
       assert.equal(leakedAdminCalls.length, 0);
 
-      // 6. Abrir pacote de cartas com requireServerSync: true funciona e grava no ROSTER_SHARED_GROUP_ID
+      // 5.1. Simula cache residual de ticket fallback não-canônico ("semedv...") que NÃO é membro do SharedGroup (causava NotAuthorized)
+      storage.setItem(
+        "desafios-playfab-viewer-ticket-v1",
+        JSON.stringify({ ticket: "9F123456789ABCDE-186F63-FALLBACK", at: Date.now() }),
+      );
+
+      // 6. Abrir pacote de cartas com requireServerSync: true descarta o ticket não-canônico, usa semedvisitante sem erro NotAuthorized e persiste após F5
       const opened = await playfabUpdatePlayerCards({
-        cards: { carta_rara_1: 1 },
+        cards: { carta_rara_1: 1, carta_comum_2: 3 },
         unopenedPacks: { pack_basico: 0 },
         packsOpenedDelta: 1,
         requireServerSync: true,
       });
       assert.equal(opened?.cards?.carta_rara_1, 1);
+      assert.equal(opened?.cards?.carta_comum_2, 3);
       assert.equal(opened?.unopenedPacks?.pack_basico, 0);
+      assert.equal(opened?.packsOpenedTotal, 1);
       assert.equal(pf.groups.get(ROSTER_SHARED_GROUP_ID)?.data.has("stu_josiney"), true);
+
+      // 7. Simula reload (F5) chamando syncSinglePlayerFromPlayFab -> cartas abertas e pacote consumido permanecem intactos
+      const afterReload = await syncSinglePlayerFromPlayFab("JOSINEY");
+      assert.equal(afterReload?.cards?.carta_rara_1, 1);
+      assert.equal(afterReload?.cards?.carta_comum_2, 3);
+      assert.equal(afterReload?.unopenedPacks?.pack_basico, 0);
+      assert.equal(afterReload?.packsOpenedTotal, 1);
     } finally {
       (globalThis as any).window.dispatchEvent = prevDispatch;
     }
