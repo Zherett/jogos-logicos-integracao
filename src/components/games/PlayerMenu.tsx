@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState, useEffect, useMemo } from "react";
+import { lazy, Suspense, useState, useEffect, useMemo, useRef } from "react";
 import { Link } from "@tanstack/react-router";
 import {
   User,
