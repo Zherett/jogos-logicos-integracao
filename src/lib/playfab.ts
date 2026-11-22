@@ -291,6 +291,12 @@ export interface PlayerProfile {
   pointsBalance?: number;
   careerPoints?: number;
   coins?: number;
+  lifetimeCoins?: number;
+  peakCoins?: number;
+  coinsSpentTotal?: number;
+  purchasedCosmeticIds?: string[];
+  chestsOpenedTotal?: number;
+  packsOpenedTotal?: number;
   unlockedAvatars?: string[];
   equippedAvatar?: { id: string; color?: string };
   unlockedAuras?: string[];
@@ -2300,6 +2306,20 @@ function buildAccountFromPlayFabPayload(
     careerPoints: parsedProfile.careerPoints ?? 0,
     pointsBalance: parsedProfile.pointsBalance ?? 0,
     coins: parsedProfile.coins ?? 0,
+    lifetimeCoins: Math.max(
+      parsedProfile.lifetimeCoins ?? 0,
+      parsedProfile.coins ?? 0,
+    ),
+    peakCoins: Math.max(
+      parsedProfile.peakCoins ?? 0,
+      parsedProfile.coins ?? 0,
+    ),
+    coinsSpentTotal: parsedProfile.coinsSpentTotal ?? 0,
+    purchasedCosmeticIds: Array.isArray(parsedProfile.purchasedCosmeticIds)
+      ? parsedProfile.purchasedCosmeticIds
+      : [],
+    chestsOpenedTotal: parsedProfile.chestsOpenedTotal ?? 0,
+    packsOpenedTotal: parsedProfile.packsOpenedTotal ?? 0,
     unlockedAvatars: Array.isArray(parsedProfile.unlockedAvatars)
       ? parsedProfile.unlockedAvatars
       : undefined,
@@ -3046,6 +3066,12 @@ async function pushProfileToPlayFab(account: StoredAccount, sessionTicket?: stri
           careerPoints: p.careerPoints ?? 0,
           pointsBalance: p.pointsBalance ?? 0,
           coins: p.coins ?? 0,
+          lifetimeCoins: Math.max(p.lifetimeCoins ?? 0, p.coins ?? 0),
+          peakCoins: Math.max(p.peakCoins ?? 0, p.coins ?? 0),
+          coinsSpentTotal: p.coinsSpentTotal ?? 0,
+          purchasedCosmeticIds: p.purchasedCosmeticIds ?? [],
+          chestsOpenedTotal: p.chestsOpenedTotal ?? 0,
+          packsOpenedTotal: p.packsOpenedTotal ?? 0,
           unlockedAvatars: p.unlockedAvatars,
           equippedAvatar: p.equippedAvatar,
           unlockedAuras: p.unlockedAuras,
@@ -7781,10 +7807,62 @@ export async function runGlobalStudentsIntegrityAudit(
   };
 }
 
+function grantPassiveMedalsForAccount(acc: StoredAccount): void {
+  try {
+    const cfg = loadAdminConfig();
+    const allMedals = getAllAvailableMedals(cfg.customMedals);
+    const newlyAwarded = evaluatePlayerMedals(
+      {
+        profile: acc.profile,
+        stats: acc.stats,
+        enabledGames: cfg.enabledGames,
+      },
+      allMedals,
+    );
+    if (newlyAwarded.length === 0) return;
+    const nowIso = new Date().toISOString();
+    const currentUnlocked = [...(acc.profile.unlockedMedals ?? [])];
+    let bonusXp = 0;
+    for (const m of newlyAwarded) {
+      currentUnlocked.push({ medalId: m.id, unlockedAt: nowIso });
+      bonusXp += MEDAL_XP_REWARDS[m.rarity] ?? 10;
+      const ptsReward = MEDAL_POINTS_REWARDS[m.rarity] ?? 20;
+      awardCareerPoints(acc.profile, ptsReward, m.title, 1);
+      const coinsReward =
+        cfg.coinRewardsConfig?.medalCoinsByRarity?.[m.rarity] ??
+        MEDAL_COINS_REWARDS[m.rarity] ??
+        5;
+      awardCoins(acc.profile, coinsReward, `Medalha: ${m.title}`);
+      try {
+        recordScoreLedgerEntry({
+          playerId: acc.profile.id,
+          playerNick: acc.profile.nick,
+          type: "medal",
+          source: "medalha",
+          amount: 1,
+          reason: `Medalha Conquistada: ${m.title}`,
+          metadata: { medalId: m.id, medalTitle: m.title },
+        });
+      } catch {
+        /* ignore */
+      }
+    }
+    acc.profile.unlockedMedals = currentUnlocked;
+    if (bonusXp > 0) {
+      acc.profile.xp = (acc.profile.xp ?? 0) + bonusXp;
+      acc.profile.seasonXp = (acc.profile.seasonXp ?? 0) + bonusXp;
+      acc.profile.level = calculatePlayerLevel(acc.profile.xp);
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 export async function playfabUpdatePlayerCards(args: {
   cards: Record<string, number>;
   unopenedPacks?: Record<string, number>;
   unopenedChests?: Record<string, number>;
+  packsOpenedDelta?: number;
   requireServerSync?: boolean;
 }): Promise<PlayerProfile | null> {
   const session = loadStoredSession();
@@ -7793,15 +7871,20 @@ export async function playfabUpdatePlayerCards(args: {
   const acc = reg[session.playerId];
   if (!acc) return null;
 
+  const packsDelta = Math.max(0, Math.floor(Number(args.packsOpenedDelta) || 0));
   const nextAcc = {
     ...acc,
     profile: {
       ...acc.profile,
       cards: { ...args.cards },
       ...(args.unopenedPacks ? { unopenedPacks: { ...args.unopenedPacks } } : {}),
+      ...(packsDelta > 0
+        ? { packsOpenedTotal: Math.max(0, acc.profile.packsOpenedTotal ?? 0) + packsDelta }
+        : {}),
     },
     updatedAt: new Date().toISOString(),
   };
+  grantPassiveMedalsForAccount(nextAcc);
 
   if (args.requireServerSync && isPlayFabConfigured()) {
     if (!session.sessionTicket) {
@@ -7844,6 +7927,7 @@ export async function syncActiveProfileChangeToPlayFab(
     profile: { ...updatedProfile },
     updatedAt: new Date().toISOString(),
   };
+  grantPassiveMedalsForAccount(nextAcc);
   reg[key] = nextAcc;
   saveRegistry(reg);
   if (session?.sessionTicket && isPlayFabConfigured()) {

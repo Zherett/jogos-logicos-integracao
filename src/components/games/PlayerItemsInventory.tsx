@@ -20,6 +20,7 @@ import {
   type ChestOpenOutcome,
 } from "@/lib/chests-catalog";
 import { usePlayerAuth } from "@/lib/player-auth";
+import { creditCoinMetrics } from "@/lib/career-points";
 import { isAdminUnlockedSession, syncActiveProfileChangeToPlayFab } from "@/lib/playfab";
 import { isAdminOrTestAccount } from "@/lib/player-profile";
 import { CollectibleCardView } from "./CollectibleCardView";
@@ -68,12 +69,13 @@ export function PlayerItemsInventory() {
       ...auth.profile,
       unopenedChests: res.updatedUnopenedChests,
       unopenedPacks: nextPacks,
+      chestsOpenedTotal: Math.max(0, auth.profile.chestsOpenedTotal ?? 0) + 1,
       pointsBalance: (auth.profile.pointsBalance ?? 0) + res.outcome.points,
       careerPoints: (auth.profile.careerPoints ?? 0) + res.outcome.points,
       xp: (auth.profile.xp ?? 0) + res.outcome.xp,
       seasonXp: (auth.profile.seasonXp ?? 0) + res.outcome.xp,
-      coins: (auth.profile.coins ?? 0) + res.outcome.coins,
     };
+    creditCoinMetrics(updatedProfile, res.outcome.coins);
     for (const cosm of res.outcome.cosmetics ?? []) {
       updatedProfile = grantCosmeticToProfile(updatedProfile, cosm.kind, cosm.itemId).profile;
     }
@@ -121,6 +123,7 @@ export function PlayerItemsInventory() {
       const saveRes = await auth.updatePlayerCards({
         cards: res.updatedCardsMap,
         unopenedPacks: res.updatedUnopenedPacks,
+        packsOpenedDelta: 1,
         requireServerSync: true,
       });
       if (!saveRes.ok) {

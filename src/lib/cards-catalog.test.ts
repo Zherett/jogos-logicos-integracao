@@ -6,9 +6,11 @@ import {
   CARD_RARITIES,
   CARD_RARITY_META,
   consumeAndOpenCardPack,
+  createCardBatch,
   createCardDefinition,
   DEFAULT_CARD_PACKS,
   editCardDefinition,
+  generateMissingFoilDuplicates,
   mergeWithDefaultCardPacks,
   openCardPack,
   orderPackRevealCards,
@@ -186,5 +188,72 @@ describe("Sistema de Cartas Colecionáveis e Pacotes", () => {
     const edited = editCardDefinition(created.card, { colorVariant: 3 });
     assert.ok(edited.card);
     assert.equal(edited.card.colorVariant, 3);
+  });
+
+  it("cria par Normal + Foil com IDs distintos e duplica cartas existentes sem duplicar repetidamente", () => {
+    const pair = createCardBatch({
+      name: "Fênix Solar",
+      description: "Renascida das chamas",
+      rarity: "epica",
+      imageUrl: "https://example.com/fenix.png",
+      colorVariant: 2,
+      createNormal: true,
+      createFoil: true,
+    });
+    assert.equal(pair.cards.length, 2);
+    assert.notEqual(pair.cards[0].id, pair.cards[1].id);
+    assert.equal(pair.cards[0].isFoil, false);
+    assert.equal(pair.cards[1].isFoil, true);
+    assert.equal(pair.cards[0].colorVariant, 2);
+    assert.equal(pair.cards[1].colorVariant, 2);
+
+    const onlyFoil = createCardBatch({
+      name: "Somente Foil",
+      description: "Exclusiva",
+      rarity: "lendaria",
+      imageUrl: "https://example.com/foil.png",
+      createNormal: false,
+      createFoil: true,
+    });
+    assert.equal(onlyFoil.cards.length, 1);
+    assert.equal(onlyFoil.cards[0].isFoil, true);
+
+    const baseNormal = createCardDefinition({
+      name: "Carta Legada",
+      description: "Sem foil ainda",
+      rarity: "comum",
+      imageUrl: "https://example.com/legada.png",
+    }).card!;
+
+    const firstSeed = generateMissingFoilDuplicates([baseNormal]);
+    assert.equal(firstSeed.addedCount, 1);
+    assert.equal(firstSeed.updatedCatalog.length, 2);
+    assert.ok(firstSeed.updatedCatalog.some((c) => c.isFoil && c.name === "Carta Legada"));
+
+    // Idempotente na segunda chamada
+    const secondSeed = generateMissingFoilDuplicates(firstSeed.updatedCatalog);
+    assert.equal(secondSeed.addedCount, 0);
+    assert.equal(secondSeed.updatedCatalog.length, 2);
+
+    // Também cria versão Normal (sem Foil) quando a carta existente é Foil
+    const baseFoil = createCardDefinition({
+      name: "Carta Foil Legada",
+      description: "Sem versão normal ainda",
+      rarity: "ouro" as any,
+      imageUrl: "https://example.com/foil-legada.png",
+      isFoil: true,
+    });
+    const foilCard = createCardDefinition({
+      name: "Carta Foil Legada",
+      description: "Sem versão normal ainda",
+      rarity: "rara",
+      imageUrl: "https://example.com/foil-legada.png",
+      isFoil: true,
+    }).card!;
+    assert.equal(baseFoil.card?.isFoil, true);
+    const reverseSeed = generateMissingFoilDuplicates([foilCard]);
+    assert.equal(reverseSeed.addedCount, 1);
+    assert.equal(reverseSeed.updatedCatalog.length, 2);
+    assert.ok(reverseSeed.updatedCatalog.some((c) => !c.isFoil && c.name === "Carta Foil Legada"));
   });
 });

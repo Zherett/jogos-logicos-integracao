@@ -446,6 +446,8 @@ export function mergeWithDefaultAuras(custom?: AuraDefinition[] | null): AuraDef
 
 export interface CosmeticProfileSlice {
   coins?: number;
+  coinsSpentTotal?: number;
+  purchasedCosmeticIds?: string[];
   unlockedAvatars?: string[];
   equippedAvatar?: { id: string; color?: string };
   unlockedAuras?: string[];
@@ -557,11 +559,18 @@ export function purchaseStoreCosmetic<T extends CosmeticProfileSlice>(
     };
   }
   const granted = grantCosmeticToProfile(profile, kind, item.id);
+  const purchasedKey = `${kind}:${item.id}`;
+  const prevPurchased = Array.isArray(profile.purchasedCosmeticIds) ? profile.purchasedCosmeticIds : [];
+  const nextPurchased = prevPurchased.includes(purchasedKey)
+    ? prevPurchased
+    : [...prevPurchased, purchasedKey];
   return {
     ok: true,
     profile: {
       ...granted.profile,
       coins: currentCoins - price,
+      coinsSpentTotal: Math.max(0, Math.floor(Number(profile.coinsSpentTotal) || 0)) + price,
+      purchasedCosmeticIds: nextPurchased,
     },
   };
 }
@@ -594,6 +603,7 @@ export function purchaseStoreCardPack<T extends CosmeticProfileSlice>(
     profile: {
       ...profile,
       coins: currentCoins - totalCost,
+      coinsSpentTotal: Math.max(0, Math.floor(Number(profile.coinsSpentTotal) || 0)) + totalCost,
       unopenedPacks: nextPacks,
     },
   };

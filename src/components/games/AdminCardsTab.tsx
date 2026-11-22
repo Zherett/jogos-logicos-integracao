@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Plus,
   Pencil,
@@ -24,8 +24,9 @@ import {
   CARD_PACK_ICONS,
   CARD_RARITIES,
   CARD_RARITY_META,
-  createCardDefinition,
+  createCardBatch,
   editCardDefinition,
+  generateMissingFoilDuplicates,
   mergeWithDefaultCardPacks,
   openCardPack,
   resolveCardBgClass,
@@ -67,7 +68,8 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
   const [cardImageUrl, setCardImageUrl] = useState("");
   const [cardImageFit, setCardImageFit] = useState<CardImageFit>("contain-blur");
   const [cardColorVariant, setCardColorVariant] = useState<CardColorVariant>(1);
-  const [cardFoil, setCardFoil] = useState(false);
+  const [createNormal, setCreateNormal] = useState(true);
+  const [cardFoil, setCardFoil] = useState(true);
   const [cardError, setCardError] = useState<string | null>(null);
   const [rarityFilter, setRarityFilter] = useState<CardRarity | "todas">("todas");
   const [previewModalCard, setPreviewModalCard] = useState<CardDefinition | null>(null);
@@ -102,6 +104,38 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
     return cards.filter((c) => c.rarity === rarityFilter);
   }, [cards, rarityFilter]);
 
+  const autoSeededRef = useRef(false);
+  const missingFoilCount = useMemo(
+    () => generateMissingFoilDuplicates(cards).addedCount,
+    [cards],
+  );
+
+  useEffect(() => {
+    if (autoSeededRef.current) return;
+    if (cards.length === 0 || draft.foilDuplicatesSeededV2) return;
+    autoSeededRef.current = true;
+    const { updatedCatalog, addedCount } = generateMissingFoilDuplicates(cards);
+    const nextCfg: PlatformAdminConfig = {
+      ...draft,
+      cardsCatalog: addedCount > 0 ? updatedCatalog : cards,
+      foilDuplicatesSeededV2: true,
+    };
+    setDraft(nextCfg);
+    void onSaveConfig(nextCfg);
+  }, [cards, draft, onSaveConfig, setDraft]);
+
+  async function handleGenerateMissingFoils() {
+    const { updatedCatalog, addedCount } = generateMissingFoilDuplicates(cards);
+    if (addedCount <= 0) return;
+    const nextCfg: PlatformAdminConfig = {
+      ...draft,
+      cardsCatalog: updatedCatalog,
+      foilDuplicatesSeededV2: true,
+    };
+    setDraft(nextCfg);
+    await onSaveConfig(nextCfg);
+  }
+
   function resetCardForm() {
     setEditingCardId(null);
     setCardName("");
@@ -110,7 +144,8 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
     setCardImageUrl("");
     setCardImageFit("contain-blur");
     setCardColorVariant(1);
-    setCardFoil(false);
+    setCreateNormal(true);
+    setCardFoil(true);
     setCardError(null);
   }
 
@@ -149,20 +184,21 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
       }
       nextCards = cards.map((c) => (c.id === editingCardId ? res.card! : c));
     } else {
-      const res = createCardDefinition({
+      const res = createCardBatch({
         name: cardName,
         description: cardDesc,
         rarity: cardRarity,
         imageUrl: cardImageUrl,
         imageFit: cardImageFit,
         colorVariant: cardColorVariant,
-        isFoil: cardFoil,
+        createNormal,
+        createFoil: cardFoil,
       });
-      if (!res.card) {
+      if (res.error || res.cards.length === 0) {
         setCardError(res.error ?? "Erro ao criar carta.");
         return;
       }
-      nextCards = [res.card, ...cards];
+      nextCards = [...res.cards, ...cards];
     }
 
     const nextCfg: PlatformAdminConfig = { ...draft, cardsCatalog: nextCards };
@@ -482,6 +518,27 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
                 />
               </div>
 
+              {!editingCardId && (
+                <label
+                  htmlFor="card-normal"
+                  className="flex items-center justify-between gap-3 rounded-xl border bg-background/70 px-3 py-2.5 cursor-pointer transition-colors hover:bg-secondary/40"
+                >
+                  <span className="flex items-center gap-2 text-xs font-bold text-foreground">
+                    Versão Normal (sem Foil)
+                    <span className="text-[10px] font-normal text-muted-foreground">
+                      Cria a carta padrão na cor base escolhida
+                    </span>
+                  </span>
+                  <input
+                    id="card-normal"
+                    type="checkbox"
+                    checked={createNormal}
+                    onChange={(e) => setCreateNormal(e.target.checked)}
+                    className="h-4 w-4 accent-primary cursor-pointer"
+                  />
+                </label>
+              )}
+
               <label
                 htmlFor="card-foil"
                 className="flex items-center justify-between gap-3 rounded-xl border bg-background/70 px-3 py-2.5 cursor-pointer transition-colors hover:bg-secondary/40"
@@ -497,7 +554,13 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
                   id="card-foil"
                   type="checkbox"
                   checked={cardFoil}
-                  onChange={(e) => setCardFoil(e.target.checked)}
+                  onChange={(e) => {
+                    const checked = e.target.checked;
+                    setCardFoil(checked);
+                    if (checked && !editingCardId) {
+                      setCreateNormal(true);
+                    }
+                  }}
                   className="h-4 w-4 accent-amber-500 cursor-pointer"
                 />
               </label>
@@ -543,9 +606,23 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
           {/* Galeria de Cartas Criadas */}
           <div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <h4 className="font-display text-sm font-extrabold text-foreground">
-                Catálogo de Cartas ({filteredCards.length})
-              </h4>
+              <div className="flex flex-wrap items-center gap-2">
+                <h4 className="font-display text-sm font-extrabold text-foreground">
+                  Catálogo de Cartas ({filteredCards.length})
+                </h4>
+                {missingFoilCount > 0 && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void handleGenerateMissingFoils()}
+                    className="h-7 rounded-lg text-[11px] font-bold border-amber-500/40 text-amber-600 dark:text-amber-400"
+                  >
+                    <Sparkles className="h-3 w-3 mr-1" />
+                    Gerar Pares Faltantes ({missingFoilCount})
+                  </Button>
+                )}
+              </div>
               <div className="flex flex-wrap gap-1.5">
                 {(["todas", ...CARD_RARITIES] as const).map((r) => (
                   <button

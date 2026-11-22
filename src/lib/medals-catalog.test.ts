@@ -45,9 +45,9 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
     assert.equal(lvlMedals[0].id, "lvl_2");
     assert.equal(lvlMedals[8].id, "lvl_10");
 
-    // Valida medalhas de quantidade de partidas (5 por jogo x ALL_GAME_IDS.length)
+    // Valida medalhas de quantidade de partidas (7 por jogo x ALL_GAME_IDS.length + 4 globais não secretas)
     const matchMedals = catalog.filter((m) => m.category === "jogo_partidas");
-    assert.equal(matchMedals.length, ALL_GAME_IDS.length * 5);
+    assert.equal(matchMedals.length, ALL_GAME_IDS.length * 7 + 4);
 
     // Valida medalhas de zero erros (1 por jogo)
     const flawlessMedals = catalog.filter((m) => m.category === "jogo_perfeito");
@@ -213,11 +213,11 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
     assert.equal(top3[2].id, "m_platina_2");
   });
 
-  it("garante que cada jogo registrado gera automaticamente 7 medalhas dedicadas (além das exclusivas vinculadas)", () => {
+  it("garante que cada jogo registrado gera automaticamente 11 medalhas dedicadas (além das exclusivas vinculadas)", () => {
     const catalog = buildBaseMedalsCatalog();
     const expectedTotalByGame: Partial<Record<string, number>> = {
-      rpg: 9,
-      spacequest: 15,
+      rpg: 13,
+      spacequest: 19,
     };
 
     for (const gId of ALL_GAME_IDS) {
@@ -226,16 +226,17 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
       );
       assert.equal(
         autoMedals.length,
-        7,
-        `Jogo ${gId} deveria ter 7 medalhas automáticas (1 nível, 1 sem erros, 5 partidas), mas tem ${autoMedals.length}`
+        11,
+        `Jogo ${gId} deveria ter 11 medalhas automáticas (1 nível, 1 sem erros, 9 partidas), mas tem ${autoMedals.length}`
       );
       assert.ok(autoMedals.some((m) => m.id === `game_${gId}_lvl_master`));
       assert.ok(autoMedals.some((m) => m.id === `game_${gId}_flawless`));
       assert.ok(autoMedals.some((m) => m.id === `game_${gId}_matches_10`));
       assert.ok(autoMedals.some((m) => m.id === `game_${gId}_matches_50`));
+      assert.ok(autoMedals.some((m) => m.id === `game_${gId}_matches_500` && m.excludeFromGameCompletion));
 
       const allGameMedals = catalog.filter((m) => m.gameId === gId);
-      const expectedTotal = expectedTotalByGame[gId] ?? 7;
+      const expectedTotal = expectedTotalByGame[gId] ?? 11;
       assert.equal(
         allGameMedals.length,
         expectedTotal,
@@ -1975,19 +1976,19 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
     ];
 
     const formas = getGameMedalsProgress("formas", unlocked);
-    assert.equal(formas.total, 7);
+    assert.equal(formas.total, 9);
     assert.equal(formas.earned, 2);
-    assert.equal(formas.remaining, 5);
+    assert.equal(formas.remaining, 7);
 
     const rpg = getGameMedalsProgress("rpg", unlocked);
-    assert.equal(rpg.total, 9);
+    assert.equal(rpg.total, 11);
     assert.equal(rpg.earned, 1);
-    assert.equal(rpg.remaining, 8);
+    assert.equal(rpg.remaining, 10);
 
     const sq = getGameMedalsProgress("spacequest", unlocked);
-    assert.equal(sq.total, 15);
+    assert.equal(sq.total, 17);
     assert.equal(sq.earned, 1);
-    assert.equal(sq.remaining, 14);
+    assert.equal(sq.remaining, 16);
 
     const customMedals: MedalDefinition[] = [
       {
@@ -2014,9 +2015,9 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
       { scope: "todos", linkedMedalIds: ["ev_global_1"] },
     ];
     const cart = getGameMedalsProgress("cartesiano", [{ medalId: "ev_cart_1", unlockedAt: "2026-11-14T11:00:00Z" }], customMedals, events);
-    assert.equal(cart.total, 8);
+    assert.equal(cart.total, 10);
     assert.equal(cart.earned, 1);
-    assert.equal(cart.remaining, 7);
+    assert.equal(cart.remaining, 9);
   });
 
   it("filterMedalsByQuery busca medalhas por nome, descrição e raridade (prata, ouro, platina)", () => {
@@ -2403,5 +2404,80 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
     const prog = calculateMedalProgress(platinaDef, { ...baseProfile, weeklyMissionsCompleted: 10 }, []);
     assert.equal(prog.percent, 50);
     assert.equal(prog.progressText, "10 de 20 missões semanais concluídas");
+  });
+
+  it("avalia medalhas de partidas normais (excluindo X1 e torneio), economia, baús, pacotes e cartas", () => {
+    const profile: PlayerProfile = {
+      id: "eco1",
+      nick: "EcoPlayer",
+      nickNormalized: "ecoplayer",
+      full_name: "Eco Player",
+      school: "E.M. Teste",
+      grade: "5º Ano",
+      birthdate: "",
+      xp: 0,
+      seasonXp: 0,
+      level: 1,
+      wins: 0,
+      matchesPlayed: 0,
+      badges: [],
+      seasonId: 1,
+      coins: 120,
+      lifetimeCoins: 1500,
+      peakCoins: 900,
+      coinsSpentTotal: 1380,
+      purchasedCosmeticIds: ["avatar:avatar_smile", "aura:aura_azul_static"],
+      chestsOpenedTotal: 12,
+      packsOpenedTotal: 16,
+      cards: {
+        c1: 10,
+        c2: 12,
+        c3: 5,
+        c4: 1,
+        c5: 2,
+        c6: 3,
+        c7: 4,
+        c8: 6,
+        c9: 8,
+        c10: 9,
+      },
+      unlockedMedals: [],
+    };
+    const stats = [
+      { game_id: "logica" as const, mode: "normal", plays: 110, wins: 50, best_score: 100, best_level: 3 },
+      { game_id: "logica" as const, mode: "x1_online", plays: 200, wins: 100, best_score: 100, best_level: 3 },
+      { game_id: "logica" as const, mode: "torneio_semanal", plays: 90, wins: 40, best_score: 100, best_level: 3 },
+    ];
+
+    const awarded = evaluatePlayerMedals({ profile, stats }).map((m) => m.id);
+    // Partidas normais: 110 (não soma 200 de X1 nem 90 de torneio)
+    assert.ok(awarded.includes("normal_matches_100"));
+    assert.ok(!awarded.includes("normal_matches_200"));
+    // Moedas conseguidas (1500)
+    assert.ok(awarded.includes("coins_earned_100"));
+    assert.ok(awarded.includes("coins_earned_1200"));
+    assert.ok(!awarded.includes("coins_earned_2000"));
+    // Moedas gastas (1380)
+    assert.ok(awarded.includes("coins_spent_50"));
+    assert.ok(awarded.includes("coins_spent_1200"));
+    assert.ok(!awarded.includes("coins_spent_2000"));
+    // Cosméticos comprados (2)
+    assert.ok(awarded.includes("cosmetics_bought_1"));
+    assert.ok(awarded.includes("cosmetics_bought_2"));
+    assert.ok(!awarded.includes("cosmetics_bought_5"));
+    // Baús (12)
+    assert.ok(awarded.includes("chests_opened_1"));
+    assert.ok(awarded.includes("chests_opened_10"));
+    assert.ok(!awarded.includes("chests_opened_20"));
+    // Pacotes (16)
+    assert.ok(awarded.includes("packs_opened_1"));
+    assert.ok(awarded.includes("packs_opened_15"));
+    assert.ok(!awarded.includes("packs_opened_30"));
+    // Cartas únicas (10) e total (60)
+    assert.ok(awarded.includes("cards_unique_10"));
+    assert.ok(!awarded.includes("cards_unique_30"));
+    assert.ok(awarded.includes("cards_total_20"));
+    assert.ok(awarded.includes("cards_total_50"));
+    assert.ok(!awarded.includes("cards_total_100"));
   });
 });

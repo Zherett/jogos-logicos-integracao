@@ -3,7 +3,7 @@
  * Suporta 6 padrões de máscara de alta entropia, proteção contra brute-force / timing attacks,
  * transações atômicas de resgate e trava de acesso para contas de teste (Zheret & Lord).
  */
-import { awardCareerPoints } from "./career-points.ts";
+import { awardCareerPoints, creditCoinMetrics } from "./career-points.ts";
 import { calculatePlayerLevel, nickSlug, type PlayerProfile } from "./player-profile.ts";
 import { recordScoreLedgerEntry } from "./score-history-ledger.ts";
 import {
@@ -615,7 +615,7 @@ export function claimPromoCode(
   // 3.1 Concede Moedas se houver
   if (rewards.coins && rewards.coins > 0) {
     const coinsQty = Math.floor(rewards.coins);
-    student.coins = (student.coins ?? 0) + coinsQty;
+    creditCoinMetrics(student, coinsQty);
     try {
       recordScoreLedgerEntry({
         playerId: student.id,

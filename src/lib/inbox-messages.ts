@@ -7,7 +7,7 @@
 // - Regra de exclusao: mensagens com recompensa nao podem ser apagadas ate o resgate
 
 import type { PlayerProfile } from "./playfab.ts";
-import { awardCareerPoints } from "./career-points.ts";
+import { awardCareerPoints, creditCoinMetrics } from "./career-points.ts";
 import { getAllAvailableMedals, type PlayerUnlockedMedal } from "./medals-catalog.ts";
 import {
   stageForPlayer,
@@ -1378,7 +1378,7 @@ export function claimInboxReward(
     // 1.2 Conceder Moedas se houver
     if (reward.type === "coins" && reward.pointsAmount && reward.pointsAmount > 0) {
       const coinsBonus = Math.floor(reward.pointsAmount);
-      profile.coins = (profile.coins ?? 0) + coinsBonus;
+      creditCoinMetrics(profile, coinsBonus);
       try {
         recordScoreLedgerEntry({
           playerId: profile.id,

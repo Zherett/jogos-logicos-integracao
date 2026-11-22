@@ -239,6 +239,8 @@ export interface PlatformAdminConfig {
   scheduledInboxRules?: ScheduledInboxRule[];
   /** Catálogo de cartas colecionáveis criadas pelo ADM */
   cardsCatalog?: CardDefinition[];
+  /** Indica se a duplicação automática inicial (Normal <-> Foil) já foi executada */
+  foilDuplicatesSeededV2?: boolean;
   /** Pacotes de cartas (5 padrão + pacotes especiais do ADM) */
   cardPacks?: CardPackDefinition[];
   /** Catálogo de baús configuráveis pelo ADM (prévia ADM) */

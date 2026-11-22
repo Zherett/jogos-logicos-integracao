@@ -4,6 +4,7 @@
 // e sistema de Medalhas de Torneio engatilhado.
 
 import { ALL_GAME_IDS, GAME_NAMES, type GameId } from "./game-storage.ts";
+import { creditCoinMetrics } from "./career-points.ts";
 import { loadAdminConfig, type RankedMilestoneReward } from "./game-codes.ts";
 import {
   grantPlayerTournamentMedal,
@@ -1983,13 +1984,13 @@ export function claimRankedMilestoneReward(args: {
     nextProfile.pointsBalance = (nextProfile.pointsBalance ?? 0) + qty;
     nextProfile.careerPoints = (nextProfile.careerPoints ?? 0) + qty;
   } else if (args.reward.type === "coins") {
-    nextProfile.coins = (nextProfile.coins ?? 0) + qty;
+    creditCoinMetrics(nextProfile, qty);
   } else {
     return { ok: false, error: "Configuração de recompensa inválida." };
   }
 
   if (args.reward.coinsBonus && args.reward.coinsBonus > 0 && args.reward.type !== "coins") {
-    nextProfile.coins = (nextProfile.coins ?? 0) + Math.floor(args.reward.coinsBonus);
+    creditCoinMetrics(nextProfile, Math.floor(args.reward.coinsBonus));
   }
 
   return { ok: true, updatedProfile: nextProfile, milestoneKey };

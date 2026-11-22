@@ -23,6 +23,9 @@ export type MedalCategory =
   | "sem_erros"
   | "atividade"
   | "ranking"
+  | "economia"
+  | "baus"
+  | "cartas"
   | "meta"
   | "evento"
   | "secreta";
@@ -38,6 +41,9 @@ export const CATEGORY_LABELS: Record<MedalCategory, string> = {
   sem_erros: "Mente Precisa",
   atividade: "Dias & XP",
   ranking: "Torneio",
+  economia: "Loja & Moedas",
+  baus: "Baús",
+  cartas: "Cartas & Coleção",
   meta: "Meta-Medalhas",
   evento: "Eventos Especiais",
   secreta: "Secretas",
@@ -96,6 +102,14 @@ export interface MedalCondition {
     | "beta_tester_heroi"
     | "daily_post_cap_matches"
     | "total_matches_played"
+    | "normal_matches_total"
+    | "lifetime_coins"
+    | "coins_spent_total"
+    | "cosmetics_purchased_count"
+    | "chests_opened_total"
+    | "packs_opened_total"
+    | "unique_cards_count"
+    | "total_cards_count"
     | "streak_medal_count"
     | "top5_weeks_count"
     | "top1_consecutive_weeks"
@@ -119,6 +133,8 @@ export interface MedalDefinition {
   createdByAdmin?: boolean;
   gameId?: GameId;
   isSecret?: boolean;
+  /** Quando true, não contabiliza no contador da página do jogo nem para conquistas de completar todas as medalhas do jogo */
+  excludeFromGameCompletion?: boolean;
   isStackable?: boolean;
   eventId?: string | null;
   eventName?: string | null;
@@ -405,23 +421,66 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
     });
   }
 
-  // 3. Por Jogo: Quantidade de Partidas (10, 20, 30, 40, 50 partidas x 10 jogos = 50 medalhas)
-  const matchThresholds = [10, 20, 30, 40, 50];
-  const thresholdRarities: MedalRarity[] = ["bronze", "prata", "prata", "ouro", "platina"];
+  // 3. Por Jogo: Quantidade de Partidas (10, 20, 30, 40, 50, 100, 200, 300*, 500* partidas x 10 jogos)
+  const matchThresholds = [10, 20, 30, 40, 50, 100, 200, 300, 500];
+  const thresholdRarities: MedalRarity[] = [
+    "bronze",
+    "prata",
+    "prata",
+    "ouro",
+    "platina",
+    "diamante",
+    "diamante",
+    "heroi",
+    "heroi",
+  ];
 
   for (const gId of ALL_GAME_IDS) {
     const gName = GAME_NAMES[gId];
     matchThresholds.forEach((count, idx) => {
+      const isUltraSecret = count >= 300;
       medals.push({
         id: `game_${gId}_matches_${count}`,
         title: `${gName}: ${count} Partidas`,
-        description: `Complete ${count} partidas no jogo ${gName}.`,
+        description: isUltraSecret
+          ? `Segredo revelado: completou ${count} partidas no jogo ${gName}!`
+          : `Complete ${count} partidas no jogo ${gName}.`,
         rarity: thresholdRarities[idx],
-        category: "jogo_partidas",
-        iconName: count === 50 ? "Award" : "Flame",
+        category: isUltraSecret ? "secreta" : "jogo_partidas",
+        iconName: count >= 300 ? "Crown" : count >= 100 ? "Trophy" : count === 50 ? "Award" : "Flame",
         gameId: gId,
+        isSecret: isUltraSecret,
+        excludeFromGameCompletion: isUltraSecret,
         condition: { type: "game_match_count", gameId: gId, threshold: count },
       });
+    });
+  }
+
+  // 3.1 Partidas Normais Totais (soma de jogos normais, excluindo X1 e Ranqueada)
+  const normalGlobalMilestones: Array<{
+    count: number;
+    rarity: MedalRarity;
+    title: string;
+    isSecret?: boolean;
+  }> = [
+    { count: 100, rarity: "ouro", title: "Maratonista de Ouro (100 Partidas)" },
+    { count: 200, rarity: "platina", title: "Veterano de Platina (200 Partidas)" },
+    { count: 300, rarity: "diamante", title: "Mestre de Diamante (300 Partidas)" },
+    { count: 500, rarity: "heroi", title: "Herói das Partidas (500 Partidas)" },
+    { count: 1000, rarity: "heroi", title: "Lenda Imortal (1.000 Partidas Normais)", isSecret: true },
+  ];
+  for (const nm of normalGlobalMilestones) {
+    medals.push({
+      id: `normal_matches_${nm.count}`,
+      title: nm.title,
+      description: nm.isSecret
+        ? `Segredo revelado: disputou ${nm.count} partidas normais na plataforma (fora X1 e Ranqueada)!`
+        : `Dispute ${nm.count} partidas normais em qualquer jogo (não inclui X1 nem Ranqueada).`,
+      rarity: nm.rarity,
+      category: nm.isSecret ? "secreta" : "jogo_partidas",
+      iconName: nm.isSecret ? "Crown" : "Flame",
+      isSecret: Boolean(nm.isSecret),
+      condition: { type: "normal_matches_total", threshold: nm.count },
     });
   }
 
@@ -1116,6 +1175,161 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
       condition: { type: "top1_consecutive_weeks", threshold: 2 },
       isSecret: true,
     },
+
+    // 16. Medalhas de Economia: Conseguir Moedas (cumulativo, não desconta gastos)
+    ...(
+      [
+        { threshold: 100, rarity: "bronze", title: "Primeiras Moedas (100)" },
+        { threshold: 300, rarity: "bronze", title: "Bolsa Crescendo (300)" },
+        { threshold: 500, rarity: "prata", title: "Caça-Tesouros (500)" },
+        { threshold: 800, rarity: "prata", title: "Cofre em Alta (800)" },
+        { threshold: 1200, rarity: "ouro", title: "Colecionador de Ouro (1.200)" },
+        { threshold: 2000, rarity: "platina", title: "Fortuna de Platina (2.000)" },
+        { threshold: 3000, rarity: "diamante", title: "Tesouro de Diamante (3.000)" },
+        { threshold: 4000, rarity: "diamante", title: "Magnata Diamante (4.000)" },
+        { threshold: 5000, rarity: "heroi", title: "Herói da Riqueza (5.000)" },
+      ] as Array<{ threshold: number; rarity: MedalRarity; title: string }>
+    ).map((m) => ({
+      id: `coins_earned_${m.threshold}`,
+      title: m.title,
+      description: `Conquiste um total acumulado de ${m.threshold.toLocaleString("pt-BR")} moedas na sua conta.`,
+      rarity: m.rarity,
+      category: "economia" as MedalCategory,
+      iconName: m.rarity === "heroi" ? "Crown" : "Sparkles",
+      condition: { type: "lifetime_coins" as const, threshold: m.threshold },
+    })),
+
+    // 17. Medalhas de Economia: Gastar Moedas na Loja
+    ...(
+      [
+        { threshold: 50, rarity: "bronze", title: "Primeira Compra (50 Moedas)" },
+        { threshold: 200, rarity: "bronze", title: "Cliente Fiel (200 Moedas)" },
+        { threshold: 500, rarity: "prata", title: "Comprador Ativo (500 Moedas)" },
+        { threshold: 700, rarity: "prata", title: "Estilo em Alta (700 Moedas)" },
+        { threshold: 1200, rarity: "ouro", title: "Investidor de Ouro (1.200 Moedas)" },
+        { threshold: 2000, rarity: "ouro", title: "VIP da Loja (2.000 Moedas)" },
+        { threshold: 2500, rarity: "platina", title: "Patrono de Platina (2.500 Moedas)" },
+        { threshold: 3000, rarity: "platina", title: "Grande Comprador (3.000 Moedas)" },
+        { threshold: 4000, rarity: "diamante", title: "Soberano da Loja (4.000 Moedas)" },
+        { threshold: 5000, rarity: "heroi", title: "Mecenas Heróico (5.000 Moedas)" },
+      ] as Array<{ threshold: number; rarity: MedalRarity; title: string }>
+    ).map((m) => ({
+      id: `coins_spent_${m.threshold}`,
+      title: m.title,
+      description: `Gaste um total de ${m.threshold.toLocaleString("pt-BR")} moedas na loja.`,
+      rarity: m.rarity,
+      category: "economia" as MedalCategory,
+      iconName: m.rarity === "heroi" ? "Crown" : "Award",
+      condition: { type: "coins_spent_total" as const, threshold: m.threshold },
+    })),
+
+    // 18. Medalhas de Economia: Comprar Itens Cosméticos Diferentes (exclui pacotes)
+    ...(
+      [
+        { threshold: 1, rarity: "bronze", title: "Primeiro Cosmético" },
+        { threshold: 2, rarity: "bronze", title: "Visual Duplo (2 Cosméticos)" },
+        { threshold: 5, rarity: "prata", title: "Guarda-Roupa Inicial (5 Cosméticos)" },
+        { threshold: 10, rarity: "prata", title: "Estilo Variado (10 Cosméticos)" },
+        { threshold: 15, rarity: "ouro", title: "Coleção de Estilo (15 Cosméticos)" },
+        { threshold: 25, rarity: "platina", title: "Ícone da Moda (25 Cosméticos)" },
+        { threshold: 35, rarity: "diamante", title: "Acervo de Diamante (35 Cosméticos)" },
+        { threshold: 50, rarity: "heroi", title: "Galeria Suprema (50 Cosméticos)" },
+      ] as Array<{ threshold: number; rarity: MedalRarity; title: string }>
+    ).map((m) => ({
+      id: `cosmetics_bought_${m.threshold}`,
+      title: m.title,
+      description: `Compre ${m.threshold} ${m.threshold === 1 ? "item cosmético diferente" : "itens cosméticos diferentes"} na loja (avatares ou auras).`,
+      rarity: m.rarity,
+      category: "economia" as MedalCategory,
+      iconName: m.rarity === "heroi" ? "Crown" : "Star",
+      condition: { type: "cosmetics_purchased_count" as const, threshold: m.threshold },
+    })),
+
+    // 19. Medalhas de Baús: Abrir Baús
+    ...(
+      [
+        { threshold: 1, rarity: "bronze", title: "Primeiro Baú Aberto" },
+        { threshold: 5, rarity: "prata", title: "Explorador de Baús (5)" },
+        { threshold: 10, rarity: "prata", title: "Caçador de Espólios (10)" },
+        { threshold: 20, rarity: "ouro", title: "Mestre dos Baús (20)" },
+        { threshold: 50, rarity: "platina", title: "Saqueador de Platina (50)" },
+        { threshold: 100, rarity: "diamante", title: "Guardião das Arcas (100)" },
+        { threshold: 300, rarity: "heroi", title: "Senhor dos Tesouros (300)" },
+      ] as Array<{ threshold: number; rarity: MedalRarity; title: string }>
+    ).map((m) => ({
+      id: `chests_opened_${m.threshold}`,
+      title: m.title,
+      description:
+        m.threshold === 1
+          ? "Abra o seu primeiro baú de recompensas."
+          : `Abra um total de ${m.threshold} baús de recompensas.`,
+      rarity: m.rarity,
+      category: "baus" as MedalCategory,
+      iconName: m.rarity === "heroi" ? "Crown" : "Trophy",
+      condition: { type: "chests_opened_total" as const, threshold: m.threshold },
+    })),
+
+    // 20. Medalhas de Cartas: Abrir Pacotes
+    ...(
+      [
+        { threshold: 1, rarity: "bronze", title: "Primeiro Pacote Aberto" },
+        { threshold: 5, rarity: "prata", title: "Abrindo Caminhos (5 Pacotes)" },
+        { threshold: 15, rarity: "ouro", title: "Colecionador em Ação (15 Pacotes)" },
+        { threshold: 30, rarity: "platina", title: "Viciado em Pacotes (30 Pacotes)" },
+        { threshold: 100, rarity: "diamante", title: "Centurião dos Pacotes (100 Pacotes)" },
+        { threshold: 300, rarity: "heroi", title: "Mestre dos Pacotes (300 Pacotes)" },
+      ] as Array<{ threshold: number; rarity: MedalRarity; title: string }>
+    ).map((m) => ({
+      id: `packs_opened_${m.threshold}`,
+      title: m.title,
+      description:
+        m.threshold === 1
+          ? "Abra o seu primeiro pacote de cartas."
+          : `Abra um total de ${m.threshold} pacotes de cartas.`,
+      rarity: m.rarity,
+      category: "cartas" as MedalCategory,
+      iconName: m.rarity === "heroi" ? "Crown" : "Sparkles",
+      condition: { type: "packs_opened_total" as const, threshold: m.threshold },
+    })),
+
+    // 21. Medalhas de Cartas: Colecionar Cartas Diferentes
+    ...(
+      [
+        { threshold: 10, rarity: "bronze", title: "Álbum Inicial (10 Cartas Únicas)" },
+        { threshold: 30, rarity: "prata", title: "Coleção Variada (30 Cartas Únicas)" },
+        { threshold: 50, rarity: "ouro", title: "Álbum de Ouro (50 Cartas Únicas)" },
+        { threshold: 80, rarity: "diamante", title: "Enciclopédia Viva (80 Cartas Únicas)" },
+        { threshold: 150, rarity: "heroi", title: "Mestre do Álbum (150 Cartas Únicas)" },
+      ] as Array<{ threshold: number; rarity: MedalRarity; title: string }>
+    ).map((m) => ({
+      id: `cards_unique_${m.threshold}`,
+      title: m.title,
+      description: `Colecione ${m.threshold} cartas diferentes no seu álbum.`,
+      rarity: m.rarity,
+      category: "cartas" as MedalCategory,
+      iconName: m.rarity === "heroi" ? "Crown" : "Star",
+      condition: { type: "unique_cards_count" as const, threshold: m.threshold },
+    })),
+
+    // 22. Medalhas de Cartas: Colecionar Total de Cartas
+    ...(
+      [
+        { threshold: 20, rarity: "bronze", title: "Primeiro Monte (20 Cartas)" },
+        { threshold: 50, rarity: "prata", title: "Baralho Crescente (50 Cartas)" },
+        { threshold: 100, rarity: "ouro", title: "Centena de Cartas (100 Cartas)" },
+        { threshold: 300, rarity: "platina", title: "Arquivo de Platina (300 Cartas)" },
+        { threshold: 500, rarity: "diamante", title: "Biblioteca de Diamante (500 Cartas)" },
+        { threshold: 1500, rarity: "heroi", title: "Acervo Infinito (1.500 Cartas)" },
+      ] as Array<{ threshold: number; rarity: MedalRarity; title: string }>
+    ).map((m) => ({
+      id: `cards_total_${m.threshold}`,
+      title: m.title,
+      description: `Acumule um total de ${m.threshold.toLocaleString("pt-BR")} cartas no seu inventário (incluindo repetidas).`,
+      rarity: m.rarity,
+      category: "cartas" as MedalCategory,
+      iconName: m.rarity === "heroi" ? "Crown" : "Flame",
+      condition: { type: "total_cards_count" as const, threshold: m.threshold },
+    })),
     {
       id: "secret_top1_consecutive_3",
       title: "Dinastia da Liderança",
@@ -1540,10 +1754,11 @@ export function getGameMedalsProgress(
 
   const medals = allMedals.filter(
     (m) =>
-      m.gameId === gameId ||
-      m.condition.gameId === gameId ||
-      m.eventRequirement?.gameId === gameId ||
-      eventLinkedIds.has(m.id),
+      !m.excludeFromGameCompletion &&
+      (m.gameId === gameId ||
+        m.condition.gameId === gameId ||
+        m.eventRequirement?.gameId === gameId ||
+        eventLinkedIds.has(m.id)),
   );
 
   const unlockedSet = new Set<string>();
@@ -2135,7 +2350,11 @@ export function countCompletedBaseGames(
   let completed = 0;
   for (const gId of enabledSet) {
     const gameBaseMedals = allMedals.filter(
-      (m) => !m.isCustom && !m.eventId && (m.gameId === gId || m.condition.gameId === gId),
+      (m) =>
+        !m.isCustom &&
+        !m.eventId &&
+        !m.excludeFromGameCompletion &&
+        (m.gameId === gId || m.condition.gameId === gId),
     );
     if (gameBaseMedals.length > 0 && gameBaseMedals.every((m) => unlockedSet.has(m.id))) {
       completed += 1;
@@ -2465,6 +2684,68 @@ export function evaluatePlayerMedals(
         if (totalCompletedPlays >= target) {
           earned = true;
         }
+        break;
+      }
+
+      case "normal_matches_total": {
+        const target = cond.threshold ?? 100;
+        const normalPlays = ctx.stats
+          .filter((s) => s.mode !== "x1_online" && s.mode !== "torneio_semanal")
+          .reduce((sum, s) => sum + (Number(s.plays) || 0), 0);
+        if (normalPlays >= target) {
+          earned = true;
+        }
+        break;
+      }
+
+      case "lifetime_coins": {
+        const target = cond.threshold ?? 100;
+        const cur = Math.max(p.lifetimeCoins ?? 0, p.coins ?? 0);
+        if (cur >= target) earned = true;
+        break;
+      }
+
+      case "coins_spent_total": {
+        const target = cond.threshold ?? 50;
+        const cur = Math.max(0, p.coinsSpentTotal ?? 0);
+        if (cur >= target) earned = true;
+        break;
+      }
+
+      case "cosmetics_purchased_count": {
+        const target = cond.threshold ?? 1;
+        const cur = Array.isArray(p.purchasedCosmeticIds) ? p.purchasedCosmeticIds.length : 0;
+        if (cur >= target) earned = true;
+        break;
+      }
+
+      case "chests_opened_total": {
+        const target = cond.threshold ?? 1;
+        const cur = Math.max(0, p.chestsOpenedTotal ?? 0);
+        if (cur >= target) earned = true;
+        break;
+      }
+
+      case "packs_opened_total": {
+        const target = cond.threshold ?? 1;
+        const cur = Math.max(0, p.packsOpenedTotal ?? 0);
+        if (cur >= target) earned = true;
+        break;
+      }
+
+      case "unique_cards_count": {
+        const target = cond.threshold ?? 10;
+        const cardsMap = p.cards ?? {};
+        const cur = Object.values(cardsMap).filter((qty) => (Number(qty) || 0) > 0).length;
+        if (cur >= target) earned = true;
+        break;
+      }
+
+      case "total_cards_count": {
+        const target = cond.threshold ?? 20;
+        const cardsMap = p.cards ?? {};
+        const cur = Object.values(cardsMap).reduce((sum, qty) => sum + Math.max(0, Number(qty) || 0), 0);
+        if (cur >= target) earned = true;
         break;
       }
 
@@ -3031,6 +3312,80 @@ export function calculateMedalProgress(
       return {
         percent: pct,
         progressText: `${cur} de ${target} partidas disputadas`,
+      };
+    }
+    case "normal_matches_total": {
+      const target = cond.threshold ?? 100;
+      const cur = stats
+        .filter((s) => s.mode !== "x1_online" && s.mode !== "torneio_semanal")
+        .reduce((sum, s) => sum + (Number(s.plays) || 0), 0);
+      const pct = Math.min(100, Math.round((cur / target) * 100));
+      return {
+        percent: pct,
+        progressText: `${cur} de ${target} partidas normais`,
+      };
+    }
+    case "lifetime_coins": {
+      const target = cond.threshold ?? 100;
+      const cur = Math.max(profile.lifetimeCoins ?? 0, profile.coins ?? 0);
+      const pct = Math.min(100, Math.round((cur / target) * 100));
+      return {
+        percent: pct,
+        progressText: `${cur.toLocaleString("pt-BR")} de ${target.toLocaleString("pt-BR")} moedas conseguidas`,
+      };
+    }
+    case "coins_spent_total": {
+      const target = cond.threshold ?? 50;
+      const cur = Math.max(0, profile.coinsSpentTotal ?? 0);
+      const pct = Math.min(100, Math.round((cur / target) * 100));
+      return {
+        percent: pct,
+        progressText: `${cur.toLocaleString("pt-BR")} de ${target.toLocaleString("pt-BR")} moedas gastas`,
+      };
+    }
+    case "cosmetics_purchased_count": {
+      const target = cond.threshold ?? 1;
+      const cur = Array.isArray(profile.purchasedCosmeticIds) ? profile.purchasedCosmeticIds.length : 0;
+      const pct = Math.min(100, Math.round((cur / target) * 100));
+      return {
+        percent: pct,
+        progressText: `${cur} de ${target} cosméticos comprados`,
+      };
+    }
+    case "chests_opened_total": {
+      const target = cond.threshold ?? 1;
+      const cur = Math.max(0, profile.chestsOpenedTotal ?? 0);
+      const pct = Math.min(100, Math.round((cur / target) * 100));
+      return {
+        percent: pct,
+        progressText: `${cur} de ${target} baús abertos`,
+      };
+    }
+    case "packs_opened_total": {
+      const target = cond.threshold ?? 1;
+      const cur = Math.max(0, profile.packsOpenedTotal ?? 0);
+      const pct = Math.min(100, Math.round((cur / target) * 100));
+      return {
+        percent: pct,
+        progressText: `${cur} de ${target} pacotes abertos`,
+      };
+    }
+    case "unique_cards_count": {
+      const target = cond.threshold ?? 10;
+      const cur = Object.values(profile.cards ?? {}).filter((qty) => (Number(qty) || 0) > 0).length;
+      const pct = Math.min(100, Math.round((cur / target) * 100));
+      return {
+        percent: pct,
+        progressText: `${cur} de ${target} cartas diferentes`,
+      };
+    }
+    case "total_cards_count": {
+      const target = cond.threshold ?? 20;
+      const cur = Object.values(profile.cards ?? {}).reduce((sum, qty) => sum + Math.max(0, Number(qty) || 0), 0);
+      const pct = Math.min(100, Math.round((cur / target) * 100));
+      return {
+        percent: pct,
+        progressText: `${cur} de ${target} cartas no total`,
       };
     }
     case "top5_weeks_count": {

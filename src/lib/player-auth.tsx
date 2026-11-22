@@ -85,6 +85,7 @@ interface AuthValue {
   updatePlayerCards: (args: {
     cards: Record<string, number>;
     unopenedPacks?: Record<string, number>;
+    packsOpenedDelta?: number;
     requireServerSync?: boolean;
   }) => Promise<{ ok: boolean; error?: string }>;
   recordMatch: (args: {
@@ -440,6 +441,7 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
     async (args: {
       cards: Record<string, number>;
       unopenedPacks?: Record<string, number>;
+      packsOpenedDelta?: number;
       requireServerSync?: boolean;
     }) => {
       try {

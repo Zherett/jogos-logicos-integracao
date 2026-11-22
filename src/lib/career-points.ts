@@ -32,6 +32,22 @@ export function getLevelUpCoinsReward(level: number, step = 10): number {
   return (safeLvl - 1) * Math.max(0, Math.floor(step));
 }
 
+/**
+ * Atualiza saldo atual, total histórico conseguido (lifetimeCoins) e recorde máximo sem gastar (peakCoins).
+ */
+export function creditCoinMetrics(
+  profile: { coins?: number; lifetimeCoins?: number; peakCoins?: number },
+  amount: number,
+): number {
+  const added = Math.max(0, Math.round(Number(amount) || 0));
+  if (added <= 0) return profile.coins ?? 0;
+  const nextBalance = Math.max(0, (profile.coins ?? 0) + added);
+  profile.coins = nextBalance;
+  profile.lifetimeCoins = Math.max(profile.lifetimeCoins ?? 0, 0) + added;
+  profile.peakCoins = Math.max(profile.peakCoins ?? 0, nextBalance);
+  return nextBalance;
+}
+
 export function awardCoins(
   profile: PlayerProfile,
   amount: number,
@@ -40,7 +56,7 @@ export function awardCoins(
   if (!profile) return { profile, coinsAwarded: 0 };
   const coinsAwarded = Math.max(0, Math.round(Number(amount) || 0));
   if (coinsAwarded <= 0) return { profile, coinsAwarded: 0 };
-  profile.coins = Math.max(0, (profile.coins ?? 0) + coinsAwarded);
+  creditCoinMetrics(profile, coinsAwarded);
   try {
     recordScoreLedgerEntry({
       playerId: profile.id || profile.nick,
@@ -227,7 +243,7 @@ export function convertPointsToCoins(
   }
 
   profile.pointsBalance = currentBalance - pointsToConvert;
-  profile.coins = (profile.coins ?? 0) + coinsAwarded;
+  creditCoinMetrics(profile, coinsAwarded);
 
   return { success: true, coinsAwarded, remainingBalance: profile.pointsBalance };
 }
@@ -250,7 +266,7 @@ export function autoConvertAllPointsToCoins(
   const coinsAwarded = Math.floor(currentBalance / safeRate);
 
   profile.pointsBalance = 0;
-  profile.coins = (profile.coins ?? 0) + coinsAwarded;
+  creditCoinMetrics(profile, coinsAwarded);
 
   return { coinsAwarded, newCoinsBalance: profile.coins };
 }

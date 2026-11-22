@@ -437,6 +437,99 @@ export function createCardDefinition(input: {
 }
 
 /**
+ * Cria versão Normal e/ou Foil da mesma carta (cada versão recebe um ID distinto).
+ */
+export function createCardBatch(input: {
+  name: string;
+  description: string;
+  rarity: CardRarity;
+  imageUrl: string;
+  imageFit?: CardImageFit;
+  colorVariant?: CardColorVariant;
+  createNormal: boolean;
+  createFoil: boolean;
+}): { cards: CardDefinition[]; error?: string } {
+  if (!input.createNormal && !input.createFoil) {
+    return { cards: [], error: "Selecione pelo menos uma versão (Normal ou Foil) para criar." };
+  }
+  const created: CardDefinition[] = [];
+  if (input.createNormal) {
+    const resNormal = createCardDefinition({ ...input, isFoil: false });
+    if (!resNormal.card) return { cards: [], error: resNormal.error };
+    created.push(resNormal.card);
+  }
+  if (input.createFoil) {
+    const resFoil = createCardDefinition({ ...input, isFoil: true });
+    if (!resFoil.card) return { cards: [], error: resFoil.error };
+    // Garante ID distinto caso criados no mesmo milissegundo
+    if (created.some((c) => c.id === resFoil.card!.id)) {
+      resFoil.card.id = `${resFoil.card.id}_foil`;
+    }
+    created.push(resFoil.card);
+  }
+  return { cards: created };
+}
+
+/**
+ * Gera automaticamente versões faltantes (Normal <-> Foil) com IDs distintos
+ * para todas as cartas do catálogo que ainda não possuem o par correspondente
+ * (mesmo nome + raridade). Idempotente.
+ */
+export function generateMissingFoilDuplicates(
+  existingCards: CardDefinition[],
+): { updatedCatalog: CardDefinition[]; addedCount: number } {
+  const normalKeys = new Set<string>();
+  const foilKeys = new Set<string>();
+  for (const c of existingCards) {
+    const key = `${c.name.trim().toLowerCase()}::${c.rarity}`;
+    if (c.isFoil) {
+      foilKeys.add(key);
+    } else {
+      normalKeys.add(key);
+    }
+  }
+
+  const additions: CardDefinition[] = [];
+  const now = new Date().toISOString();
+
+  existingCards.forEach((c, idx) => {
+    const key = `${c.name.trim().toLowerCase()}::${c.rarity}`;
+    if (c.isFoil) {
+      // Carta já é Foil: se não existe versão Normal (sem Foil), cria a versão Normal
+      if (normalKeys.has(key)) return;
+      normalKeys.add(key);
+      additions.push({
+        ...c,
+        id: `card_${Date.now()}_${idx}_normal_${Math.random().toString(36).slice(2, 6)}`,
+        isFoil: false,
+        createdAt: now,
+        updatedAt: now,
+      });
+    } else {
+      // Carta é Normal: se não existe versão Foil, cria a versão Foil
+      if (foilKeys.has(key)) return;
+      foilKeys.add(key);
+      additions.push({
+        ...c,
+        id: `card_${Date.now()}_${idx}_foil_${Math.random().toString(36).slice(2, 6)}`,
+        isFoil: true,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+  });
+
+  if (additions.length === 0) {
+    return { updatedCatalog: existingCards, addedCount: 0 };
+  }
+
+  return {
+    updatedCatalog: [...additions, ...existingCards],
+    addedCount: additions.length,
+  };
+}
+
+/**
  * Edita uma carta existente mantendo a raridade IMUTÁVEL.
  */
 export function editCardDefinition(
