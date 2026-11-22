@@ -36,6 +36,7 @@ import {
 import { getAllAvailableMedals, RARITY_INFO } from "@/lib/medals-catalog";
 import { usePlayerAuth } from "@/lib/player-auth";
 import {
+  hasValidCloudSessionTicket,
   pushInboxReadToPlayFab,
   pushInboxClaimToPlayFab,
   savePlayerProfile,
@@ -168,20 +169,43 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
     }, 120);
   };
 
-  // Confirmar Resgate
+  // Confirmar Resgate (Atômico: só marca resgatada na nuvem após confirmar gravação no UserData)
   const handleClaimReward = async (msgId: string) => {
     if (!profile) return;
-    const res = claimInboxReward(msgId, profile);
-    if (res.success) {
+    if (!hasValidCloudSessionTicket()) {
+      alert("Sua sessão expirou. Faça login novamente para resgatar esta recompensa com segurança.");
+      return;
+    }
+    const profileSnapshot = JSON.parse(JSON.stringify(profile)) as typeof profile;
+    const prevClaimsRaw =
+      typeof window !== "undefined" ? window.localStorage.getItem("desafios-inbox-student-claims-v1") : null;
+
+    const res = claimInboxReward(msgId, profileSnapshot);
+    if (!res.success) {
+      alert(res.error || "Erro ao resgatar recompensa.");
+      return;
+    }
+    try {
+      await savePlayerProfile(res.profile, { requireServerSync: true });
       setRevealedRewardModal(null);
-      markInboxMessageAsRead(msgId, profile);
-      pushInboxReadToPlayFab(msgId, profile).catch(console.warn);
-      pushInboxClaimToPlayFab(msgId, profile).catch(console.warn);
-      await savePlayerProfile(res.profile);
+      markInboxMessageAsRead(msgId, res.profile);
+      pushInboxReadToPlayFab(msgId, res.profile).catch(console.warn);
+      pushInboxClaimToPlayFab(msgId, res.profile).catch(console.warn);
       await auth.refresh();
       refreshMessages();
-    } else {
-      alert(res.error || "Erro ao resgatar recompensa.");
+    } catch (err) {
+      if (typeof window !== "undefined") {
+        if (prevClaimsRaw !== null) {
+          window.localStorage.setItem("desafios-inbox-student-claims-v1", prevClaimsRaw);
+        } else {
+          window.localStorage.removeItem("desafios-inbox-student-claims-v1");
+        }
+      }
+      alert(
+        err instanceof Error && err.message
+          ? err.message
+          : "Sua sessão expirou ou está sem conexão. Faça login novamente para resgatar esta recompensa.",
+      );
     }
   };
 

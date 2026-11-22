@@ -3019,14 +3019,22 @@ export function getActiveAccount(): StoredAccount | null {
   return ensurePlayerSeasonAligned(acc, cfg);
 }
 
-async function pushProfileToPlayFab(account: StoredAccount, sessionTicket?: string) {
+async function pushProfileToPlayFab(
+  account: StoredAccount,
+  sessionTicket?: string,
+  options?: { requireUserDataSync?: boolean },
+) {
   const ticket = sessionTicket ?? loadStoredSession()?.sessionTicket;
   if (!isPlayFabConfigured()) return;
+
+  if (options?.requireUserDataSync && (!ticket || ticket.startsWith("admin-"))) {
+    throw new Error("Sua sessão expirou. Faça login novamente para salvar suas recompensas com segurança.");
+  }
 
   const p = account.profile;
   if (ticket) {
     try {
-      await callPlayFabClient(
+      const udRes = await callPlayFabClient(
         "UpdateUserData",
         {
           Data: {
@@ -3099,7 +3107,15 @@ async function pushProfileToPlayFab(account: StoredAccount, sessionTicket?: stri
     },
     ticket,
   );
-    } catch {
+      if (options?.requireUserDataSync && udRes.error) {
+        throw new Error(udRes.error || "Falha ao sincronizar recompensa com o servidor.");
+      }
+    } catch (err) {
+      if (options?.requireUserDataSync) {
+        throw err instanceof Error
+          ? err
+          : new Error("Sua sessão expirou ou está sem conexão. Faça login novamente para resgatar.");
+      }
       /* ignore UserData error so roster sync still runs */
     }
   }
@@ -4817,10 +4833,19 @@ export async function pushInboxClaimToPlayFab(
   }
 }
 
+export function hasValidCloudSessionTicket(): boolean {
+  if (!isPlayFabConfigured()) return true;
+  const ticket = loadStoredSession()?.sessionTicket;
+  return Boolean(ticket && !ticket.startsWith("admin-"));
+}
+
 /**
  * Salva o perfil do aluno no registro local e sincroniza imediatamente com a nuvem PlayFab.
  */
-export async function savePlayerProfile(profile: PlayerProfile): Promise<PlayerProfile> {
+export async function savePlayerProfile(
+  profile: PlayerProfile,
+  options?: { requireServerSync?: boolean },
+): Promise<PlayerProfile> {
   const reg = loadRegistry();
   const slug = nickSlug(profile.nickNormalized || profile.nick || profile.id);
   const pId = profile.id;
@@ -4830,18 +4855,27 @@ export async function savePlayerProfile(profile: PlayerProfile): Promise<PlayerP
     Object.values(reg).find((a) => a.profile.id === pId || a.profile.nickNormalized === slug);
 
   if (acc) {
-    acc.profile = { ...acc.profile, ...profile };
-    acc.updatedAt = new Date().toISOString();
-    reg[slug] = acc;
-    if (pId) reg[pId] = acc;
-    saveRegistry(reg);
-  invalidatePioneersCache();
-    syncLocalBrowserFromAccount(acc);
+    const nextAcc: StoredAccount = {
+      ...acc,
+      profile: { ...acc.profile, ...profile },
+      updatedAt: new Date().toISOString(),
+    };
     const session = loadStoredSession();
-    if (session?.sessionTicket && isPlayFabConfigured()) {
-      await pushProfileToPlayFab(acc, session.sessionTicket);
+    if (options?.requireServerSync && isPlayFabConfigured()) {
+      if (!session?.sessionTicket || session.sessionTicket.startsWith("admin-")) {
+        throw new Error("Sua sessão expirou. Faça login novamente para resgatar esta recompensa com segurança.");
+      }
+      await pushProfileToPlayFab(nextAcc, session.sessionTicket, { requireUserDataSync: true });
     }
-    return acc.profile;
+    reg[slug] = nextAcc;
+    if (pId) reg[pId] = nextAcc;
+    saveRegistry(reg);
+    invalidatePioneersCache();
+    syncLocalBrowserFromAccount(nextAcc);
+    if (!options?.requireServerSync && session?.sessionTicket && isPlayFabConfigured()) {
+      await pushProfileToPlayFab(nextAcc, session.sessionTicket);
+    }
+    return nextAcc.profile;
   }
   return profile;
 }
