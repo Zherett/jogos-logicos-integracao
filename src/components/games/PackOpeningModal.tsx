@@ -45,6 +45,7 @@ interface PackOpeningModalProps {
   pack: CardPackDefinition | null;
   onConfirmOpen: (pack: CardPackDefinition) => Promise<PackOpenOutcome | null>;
   onClose: () => void;
+  onRequestRelogin?: () => void;
   titlePrefix?: string;
 }
 
@@ -148,6 +149,7 @@ export function PackOpeningModal({
   pack,
   onConfirmOpen,
   onClose,
+  onRequestRelogin,
   titlePrefix = "Pacote",
 }: PackOpeningModalProps) {
   const [stage, setStage] = useState<Stage>("sealed");
@@ -389,9 +391,20 @@ export function PackOpeningModal({
 
             <div className="flex w-full flex-col items-center gap-2 pt-3">
               {openError && (
-                <p className="w-full rounded-xl bg-destructive/15 px-3 py-2 text-center text-xs font-semibold text-destructive">
-                  {openError}
-                </p>
+                <div className="flex w-full flex-col items-center gap-2 rounded-xl bg-destructive/15 px-3 py-2 text-center text-xs font-semibold text-destructive">
+                  <p>{openError}</p>
+                  {onRequestRelogin && /sessão expir|sessao expir|faça login/i.test(openError) && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={onRequestRelogin}
+                      className="rounded-xl border-destructive/40 bg-background/80 text-xs font-extrabold text-foreground hover:bg-background"
+                    >
+                      Renovar Login
+                    </Button>
+                  )}
+                </div>
               )}
               <Button
                 type="button"

@@ -58,8 +58,13 @@ export function PlayerAuthDialog({ open, onOpenChange }: Props) {
       setError(null);
       setShowLoginPassword(false);
       setShowSignupPassword(false);
+    } else if (auth.profile && auth.cloudSessionExpired) {
+      setTab("entrar");
+      setIdentifier(auth.profile.nick || "");
+      setPassword("");
+      setError(null);
     }
-  }, [open]);
+  }, [open, auth.profile, auth.cloudSessionExpired]);
 
   const availableSchools = useMemo(() => {
     if (ageStage === "etapa_3") {
@@ -174,6 +179,11 @@ export function PlayerAuthDialog({ open, onOpenChange }: Props) {
           <form onSubmit={submitLoginOrSignup} className="space-y-4">
             {tab === "entrar" ? (
               <>
+                {auth.profile && auth.cloudSessionExpired && (
+                  <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-700 dark:text-amber-300">
+                    🔑 Sua sessão na nuvem expirou (limite de 24h). Digite sua senha para renovar o login sem perder seus dados.
+                  </div>
+                )}
                 <div className="space-y-1.5">
                   <Label htmlFor="identifier">Seu Apelido (nick)</Label>
                   <Input

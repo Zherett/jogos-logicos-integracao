@@ -472,6 +472,8 @@ export function setCachedAdminPlayFabTicket(ticket: string | null) {
   }
 }
 
+export const CLOUD_SESSION_EXPIRED_EVENT = "desafios:cloud-session-expired";
+
 export function clearExpiredStoredSessionTicket(failedTicket?: string | null): void {
   if (typeof window === "undefined") return;
   try {
@@ -481,6 +483,7 @@ export function clearExpiredStoredSessionTicket(failedTicket?: string | null): v
       (!failedTicket || sess.sessionTicket === failedTicket || sess.sessionTicket.startsWith("admin-"))
     ) {
       saveStoredSession({ ...sess, sessionTicket: undefined });
+      window.dispatchEvent(new CustomEvent(CLOUD_SESSION_EXPIRED_EVENT));
     }
     const rawViewer = window.localStorage.getItem(VIEWER_TICKET_KEY);
     if (rawViewer && failedTicket && rawViewer.includes(failedTicket)) {
@@ -7998,6 +8001,7 @@ export async function playfabUpdatePlayerCards(args: {
       ...acc.profile,
       cards: { ...args.cards },
       ...(args.unopenedPacks ? { unopenedPacks: { ...args.unopenedPacks } } : {}),
+      ...(args.unopenedChests ? { unopenedChests: { ...args.unopenedChests } } : {}),
       ...(packsDelta > 0
         ? { packsOpenedTotal: Math.max(0, acc.profile.packsOpenedTotal ?? 0) + packsDelta }
         : {}),
@@ -8007,10 +8011,10 @@ export async function playfabUpdatePlayerCards(args: {
   grantPassiveMedalsForAccount(nextAcc);
 
   if (args.requireServerSync && isPlayFabConfigured()) {
-    if (!session.sessionTicket) {
+    if (!session.sessionTicket || session.sessionTicket.startsWith("admin-")) {
       throw new Error("Sessão expirada. Faça login novamente para abrir pacotes.");
     }
-    await pushProfileToPlayFab(nextAcc, session.sessionTicket);
+    await pushProfileToPlayFab(nextAcc, session.sessionTicket, { requireUserDataSync: true });
     reg[session.playerId] = nextAcc;
     saveRegistry(reg);
     return nextAcc.profile;
@@ -8019,7 +8023,7 @@ export async function playfabUpdatePlayerCards(args: {
   reg[session.playerId] = nextAcc;
   saveRegistry(reg);
 
-  if (session.sessionTicket && isPlayFabConfigured()) {
+  if (session.sessionTicket && !session.sessionTicket.startsWith("admin-") && isPlayFabConfigured()) {
     try {
       await pushProfileToPlayFab(nextAcc, session.sessionTicket);
     } catch {
@@ -8031,6 +8035,7 @@ export async function playfabUpdatePlayerCards(args: {
 
 export async function syncActiveProfileChangeToPlayFab(
   updatedProfile: PlayerProfile,
+  options?: { requireServerSync?: boolean },
 ): Promise<void> {
   const session = loadStoredSession();
   const reg = loadRegistry();
@@ -8048,9 +8053,20 @@ export async function syncActiveProfileChangeToPlayFab(
     updatedAt: new Date().toISOString(),
   };
   grantPassiveMedalsForAccount(nextAcc);
+
+  if (options?.requireServerSync && isPlayFabConfigured()) {
+    if (!session?.sessionTicket || session.sessionTicket.startsWith("admin-")) {
+      throw new Error("Sessão expirada. Faça login novamente para abrir baús.");
+    }
+    await pushProfileToPlayFab(nextAcc, session.sessionTicket, { requireUserDataSync: true });
+    reg[key] = nextAcc;
+    saveRegistry(reg);
+    return;
+  }
+
   reg[key] = nextAcc;
   saveRegistry(reg);
-  if (session?.sessionTicket && isPlayFabConfigured()) {
+  if (session?.sessionTicket && !session.sessionTicket.startsWith("admin-") && isPlayFabConfigured()) {
     try {
       await pushProfileToPlayFab(nextAcc, session.sessionTicket);
     } catch {

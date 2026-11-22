@@ -55,6 +55,7 @@ export function PlayerItemsInventory() {
   const [packToOpen, setPackToOpen] = useState<CardPackDefinition | null>(null);
   const [openingChest, setOpeningChest] = useState<ChestDefinition | null>(null);
   const [chestOutcome, setChestOutcome] = useState<ChestOpenOutcome | null>(null);
+  const [chestError, setChestError] = useState<string | null>(null);
 
   const chests = useMemo(() => mergeWithDefaultChests(auth.adminConfig.chestsCatalog), [auth.adminConfig.chestsCatalog]);
   const ownedChests = useMemo(() => {
@@ -66,6 +67,7 @@ export function PlayerItemsInventory() {
 
   async function handleOpenChest(chest: ChestDefinition) {
     if (!auth.profile || !canViewCards) return;
+    setChestError(null);
     const res = consumeAndOpenChest(chest, auth.profile.unopenedChests ?? {});
     if (!res.ok || !res.outcome) return;
     const nextPacks = { ...(auth.profile.unopenedPacks ?? {}) };
@@ -86,10 +88,18 @@ export function PlayerItemsInventory() {
     for (const cosm of res.outcome.cosmetics ?? []) {
       updatedProfile = grantCosmeticToProfile(updatedProfile, cosm.kind, cosm.itemId).profile;
     }
-    await syncActiveProfileChangeToPlayFab(updatedProfile);
-    await auth.refresh();
-    setOpeningChest(chest);
-    setChestOutcome(res.outcome);
+    try {
+      await syncActiveProfileChangeToPlayFab(updatedProfile, { requireServerSync: true });
+      await auth.refresh();
+      setOpeningChest(chest);
+      setChestOutcome(res.outcome);
+    } catch (err) {
+      setChestError(
+        err instanceof Error && err.message
+          ? err.message
+          : "Não foi possível abrir o baú. Tente novamente.",
+      );
+    }
   }
 
   const catalog = useMemo(() => auth.adminConfig.cardsCatalog ?? [], [auth.adminConfig.cardsCatalog]);
@@ -219,6 +229,41 @@ export function PlayerItemsInventory() {
 
   return (
     <div className="space-y-4">
+      {auth.cloudSessionExpired && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-amber-500/40 bg-amber-500/10 px-3.5 py-2.5 text-xs font-semibold text-amber-700 dark:text-amber-300">
+          <span>
+            🔑 Sua sessão na nuvem expirou (24h). Renove o login para abrir pacotes e baús com segurança.
+          </span>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => auth.openReloginDialog()}
+            className="rounded-xl border-amber-500/50 bg-background/80 text-xs font-extrabold text-foreground hover:bg-background"
+          >
+            Renovar Login
+          </Button>
+        </div>
+      )}
+      {chestError && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-destructive/40 bg-destructive/10 px-3.5 py-2.5 text-xs font-semibold text-destructive">
+          <span>{chestError}</span>
+          {/sessão expir|sessao expir|faça login/i.test(chestError) && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setChestError(null);
+                auth.openReloginDialog();
+              }}
+              className="rounded-xl border-destructive/40 bg-background/80 text-xs font-extrabold text-foreground hover:bg-background"
+            >
+              Renovar Login
+            </Button>
+          )}
+        </div>
+      )}
       {/* Pílulas do Inventário (Álbum de Cartas visível apenas para ADM / perfis de teste) */}
       {canViewCards && (
         <div className="flex flex-wrap items-center gap-2">
@@ -838,6 +883,10 @@ export function PlayerItemsInventory() {
         titlePrefix="Abrir Pacote"
         onConfirmOpen={confirmOpenPack}
         onClose={() => setPackToOpen(null)}
+        onRequestRelogin={() => {
+          setPackToOpen(null);
+          auth.openReloginDialog();
+        }}
       />
 
       {/* Modal Animado de Abertura de Baú (Prévia ADM) */}

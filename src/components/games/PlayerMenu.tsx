@@ -85,7 +85,7 @@ import {
 } from "@/lib/inbox-messages";
 import { setPlayerCurrentActivity } from "@/lib/presence";
 import { PresenceDot } from "./PresenceDot";
-import { usePlayerAuth } from "@/lib/player-auth";
+import { OPEN_REAUTH_LOGIN_EVENT, usePlayerAuth } from "@/lib/player-auth";
 import {
   DEFAULT_DAILY_XP_CAP,
   getLocalDateKey,
@@ -268,6 +268,16 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profileOpen, profile?.id]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onOpenReauth = () => {
+      setProfileOpen(false);
+      setAuthOpen(true);
+    };
+    window.addEventListener(OPEN_REAUTH_LOGIN_EVENT, onOpenReauth);
+    return () => window.removeEventListener(OPEN_REAUTH_LOGIN_EVENT, onOpenReauth);
+  }, []);
 
   // Atualiza em tempo real a atividade do aluno quando ele visualiza perfil, medalhas ou caixa de entrada
   const hadOverlayOpenRef = useRef(false);
@@ -542,6 +552,17 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
         </div>
 
         {/* Player Profile / Login Button */}
+        {profile && auth.cloudSessionExpired && (
+          <button
+            type="button"
+            onClick={() => setAuthOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-2xl border border-amber-500/50 bg-amber-500/15 px-3 py-2 text-xs font-extrabold text-amber-700 dark:text-amber-300 shadow-sm transition-all hover:bg-amber-500/25 active:scale-95"
+            title="Sua sessão na nuvem expirou (24h). Clique para renovar o login e abrir pacotes/baús."
+          >
+            <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+            <span>Sessão expirada — Renovar login</span>
+          </button>
+        )}
         {(() => {
           const topEquippedAv =
             profile && showDailyRewards

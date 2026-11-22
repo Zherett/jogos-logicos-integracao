@@ -1,5 +1,5 @@
 // Modulo de Presenca e Rastreamento de Status Online dos Jogadores
-// Browser-safe: Verde = Online (< 5 min), Cinza = Inativo (5 a 10 min), Vermelho = Offline (> 10 min ou desconectado)
+// Browser-safe: Verde = Online (<= 90s), Âmbar = Inativo (90s a 5 min), Vermelho = Offline (> 5 min ou desconectado)
 
 import { useEffect, useState } from "react";
 import { nickSlug } from "./player-profile.ts";
@@ -67,9 +67,9 @@ export const PRESENCE_UPDATED_EVENT = "desafios:presence-updated";
 
 /**
  * Avalia de forma pura e deterministica o status de presenca de um jogador.
- * - Verde ("online"): fez interacao ha menos de 2 minutos (com heartbeat ativo).
- * - Amarelo/Âmbar ("idle"): sem interacao entre 2 e 10 minutos (aba continua aberta conectada).
- * - Vermelho ("offline"): mais de 10 minutos sem interacao OU sem heartbeat recente (aba fechada).
+ * - Verde ("online"): fez interacao ha menos de 1 min 30s (com heartbeat ativo).
+ * - Amarelo/Âmbar ("idle"): sem interacao entre 1 min 30s e 5 minutos (aba continua aberta conectada).
+ * - Vermelho ("offline"): mais de 5 minutos sem interacao OU sem heartbeat recente (aba fechada/desconectada).
  */
 export function computePresenceStatus(
   record?: { lastSeenAt?: number; lastActiveAt?: number; idleMs?: number; disconnected?: boolean } | null,
@@ -84,7 +84,7 @@ export function computePresenceStatus(
     return "offline";
   }
 
-  // Se o heartbeat está mais antigo que o limite de desconexão (2 min), a aba foi fechada/suspensa
+  // Se o heartbeat está mais antigo que o limite de desconexão (5 min), a aba foi fechada/suspensa
   const timeSinceSeen = Math.max(0, now - record.lastSeenAt);
   if (timeSinceSeen > PRESENCE_DISCONNECT_MAX_AGE_MS) {
     return "offline";
@@ -567,9 +567,19 @@ export function recordPlayerHeartbeat(
         ? Math.max(0, lastSeenAt - lastActiveAt)
         : 0;
 
+  // Só recorre à atividade local do navegador quando o registro pertence ao próprio jogador logado
+  const localSessId = loadStoredSession()?.playerId;
+  const isLocalPlayer = Boolean(
+    localSessId &&
+      (playerId === localSessId ||
+        resolvedSlug === localSessId ||
+        `pf_${localSessId}` === playerId),
+  );
   const activity =
     data?.activity ??
-    (data?.disconnected ? undefined : (existing?.activity ?? getPlayerCurrentActivity()));
+    (data?.disconnected
+      ? undefined
+      : (existing?.activity ?? (isLocalPlayer ? getPlayerCurrentActivity() : undefined)));
 
   const record: PlayerPresenceRecord = {
     playerId,
@@ -822,15 +832,22 @@ function shouldKeepExistingPresence(
     }
     return false;
   }
-  // Entre dois registros online do mesmo aluno, se ambos tiverem timestamp de ação (activity.updatedAt),
-  // a ação mais recente do próprio dispositivo do aluno sempre vence (evita congelar na ação anterior)
+  // Registro online: nunca sobrescreve um heartbeat estritamente mais recente (normalizado pelo servidor)
+  if (
+    !existing.disconnected &&
+    existing.lastSeenAt > 0 &&
+    incoming.lastSeenAt > 0 &&
+    Math.abs(existing.lastSeenAt - incoming.lastSeenAt) > 2000
+  ) {
+    return existing.lastSeenAt > incoming.lastSeenAt;
+  }
+  // Quando os heartbeats são praticamente simultâneos (<= 2s), desempata pela troca de atividade mais recente
   const existingActTs = existing.activity?.updatedAt ?? 0;
   const incomingActTs = incoming.activityUpdatedAt ?? 0;
   if (!existing.disconnected && existingActTs > 0 && incomingActTs > 0) {
     if (incomingActTs < existingActTs) return true;
     if (incomingActTs > existingActTs) return false;
   }
-  // Registro online: nunca sobrescreve um heartbeat estritamente mais recente
   if (!existing.disconnected && existing.lastSeenAt > incoming.lastSeenAt && incoming.lastSeenAt > 0) {
     return true;
   }
@@ -1026,8 +1043,10 @@ export async function syncPresenceFromPlayFab(force = false): Promise<void> {
       const syncNow = Date.now();
       let changed = false;
 
-      // Mantém calibração de horário com o servidor PlayFab
-      if (serverClockOffsetMs === null || syncNow - lastServerClockSyncAt > 5 * 60 * 1000) {
+      // Mantém calibração de horário com o servidor PlayFab (aguarda na primeira vez para não usar offset 0)
+      if (serverClockOffsetMs === null) {
+        await syncServerClockOffset();
+      } else if (syncNow - lastServerClockSyncAt > 5 * 60 * 1000) {
         void syncServerClockOffset();
       }
       const curServerNow = syncNow + (serverClockOffsetMs ?? 0);
@@ -1198,64 +1217,6 @@ export async function syncPresenceFromPlayFab(force = false): Promise<void> {
   return inFlightPresenceSync;
 }
 
-let cachedX1PresenceRaw: string | null = null;
-let cachedX1PresenceIndexMap: Map<string, PlayerPresenceRecord> | null = null;
-
-function getX1PresenceIndexMap(): Map<string, PlayerPresenceRecord> | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const x1Raw = localStorage.getItem("desafios-x1-lobby-state-v1");
-    if (!x1Raw) {
-      cachedX1PresenceRaw = null;
-      cachedX1PresenceIndexMap = null;
-      return null;
-    }
-    if (x1Raw === cachedX1PresenceRaw && cachedX1PresenceIndexMap) {
-      return cachedX1PresenceIndexMap;
-    }
-    const x1Store = JSON.parse(x1Raw) as {
-      players?: Record<
-        string,
-        { playerId?: string; lastSeenAt?: number; lastActiveAt?: number; nick?: string }
-      >;
-    };
-    const map = new Map<string, PlayerPresenceRecord>();
-    const put = (key: string | undefined | null, rec: PlayerPresenceRecord) => {
-      if (!key) return;
-      const cur = map.get(key);
-      if (!cur || rec.lastSeenAt > cur.lastSeenAt) {
-        map.set(key, rec);
-      }
-    };
-    for (const [k, x1Player] of Object.entries(x1Store?.players ?? {})) {
-      if (!x1Player || typeof x1Player.lastSeenAt !== "number") continue;
-      const x1Slug = x1Player.nick ? nickSlug(x1Player.nick) : "";
-      const rec: PlayerPresenceRecord = {
-        playerId: x1Player.playerId || k,
-        nick: x1Player.nick,
-        nickNormalized: x1Slug,
-        lastSeenAt: x1Player.lastSeenAt,
-        lastActiveAt: x1Player.lastActiveAt ?? x1Player.lastSeenAt,
-      };
-      put(k, rec);
-      put(k.toLowerCase(), rec);
-      if (x1Player.playerId) {
-        put(x1Player.playerId, rec);
-        put(x1Player.playerId.toLowerCase(), rec);
-      }
-      if (x1Slug) {
-        put(x1Slug, rec);
-        put(`pf_${x1Slug}`, rec);
-      }
-    }
-    cachedX1PresenceRaw = x1Raw;
-    cachedX1PresenceIndexMap = map;
-    return map;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Extrai apenas timestamps reais com hora e minuto exatos gerados pela própria sessão/partida do aluno
  * (activeSessionUpdatedAt e stats[].last_played_at). Nunca utiliza dailyXpDate, updatedAt do roster ou medalhas
@@ -1337,23 +1298,6 @@ export function getPlayerPresenceData(
       const recTs = rec ? Math.max(rec.lastSeenAt || 0, rec.lastActiveAt || 0) : -1;
       if (candidate && (!rec || candTs > recTs)) {
         rec = candidate;
-      }
-    }
-  }
-
-  // 2. Se nao encontrou ou dados estao desatualizados, verificar x1-lobby-state por indice O(1)
-  const x1IndexMap = getX1PresenceIndexMap();
-  if (x1IndexMap) {
-    for (const k of candidateKeys) {
-      const x1Candidate = x1IndexMap.get(k);
-      if (x1Candidate && (!rec || x1Candidate.lastSeenAt > rec.lastSeenAt)) {
-        rec = {
-          playerId: cleanId || x1Candidate.playerId,
-          nick: x1Candidate.nick ?? rec?.nick,
-          nickNormalized: x1Candidate.nickNormalized || slugHint,
-          lastSeenAt: x1Candidate.lastSeenAt,
-          lastActiveAt: x1Candidate.lastActiveAt,
-        };
       }
     }
   }
@@ -1702,6 +1646,13 @@ export function usePresenceTracker(player?: {
       pulse(false);
     };
 
+    let disconnectSent = false;
+    const onPageExit = () => {
+      if (disconnectSent) return;
+      disconnectSent = true;
+      pulse(true);
+    };
+
     window.addEventListener("pointerdown", onUserInteraction, { passive: true });
     window.addEventListener("keydown", onUserInteraction, { passive: true });
     window.addEventListener("touchstart", onUserInteraction, { passive: true });
@@ -1709,6 +1660,8 @@ export function usePresenceTracker(player?: {
     window.addEventListener("focus", onVisibilityOrFocus);
     document.addEventListener("visibilitychange", onVisibilityOrFocus);
     window.addEventListener(ACTIVITY_CHANGED_EVENT, onActivityChange);
+    window.addEventListener("pagehide", onPageExit);
+    window.addEventListener("beforeunload", onPageExit);
 
     pulse(false);
     const intervalId = setInterval(() => {
@@ -1724,9 +1677,39 @@ export function usePresenceTracker(player?: {
       window.removeEventListener("focus", onVisibilityOrFocus);
       document.removeEventListener("visibilitychange", onVisibilityOrFocus);
       window.removeEventListener(ACTIVITY_CHANGED_EVENT, onActivityChange);
+      window.removeEventListener("pagehide", onPageExit);
+      window.removeEventListener("beforeunload", onPageExit);
       clearInterval(intervalId);
     };
   }, [player?.playerId, player?.playfabId, player?.nick, player?.nickNormalized]);
+}
+
+/**
+ * Marca o jogador como desconectado imediatamente (ex.: ao clicar em Sair/Logout),
+ * enviando pulso com keepalive para o PlayFab antes da sessão ser encerrada.
+ */
+export function markPlayerDisconnected(player?: {
+  playerId?: string;
+  playfabId?: string;
+  nick?: string;
+  nickNormalized?: string;
+} | null): void {
+  if (!player?.playerId) return;
+  const now = Date.now();
+  const activeAt = getLocalUserLastActiveAt();
+  const rec = recordPlayerHeartbeat(player.playerId, {
+    playfabId: player.playfabId,
+    nick: player.nick,
+    nickNormalized: player.nickNormalized || (player.nick ? nickSlug(player.nick) : undefined),
+    lastActiveAt: activeAt > 0 ? activeAt : now,
+    lastSeenAt: 0,
+    idleMs: 0,
+    disconnected: true,
+    activity: undefined,
+  });
+  if (rec) {
+    void pushPresenceToPlayFab(rec);
+  }
 }
 
 /**

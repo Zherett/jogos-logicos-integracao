@@ -24,11 +24,13 @@ import {
   type PlatformAdminConfig,
 } from "./game-codes";
 import {
+  CLOUD_SESSION_EXPIRED_EVENT,
   executeActivitySeasonReset,
   executeRankedSeasonReset,
   executeRankingReset,
   getActiveAccount,
   getAdminPin,
+  hasValidCloudSessionTicket,
   isAdminUnlockedSession,
   playfabRecordMatch,
   playfabRecoverByNameAndBirthdate,
@@ -49,7 +51,10 @@ import {
   type PlayerProfile,
   type SignUpData,
 } from "./playfab";
+import { markPlayerDisconnected } from "./presence";
 import type { MedalDefinition } from "./medals-catalog";
+
+export const OPEN_REAUTH_LOGIN_EVENT = "desafios:open-reauth-login";
 
 export type { PlayerProfile, GameStatRow, SignUpData };
 
@@ -60,6 +65,8 @@ interface AuthValue {
   stats: GameStatRow[];
   adminConfig: PlatformAdminConfig;
   isAdmin: boolean;
+  cloudSessionExpired: boolean;
+  openReloginDialog: () => void;
   signUp: (data: SignUpData) => Promise<{
     error: string | null;
     recoveredNick?: string;
@@ -144,6 +151,17 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
   const [adminConfig, setAdminConfig] = useState<PlatformAdminConfig>(() => loadAdminConfig());
   const [adminPinUnlocked, setAdminPinUnlocked] = useState(false);
   const [sessionKickedTime, setSessionKickedTime] = useState<string | null>(null);
+  const [cloudSessionExpired, setCloudSessionExpired] = useState(false);
+
+  const syncCloudSessionStatus = useCallback((hasProfile: boolean) => {
+    setCloudSessionExpired(Boolean(hasProfile && !hasValidCloudSessionTicket()));
+  }, []);
+
+  const openReloginDialog = useCallback(() => {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(OPEN_REAUTH_LOGIN_EVENT));
+    }
+  }, []);
 
   const loadState = useCallback(async () => {
     const syncedCfg = await syncAdminConfigFromPlayFab();
@@ -155,6 +173,7 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
       setProfile({ ...active.profile });
       setUnlocked([...active.unlocked]);
       setStats([...active.stats]);
+      syncCloudSessionStatus(true);
       if (isPlayFabConfigured()) {
         const targetId = active.profile.nickNormalized || active.profile.id;
         void syncSinglePlayerFromPlayFab(targetId).then(() => {
@@ -163,6 +182,7 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
             setProfile({ ...synced.profile });
             setUnlocked([...synced.unlocked]);
             setStats([...synced.stats]);
+            syncCloudSessionStatus(true);
           }
         });
       }
@@ -170,9 +190,10 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
       setProfile(null);
       setUnlocked([]);
       setStats([]);
+      syncCloudSessionStatus(false);
     }
     setLoading(false);
-  }, []);
+  }, [syncCloudSessionStatus]);
 
   useEffect(() => {
     void loadState();
@@ -222,8 +243,9 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
     setProfile({ ...res.account.profile });
     setUnlocked([...res.account.unlocked]);
     setStats([...res.account.stats]);
+    syncCloudSessionStatus(true);
     return { error: null, recoveredNick: res.recoveredNick };
-  }, []);
+  }, [syncCloudSessionStatus]);
 
   const signIn = useCallback(async (identifier: string, password: string) => {
     const res = await playfabSignIn(identifier, password);
@@ -236,8 +258,9 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
     setProfile({ ...res.account.profile });
     setUnlocked([...res.account.unlocked]);
     setStats([...res.account.stats]);
+    syncCloudSessionStatus(true);
     return { error: null, recoveredNick: res.recoveredNick };
-  }, []);
+  }, [syncCloudSessionStatus]);
 
   const recoverByNameAndBirthdate = useCallback(
     async (fullName: string, birthdate: string) => {
@@ -248,22 +271,47 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
       setProfile({ ...res.account.profile });
       setUnlocked([...res.account.unlocked]);
       setStats([...res.account.stats]);
+      syncCloudSessionStatus(true);
       return {
         error: null,
         recoveredNick: res.recoveredNick,
         derivedPassword: res.derivedPassword,
       };
     },
-    [],
+    [syncCloudSessionStatus],
   );
 
   const signOut = useCallback(async () => {
+    const active = getActiveAccount();
+    if (active?.profile) {
+      markPlayerDisconnected({
+        playerId: active.profile.id,
+        playfabId: active.profile.playfabId,
+        nick: active.profile.nick,
+        nickNormalized: active.profile.nickNormalized,
+      });
+    }
     playfabSignOut();
     setProfile(null);
     setUnlocked([]);
     setStats([]);
     setAdminPinUnlocked(false);
+    setCloudSessionExpired(false);
   }, []);
+
+  // Monitora expiração do SessionTicket do PlayFab (24h) para alertar o usuário na UI
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onExpired = () => {
+      syncCloudSessionStatus(Boolean(getActiveAccount()));
+    };
+    window.addEventListener(CLOUD_SESSION_EXPIRED_EVENT, onExpired);
+    window.addEventListener("storage", onExpired);
+    return () => {
+      window.removeEventListener(CLOUD_SESSION_EXPIRED_EVENT, onExpired);
+      window.removeEventListener("storage", onExpired);
+    };
+  }, [syncCloudSessionStatus]);
 
   // Sessão Única Modelo A: Ouvinte para desconexão automática caso a conta seja conectada em outro aparelho
   useEffect(() => {
@@ -472,6 +520,8 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
       stats,
       adminConfig,
       isAdmin,
+      cloudSessionExpired,
+      openReloginDialog,
       signUp,
       signIn,
       recoverByNameAndBirthdate,
@@ -496,6 +546,8 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
       stats,
       adminConfig,
       isAdmin,
+      cloudSessionExpired,
+      openReloginDialog,
       signUp,
       signIn,
       recoverByNameAndBirthdate,

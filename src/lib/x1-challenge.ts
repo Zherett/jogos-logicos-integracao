@@ -18,7 +18,6 @@ import {
   loadStoredSession,
 } from "./playfab.ts";
 import { isAdminOrTestAccount, type AgeStageId } from "./player-profile.ts";
-import { recordPlayerHeartbeat } from "./presence.ts";
 import { type Shape } from "./shapes-content.ts";
 import {
   GENERAL_SHAPES,
@@ -1666,11 +1665,6 @@ async function runSyncX1WithPlayFabCloud(activeRoomCode?: string | null): Promis
               ...p,
               receivedAt: now,
             };
-            recordPlayerHeartbeat(p.playerId || id, {
-              nick: p.nick,
-              lastSeenAt: now,
-              lastActiveAt: now,
-            });
             changed = true;
           }
         }
@@ -1965,11 +1959,6 @@ export function heartbeatOnlinePlayer(player: {
     lastActiveAt,
   };
   saveStore(store);
-  recordPlayerHeartbeat(player.playerId, {
-    nick: player.nick,
-    lastSeenAt: now,
-    lastActiveAt,
-  });
 }
 
 export function getX1LobbySnapshot(currentPlayerId?: string, currentPlayerNick?: string) {

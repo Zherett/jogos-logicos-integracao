@@ -3,12 +3,20 @@ import assert from "node:assert/strict";
 import {
   getPlayerPresenceData,
   getPlayerPresenceStatus,
+  markPlayerDisconnected,
   PRESENCE_SHARED_GROUP_ID,
   pushPresenceToPlayFab,
+  recordPlayerHeartbeat,
+  setPlayerCurrentActivity,
   syncPresenceFromPlayFab,
   syncPresenceFromUserData,
   type PlayerPresenceRecord,
 } from "./presence.ts";
+import {
+  clearExpiredStoredSessionTicket,
+  CLOUD_SESSION_EXPIRED_EVENT,
+  playfabUpdatePlayerCards,
+} from "./playfab.ts";
 
 const SESSION_KEY = "desafios-playfab-session-v1";
 
@@ -267,5 +275,141 @@ describe("Presença online/offline na nuvem (fluxo aluno → ADM)", () => {
     await syncPresenceFromUserData([{ playfabId: "PF_ALUNO_1" }], { force: true });
     const data = getPlayerPresenceData("stu_alunoteste", target);
     assert.equal(data?.activity?.type, "ranking");
+  });
+
+  it("recordPlayerHeartbeat para outro jogador NÃO contamina com a atividade local do ADM ('ranking')", () => {
+    loginAs("TK_ADMIN", "josiney");
+    setPlayerCurrentActivity({ type: "ranking" });
+
+    const recOutro = recordPlayerHeartbeat("stu_marechxxx", {
+      nick: "marechxxx",
+      lastSeenAt: Date.now(),
+      lastActiveAt: Date.now(),
+    });
+    assert.equal(recOutro?.activity, undefined);
+  });
+
+  it("getPlayerPresenceData ignora cache antigo do lobby X1 e NÃO forja falso online", async () => {
+    const fourDaysAgoIso = new Date(Date.now() - 4 * 86_400_000).toISOString();
+    loginAs("TK_ALUNO", "alunoteste");
+    pf.setWriteTime(fourDaysAgoIso);
+    await pushPresenceToPlayFab(
+      rec({ lastSeenAt: Date.now() - 4 * 86_400_000, lastActiveAt: Date.now() - 4 * 86_400_000 }),
+    );
+
+    loginAs("TK_ADMIN", "admin");
+    await syncPresenceFromPlayFab(true);
+
+    // Mesmo que o cache local do X1 contenha um timestamp recente/adiantado, o status deve permanecer offline
+    storage.setItem(
+      "desafios-x1-lobby-state-v1",
+      JSON.stringify({
+        players: {
+          stu_alunoteste: {
+            playerId: "stu_alunoteste",
+            nick: "AlunoTeste",
+            lastSeenAt: Date.now() + 60_000,
+            lastActiveAt: Date.now() + 60_000,
+          },
+        },
+      }),
+    );
+
+    assert.equal(getPlayerPresenceStatus(target), "offline");
+  });
+
+  it("markPlayerDisconnected marca imediatamente o jogador como offline e envia disconnected com keepalive", async () => {
+    loginAs("TK_ALUNO", "alunoteste");
+    const onlineRec = recordPlayerHeartbeat("stu_alunoteste", {
+      playfabId: "PF_ALUNO_1",
+      nick: "AlunoTeste",
+      nickNormalized: "alunoteste",
+      lastSeenAt: Date.now(),
+      lastActiveAt: Date.now(),
+    });
+    if (onlineRec) await pushPresenceToPlayFab(onlineRec);
+    assert.equal(getPlayerPresenceStatus(target), "online");
+
+    markPlayerDisconnected({
+      playerId: "stu_alunoteste",
+      playfabId: "PF_ALUNO_1",
+      nick: "AlunoTeste",
+      nickNormalized: "alunoteste",
+    });
+
+    assert.equal(getPlayerPresenceStatus(target), "offline");
+    await new Promise((r) => setTimeout(r, 15));
+    const exitCalls = pf.calls.filter((c) => c.endpoint === "UpdateUserData" && c.keepalive);
+    assert.ok(exitCalls.length >= 1);
+  });
+
+  it("clearExpiredStoredSessionTicket dispara evento de sessão expirada e playfabUpdatePlayerCards exige ticket válido", async () => {
+    let expiredEventCount = 0;
+    const prevDispatch = (globalThis as any).window.dispatchEvent;
+    (globalThis as any).window.dispatchEvent = (ev: Event) => {
+      if (ev?.type === CLOUD_SESSION_EXPIRED_EVENT) expiredEventCount++;
+      return prevDispatch ? prevDispatch(ev) : true;
+    };
+
+    try {
+      storage.setItem(
+        "desafios-playfab-registry-v1",
+        JSON.stringify({
+          josiney: {
+            profile: {
+              id: "admin-josiney",
+              nick: "JOSINEY",
+              nickNormalized: "josiney",
+              full_name: "JOSINEY - ADM",
+              school: "SEMED",
+              birthdate: "1990-01-01",
+              xp: 100,
+              seasonXp: 100,
+              level: 1,
+              wins: 0,
+              matchesPlayed: 0,
+              badges: [],
+              isAdmin: true,
+              cards: {},
+              unopenedPacks: { pack_basico: 2 },
+            },
+            passwordHash: "h",
+            unlocked: [],
+            stats: [],
+            updatedAt: new Date().toISOString(),
+          },
+        }),
+      );
+
+      // Placeholder admin-* deve ser limpo e disparar evento de sessão expirada
+      loginAs("admin-josiney-session-ticket", "josiney");
+      await assert.rejects(
+        () =>
+          playfabUpdatePlayerCards({
+            cards: { c1: 1 },
+            unopenedPacks: { pack_basico: 1 },
+            requireServerSync: true,
+          }),
+        /Sessão expirada/,
+      );
+
+      clearExpiredStoredSessionTicket("admin-josiney-session-ticket");
+      assert.equal(expiredEventCount, 1);
+
+      // Com ticket válido do PlayFab, abre e sincroniza com sucesso (incluindo unopenedChests)
+      loginAs("TK_ADMIN", "josiney");
+      const updated = await playfabUpdatePlayerCards({
+        cards: { c1: 1 },
+        unopenedPacks: { pack_basico: 1 },
+        unopenedChests: { bau_ouro: 3 },
+        packsOpenedDelta: 1,
+        requireServerSync: true,
+      });
+      assert.equal(updated?.cards?.c1, 1);
+      assert.equal(updated?.unopenedPacks?.pack_basico, 1);
+      assert.equal(updated?.unopenedChests?.bau_ouro, 3);
+    } finally {
+      (globalThis as any).window.dispatchEvent = prevDispatch;
+    }
   });
 });
