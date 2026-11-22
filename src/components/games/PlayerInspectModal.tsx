@@ -78,6 +78,7 @@ import { ALL_GAME_IDS, GAME_NAMES } from "@/lib/game-storage";
 import { PlayerMedalsInventory } from "./PlayerMedalsInventory";
 import { PresenceDot } from "./PresenceDot";
 import { PlayerActivityBadge } from "./PlayerActivityBadge";
+import { getLatestProfileActivityMs } from "@/lib/presence";
 import { TournamentRankBadge } from "./TournamentRankBadge";
 import { StudentNameDisplay } from "./StudentNameDisplay";
 import {
@@ -418,12 +419,7 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                     nick={profile.nick}
                     nickNormalized={profile.nickNormalized}
                     activeSessionUpdatedAt={profile.activeSessionUpdatedAt}
-                    lastKnownActivityAt={
-                      Math.max(
-                        profile.activeSessionUpdatedAt ? Date.parse(profile.activeSessionUpdatedAt) || 0 : 0,
-                        ...(profile.stats ?? []).map((s) => (s.last_played_at ? Date.parse(s.last_played_at) || 0 : 0)),
-                      ) || undefined
-                    }
+                    lastKnownActivityAt={getLatestProfileActivityMs(profile) || undefined}
                     size="sm"
                     showTimeAgoText
                   />

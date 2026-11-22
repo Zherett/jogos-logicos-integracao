@@ -244,6 +244,20 @@ export function setPlayerCurrentActivity(
 }
 
 /**
+ * Atualiza em tempo real o nível da partida em andamento quando o jogador sobe de nível no jogo.
+ */
+export function updateActiveGameLevel(level: number): void {
+  const safeLevel = Math.max(1, Math.floor(Number(level) || 1));
+  const cur = getPlayerCurrentActivity();
+  if (cur.type === "game" && cur.level !== safeLevel) {
+    setPlayerCurrentActivity({
+      ...cur,
+      level: safeLevel,
+    });
+  }
+}
+
+/**
  * Recupera a atividade atual do jogador local
  */
 export function getPlayerCurrentActivity(): PlayerActivityInfo {
@@ -586,7 +600,6 @@ export function recordPlayerHeartbeat(
 
 let presenceGroupCreated = false;
 let preferViewerTicketForSharedGroup = false;
-let legacyPresenceFetched = false;
 let userDataPresenceCursor = 0;
 let inFlightUserDataPresenceSync: Promise<void> | null = null;
 let lastUserDataPresenceSyncAt = 0;
@@ -654,20 +667,26 @@ async function callPresencePlayFab(
     };
 
     // Renovação automática caso o ticket em cache ou na sessão tenha expirado ou sido invalidado no PlayFab
-    const isAuthFailure =
+    // IMPORTANTE: "NotAuthorized" (1075) em SharedGroup significa apenas que o aluno não é membro do grupo,
+    // NÃO que o sessionTicket expirou — nunca apagar o sessionTicket do aluno por NotAuthorized!
+    const isExpiredTicket =
       res.status === 401 ||
       json.errorCode === 1074 ||
       json.errorCode === 1089 ||
       json.error === "NotAuthenticated" ||
-      json.error === "InvalidSessionTicket" ||
-      (!overrideTicket && json.error === "NotAuthorized");
+      json.error === "InvalidSessionTicket";
 
-    if (isAuthFailure) {
+    if (isExpiredTicket) {
       clearCachedAdminPlayFabTicket();
       clearExpiredStoredSessionTicket(ticket);
       if (!overrideTicket && canRetry) {
         return callPresencePlayFab(endpoint, body, false, undefined, keepalive);
       }
+      return null;
+    }
+
+    if (!overrideTicket && json.error === "NotAuthorized") {
+      clearCachedAdminPlayFabTicket();
       return null;
     }
 
@@ -899,7 +918,7 @@ export async function syncPresenceFromUserData(
 ): Promise<void> {
   if (typeof window === "undefined" || !isPlayFabConfigured()) return;
   const now = Date.now();
-  if (!options?.force && now - lastUserDataPresenceSyncAt < 5000) return;
+  if (!options?.force && now - lastUserDataPresenceSyncAt < 2500) return;
   if (inFlightUserDataPresenceSync) return inFlightUserDataPresenceSync;
 
   const ids: string[] = [];
@@ -961,7 +980,7 @@ export async function syncPresenceFromUserData(
 export async function syncPresenceFromPlayFab(force = false): Promise<void> {
   if (typeof window === "undefined" || !isPlayFabConfigured()) return;
   const now = Date.now();
-  if (!force && now - lastPresenceCloudSyncAt < 4000) return;
+  if (!force && now - lastPresenceCloudSyncAt < 2000) return;
   if (inFlightPresenceSync) return inFlightPresenceSync;
 
   inFlightPresenceSync = (async () => {
@@ -985,26 +1004,6 @@ export async function syncPresenceFromPlayFab(force = false): Promise<void> {
       const combinedData: Record<string, { Value: string; LastUpdated?: string }> = {
         ...(resData?.Data ?? {}),
       };
-
-      // Na primeira sincronização (ou quando V3 ainda não tem todas as chaves históricas), mescla o histórico legado V2
-      if (!legacyPresenceFetched) {
-        legacyPresenceFetched = true;
-        const legacyRes = await callPresencePlayFab("GetSharedGroupData", {
-          SharedGroupId: LEGACY_PRESENCE_SHARED_GROUP_ID,
-        });
-        const legacyData = (
-          legacyRes?.data as {
-            Data?: Record<string, { Value: string; LastUpdated?: string }>;
-          } | undefined
-        )?.Data;
-        if (legacyData) {
-          for (const [k, v] of Object.entries(legacyData)) {
-            if (!combinedData[k]) {
-              combinedData[k] = v;
-            }
-          }
-        }
-      }
 
       if (Object.keys(combinedData).length === 0) return;
 
@@ -1245,14 +1244,37 @@ function getX1PresenceIndexMap(): Map<string, PlayerPresenceRecord> | null {
 export function getLatestProfileActivityMs(profileLike?: {
   activeSessionUpdatedAt?: string;
   updatedAt?: string;
+  lastActiveDate?: string;
+  activeDates?: string[];
+  dailyXpDate?: string;
+  lastDailyLoginPointsDate?: string;
+  lastDailyFirstGamePointsDate?: string;
+  unlockedMedals?: Array<{ unlockedAt?: string; lastUnlockedAt?: string }>;
+  tournamentMedals?: Array<{ unlockedAt?: string; awardedAt?: string }>;
   stats?: Array<{ last_played_at?: string }>;
   lastKnownActivityAt?: string | number;
 } | null): number {
   if (!profileLike) return 0;
   let maxMs = 0;
+  const nowMs = Date.now();
   const consider = (raw?: string | number) => {
     if (!raw) return;
-    const ms = typeof raw === "number" ? raw : Date.parse(raw);
+    if (typeof raw === "number") {
+      if (!Number.isNaN(raw) && raw > maxMs) maxMs = raw;
+      return;
+    }
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+    // Datas no formato YYYY-MM-DD: interpreta no fuso local às 12:00 (evita voltar 1 dia em UTC-4)
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      const localNoonMs = new Date(`${trimmed}T12:00:00`).getTime();
+      if (!Number.isNaN(localNoonMs)) {
+        const clamped = Math.min(nowMs, localNoonMs);
+        if (clamped > maxMs) maxMs = clamped;
+      }
+      return;
+    }
+    const ms = Date.parse(trimmed);
     if (!Number.isNaN(ms) && ms > maxMs) {
       maxMs = ms;
     }
@@ -1260,6 +1282,21 @@ export function getLatestProfileActivityMs(profileLike?: {
   consider(profileLike.lastKnownActivityAt);
   consider(profileLike.activeSessionUpdatedAt);
   consider(profileLike.updatedAt);
+  consider(profileLike.lastActiveDate);
+  consider(profileLike.dailyXpDate);
+  consider(profileLike.lastDailyLoginPointsDate);
+  consider(profileLike.lastDailyFirstGamePointsDate);
+  for (const d of profileLike.activeDates ?? []) {
+    consider(d);
+  }
+  for (const m of profileLike.unlockedMedals ?? []) {
+    consider(m?.lastUnlockedAt);
+    consider(m?.unlockedAt);
+  }
+  for (const tm of profileLike.tournamentMedals ?? []) {
+    consider(tm?.unlockedAt);
+    consider(tm?.awardedAt);
+  }
   for (const s of profileLike.stats ?? []) {
     consider(s?.last_played_at);
   }

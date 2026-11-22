@@ -6982,7 +6982,7 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
         ticket,
       ),
       knownPfId
-        ? callPlayFabClient<{ Data?: Record<string, { Value: string }> }>(
+        ? callPlayFabClient<{ Data?: Record<string, { Value: string; LastUpdated?: string }> }>(
             "GetUserData",
             { PlayFabId: knownPfId, Keys: ["PlayerProfile", "GameStats", "PresenceHeartbeat"] },
             ticket,
@@ -7009,7 +7009,7 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
     if (userDataRes.status === "fulfilled" && userDataRes.value?.data?.Data) {
       const ud = userDataRes.value.data.Data;
       if (ud.PresenceHeartbeat?.Value) {
-        applyRemotePresenceHeartbeat(ud.PresenceHeartbeat.Value);
+        applyRemotePresenceHeartbeat(ud.PresenceHeartbeat.Value, ud.PresenceHeartbeat.LastUpdated);
       }
       if (ud.PlayerProfile?.Value) {
         try {

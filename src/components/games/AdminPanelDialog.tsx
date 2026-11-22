@@ -617,7 +617,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
       if (isPresenceTab) {
         setPresenceTick((t) => t + 1);
       }
-    }, 10000);
+    }, 4000);
 
     return () => {
       window.removeEventListener(PRESENCE_UPDATED_EVENT, onPresenceChange);

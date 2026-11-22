@@ -245,13 +245,12 @@ function Index() {
         : activeX1Room
           ? "duelo_x1"
           : "normal";
-      const currentLevel = stats[view]?.bestLevel || 1;
       setPlayerCurrentActivity({
         type: "game",
         gameId: view,
         gameName: GAME_NAMES[view] || view,
         mode,
-        level: currentLevel,
+        level: 1,
       });
     } else if (tournamentOpen) {
       setPlayerCurrentActivity({ type: "tournament" });
@@ -260,7 +259,7 @@ function Index() {
     } else {
       setPlayerCurrentActivity({ type: "menu" });
     }
-  }, [view, activeRankedGameId, activeX1Room, tournamentOpen, x1Open, stats]);
+  }, [view, activeRankedGameId, activeX1Room, tournamentOpen, x1Open]);
 
   // Keep logged-in student visible in the online players list across the platform
   useEffect(() => {

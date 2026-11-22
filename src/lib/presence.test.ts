@@ -8,7 +8,9 @@ import {
   formatPlayerActivity,
   getPlayerActivityDetails,
   setPlayerCurrentActivity,
+  updateActiveGameLevel,
   getPlayerCurrentActivity,
+  getLatestProfileActivityMs,
   recordPlayerHeartbeat,
   compareStudentsByPresenceAndLevel,
   sortStudentsByPresenceAndLevel,
@@ -236,6 +238,20 @@ describe("Player Presence System (computePresenceStatus)", () => {
       assert.equal(current.gameId, "cartesiano");
       assert.equal(current.gameName, "Plano Cartesiano");
       assert.equal(current.level, 2);
+
+      // GameHud atualiza o nível da partida em tempo real
+      updateActiveGameLevel(4);
+      assert.equal(getPlayerCurrentActivity().level, 4);
+    });
+
+    it("getLatestProfileActivityMs considera medalhas conquistadas e datas de atividade recentes", () => {
+      const yesterdayIso = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+      const fiveDaysAgoIso = new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString();
+      const latestMs = getLatestProfileActivityMs({
+        updatedAt: fiveDaysAgoIso,
+        unlockedMedals: [{ unlockedAt: yesterdayIso }],
+      });
+      assert.equal(latestMs, Date.parse(yesterdayIso));
     });
 
     it("recordPlayerHeartbeat armazena a atividade no registro do jogador", () => {

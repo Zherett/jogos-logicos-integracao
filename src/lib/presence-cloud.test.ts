@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  getPlayerPresenceData,
   getPlayerPresenceStatus,
   PRESENCE_SHARED_GROUP_ID,
   pushPresenceToPlayFab,
@@ -236,5 +237,33 @@ describe("Presença online/offline na nuvem (fluxo aluno → ADM)", () => {
 
     await syncPresenceFromPlayFab(true);
     assert.equal(getPlayerPresenceStatus(target), "online");
+  });
+
+  it("preserva o sessionTicket do aluno após múltiplos pulsos e sincroniza troca imediata de atividade (Jogo Nv.1 → Perfil → Ranking)", async () => {
+    // Cria o grupo antes como ADM para que o aluno comum receba NotAuthorized (1075) ao tentar com seu próprio ticket
+    loginAs("TK_ADMIN", "admin");
+    await pushPresenceToPlayFab(rec({ playerId: "admin", nick: "Admin", nickNormalized: "admin" }));
+
+    loginAs("TK_ALUNO", "alunoteste");
+    // 1. Entrou em Lógica Matemática Nível 1
+    await pushPresenceToPlayFab(
+      rec({ activity: { type: "game", gameId: "logica", gameName: "Lógica Matemática", level: 1 } }),
+    );
+    // O sessionTicket do aluno NÃO pode ter sido apagado pelo NotAuthorized do SharedGroup!
+    const sessAfter1 = JSON.parse(storage.getItem(SESSION_KEY) || "{}");
+    assert.equal(sessAfter1.sessionTicket, "TK_ALUNO");
+
+    // 2. Abriu o Perfil
+    await pushPresenceToPlayFab(rec({ activity: { type: "profile" } }));
+    // 3. Abriu o Ranking
+    await pushPresenceToPlayFab(rec({ activity: { type: "ranking" } }));
+    const sessAfter3 = JSON.parse(storage.getItem(SESSION_KEY) || "{}");
+    assert.equal(sessAfter3.sessionTicket, "TK_ALUNO");
+
+    loginAs("TK_ADMIN", "admin");
+    await syncPresenceFromPlayFab(true);
+    await syncPresenceFromUserData([{ playfabId: "PF_ALUNO_1" }], { force: true });
+    const data = getPlayerPresenceData("stu_alunoteste", target);
+    assert.equal(data?.activity?.type, "ranking");
   });
 });

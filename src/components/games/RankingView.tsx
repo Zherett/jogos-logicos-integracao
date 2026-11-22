@@ -196,7 +196,7 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
 
   useEffect(() => {
     setPlayerCurrentActivity({ type: "ranking" });
-  }, []);
+  }, [tab, auth.profile?.id]);
 
   // Recalcula o placar geral das escolas SOMENTE quando o aluno está visualizando "Escolas -> Placar Geral"
   const schoolStandings = useMemo(() => {

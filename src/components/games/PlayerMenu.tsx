@@ -270,15 +270,23 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
   }, [profileOpen, profile?.id]);
 
   // Atualiza em tempo real a atividade do aluno quando ele visualiza perfil, medalhas ou caixa de entrada
+  const hadOverlayOpenRef = useRef(false);
   useEffect(() => {
     if (inboxOpen) {
+      hadOverlayOpenRef.current = true;
       setPlayerCurrentActivity({ type: "inbox" });
     } else if (profileOpen) {
+      hadOverlayOpenRef.current = true;
       if (profileTab === "medalhas") {
         setPlayerCurrentActivity({ type: "medals" });
       } else {
         setPlayerCurrentActivity({ type: "profile" });
       }
+    } else if (hadOverlayOpenRef.current) {
+      hadOverlayOpenRef.current = false;
+      const isOnRankingPage =
+        typeof window !== "undefined" && window.location.pathname.includes("ranking");
+      setPlayerCurrentActivity({ type: isOnRankingPage ? "ranking" : "menu" });
     }
   }, [inboxOpen, profileOpen, profileTab]);
   useEffect(() => {

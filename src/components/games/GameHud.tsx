@@ -1,5 +1,7 @@
+import { useEffect } from "react";
 import { Trophy, Star, Clock, Flame } from "lucide-react";
 import { formatTime } from "@/lib/use-countdown";
+import { updateActiveGameLevel } from "@/lib/presence";
 
 interface Props {
   time: number;
@@ -10,6 +12,10 @@ interface Props {
 }
 
 export function GameHud({ time, score, level, streak, wrong }: Props) {
+  useEffect(() => {
+    updateActiveGameLevel(level);
+  }, [level]);
+
   return (
     <div className="grid grid-cols-4 gap-1.5 sm:gap-3 select-none">
       <Stat icon={<Clock className="h-3.5 w-3.5 sm:h-5 sm:w-5" />} label="Tempo" value={formatTime(time)} tone="primary" />
