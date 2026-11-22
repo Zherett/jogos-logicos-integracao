@@ -189,7 +189,7 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] flex flex-col overflow-hidden rounded-3xl sm:max-w-3xl">
+      <DialogContent className="h-[min(86vh,46rem)] max-h-[90vh] flex flex-col overflow-hidden rounded-3xl sm:max-w-3xl">
         <DialogHeader className="shrink-0 space-y-3 border-b border-border/60 pb-3">
           <div className="flex flex-wrap items-center justify-between gap-2 pr-6">
             <DialogTitle className="flex items-center gap-2 font-display text-xl sm:text-2xl font-black">
@@ -247,11 +247,17 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
           </div>
         </DialogHeader>
 
-        {feedback && (
-          <div className="shrink-0 rounded-2xl border border-primary/30 bg-primary/10 px-3.5 py-2 text-xs font-bold text-foreground">
-            {feedback}
-          </div>
-        )}
+        <div className="shrink-0 min-h-[2.35rem] flex items-center">
+          {feedback ? (
+            <div className="w-full rounded-2xl border border-primary/30 bg-primary/10 px-3.5 py-2 text-xs font-bold text-foreground">
+              {feedback}
+            </div>
+          ) : (
+            <div className="w-full rounded-2xl border border-border/40 bg-secondary/20 px-3.5 py-2 text-[11px] font-medium text-muted-foreground">
+              Selecione um item ou pacote abaixo para comprar com suas moedas.
+            </div>
+          )}
+        </div>
 
         <div className="flex-1 min-h-0 overflow-y-auto space-y-5 pr-1 py-1">
           {activePill === "destaques" && (

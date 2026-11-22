@@ -27,6 +27,7 @@ import {
   DEFAULT_CHEST_PRIMARY_COLOR,
   mergeWithDefaultChests,
   openChest,
+  type ChestCardPackDrop,
   type ChestDefinition,
   type ChestOpenOutcome,
   type ChestRarity,
@@ -65,9 +66,10 @@ export function AdminChestsTab({
   const [xpMax, setXpMax] = useState(100);
   const [coinsMin, setCoinsMin] = useState(20);
   const [coinsMax, setCoinsMax] = useState(60);
+  const [packDrops, setPackDrops] = useState<ChestCardPackDrop[]>([]);
   const [packId, setPackId] = useState<string>(packs[0]?.id ?? "");
   const [packQty, setPackQty] = useState(1);
-  const [packChance, setPackChance] = useState(50);
+  const [packChance, setPackChance] = useState(100);
   const [primaryColor, setPrimaryColor] = useState(DEFAULT_CHEST_PRIMARY_COLOR);
   const [metalColor, setMetalColor] = useState(DEFAULT_CHEST_METAL_COLOR);
   const [shape, setShape] = useState<ChestShape>("padrao");
@@ -88,9 +90,10 @@ export function AdminChestsTab({
     setXpMax(100);
     setCoinsMin(20);
     setCoinsMax(60);
+    setPackDrops([]);
     setPackId(packs[0]?.id ?? "");
     setPackQty(1);
-    setPackChance(50);
+    setPackChance(100);
     setPrimaryColor(DEFAULT_CHEST_PRIMARY_COLOR);
     setMetalColor(DEFAULT_CHEST_METAL_COLOR);
     setShape("padrao");
@@ -108,10 +111,14 @@ export function AdminChestsTab({
     setXpMax(c.rewards.xp?.max ?? 0);
     setCoinsMin(c.rewards.coins?.min ?? 0);
     setCoinsMax(c.rewards.coins?.max ?? 0);
-    const firstPack = c.rewards.cardPacks?.[0];
-    setPackId(firstPack?.packId ?? "");
-    setPackQty(firstPack?.quantity ?? 1);
-    setPackChance(firstPack?.chancePercent ?? 50);
+    setPackDrops(
+      Array.isArray(c.rewards.cardPacks)
+        ? c.rewards.cardPacks.map((d) => ({ ...d }))
+        : [],
+    );
+    setPackId(packs[0]?.id ?? "");
+    setPackQty(1);
+    setPackChance(100);
     setPrimaryColor(c.primaryColor ?? DEFAULT_CHEST_PRIMARY_COLOR);
     setMetalColor(c.metalColor ?? DEFAULT_CHEST_METAL_COLOR);
     setShape(c.shape ?? "padrao");
@@ -142,8 +149,16 @@ export function AdminChestsTab({
           ...(ptsMax > 0 ? { points: { min: Math.min(ptsMin, ptsMax), max: Math.max(ptsMin, ptsMax) } } : {}),
           ...(xpMax > 0 ? { xp: { min: Math.min(xpMin, xpMax), max: Math.max(xpMin, xpMax) } } : {}),
           ...(coinsMax > 0 ? { coins: { min: Math.min(coinsMin, coinsMax), max: Math.max(coinsMin, coinsMax) } } : {}),
-          ...(packId && packQty > 0 && packChance > 0
-            ? { cardPacks: [{ packId, quantity: packQty, chancePercent: Math.min(100, packChance) }] }
+          ...(packDrops.length > 0
+            ? {
+                cardPacks: packDrops
+                  .filter((d) => d.packId && d.quantity > 0 && d.chancePercent > 0)
+                  .map((d) => ({
+                    packId: d.packId,
+                    quantity: Math.max(1, Math.floor(d.quantity)),
+                    chancePercent: Math.min(100, Math.max(1, Number(d.chancePercent))),
+                  })),
+              }
             : {}),
         },
         createdAt: existing?.createdAt ?? nowIso,
@@ -331,51 +346,112 @@ export function AdminChestsTab({
           </div>
         </div>
 
-        {/* Drop de Pacote de Cartas */}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 rounded-2xl border bg-secondary/30 p-3">
-          <div className="space-y-1">
+        {/* Drops Dinâmicos de Pacotes de Cartas */}
+        <div className="rounded-2xl border bg-secondary/30 p-3 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <Label className="text-[11px] font-bold flex items-center gap-1">
-              <Package className="h-3.5 w-3.5 text-primary" /> Pacote de Cartas (Opcional)
+              <Package className="h-3.5 w-3.5 text-primary" /> Recompensas de Pacotes de Cartas (Opcional)
             </Label>
-            <select
-              value={packId}
-              onChange={(e) => setPackId(e.target.value)}
-              className="h-8 w-full rounded-lg border bg-background px-2.5 text-xs font-bold"
-            >
-              <option value="">Nenhum pacote</option>
-              {packs.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
+            <span className="text-[10px] text-muted-foreground">
+              Adicione um ou mais pacotes (inclusive o mesmo pacote com quantidades e chances diferentes)
+            </span>
           </div>
 
-          <div className="space-y-1">
-            <Label className="text-[11px] font-bold">Quantidade de Pacotes</Label>
-            <Input
-              type="number"
-              min={1}
-              max={10}
-              value={packQty}
-              disabled={!packId}
-              onChange={(e) => setPackQty(Math.max(1, Number(e.target.value) || 1))}
-              className="h-8 rounded-lg text-xs"
-            />
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5 items-end">
+            <div className="space-y-1 sm:col-span-2">
+              <Label className="text-[11px] font-bold">Pacote de Cartas</Label>
+              <select
+                value={packId}
+                onChange={(e) => setPackId(e.target.value)}
+                className="h-8 w-full rounded-lg border bg-background px-2.5 text-xs font-bold"
+              >
+                <option value="">Selecione um pacote...</option>
+                {packs.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="space-y-1">
+              <Label className="text-[11px] font-bold">Quantidade</Label>
+              <Input
+                type="number"
+                min={1}
+                max={50}
+                value={packQty}
+                disabled={!packId}
+                onChange={(e) => setPackQty(Math.max(1, Number(e.target.value) || 1))}
+                className="h-8 rounded-lg text-xs"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <Label className="text-[11px] font-bold">Chance (%)</Label>
+              <div className="flex gap-1.5">
+                <Input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={packChance}
+                  disabled={!packId}
+                  onChange={(e) => setPackChance(Math.min(100, Math.max(1, Number(e.target.value) || 100)))}
+                  className="h-8 rounded-lg text-xs"
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={!packId}
+                  onClick={() => {
+                    if (!packId) return;
+                    setPackDrops((prev) => [
+                      ...prev,
+                      {
+                        packId,
+                        quantity: Math.max(1, Math.floor(packQty)),
+                        chancePercent: Math.min(100, Math.max(1, Number(packChance) || 100)),
+                      },
+                    ]);
+                  }}
+                  className="h-8 rounded-lg text-xs font-bold shrink-0"
+                >
+                  <Plus className="h-3.5 w-3.5 mr-1" /> Adicionar
+                </Button>
+              </div>
+            </div>
           </div>
 
-          <div className="space-y-1">
-            <Label className="text-[11px] font-bold">Chance de Drop (%)</Label>
-            <Input
-              type="number"
-              min={1}
-              max={100}
-              value={packChance}
-              disabled={!packId}
-              onChange={(e) => setPackChance(Math.min(100, Math.max(1, Number(e.target.value) || 100)))}
-              className="h-8 rounded-lg text-xs"
-            />
-          </div>
+          {packDrops.length > 0 && (
+            <div className="flex flex-wrap gap-2 pt-1">
+              {packDrops.map((drop, idx) => {
+                const packName = packs.find((p) => p.id === drop.packId)?.name ?? drop.packId;
+                return (
+                  <div
+                    key={`${drop.packId}_${idx}`}
+                    className="inline-flex items-center gap-2 rounded-xl border border-primary/30 bg-background px-2.5 py-1.5 text-xs font-bold"
+                  >
+                    <Package className="h-3.5 w-3.5 text-primary shrink-0" />
+                    <span>{packName}</span>
+                    <span className="rounded-md bg-primary/15 px-1.5 py-0.5 font-mono text-[10px] font-black text-primary">
+                      x{drop.quantity}
+                    </span>
+                    <span className="rounded-md bg-amber-500/15 px-1.5 py-0.5 font-mono text-[10px] font-black text-amber-600 dark:text-amber-400">
+                      {drop.chancePercent}%
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setPackDrops((prev) => prev.filter((_, i) => i !== idx))}
+                      className="text-muted-foreground hover:text-destructive transition-colors cursor-pointer"
+                      title="Remover esta recompensa"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* Aparência Vetorial e Tempo de Abertura */}

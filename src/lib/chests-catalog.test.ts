@@ -68,4 +68,27 @@ describe("Catálogo e Abertura de Baús", () => {
     assert.equal(lastRes.ok, true);
     assert.equal(lastRes.updatedUnopenedChests[chest.id], undefined);
   });
+
+  it("permite múltiplas entradas de pacotes no mesmo baú (inclusive mesmo pacote com quantidades e chances diferentes)", () => {
+    const chest = {
+      ...DEFAULT_CHESTS[0],
+      rewards: {
+        cardPacks: [
+          { packId: "pack_iniciante", quantity: 1, chancePercent: 100 },
+          { packId: "pack_iniciante", quantity: 2, chancePercent: 25 },
+          { packId: "pack_explorador", quantity: 1, chancePercent: 25 },
+        ],
+      },
+    };
+
+    const onlyGuaranteed = openChest(chest, () => 0.5); // 50 >= 25 -> só o de 100%
+    assert.deepEqual(onlyGuaranteed.packs, [{ packId: "pack_iniciante", quantity: 1 }]);
+
+    const luckyRoll = openChest(chest, () => 0.1); // 10 < 25 -> ganha todos!
+    assert.deepEqual(luckyRoll.packs, [
+      { packId: "pack_iniciante", quantity: 1 },
+      { packId: "pack_iniciante", quantity: 2 },
+      { packId: "pack_explorador", quantity: 1 },
+    ]);
+  });
 });
