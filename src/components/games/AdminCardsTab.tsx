@@ -40,8 +40,11 @@ import {
   type CardPackDefinition,
   type CardPackIconId,
   type CardRarity,
+  type DungeonCardSkillId,
   type PackProbabilities,
 } from "@/lib/cards-catalog";
+import { DUNGEON_CARD_SKILL_LIST } from "@/lib/dungeon-config";
+import { resolveCardDungeonBonus } from "@/lib/dungeon-engine";
 import type { PlatformAdminConfig } from "@/lib/game-codes";
 import { usePlayerAuth } from "@/lib/player-auth";
 import { CollectibleCardView } from "./CollectibleCardView";
@@ -71,6 +74,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
   const [cardColorVariant, setCardColorVariant] = useState<CardColorVariant>(1);
   const [createNormal, setCreateNormal] = useState(true);
   const [cardFoil, setCardFoil] = useState(true);
+  const [cardDungeonSkill, setCardDungeonSkill] = useState<DungeonCardSkillId | "">("");
   const [cardError, setCardError] = useState<string | null>(null);
   const [rarityFilter, setRarityFilter] = useState<CardRarity | "todas">("todas");
   const [previewModalCard, setPreviewModalCard] = useState<CardDefinition | null>(null);
@@ -147,6 +151,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
     setCardColorVariant(1);
     setCreateNormal(true);
     setCardFoil(true);
+    setCardDungeonSkill("");
     setCardError(null);
   }
 
@@ -159,6 +164,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
     setCardImageFit(card.imageFit ?? "contain-blur");
     setCardColorVariant(card.colorVariant === 2 || card.colorVariant === 3 ? card.colorVariant : 1);
     setCardFoil(Boolean(card.isFoil));
+    setCardDungeonSkill(card.dungeonSkillId ?? "");
     setCardError(null);
     setSection("cartas");
   }
@@ -178,6 +184,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
         imageFit: cardImageFit,
         colorVariant: cardColorVariant,
         isFoil: cardFoil,
+        dungeonSkillId: cardDungeonSkill ? cardDungeonSkill : null,
       });
       if (!res.card) {
         setCardError(res.error ?? "Erro ao atualizar carta.");
@@ -194,6 +201,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
         colorVariant: cardColorVariant,
         createNormal,
         createFoil: cardFoil,
+        dungeonSkillId: cardDungeonSkill ? cardDungeonSkill : null,
       });
       if (res.error || res.cards.length === 0) {
         setCardError(res.error ?? "Erro ao criar carta.");
@@ -520,6 +528,27 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
                 />
               </div>
 
+              <div className="space-y-1">
+                <Label htmlFor="card-dungeon-skill">
+                  Habilidade na Masmorra (Opcional)
+                </Label>
+                <select
+                  id="card-dungeon-skill"
+                  value={cardDungeonSkill}
+                  onChange={(e) =>
+                    setCardDungeonSkill((e.target.value || "") as DungeonCardSkillId | "")
+                  }
+                  className="h-10 w-full rounded-xl border bg-background px-3 text-xs sm:text-sm font-semibold"
+                >
+                  <option value="">Automática (padrão da carta)</option>
+                  {DUNGEON_CARD_SKILL_LIST.map((sk) => (
+                    <option key={sk.id} value={sk.id}>
+                      {sk.emoji} {sk.name} — {sk.shortDesc}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               {!editingCardId && (
                 <label
                   htmlFor="card-normal"
@@ -649,13 +678,20 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
               </div>
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                {filteredCards.map((card) => (
+                {filteredCards.map((card) => {
+                  const dungeonBonus = resolveCardDungeonBonus(card);
+                  return (
                   <div key={card.id} className="space-y-1.5">
                     <CollectibleCardView
                       card={card}
                       compact
                       onClick={() => setPreviewModalCard(card)}
                     />
+                    <div className="px-1 text-center">
+                      <span className="inline-flex items-center gap-1 rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">
+                        {dungeonBonus.skillEmoji} {dungeonBonus.skillName} (+{dungeonBonus.totalPowerPercent}%)
+                      </span>
+                    </div>
                     <div className="flex items-center justify-between gap-1 px-1">
                       <Button
                         type="button"
@@ -687,7 +723,8 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
                       </Button>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

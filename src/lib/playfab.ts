@@ -142,6 +142,11 @@ import {
 import { checkEventObjectiveMet, getEventActivationKey } from "./custom-events.ts";
 import { invalidatePioneersCache } from "./medal-pioneers.ts";
 import { recordScoreLedgerEntry } from "./score-history-ledger.ts";
+import {
+  mergeDungeonStates,
+  recordExternalMatchForDungeonStamina,
+  type PlayerDungeonState,
+} from "./dungeon-engine.ts";
 
 const SESSION_KEY = "desafios-playfab-session-v1";
 const REGISTRY_KEY = "desafios-playfab-registry-v1";
@@ -304,6 +309,7 @@ export interface PlayerProfile {
   cards?: Record<string, number>;
   unopenedPacks?: Record<string, number>;
   unopenedChests?: Record<string, number>;
+  dungeonState?: PlayerDungeonState;
   claimedInboxRewardIds?: string[];
   claimedRankedMilestones?: string[];
   claimedEventRewardKeys?: string[];
@@ -2485,6 +2491,10 @@ function buildAccountFromPlayFabPayload(
       parsedProfile.unopenedChests && typeof parsedProfile.unopenedChests === "object"
         ? parsedProfile.unopenedChests
         : {},
+    dungeonState:
+      parsedProfile.dungeonState && typeof parsedProfile.dungeonState === "object"
+        ? parsedProfile.dungeonState
+        : undefined,
     claimedInboxRewardIds: Array.isArray(parsedProfile.claimedInboxRewardIds)
       ? parsedProfile.claimedInboxRewardIds
       : [],
@@ -3339,6 +3349,7 @@ async function pushProfileToPlayFab(
           cards: p.cards ?? {},
           unopenedPacks: p.unopenedPacks ?? {},
           unopenedChests: p.unopenedChests ?? {},
+          ...(p.dungeonState ? { dungeonState: p.dungeonState } : {}),
           claimedInboxRewardIds: p.claimedInboxRewardIds ?? [],
           claimedRankedMilestones: p.claimedRankedMilestones ?? [],
           lastDailyLoginPointsDate: p.lastDailyLoginPointsDate,
@@ -3430,6 +3441,7 @@ async function pushProfileToPlayFab(
             cards: p.cards ?? {},
             unopenedPacks: p.unopenedPacks ?? {},
             unopenedChests: p.unopenedChests ?? {},
+            ...(p.dungeonState ? { dungeonState: p.dungeonState } : {}),
             claimedInboxRewardIds: p.claimedInboxRewardIds ?? [],
             claimedRankedMilestones: p.claimedRankedMilestones ?? [],
             lastDailyLoginPointsDate: p.lastDailyLoginPointsDate,
@@ -4418,6 +4430,16 @@ export async function syncStudentRosterFromPlayFab(
                 existing?.profile.unopenedChests ??
                 {}
               );
+            })(),
+            dungeonState: (() => {
+              const pDungeon = (parsed as any).dungeonState as PlayerDungeonState | undefined;
+              const eDungeon = existing?.profile.dungeonState;
+              const uDungeon = (udProf as any)?.dungeonState as PlayerDungeonState | undefined;
+              if (!pDungeon && !eDungeon && !uDungeon) return undefined;
+              const localTs = existing?.updatedAt ? Date.parse(existing.updatedAt) : 0;
+              const parsedTs = (parsed as any).updatedAt ? Date.parse((parsed as any).updatedAt) : 0;
+              const cloudMerged = mergeDungeonStates(pDungeon, uDungeon, true);
+              return mergeDungeonStates(eDungeon, cloudMerged, localTs >= parsedTs);
             })(),
             unlockedAvatars: Array.from(
               new Set([
@@ -5753,6 +5775,18 @@ export async function playfabRecordMatch(args: {
   acc.profile.level = stageRes.level;
   acc.profile.levelStageProgress = stageRes.stageProgress;
   checkLevelPromotionPoints(acc.profile.level, acc.profile, pointsMultiplier);
+
+  // Recarrega estamina da Masmorra com base nas partidas concluídas nos jogos da plataforma
+  if (
+    acc.profile.dungeonState &&
+    acc.profile.dungeonState.stamina.current < acc.profile.dungeonState.stamina.max
+  ) {
+    acc.profile.dungeonState = recordExternalMatchForDungeonStamina(
+      acc.profile.dungeonState,
+      args.gameId,
+      todayKey,
+    ).state;
+  }
 
   if (earnedXp > 0) {
     try {
@@ -7541,6 +7575,14 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
                 packsOpenedTotal: Math.max(cloudProfile.packsOpenedTotal ?? 0, udProf.packsOpenedTotal ?? 0),
                 chestsOpenedTotal: Math.max(cloudProfile.chestsOpenedTotal ?? 0, udProf.chestsOpenedTotal ?? 0),
                 cards: mergedCloudCards,
+                dungeonState:
+                  cloudProfile.dungeonState || udProf.dungeonState
+                    ? mergeDungeonStates(
+                        cloudProfile.dungeonState,
+                        udProf.dungeonState,
+                        rosterTs > udTs,
+                      )
+                    : undefined,
                 activeSessionUpdatedAt: mergedActiveSess,
                 lastKnownActivityAt: mergedLastKnown,
               }
@@ -7688,6 +7730,14 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
               unopenedChests: localChestsNewer
                 ? (existing.profile.unopenedChests ?? cloudProfile.unopenedChests ?? {})
                 : (cloudProfile.unopenedChests ?? existing.profile.unopenedChests ?? {}),
+              dungeonState:
+                existing.profile.dungeonState || cloudProfile.dungeonState
+                  ? mergeDungeonStates(
+                      existing.profile.dungeonState,
+                      cloudProfile.dungeonState,
+                      localIsNewer,
+                    )
+                  : undefined,
               claimedInboxRewardIds: Array.from(
                 new Set([
                   ...(existing.profile.claimedInboxRewardIds ?? []),
@@ -8561,6 +8611,40 @@ export async function syncActiveProfileChangeToPlayFab(
       /* ignore network sync error */
     }
   }
+}
+
+export async function playfabSaveDungeonProfileUpdate(
+  updater: (profile: PlayerProfile) => PlayerProfile,
+): Promise<PlayerProfile | null> {
+  const session = loadStoredSession();
+  if (!session) return null;
+  const reg = loadRegistry();
+  const acc = reg[session.playerId];
+  if (!acc) return null;
+
+  const updatedProfile = updater(structuredClone(acc.profile));
+  const nextAcc: StoredAccount = {
+    ...acc,
+    profile: updatedProfile,
+    updatedAt: new Date().toISOString(),
+  };
+  grantPassiveMedalsForAccount(nextAcc);
+  reg[session.playerId] = nextAcc;
+  saveRegistry(reg);
+
+  const isAdminSessionActive = isSpecialAdminAccount(nextAcc.profile) && isAdminUnlockedSession();
+  if (
+    session.sessionTicket &&
+    (!session.sessionTicket.startsWith("admin-") || isAdminSessionActive) &&
+    isPlayFabConfigured()
+  ) {
+    try {
+      await pushProfileToPlayFab(nextAcc, session.sessionTicket);
+    } catch {
+      /* ignore network sync error */
+    }
+  }
+  return nextAcc.profile;
 }
 
 export { ALL_GAME_IDS };

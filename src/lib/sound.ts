@@ -680,3 +680,169 @@ export function playChestReveal() {
     /* ignore */
   }
 }
+
+/**
+ * Som de chave / arrombamento tentando abrir a fechadura durante o chacoalhado do baú.
+ * Adapta o peso e o timbre ao tamanho do baú (`compacto`, `padrao`, `largo`) e à variação (1..3).
+ */
+export function playChestLockpickTick(
+  shape: "padrao" | "largo" | "compacto" = "padrao",
+  variant: 1 | 2 | 3 = 1,
+) {
+  if (isSoundMuted()) return;
+  const ctx = getAudioContext();
+  if (!ctx) return;
+  try {
+    const now = ctx.currentTime;
+    const sizeFactor = shape === "compacto" ? 1.24 : shape === "largo" ? 0.78 : 1.0;
+    const variantOffsets = variant === 1 ? [0, 0.075] : variant === 2 ? [0, 0.055, 0.12] : [0, 0.09];
+
+    // 1. Cliques metálicos da chave girando/raspando na fechadura
+    variantOffsets.forEach((offset, idx) => {
+      const t = now + offset;
+      const clickOsc = ctx.createOscillator();
+      const clickGain = ctx.createGain();
+      clickOsc.type = idx % 2 === 0 ? "triangle" : "square";
+      const baseFreq = (idx % 2 === 0 ? 1480 : 1960) * sizeFactor * (1 + (variant - 1) * 0.06);
+      clickOsc.frequency.setValueAtTime(baseFreq, t);
+      clickOsc.frequency.exponentialRampToValueAtTime(baseFreq * 0.62, t + 0.032);
+      clickGain.gain.setValueAtTime(0.0001, t);
+      clickGain.gain.linearRampToValueAtTime(0.055, t + 0.004);
+      clickGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.04);
+      clickOsc.connect(clickGain);
+      clickGain.connect(ctx.destination);
+      clickOsc.start(t);
+      clickOsc.stop(t + 0.045);
+    });
+
+    // 2. Raspagem metálica curta da tranca
+    playFilteredNoise({
+      duration: 0.09,
+      freqStart: 2200 * sizeFactor,
+      freqEnd: 3300 * sizeFactor,
+      q: 2.2,
+      filterType: "bandpass",
+      vol: 0.065,
+      crackle: true,
+    });
+
+    // 3. Impacto grave do baú chacoalhando
+    const thudOsc = ctx.createOscillator();
+    const thudGain = ctx.createGain();
+    thudOsc.type = "sine";
+    const thudFreq = (shape === "largo" ? 115 : shape === "compacto" ? 195 : 148) + variant * 8;
+    thudOsc.frequency.setValueAtTime(thudFreq, now);
+    thudOsc.frequency.exponentialRampToValueAtTime(Math.max(55, thudFreq * 0.5), now + 0.085);
+    thudGain.gain.setValueAtTime(0.0001, now);
+    thudGain.gain.linearRampToValueAtTime(shape === "largo" ? 0.12 : 0.085, now + 0.008);
+    thudGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.095);
+    thudOsc.connect(thudGain);
+    thudGain.connect(ctx.destination);
+    thudOsc.start(now);
+    thudOsc.stop(now + 0.1);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Som cristalino ao revelar a recompensa de Pontos do baú. */
+export function playChestRewardPoints() {
+  if (isSoundMuted()) return;
+  const ctx = getAudioContext();
+  if (!ctx) return;
+  try {
+    const now = ctx.currentTime;
+    [587.33, 880].forEach((freq, idx) => {
+      const t = now + idx * 0.07;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(freq, t);
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.linearRampToValueAtTime(0.11, t + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.24);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.26);
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Som energético ascendente ao revelar a recompensa de XP do baú. */
+export function playChestRewardXp() {
+  if (isSoundMuted()) return;
+  const ctx = getAudioContext();
+  if (!ctx) return;
+  try {
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(440, now);
+    osc.frequency.exponentialRampToValueAtTime(987.77, now + 0.18);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.linearRampToValueAtTime(0.1, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.28);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.3);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Som metálico de moedas tilintando ao revelar a recompensa de Moedas do baú. */
+export function playChestRewardCoins() {
+  if (isSoundMuted()) return;
+  const ctx = getAudioContext();
+  if (!ctx) return;
+  try {
+    const now = ctx.currentTime;
+    [1318.51, 1760, 2093].forEach((freq, idx) => {
+      const t = now + idx * 0.055;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, t);
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.linearRampToValueAtTime(0.085, t + 0.008);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.22);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.24);
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Acorde especial ao revelar Pacotes ou Cosméticos recebidos no baú. */
+export function playChestRewardPack() {
+  if (isSoundMuted()) return;
+  const ctx = getAudioContext();
+  if (!ctx) return;
+  try {
+    const now = ctx.currentTime;
+    [523.25, 659.25, 783.99, 1046.5, 1318.51].forEach((freq, idx) => {
+      const t = now + idx * 0.05;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(freq, t);
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.linearRampToValueAtTime(0.085, t + 0.018);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.34);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.36);
+    });
+  } catch {
+    /* ignore */
+  }
+}

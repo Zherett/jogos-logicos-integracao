@@ -123,6 +123,16 @@ export function resolveCardBgClass(
 
 export type CardImageFit = "contain-blur" | "cover";
 
+export type DungeonCardSkillId =
+  | "chronomancer"
+  | "aegis"
+  | "regeneration"
+  | "miner"
+  | "explorer"
+  | "critical"
+  | "economy"
+  | "pocket";
+
 export interface CardDefinition {
   id: string;
   name: string;
@@ -132,6 +142,7 @@ export interface CardDefinition {
   imageFit?: CardImageFit;
   colorVariant?: CardColorVariant;
   isFoil?: boolean;
+  dungeonSkillId?: DungeonCardSkillId;
   createdAt: string;
   updatedAt: string;
 }
@@ -411,6 +422,7 @@ export function createCardDefinition(input: {
   imageFit?: CardImageFit;
   colorVariant?: CardColorVariant;
   isFoil?: boolean;
+  dungeonSkillId?: DungeonCardSkillId | null;
 }): { card: CardDefinition | null; error?: string } {
   const name = input.name.trim();
   const description = input.description.trim();
@@ -430,6 +442,7 @@ export function createCardDefinition(input: {
       imageFit: input.imageFit ?? "contain-blur",
       colorVariant: input.colorVariant === 2 || input.colorVariant === 3 ? input.colorVariant : 1,
       isFoil: Boolean(input.isFoil),
+      ...(input.dungeonSkillId ? { dungeonSkillId: input.dungeonSkillId } : {}),
       createdAt: now,
       updatedAt: now,
     },
@@ -448,6 +461,7 @@ export function createCardBatch(input: {
   colorVariant?: CardColorVariant;
   createNormal: boolean;
   createFoil: boolean;
+  dungeonSkillId?: DungeonCardSkillId | null;
 }): { cards: CardDefinition[]; error?: string } {
   if (!input.createNormal && !input.createFoil) {
     return { cards: [], error: "Selecione pelo menos uma versão (Normal ou Foil) para criar." };
@@ -541,6 +555,7 @@ export function editCardDefinition(
     imageFit?: CardImageFit;
     colorVariant?: CardColorVariant;
     isFoil?: boolean;
+    dungeonSkillId?: DungeonCardSkillId | null;
   },
 ): { card: CardDefinition | null; error?: string } {
   const nextName = patch.name !== undefined ? patch.name.trim() : existing.name;
@@ -554,25 +569,34 @@ export function editCardDefinition(
         ? existing.colorVariant
         : 1;
   const nextFoil = patch.isFoil !== undefined ? Boolean(patch.isFoil) : Boolean(existing.isFoil);
+  const nextSkillId =
+    patch.dungeonSkillId === undefined
+      ? existing.dungeonSkillId
+      : patch.dungeonSkillId ?? undefined;
 
   if (!nextName) return { card: null, error: "O nome da carta não pode ficar vazio." };
   if (!isValidCardMediaUrl(nextUrl)) {
     return { card: null, error: "Link de imagem/GIF inválido. Utilize HTTPS." };
   }
 
-  return {
-    card: {
-      ...existing,
-      name: nextName,
-      description: nextDesc,
-      imageUrl: nextUrl,
-      imageFit: nextFit,
-      colorVariant: nextVariant,
-      isFoil: nextFoil,
-      rarity: existing.rarity, // Raridade nunca pode ser alterada após criação
-      updatedAt: new Date().toISOString(),
-    },
+  const nextCard: CardDefinition = {
+    ...existing,
+    name: nextName,
+    description: nextDesc,
+    imageUrl: nextUrl,
+    imageFit: nextFit,
+    colorVariant: nextVariant,
+    isFoil: nextFoil,
+    rarity: existing.rarity, // Raridade nunca pode ser alterada após criação
+    updatedAt: new Date().toISOString(),
   };
+  if (nextSkillId) {
+    nextCard.dungeonSkillId = nextSkillId;
+  } else {
+    delete nextCard.dungeonSkillId;
+  }
+
+  return { card: nextCard };
 }
 
 export function resolvePackCardPool(

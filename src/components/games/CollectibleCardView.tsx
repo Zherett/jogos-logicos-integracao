@@ -50,7 +50,7 @@ export function CollectibleCardView({
           : undefined
       }
       className={`group relative flex flex-col overflow-hidden rounded-2xl border-2 isolate transition-all ${bgClass} ${meta.borderClass} ${
-        locked ? "opacity-55 grayscale" : meta.glowClass
+        locked ? "grayscale select-none" : meta.glowClass
       } ${compact ? "gap-1.5 p-2 pb-1.5" : "gap-1.5 p-2.5 pb-2"} ${
         onClick ? "cursor-pointer hover:-translate-y-0.5 hover:shadow-xl" : ""
       }`}
@@ -76,21 +76,27 @@ export function CollectibleCardView({
         className={`relative z-20 mx-auto w-full rounded-xl border px-2.5 py-1 text-center shadow-inner ${meta.innerBoxClass}`}
       >
         <h4
+          aria-hidden={locked || undefined}
           className={`font-display font-extrabold tracking-tight line-clamp-1 ${
             compact ? "text-[11px] sm:text-xs" : "text-xs sm:text-sm"
-          }`}
+          } ${locked ? "blur-[7px] opacity-35" : ""}`}
         >
-          {card.name.trim() || "Nome da Carta"}
+          {locked ? "Carta Secreta" : card.name.trim() || "Nome da Carta"}
         </h4>
       </div>
 
       {/* 2. Moldura da Imagem / GIF ao Centro */}
       <div
         className={`relative z-20 mx-auto w-full overflow-hidden rounded-xl border border-slate-300/80 dark:border-black/40 shadow-sm aspect-[4/3] ${
-          hasValidUrl ? "bg-slate-950/20" : "bg-white dark:bg-slate-950/75"
+          hasValidUrl && !locked ? "bg-slate-950/20" : "bg-white dark:bg-slate-950/75"
         }`}
       >
-        {hasValidUrl ? (
+        {locked ? (
+          <div
+            aria-hidden="true"
+            className="h-full w-full scale-125 bg-gradient-to-br from-slate-400/50 via-slate-600/40 to-slate-800/60 blur-2xl"
+          />
+        ) : hasValidUrl ? (
           <>
             {useContainBlur && (
               <img
@@ -110,7 +116,7 @@ export function CollectibleCardView({
               onError={() => setImgError(true)}
               className={`relative z-10 h-full w-full transition-transform duration-300 ${
                 useContainBlur ? "object-contain" : "object-cover"
-              } ${onClick && !locked ? "group-hover:scale-105" : ""}`}
+              } ${onClick ? "group-hover:scale-105" : ""}`}
             />
           </>
         ) : (
@@ -122,21 +128,15 @@ export function CollectibleCardView({
           </div>
         )}
 
-        {locked && (
-          <div className="absolute inset-0 z-20 flex items-center justify-center bg-background/55 backdrop-blur-[2px]">
-            <Lock className="h-6 w-6 text-muted-foreground" />
-          </div>
-        )}
-
         {/* Badge de quantidade acumulada */}
-        {typeof count === "number" && count > 0 && (
+        {!locked && typeof count === "number" && count > 0 && (
           <span className="absolute top-1.5 right-1.5 z-20 rounded-full bg-white/95 dark:bg-slate-950/90 border border-slate-300 dark:border-white/20 px-2 py-0.5 font-mono text-[10px] font-black text-slate-900 dark:text-white shadow-sm">
             x{count}
           </span>
         )}
 
         {/* Badge NOVA! na abertura de pacote */}
-        {isNew && (
+        {!locked && isNew && (
           <span className="absolute top-1.5 left-1.5 z-20 inline-flex items-center gap-1 rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-black uppercase text-white shadow-sm">
             <Sparkles className="h-2.5 w-2.5" /> Nova!
           </span>
@@ -150,13 +150,28 @@ export function CollectibleCardView({
         }`}
       >
         <p
+          aria-hidden={locked || undefined}
           className={`text-justify leading-snug text-slate-700 dark:text-slate-200/95 ${
             compact ? "text-[10px] line-clamp-3" : "text-[11px] sm:text-xs line-clamp-6"
-          }`}
+          } ${locked ? "blur-[7px] opacity-35" : ""}`}
         >
-          {card.description.trim() || "Descrição da carta colecionável."}
+          {locked
+            ? "Conteúdo oculto até esta carta ser revelada em um pacote."
+            : card.description.trim() || "Descrição da carta colecionável."}
         </p>
       </div>
+
+      {/* Sobreposição total de bloqueio com blur intenso para cartas ainda não reveladas */}
+      {locked && (
+        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-1.5 bg-slate-950/60 backdrop-blur-xl">
+          <div className="grid h-11 w-11 place-items-center rounded-full border border-white/20 bg-slate-900/85 text-white/85 shadow-lg">
+            <Lock className="h-5 w-5" />
+          </div>
+          <span className="rounded-full border border-white/15 bg-slate-900/85 px-2.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wider text-white/85 shadow-sm">
+            Não Revelada
+          </span>
+        </div>
+      )}
     </div>
   );
 }

@@ -24,6 +24,9 @@ const WeeklyTournamentDialog = lazy(() =>
     default: m.WeeklyTournamentDialog,
   })),
 );
+const DungeonGame = lazy(() =>
+  import("@/components/games/DungeonGame").then((m) => ({ default: m.DungeonGame })),
+);
 import { GameRecordBanner } from "@/components/games/GameRecordBanner";
 import {
   recordGameStageScore,
@@ -118,7 +121,7 @@ export function IndexPage() {
 }
 
 function Index() {
-  const [view, setView] = useState<"menu" | GameId>("menu");
+  const [view, setView] = useState<"menu" | "masmorra" | GameId>("menu");
   const [stats, setStats] = useState<AllStats>(DEFAULT_STATS);
   const [mounted, setMounted] = useState(false);
   const [unlocked, setUnlocked] = useState<GameId[]>([]);
@@ -237,9 +240,16 @@ function Index() {
       : null,
   );
 
+  // Garantia estrita de que a Masmorra só permaneça acessível enquanto isAdmin estiver ativo
+  useEffect(() => {
+    if (view === "masmorra" && !auth.isAdmin) {
+      setView("menu");
+    }
+  }, [view, auth.isAdmin]);
+
   // Rastreia e atualiza a atividade atual do aluno para exibição em tempo real ao ADM
   useEffect(() => {
-    if (view !== "menu") {
+    if (view !== "menu" && view !== "masmorra") {
       const mode = activeRankedGameId
         ? "torneio_semanal"
         : activeX1Room
@@ -562,6 +572,14 @@ function Index() {
           onOpenX1Arena={() => setX1Open(true)}
           onOpenWeeklyTournament={() => setTournamentOpen(true)}
           onOpenAuth={() => setAuthDialogOpen(true)}
+          onOpenDungeon={
+            auth.isAdmin
+              ? () => {
+                  setActiveRankedGameId(null);
+                  setView("masmorra");
+                }
+              : undefined
+          }
         />
       )}
 
@@ -634,8 +652,21 @@ function Index() {
         </Suspense>
       )}
 
+      {/* Masmorra (Expedição Lógica) — Exclusivo ADM */}
+      {!activeX1Room && view === "masmorra" && auth.isAdmin && (
+        <Suspense
+          fallback={
+            <div className="p-10 text-center text-sm font-semibold text-muted-foreground">
+              Carregando Masmorra...
+            </div>
+          }
+        >
+          <DungeonGame onExit={() => setView("menu")} />
+        </Suspense>
+      )}
+
       {/* Execução Dinâmica de Qualquer Jogo Registrado */}
-      {!activeX1Room && view !== "menu" && (() => {
+      {!activeX1Room && view !== "menu" && view !== "masmorra" && (() => {
         const reg = getGameRegistration(view);
         if (!reg) return null;
         const GameComponent = reg.component;

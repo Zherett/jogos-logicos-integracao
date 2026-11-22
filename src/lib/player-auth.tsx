@@ -37,6 +37,7 @@ import {
   playfabSignIn,
   playfabSignOut,
   playfabSignUp,
+  playfabSaveDungeonProfileUpdate,
   playfabUpdatePlayerCards,
   playfabUnlockGames,
   pushAdminConfigToPlayFab,
@@ -95,6 +96,9 @@ interface AuthValue {
     packsOpenedDelta?: number;
     requireServerSync?: boolean;
   }) => Promise<{ ok: boolean; error?: string }>;
+  updateDungeonProfile: (
+    updater: (profile: PlayerProfile) => PlayerProfile,
+  ) => Promise<PlayerProfile | null>;
   recordMatch: (args: {
     gameId: GameId;
     mode?: string;
@@ -512,6 +516,17 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const updateDungeonProfile = useCallback(
+    async (updater: (profile: PlayerProfile) => PlayerProfile) => {
+      const updated = await playfabSaveDungeonProfileUpdate(updater);
+      if (updated) {
+        setProfile({ ...updated });
+      }
+      return updated;
+    },
+    [],
+  );
+
   const value = useMemo<AuthValue>(
     () => ({
       loading,
@@ -528,6 +543,7 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
       signOut,
       unlockGames,
       updatePlayerCards,
+      updateDungeonProfile,
       recordMatch,
       awardSpecialRobotMedal,
       awardSpaceQuestMedal,
@@ -554,6 +570,7 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
       signOut,
       unlockGames,
       updatePlayerCards,
+      updateDungeonProfile,
       recordMatch,
       awardSpecialRobotMedal,
       awardSpaceQuestMedal,

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Coins, Gift, HelpCircle, Package, Sparkles, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -7,8 +7,18 @@ import {
   DEFAULT_CHEST_OPEN_DURATION_MS,
   type ChestDefinition,
   type ChestOpenOutcome,
+  type ChestShape,
 } from "@/lib/chests-catalog";
-import { playChestLidOpen, playChestReveal, playChestUnlock } from "@/lib/sound";
+import {
+  playChestLidOpen,
+  playChestLockpickTick,
+  playChestReveal,
+  playChestRewardCoins,
+  playChestRewardPack,
+  playChestRewardPoints,
+  playChestRewardXp,
+  playChestUnlock,
+} from "@/lib/sound";
 import { ChestVector } from "./ChestVector";
 
 interface ChestOpeningModalProps {
@@ -20,6 +30,8 @@ interface ChestOpeningModalProps {
 }
 
 type OpeningStage = "unlocking" | "opening" | "revealed";
+type RewardStepKind = "points" | "xp" | "coins" | "packs";
+type RewardStepPhase = "mystery" | "reveal" | "flying";
 
 export function ChestOpeningModal({
   chest,
@@ -30,14 +42,89 @@ export function ChestOpeningModal({
 }: ChestOpeningModalProps) {
   const [stage, setStage] = useState<OpeningStage>("unlocking");
   const [progress, setProgress] = useState(0);
+  const [shakeVariant, setShakeVariant] = useState<1 | 2 | 3>(1);
+
+  const [activeStep, setActiveStep] = useState<RewardStepKind | null>(null);
+  const [stepPhase, setStepPhase] = useState<RewardStepPhase>("mystery");
+  const [settledSteps, setSettledSteps] = useState<Record<RewardStepKind, boolean>>({
+    points: false,
+    xp: false,
+    coins: false,
+    packs: false,
+  });
+  const [flyTransform, setFlyTransform] = useState<{
+    dx: number;
+    dy: number;
+    scaleX: number;
+    scaleY: number;
+  }>({ dx: 0, dy: 0, scaleX: 1, scaleY: 1 });
+
   const rafRef = useRef<number | null>(null);
-  const timerRef = useRef<number | null>(null);
+  const timersRef = useRef<number[]>([]);
+  const lockpickIntervalRef = useRef<number | null>(null);
+  const spotlightRef = useRef<HTMLDivElement | null>(null);
+  const slotRefs = useRef<Record<RewardStepKind, HTMLDivElement | null>>({
+    points: null,
+    xp: null,
+    coins: null,
+    packs: null,
+  });
+
+  const hasExtras = Boolean(
+    outcome && (outcome.packs.length > 0 || (outcome.cosmetics?.length ?? 0) > 0),
+  );
+
+  const rewardQueue = useMemo<RewardStepKind[]>(() => {
+    const q: RewardStepKind[] = ["points", "xp", "coins"];
+    if (hasExtras) q.push("packs");
+    return q;
+  }, [hasExtras]);
+
+  const allSettled = useMemo(
+    () => rewardQueue.every((k) => settledSteps[k]),
+    [rewardQueue, settledSteps],
+  );
+
+  function clearTimers() {
+    for (const id of timersRef.current) {
+      window.clearTimeout(id);
+    }
+    timersRef.current = [];
+  }
+
+  function schedule(fn: () => void, ms: number) {
+    const id = window.setTimeout(fn, ms);
+    timersRef.current.push(id);
+    return id;
+  }
 
   useEffect(() => {
     if (!chest || !outcome) return;
 
+    clearTimers();
+    if (lockpickIntervalRef.current !== null) {
+      window.clearInterval(lockpickIntervalRef.current);
+      lockpickIntervalRef.current = null;
+    }
+
     setStage("unlocking");
     setProgress(0);
+    setShakeVariant(1);
+    setActiveStep(null);
+    setStepPhase("mystery");
+    setSettledSteps({ points: false, xp: false, coins: false, packs: false });
+    setFlyTransform({ dx: 0, dy: 0, scaleX: 1, scaleY: 1 });
+
+    const resolvedShape: ChestShape =
+      chest.shape === "largo" || chest.shape === "compacto" ? chest.shape : "padrao";
+    let currentVariant: 1 | 2 | 3 = 1;
+    playChestLockpickTick(resolvedShape, currentVariant);
+
+    lockpickIntervalRef.current = window.setInterval(() => {
+      currentVariant = currentVariant === 1 ? 2 : currentVariant === 2 ? 3 : 1;
+      setShakeVariant(currentVariant);
+      playChestLockpickTick(resolvedShape, currentVariant);
+    }, 340);
 
     const duration = Math.min(
       6000,
@@ -53,10 +140,14 @@ export function ChestOpeningModal({
       if (pct < 100) {
         rafRef.current = requestAnimationFrame(step);
       } else {
+        if (lockpickIntervalRef.current !== null) {
+          window.clearInterval(lockpickIntervalRef.current);
+          lockpickIntervalRef.current = null;
+        }
         playChestUnlock();
         playChestLidOpen();
         setStage("opening");
-        timerRef.current = window.setTimeout(() => {
+        schedule(() => {
           playChestReveal();
           setStage("revealed");
         }, 780);
@@ -67,11 +158,111 @@ export function ChestOpeningModal({
 
     return () => {
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+      if (lockpickIntervalRef.current !== null) {
+        window.clearInterval(lockpickIntervalRef.current);
+        lockpickIntervalRef.current = null;
+      }
+      clearTimers();
     };
   }, [chest, outcome]);
 
+  // Orquestra a revelação 1 a 1 quando o estágio chega em "revealed"
+  useEffect(() => {
+    if (stage !== "revealed" || !outcome) return;
+
+    clearTimers();
+    let cancelled = false;
+
+    const runStep = (idx: number) => {
+      if (cancelled) return;
+      if (idx >= rewardQueue.length) {
+        setActiveStep(null);
+        return;
+      }
+      const kind = rewardQueue[idx];
+      setFlyTransform({ dx: 0, dy: 0, scaleX: 1, scaleY: 1 });
+      setActiveStep(kind);
+      setStepPhase("mystery");
+
+      schedule(() => {
+        if (cancelled) return;
+        setStepPhase("reveal");
+        if (kind === "points") playChestRewardPoints();
+        else if (kind === "xp") playChestRewardXp();
+        else if (kind === "coins") playChestRewardCoins();
+        else playChestRewardPack();
+
+        schedule(() => {
+          if (cancelled) return;
+          setStepPhase("flying");
+
+          schedule(() => {
+            if (cancelled) return;
+            setSettledSteps((prev) => ({ ...prev, [kind]: true }));
+            runStep(idx + 1);
+          }, 460);
+        }, 680);
+      }, 220);
+    };
+
+    runStep(0);
+
+    return () => {
+      cancelled = true;
+      clearTimers();
+    };
+  }, [stage, outcome, rewardQueue]);
+
+  // Calcula o deslocamento exato do card em destaque até o seu slot de destino no layout
+  useLayoutEffect(() => {
+    if (stage !== "revealed" || !activeStep || stepPhase !== "flying") return;
+    const spotEl = spotlightRef.current;
+    const targetEl = slotRefs.current[activeStep];
+    if (!spotEl || !targetEl) return;
+
+    const spotRect = spotEl.getBoundingClientRect();
+    const targetRect = targetEl.getBoundingClientRect();
+    const spotCx = spotRect.left + spotRect.width / 2;
+    const spotCy = spotRect.top + spotRect.height / 2;
+    const targetCx = targetRect.left + targetRect.width / 2;
+    const targetCy = targetRect.top + targetRect.height / 2;
+
+    const dx = targetCx - spotCx;
+    const dy = targetCy - spotCy;
+    const scaleX = spotRect.width > 0 ? Math.max(0.35, targetRect.width / spotRect.width) : 0.7;
+    const scaleY = spotRect.height > 0 ? Math.max(0.35, targetRect.height / spotRect.height) : 0.7;
+
+    setFlyTransform({ dx, dy, scaleX, scaleY });
+  }, [stage, activeStep, stepPhase]);
+
+  function handleSkipSequence() {
+    clearTimers();
+    setActiveStep(null);
+    setSettledSteps({
+      points: true,
+      xp: true,
+      coins: true,
+      packs: hasExtras,
+    });
+  }
+
   if (!chest || !outcome) return null;
+
+  const packsSummary = outcome.packs
+    .map((pk) => {
+      const pName = packsCatalog.find((p) => p.id === pk.packId)?.name ?? pk.packId;
+      return `${pk.quantity}x ${pName}`;
+    })
+    .join(" • ");
+
+  const extrasLabel = [
+    packsSummary,
+    outcome.cosmetics?.length
+      ? `${outcome.cosmetics.length} cosmético(s) desbloqueado(s)`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" • ");
 
   return (
     <Dialog open={Boolean(chest && outcome)} onOpenChange={(v) => !v && onClose()}>
@@ -88,7 +279,7 @@ export function ChestOpeningModal({
           </DialogTitle>
         </DialogHeader>
 
-        {/* Estágios 1 e 2: Baú chacoalhando + barra carregando -> Tampa sobe + bolinha '?' emerge */}
+        {/* Estágios 1 e 2: Baú chacoalhando (3 variações por tamanho) + som de chave -> Tampa sobe + bolinha '?' */}
         {stage !== "revealed" && (
           <div className="py-6 flex flex-col items-center justify-center space-y-6">
             <div className="relative flex items-center justify-center pt-6">
@@ -105,6 +296,7 @@ export function ChestOpeningModal({
                 metalColor={chest.metalColor}
                 shape={chest.shape}
                 isShaking={stage === "unlocking"}
+                shakeVariant={shakeVariant}
                 isOpen={stage === "opening"}
                 size="lg"
               />
@@ -126,57 +318,194 @@ export function ChestOpeningModal({
           </div>
         )}
 
-        {/* Estágio 3: Bolinha se expande para o modal de premiação */}
+        {/* Estágio 3: Revelação 1 a 1 com deslize para a posição final */}
         {stage === "revealed" && (
-          <div className="space-y-4 py-2 animate-in zoom-in-90 duration-300">
-            <div className="mx-auto inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-3 py-1 text-xs font-black text-emerald-600 dark:text-emerald-400">
-              <Sparkles className="h-3.5 w-3.5" /> Recompensas Recebidas!
+          <div className="relative space-y-4 py-2">
+            <div
+              className={`mx-auto inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-3 py-1 text-xs font-black text-emerald-600 dark:text-emerald-400 transition-all duration-300 ${
+                allSettled ? "opacity-100 scale-100" : "opacity-60 scale-95"
+              }`}
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              {allSettled ? "Recompensas Recebidas!" : "Revelando Recompensas..."}
             </div>
 
+            {/* Grade definitiva de Pontos, XP e Moedas (slots ocultos até pousarem) */}
             <div className="grid grid-cols-3 gap-2.5">
-              <div className="rounded-2xl border bg-secondary/40 p-3">
+              <div
+                ref={(el) => {
+                  slotRefs.current.points = el;
+                }}
+                className={`rounded-2xl border bg-secondary/40 p-3 transition-all duration-300 ${
+                  settledSteps.points
+                    ? "opacity-100 scale-100"
+                    : "opacity-15 scale-95 border-dashed"
+                }`}
+              >
                 <Coins className="mx-auto mb-1 h-4 w-4 text-primary" />
                 <div className="text-[10px] font-bold text-muted-foreground">Pontos</div>
                 <div className="font-display text-lg font-black text-primary">
-                  +{outcome.points}
+                  {settledSteps.points ? `+${outcome.points}` : "?"}
                 </div>
               </div>
-              <div className="rounded-2xl border bg-secondary/40 p-3">
+
+              <div
+                ref={(el) => {
+                  slotRefs.current.xp = el;
+                }}
+                className={`rounded-2xl border bg-secondary/40 p-3 transition-all duration-300 ${
+                  settledSteps.xp
+                    ? "opacity-100 scale-100"
+                    : "opacity-15 scale-95 border-dashed"
+                }`}
+              >
                 <Zap className="mx-auto mb-1 h-4 w-4 text-emerald-500" />
                 <div className="text-[10px] font-bold text-muted-foreground">XP</div>
                 <div className="font-display text-lg font-black text-emerald-500">
-                  +{outcome.xp}
+                  {settledSteps.xp ? `+${outcome.xp}` : "?"}
                 </div>
               </div>
-              <div className="rounded-2xl border bg-secondary/40 p-3">
+
+              <div
+                ref={(el) => {
+                  slotRefs.current.coins = el;
+                }}
+                className={`rounded-2xl border bg-secondary/40 p-3 transition-all duration-300 ${
+                  settledSteps.coins
+                    ? "opacity-100 scale-100"
+                    : "opacity-15 scale-95 border-dashed"
+                }`}
+              >
                 <Coins className="mx-auto mb-1 h-4 w-4 text-amber-500" />
                 <div className="text-[10px] font-bold text-muted-foreground">Moedas</div>
                 <div className="font-display text-lg font-black text-amber-500">
-                  +{outcome.coins}
+                  {settledSteps.coins ? `+${outcome.coins}` : "?"}
                 </div>
               </div>
             </div>
 
-            {outcome.packs.length > 0 && (
-              <div className="rounded-2xl border border-primary/30 bg-primary/10 p-3 text-xs font-bold text-primary flex items-center justify-center gap-2">
+            {/* Espaço inferior reservado para Pacotes / Itens (quando houver) */}
+            {hasExtras && (
+              <div
+                ref={(el) => {
+                  slotRefs.current.packs = el;
+                }}
+                className={`rounded-2xl border border-primary/30 bg-primary/10 p-3 text-xs font-bold text-primary flex items-center justify-center gap-2 transition-all duration-300 ${
+                  settledSteps.packs
+                    ? "opacity-100 scale-100"
+                    : "opacity-15 scale-95 border-dashed"
+                }`}
+              >
                 <Package className="h-4 w-4 shrink-0" />
-                <span>
-                  {outcome.packs
-                    .map((pk) => {
-                      const pName =
-                        packsCatalog.find((p) => p.id === pk.packId)?.name ?? pk.packId;
-                      return `${pk.quantity}x ${pName}`;
-                    })
-                    .join(" • ")}
-                </span>
+                <span>{settledSteps.packs ? extrasLabel : "Item bônus..."}</span>
+              </div>
+            )}
+
+            {/* Spotlight central: aparece, revela o valor com som e desliza para o slot de destino */}
+            {activeStep && (
+              <div
+                onClick={handleSkipSequence}
+                title="Clique para revelar tudo"
+                className="pointer-events-auto absolute inset-0 z-30 flex items-center justify-center cursor-pointer"
+              >
+                <div
+                  ref={spotlightRef}
+                  style={{
+                    transform:
+                      stepPhase === "flying"
+                        ? `translate(${flyTransform.dx}px, ${flyTransform.dy}px) scale(${flyTransform.scaleX}, ${flyTransform.scaleY})`
+                        : "translate(0px, 0px) scale(1)",
+                    transition:
+                      stepPhase === "flying"
+                        ? "transform 440ms cubic-bezier(0.22, 1, 0.36, 1), opacity 440ms ease"
+                        : "transform 220ms cubic-bezier(0.22, 1, 0.36, 1)",
+                    opacity: stepPhase === "flying" ? 0.25 : 1,
+                  }}
+                  className={`flex flex-col items-center justify-center gap-1.5 rounded-3xl border-2 px-6 py-5 shadow-2xl backdrop-blur-md ${
+                    activeStep === "points"
+                      ? "w-44 border-primary/60 bg-card/95 shadow-primary/25"
+                      : activeStep === "xp"
+                        ? "w-44 border-emerald-500/60 bg-card/95 shadow-emerald-500/25"
+                        : activeStep === "coins"
+                          ? "w-44 border-amber-500/60 bg-card/95 shadow-amber-500/25"
+                          : "w-64 border-primary/70 bg-card/95 shadow-primary/30"
+                  }`}
+                >
+                  {activeStep === "points" && (
+                    <>
+                      <Coins className="h-7 w-7 text-primary" />
+                      <span className="text-xs font-extrabold uppercase tracking-wider text-muted-foreground">
+                        Pontos
+                      </span>
+                      <span
+                        className={`font-display text-3xl font-black text-primary transition-all duration-200 ${
+                          stepPhase === "mystery" ? "scale-75 opacity-60" : "scale-110 opacity-100"
+                        }`}
+                      >
+                        {stepPhase === "mystery" ? "?" : `+${outcome.points}`}
+                      </span>
+                    </>
+                  )}
+
+                  {activeStep === "xp" && (
+                    <>
+                      <Zap className="h-7 w-7 text-emerald-500" />
+                      <span className="text-xs font-extrabold uppercase tracking-wider text-muted-foreground">
+                        XP
+                      </span>
+                      <span
+                        className={`font-display text-3xl font-black text-emerald-500 transition-all duration-200 ${
+                          stepPhase === "mystery" ? "scale-75 opacity-60" : "scale-110 opacity-100"
+                        }`}
+                      >
+                        {stepPhase === "mystery" ? "?" : `+${outcome.xp}`}
+                      </span>
+                    </>
+                  )}
+
+                  {activeStep === "coins" && (
+                    <>
+                      <Coins className="h-7 w-7 text-amber-500" />
+                      <span className="text-xs font-extrabold uppercase tracking-wider text-muted-foreground">
+                        Moedas
+                      </span>
+                      <span
+                        className={`font-display text-3xl font-black text-amber-500 transition-all duration-200 ${
+                          stepPhase === "mystery" ? "scale-75 opacity-60" : "scale-110 opacity-100"
+                        }`}
+                      >
+                        {stepPhase === "mystery" ? "?" : `+${outcome.coins}`}
+                      </span>
+                    </>
+                  )}
+
+                  {activeStep === "packs" && (
+                    <>
+                      <Package className="h-7 w-7 text-primary" />
+                      <span className="text-xs font-extrabold uppercase tracking-wider text-muted-foreground">
+                        Pacotes &amp; Itens
+                      </span>
+                      <span
+                        className={`font-display text-sm font-black text-primary transition-all duration-200 ${
+                          stepPhase === "mystery" ? "scale-75 opacity-60" : "scale-105 opacity-100"
+                        }`}
+                      >
+                        {stepPhase === "mystery" ? "?" : extrasLabel}
+                      </span>
+                    </>
+                  )}
+                </div>
               </div>
             )}
 
             <Button
               type="button"
               size="lg"
+              disabled={!allSettled}
               onClick={onClose}
-              className="w-full rounded-2xl font-display text-base font-extrabold"
+              className={`w-full rounded-2xl font-display text-base font-extrabold transition-opacity duration-300 ${
+                allSettled ? "opacity-100" : "opacity-40"
+              }`}
             >
               OK
             </Button>

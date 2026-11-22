@@ -10,9 +10,28 @@ interface ChestVectorProps {
   shape?: ChestShape;
   isOpen?: boolean;
   isShaking?: boolean;
+  shakeVariant?: 1 | 2 | 3;
   size?: "sm" | "md" | "lg";
   className?: string;
 }
+
+const SHAKE_CLASS_BY_SHAPE: Record<ChestShape, Record<1 | 2 | 3, string>> = {
+  compacto: {
+    1: "animate-chest-shake-compacto-1",
+    2: "animate-chest-shake-compacto-2",
+    3: "animate-chest-shake-compacto-3",
+  },
+  padrao: {
+    1: "animate-chest-shake-padrao-1",
+    2: "animate-chest-shake-padrao-2",
+    3: "animate-chest-shake-padrao-3",
+  },
+  largo: {
+    1: "animate-chest-shake-largo-1",
+    2: "animate-chest-shake-largo-2",
+    3: "animate-chest-shake-largo-3",
+  },
+};
 
 export function ChestVector({
   primaryColor = DEFAULT_CHEST_PRIMARY_COLOR,
@@ -20,6 +39,7 @@ export function ChestVector({
   shape = "padrao",
   isOpen = false,
   isShaking = false,
+  shakeVariant = 1,
   size = "md",
   className = "",
 }: ChestVectorProps) {
@@ -39,17 +59,22 @@ export function ChestVector({
         ? "scale-x-85 scale-y-90"
         : "";
 
+  const resolvedShape: ChestShape =
+    shape === "largo" || shape === "compacto" ? shape : "padrao";
+  const shakeClass = isShaking
+    ? SHAKE_CLASS_BY_SHAPE[resolvedShape][shakeVariant]
+    : "";
+
   return (
     <div
-      className={`relative inline-flex items-center justify-center select-none ${baseSizeClass} ${shapeTransform} ${
-        isShaking ? "animate-chest-shake" : ""
-      } ${className}`}
+      className={`relative inline-flex items-center justify-center select-none ${baseSizeClass} ${shapeTransform} ${className}`}
     >
-      <svg
-        viewBox="0 0 240 185"
-        className="h-full w-full overflow-visible drop-shadow-md"
-        aria-hidden="true"
-      >
+      <div className={`h-full w-full ${shakeClass}`}>
+        <svg
+          viewBox="0 0 240 185"
+          className="h-full w-full overflow-visible drop-shadow-md"
+          aria-hidden="true"
+        >
         {/* Cavidade interna revelada quando a tampa sobe */}
         {isOpen && (
           <g>
@@ -158,6 +183,7 @@ export function ChestVector({
           <rect x="116.5" y="88" width="7" height="14" rx="3" fill="#334155" />
         </g>
       </svg>
+      </div>
     </div>
   );
 }

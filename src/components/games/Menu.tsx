@@ -20,6 +20,7 @@ import {
   Target,
   LogIn,
   Gamepad2,
+  Compass,
 } from "lucide-react";
 import type { AllStats, GameId } from "@/lib/game-storage";
 import { GAME_NAMES } from "@/lib/game-storage";
@@ -74,6 +75,7 @@ interface Props {
   onOpenX1Arena?: () => void;
   onOpenWeeklyTournament?: () => void;
   onOpenAuth?: () => void;
+  onOpenDungeon?: () => void;
 }
 
 export function Menu({
@@ -102,6 +104,7 @@ export function Menu({
   onOpenX1Arena,
   onOpenWeeklyTournament,
   onOpenAuth,
+  onOpenDungeon,
 }: Props) {
   const isGameEnabled = (id: GameId) => Boolean(enabledGames && enabledGames[id] === true);
   const isGameAllowedForUser = (id: GameId) => {
@@ -638,6 +641,30 @@ export function Menu({
             </button>
           );
         })}
+
+        {/* Card exclusivo ADM: Masmorra (Expedição Lógica) */}
+        {isAdmin && onOpenDungeon && (
+          <button
+            type="button"
+            onClick={onOpenDungeon}
+            className="group relative flex flex-col items-center justify-center rounded-3xl border-2 border-purple-500/50 bg-card p-4 sm:p-5 text-center shadow-xs transition-all hover:scale-[1.03] hover:border-purple-400 hover:shadow-xl hover:bg-purple-500/10 active:scale-95 cursor-pointer min-h-[155px]"
+          >
+            <div className="grid h-16 w-16 sm:h-20 sm:w-20 place-items-center rounded-2xl bg-gradient-to-br from-purple-600 via-indigo-600 to-fuchsia-700 text-white shadow-md group-hover:scale-105 transition-all mb-2.5">
+              <Compass className="h-9 w-9 sm:h-11 sm:w-11" />
+            </div>
+            <span className="font-display text-sm sm:text-base font-black text-foreground group-hover:text-purple-400 transition-colors leading-tight line-clamp-2">
+              Masmorra Lógica
+            </span>
+            <div className="flex flex-wrap items-center justify-center gap-1 mt-1.5">
+              <span className="inline-flex items-center gap-1 rounded-full bg-purple-500/20 border border-purple-500/40 px-2 py-0.5 text-[9px] font-black uppercase text-purple-300">
+                🧪 Testes ADM
+              </span>
+              <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 text-[9px] font-black uppercase text-amber-600 dark:text-amber-400">
+                Nv. 5+
+              </span>
+            </div>
+          </button>
+        )}
 
         {/* Card Opcional para Inserir Novo Código de Jogo (Configurável no Painel ADM) */}
         {showCodeGateCardOnHome && (
