@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  formatPresenceTimeAgo,
   getPlayerPresenceData,
   getPlayerPresenceStatus,
+  LEGACY_PRESENCE_SHARED_GROUP_ID,
   markPlayerDisconnected,
   PRESENCE_SHARED_GROUP_ID,
   pushPresenceToPlayFab,
@@ -16,9 +18,14 @@ import {
   callPlayFabClient,
   clearExpiredStoredSessionTicket,
   CLOUD_SESSION_EXPIRED_EVENT,
+  getLeaderboardSnapshotLocal,
+  getPlayerPublicProfile,
   hasValidCloudSessionTicket,
   playfabSignIn,
   playfabUpdatePlayerCards,
+  ROSTER_SHARED_GROUP_ID,
+  syncSinglePlayerFromPlayFab,
+  syncStudentRosterFromPlayFab,
 } from "./playfab.ts";
 
 const SESSION_KEY = "desafios-playfab-session-v1";
@@ -45,10 +52,12 @@ function createFakePlayFab() {
     TK_VIEWER: "1B2E1517154B2D49",
     TK_ALUNO: "PF_ALUNO_1",
   };
+  const users = new Map<string, { password: string; playfabId: string; ticket: string; displayName?: string }>();
   const groups = new Map<string, { members: Set<string>; data: Map<string, { Value: string; LastUpdated: string }> }>();
   const userData = new Map<string, Map<string, { Value: string; LastUpdated: string }>>();
   const calls: Array<{ endpoint: string; ticket: string; keepalive: boolean; body: Record<string, any> }> = [];
   let writeTimeOverride: string | null = null;
+  let forceRateLimit = false;
 
   const ok = (data: unknown) => new Response(JSON.stringify({ code: 200, status: "OK", data }), { status: 200 });
   const fail = (error: string, code = 1000, status = 400) =>
@@ -63,8 +72,32 @@ function createFakePlayFab() {
     calls.push({ endpoint, ticket, keepalive: Boolean((init as any)?.keepalive), body });
 
     if (endpoint === "LoginWithPlayFab") {
+      if (forceRateLimit) {
+        return fail("APIClientRequestRateLimitExceeded", 1199, 429);
+      }
       if (body.Username === "semedvisitante") {
         return ok({ PlayFabId: "1B2E1517154B2D49", SessionTicket: "TK_VIEWER" });
+      }
+      const user = users.get(String(body.Username ?? "").toLowerCase());
+      if (user) {
+        if (user.password === body.Password) {
+          tickets[user.ticket] = user.playfabId;
+          return ok({
+            PlayFabId: user.playfabId,
+            SessionTicket: user.ticket,
+            InfoResultPayload: {
+              AccountInfo: {
+                Username: String(body.Username),
+                TitleInfo: { DisplayName: user.displayName ?? String(body.Username) },
+              },
+              UserData: Object.fromEntries(userData.get(user.playfabId) ?? new Map()),
+            },
+          });
+        }
+        return fail("InvalidUsernameOrPassword", 1142, 400);
+      }
+      if (users.size > 0) {
+        return fail("AccountNotFound", 1001, 400);
       }
       return fail("InvalidUsernameOrPassword", 1142, 401);
     }
@@ -129,7 +162,10 @@ function createFakePlayFab() {
     fetchImpl,
     calls,
     groups,
+    userData,
+    users,
     setWriteTime: (iso: string | null) => (writeTimeOverride = iso),
+    setRateLimit: (v: boolean) => (forceRateLimit = v),
   };
 }
 
@@ -462,5 +498,375 @@ describe("Presença online/offline na nuvem (fluxo aluno → ADM)", () => {
     const resWrong = await playfabSignIn("JOSINEY", "SENHA_ERRADA");
     assert.equal(resWrong.account, null);
     assert.ok(resWrong.error);
+  });
+
+  it("alunos com senha padrão de 6 dígitos (DDMMAA ou DD/MM/AAAA) autenticam em 1 chamada e preservam sessão válida", async () => {
+    pf.users.set("alunopadrao", {
+      password: "200114",
+      playfabId: "PF_PADRAO_1",
+      ticket: "TK_PADRAO_1",
+      displayName: "AlunoPadrao",
+    });
+
+    const res1 = await playfabSignIn("AlunoPadrao", "200114");
+    assert.equal(res1.error, null);
+    assert.equal(res1.account?.profile.playfabId, "PF_PADRAO_1");
+    assert.equal(hasValidCloudSessionTicket(), true);
+
+    const loginCalls1 = pf.calls.filter((c) => c.endpoint === "LoginWithPlayFab" && c.body.Username === "alunopadrao");
+    assert.equal(loginCalls1.length, 1);
+
+    // Também aceita data formatada DD/MM/AAAA (normalizada para 200114 na 1ª chamada)
+    const res2 = await playfabSignIn("alunopadrao", "20/01/2014");
+    assert.equal(res2.error, null);
+    assert.equal(res2.account?.profile.playfabId, "PF_PADRAO_1");
+    assert.equal(hasValidCloudSessionTicket(), true);
+  });
+
+  it("conta criada com senha numérica de 8 dígitos ou alfanumérica com 6 dígitos faz login sem corromper a senha", async () => {
+    pf.users.set("zheret", {
+      password: "12345678",
+      playfabId: "PF_ZHERET",
+      ticket: "TK_ZHERET",
+      displayName: "ZHERET",
+    });
+    pf.users.set("alunoalfa", {
+      password: "teste123456",
+      playfabId: "PF_ALFA",
+      ticket: "TK_ALFA",
+      displayName: "AlunoAlfa",
+    });
+
+    // 8 dígitos literais: tenta 123478 (DDMMAA) e faz fallback automático para 12345678
+    const res8 = await playfabSignIn("ZHERET", "12345678");
+    assert.equal(res8.error, null);
+    assert.equal(res8.account?.profile.playfabId, "PF_ZHERET");
+    assert.equal(hasValidCloudSessionTicket(), true);
+
+    // Alfanumérica com 6 dígitos: não remove letras e entra na 1ª tentativa
+    const resAlfa = await playfabSignIn("AlunoAlfa", "teste123456");
+    assert.equal(resAlfa.error, null);
+    assert.equal(resAlfa.account?.profile.playfabId, "PF_ALFA");
+    const alfaCalls = pf.calls.filter((c) => c.endpoint === "LoginWithPlayFab" && c.body.Username === "alunoalfa");
+    assert.equal(alfaCalls.length, 1);
+    assert.equal(alfaCalls[0].body.Password, "teste123456");
+  });
+
+  it("conta antiga com underline '_' cadastrada sem codificação '0u' autentica via fallback legado", async () => {
+    pf.users.set("joaosilva", {
+      password: "150815",
+      playfabId: "PF_JOAO_LEGADO",
+      ticket: "TK_JOAO_LEGADO",
+      displayName: "joao_silva",
+    });
+
+    const res = await playfabSignIn("joao_silva", "150815");
+    assert.equal(res.error, null);
+    assert.equal(res.account?.profile.playfabId, "PF_JOAO_LEGADO");
+    assert.equal(hasValidCloudSessionTicket(), true);
+  });
+
+  it("HTTP 429 (APIClientRequestRateLimitExceeded) interrompe tentativas imediatamente e informa mensagem clara de espera", async () => {
+    pf.users.set("alunorate", {
+      password: "12345678",
+      playfabId: "PF_RATE",
+      ticket: "TK_RATE",
+    });
+    pf.setRateLimit(true);
+
+    const res = await playfabSignIn("alunorate", "12345678");
+    assert.equal(res.account, null);
+    assert.match(res.error ?? "", /Aguarde|tentativas/i);
+    assert.doesNotMatch(res.error ?? "", /Apelido ou senha incorretos/i);
+
+    const rateCalls = pf.calls.filter((c) => c.endpoint === "LoginWithPlayFab");
+    assert.equal(rateCalls.length, 1);
+  });
+
+  it("caso Quimquim: syncStudentRosterFromPlayFab NÃO apaga activeSessionUpdatedAt nem causa oscilação 'há 5 dias' ↔ 'há 2 dias'", async () => {
+    const now = Date.now();
+    const fiveDaysAgoIso = new Date(now - 5.2 * 86_400_000).toISOString();
+    const fourDaysAgoIso = new Date(now - 4.0 * 86_400_000).toISOString();
+    const twoDaysAgoIso = new Date(now - 2.6 * 86_400_000).toISOString();
+
+    // Roster congelado em 5 dias atrás (sem activeSessionUpdatedAt)
+    pf.groups.set(ROSTER_SHARED_GROUP_ID, {
+      members: new Set(["1B2E1517154B2D49", "FB6662558A38ACAD"]),
+      data: new Map([
+        [
+          "stu_quimquim",
+          {
+            Value: JSON.stringify({
+              id: "B6F7125B9A97C2E7",
+              playfabId: "B6F7125B9A97C2E7",
+              nick: "Quimquim",
+              nickNormalized: "quimquim",
+              full_name: "JOAQUIM G.",
+              school: "Raimundo Bezerra",
+              level: 10,
+              xp: 12120,
+              seasonXp: 12120,
+              matchesPlayed: 293,
+              wins: 288,
+              careerPoints: 7236,
+              pointsBalance: 7236,
+              updatedAt: fiveDaysAgoIso,
+              stats: [{ game_id: "logica", plays: 293, wins: 288, best_score: 200, best_level: 3, last_played_at: fiveDaysAgoIso }],
+            }),
+            LastUpdated: fiveDaysAgoIso,
+          },
+        ],
+      ]),
+    });
+
+    // Presença legada V2 congelada em 5 dias atrás
+    pf.groups.set(LEGACY_PRESENCE_SHARED_GROUP_ID, {
+      members: new Set(["1B2E1517154B2D49"]),
+      data: new Map([
+        [
+          "pres_quimquim",
+          {
+            Value: JSON.stringify({
+              playerId: "B6F7125B9A97C2E7",
+              playfabId: "B6F7125B9A97C2E7",
+              nick: "Quimquim",
+              nickNormalized: "quimquim",
+              lastSeenAt: now - 5.2 * 86_400_000,
+              lastActiveAt: now - 5.2 * 86_400_000,
+              idleMs: 0,
+              disconnected: false,
+            }),
+            LastUpdated: fiveDaysAgoIso,
+          },
+        ],
+      ]),
+    });
+
+    // UserData individual mais recente (2 dias atrás, sem campo updatedAt no JSON — apenas LastUpdated do servidor)
+    pf.userData.set(
+      "B6F7125B9A97C2E7",
+      new Map([
+        [
+          "PlayerProfile",
+          {
+            Value: JSON.stringify({
+              nick: "Quimquim",
+              xp: 13305,
+              seasonXp: 13305,
+              level: 10,
+              matchesPlayed: 314,
+              wins: 309,
+              careerPoints: 7756,
+              pointsBalance: 7756,
+              activeSessionId: "sess_quim_recent",
+              activeSessionUpdatedAt: twoDaysAgoIso,
+            }),
+            LastUpdated: twoDaysAgoIso,
+          },
+        ],
+        [
+          "GameStats",
+          {
+            Value: JSON.stringify([
+              { game_id: "logica", plays: 314, wins: 309, best_score: 210, best_level: 3, last_played_at: fourDaysAgoIso },
+            ]),
+            LastUpdated: twoDaysAgoIso,
+          },
+        ],
+      ]),
+    );
+
+    loginAs("TK_ADMIN", "josiney");
+    await syncPresenceFromPlayFab(true);
+    await syncStudentRosterFromPlayFab(undefined, true, { lightweight: true });
+
+    // Abre perfil do Quimquim -> baixa UserData (2 dias atrás) e preserva XP maior do UserData (13.305+)
+    const afterInspect = await syncSinglePlayerFromPlayFab("Quimquim");
+    assert.ok((afterInspect?.xp ?? 0) >= 13305);
+    assert.equal(afterInspect?.activeSessionUpdatedAt, twoDaysAgoIso);
+
+    const presAfterInspect = getPlayerPresenceData(afterInspect!.id, {
+      playfabId: afterInspect!.playfabId,
+      nick: afterInspect!.nick,
+      nickNormalized: afterInspect!.nickNormalized,
+      activeSessionUpdatedAt: afterInspect!.activeSessionUpdatedAt,
+      lastKnownActivityAt: afterInspect!.lastKnownActivityAt,
+    });
+    assert.equal(formatPresenceTimeAgo(presAfterInspect, now), "Online há 2 dias");
+
+    // Novo ciclo do Roster (antes apagava activeSessionUpdatedAt e voltava para "Online há 5 dias"!)
+    await syncStudentRosterFromPlayFab(undefined, true, { lightweight: true });
+    const afterSecondRosterSync = getPlayerPublicProfile("Quimquim");
+    assert.equal(afterSecondRosterSync?.activeSessionUpdatedAt, twoDaysAgoIso);
+    assert.ok((afterSecondRosterSync?.xp ?? 0) >= 13305);
+
+    const presAfterRoster = getPlayerPresenceData(afterSecondRosterSync!.id, {
+      playfabId: afterSecondRosterSync!.playfabId,
+      nick: afterSecondRosterSync!.nick,
+      nickNormalized: afterSecondRosterSync!.nickNormalized,
+      activeSessionUpdatedAt: afterSecondRosterSync!.activeSessionUpdatedAt,
+      lastKnownActivityAt: afterSecondRosterSync!.lastKnownActivityAt,
+    });
+    assert.equal(formatPresenceTimeAgo(presAfterRoster, now), "Online há 2 dias");
+
+    // Ranking local também carrega activeSessionUpdatedAt / lastKnownActivityAt idênticos
+    const board = getLeaderboardSnapshotLocal({ kind: "xp_total", stage: "TODAS" });
+    const row = board.find((r) => r.nick === "Quimquim");
+    assert.ok(row);
+    assert.equal(row.activeSessionUpdatedAt, twoDaysAgoIso);
+    assert.equal(row.playfabId, "B6F7125B9A97C2E7");
+  });
+
+  it("caso ana-banana: recupera histórico legado de SEMED_PRESENCE_V2 (sem sobrescrever V3) e preserva progresso maior do Roster", async () => {
+    const now = Date.now();
+    const sixteenDaysAgoIso = new Date(now - 16.5 * 86_400_000).toISOString();
+    const sixDaysAgoIso = new Date(now - 6.5 * 86_400_000).toISOString();
+    const fiveDaysAgoIso = new Date(now - 5.5 * 86_400_000).toISOString();
+    const oneHourAgoIso = new Date(now - 3_600_000).toISOString();
+
+    pf.groups.set(LEGACY_PRESENCE_SHARED_GROUP_ID, {
+      members: new Set(["1B2E1517154B2D49"]),
+      data: new Map([
+        [
+          "pres_anabanana",
+          {
+            Value: JSON.stringify({
+              playerId: "F5CE5DE0323AE361",
+              playfabId: "F5CE5DE0323AE361",
+              nick: "ana-banana",
+              nickNormalized: "anabanana",
+              lastSeenAt: now - 5.5 * 86_400_000,
+              lastActiveAt: now - 5.5 * 86_400_000,
+              idleMs: 0,
+              disconnected: false,
+            }),
+            LastUpdated: fiveDaysAgoIso,
+          },
+        ],
+        [
+          "pres_kaylon",
+          {
+            Value: JSON.stringify({
+              playerId: "PF_KAYLON",
+              playfabId: "PF_KAYLON",
+              nick: "kaylon",
+              nickNormalized: "kaylon",
+              lastSeenAt: now - 5.5 * 86_400_000,
+              lastActiveAt: now - 5.5 * 86_400_000,
+              idleMs: 0,
+              disconnected: false,
+            }),
+            LastUpdated: fiveDaysAgoIso,
+          },
+        ],
+      ]),
+    });
+
+    // V3 tem kaylon há 1h (NÃO pode ser sobrescrito pelo V2 de 5 dias atrás) e NÃO tem ana-banana
+    pf.groups.set(PRESENCE_SHARED_GROUP_ID, {
+      members: new Set(["1B2E1517154B2D49"]),
+      data: new Map([
+        [
+          "pres_kaylon",
+          {
+            Value: JSON.stringify({
+              playerId: "PF_KAYLON",
+              playfabId: "PF_KAYLON",
+              nick: "kaylon",
+              nickNormalized: "kaylon",
+              lastSeenAt: now - 3_600_000,
+              lastActiveAt: now - 3_600_000,
+              idleMs: 0,
+              disconnected: false,
+            }),
+            LastUpdated: oneHourAgoIso,
+          },
+        ],
+      ]),
+    });
+
+    pf.groups.set(ROSTER_SHARED_GROUP_ID, {
+      members: new Set(["1B2E1517154B2D49"]),
+      data: new Map([
+        [
+          "stu_anabanana",
+          {
+            Value: JSON.stringify({
+              id: "F5CE5DE0323AE361",
+              playfabId: "F5CE5DE0323AE361",
+              nick: "ana-banana",
+              nickNormalized: "anabanana",
+              full_name: "LUIZZI",
+              school: "Raimundo Bezerra",
+              level: 10,
+              xp: 10500,
+              seasonXp: 10500,
+              matchesPlayed: 241,
+              wins: 191,
+              careerPoints: 7474,
+              pointsBalance: 7474,
+              updatedAt: oneHourAgoIso, // regravação de auditoria (NÃO deve virar "Online há 1 hora"!)
+              stats: [{ game_id: "logica", plays: 241, wins: 191, best_score: 180, best_level: 3, last_played_at: sixDaysAgoIso }],
+            }),
+            LastUpdated: oneHourAgoIso,
+          },
+        ],
+      ]),
+    });
+
+    // UserData da ana-banana congelado em 5,9 dias atrás com XP antigo (2260) e GameStats de 16 dias atrás
+    pf.userData.set(
+      "F5CE5DE0323AE361",
+      new Map([
+        [
+          "PlayerProfile",
+          {
+            Value: JSON.stringify({
+              nick: "ana-banana",
+              xp: 2260,
+              seasonXp: 2260,
+              level: 5,
+              matchesPlayed: 49,
+              wins: 48,
+              careerPoints: 375,
+              pointsBalance: 375,
+            }),
+            LastUpdated: fiveDaysAgoIso,
+          },
+        ],
+        [
+          "GameStats",
+          {
+            Value: JSON.stringify([
+              { game_id: "logica", plays: 6, wins: 5, best_score: 100, best_level: 2, last_played_at: sixteenDaysAgoIso },
+            ]),
+            LastUpdated: fiveDaysAgoIso,
+          },
+        ],
+      ]),
+    );
+
+    loginAs("TK_ADMIN", "josiney");
+    await syncPresenceFromPlayFab(true);
+    await syncStudentRosterFromPlayFab(undefined, true, { lightweight: true });
+    const prof = await syncSinglePlayerFromPlayFab("ana-banana");
+
+    // Progresso maior do Roster (10.500+ XP) preservado; não regride para 2.260 do UserData
+    assert.ok((prof?.xp ?? 0) >= 10500);
+    assert.equal(prof?.matchesPlayed, 241);
+
+    // Presença da ana-banana recuperada do SEMED_PRESENCE_V2 ("Online há 5 dias") e NÃO contaminada pelo updatedAt de 1h atrás do Roster!
+    const anaPres = getPlayerPresenceData(prof!.id, {
+      playfabId: prof!.playfabId,
+      nick: prof!.nick,
+      nickNormalized: prof!.nickNormalized,
+      activeSessionUpdatedAt: prof!.activeSessionUpdatedAt,
+      lastKnownActivityAt: prof!.lastKnownActivityAt,
+    });
+    assert.equal(formatPresenceTimeAgo(anaPres, now), "Online há 5 dias");
+
+    // Kaylon no V3 (1h atrás) NÃO foi sobrescrito pelo V2 (5 dias atrás)
+    const kaylonPres = getPlayerPresenceData("PF_KAYLON", { nick: "kaylon", nickNormalized: "kaylon" });
+    assert.equal(formatPresenceTimeAgo(kaylonPres, now), "Online há 1 hora");
   });
 });

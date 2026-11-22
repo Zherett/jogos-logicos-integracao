@@ -609,6 +609,7 @@ export function recordPlayerHeartbeat(
 /* --------------------- Sincronização em Nuvem (PlayFab SharedGroup) --------------------- */
 
 let presenceGroupCreated = false;
+let legacyPresenceV2Loaded = false;
 let preferViewerTicketForSharedGroup = false;
 let userDataPresenceCursor = 0;
 let inFlightUserDataPresenceSync: Promise<void> | null = null;
@@ -1027,21 +1028,51 @@ export async function syncPresenceFromPlayFab(force = false): Promise<void> {
         presenceGroupCreated = true;
       }
 
-      const res = await callPresencePlayFab("GetSharedGroupData", {
-        SharedGroupId: PRESENCE_SHARED_GROUP_ID,
-      });
+      const store = loadPresenceStore();
+      const shouldFetchLegacyV2 =
+        !legacyPresenceV2Loaded || Object.keys(store.players ?? {}).length === 0;
+
+      const [res, legacyV2Res] = await Promise.all([
+        callPresencePlayFab("GetSharedGroupData", {
+          SharedGroupId: PRESENCE_SHARED_GROUP_ID,
+        }),
+        shouldFetchLegacyV2
+          ? callPresencePlayFab("GetSharedGroupData", {
+              SharedGroupId: LEGACY_PRESENCE_SHARED_GROUP_ID,
+            })
+          : Promise.resolve(null),
+      ]);
+
+      if (shouldFetchLegacyV2 && (legacyV2Res || res)) {
+        legacyPresenceV2Loaded = true;
+      }
 
       const resData = res?.data as {
         Data?: Record<string, { Value: string; LastUpdated?: string }>;
       } | undefined;
+      const legacyData = legacyV2Res?.data as {
+        Data?: Record<string, { Value: string; LastUpdated?: string }>;
+      } | undefined;
 
+      // Mescla fallback histórico do SEMED_PRESENCE_V2 (188 alunos legados) sem nunca sobrescrever dados mais novos do V3
       const combinedData: Record<string, { Value: string; LastUpdated?: string }> = {
-        ...(resData?.Data ?? {}),
+        ...(legacyData?.Data ?? {}),
       };
+      for (const [k, v3Entry] of Object.entries(resData?.Data ?? {})) {
+        const v2Entry = combinedData[k];
+        if (!v2Entry) {
+          combinedData[k] = v3Entry;
+        } else {
+          const v3Ms = v3Entry.LastUpdated ? Date.parse(v3Entry.LastUpdated) : 0;
+          const v2Ms = v2Entry.LastUpdated ? Date.parse(v2Entry.LastUpdated) : 0;
+          if (!v2Ms || v3Ms >= v2Ms) {
+            combinedData[k] = v3Entry;
+          }
+        }
+      }
 
       if (Object.keys(combinedData).length === 0) return;
 
-      const store = loadPresenceStore();
       const localSessionId = loadStoredSession()?.playerId;
       const syncNow = Date.now();
       let changed = false;

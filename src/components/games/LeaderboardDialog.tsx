@@ -556,7 +556,15 @@ export function LeaderboardDialog({ open, onOpenChange }: Props) {
                           <span className="truncate font-display text-base font-black text-foreground">
                             {row.nick}
                           </span>
-                          <PresenceDot playerId={row.playerId} nick={row.nick} size="xs" />
+                          <PresenceDot
+                            playerId={row.playerId}
+                            playfabId={row.playfabId}
+                            nick={row.nick}
+                            nickNormalized={row.nickNormalized}
+                            activeSessionUpdatedAt={row.activeSessionUpdatedAt}
+                            lastKnownActivityAt={row.lastKnownActivityAt}
+                            size="xs"
+                          />
                           <span className="shrink-0 rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-bold text-primary">
                             {row.rankEmoji} Nv. {row.level}
                           </span>

@@ -321,6 +321,7 @@ export interface PlayerProfile {
   rankedSeasonId?: number;
   activeSessionId?: string;
   activeSessionUpdatedAt?: string;
+  lastKnownActivityAt?: string;
   deletedAt?: string;
   deleteScheduledPermanentAt?: string;
 }
@@ -353,7 +354,9 @@ export interface SignUpData {
 export interface LeaderboardEntry {
   rank: number;
   playerId: string;
+  playfabId?: string;
   nick: string;
+  nickNormalized?: string;
   fullName: string;
   school: string;
   grade: string | null;
@@ -377,6 +380,59 @@ export interface LeaderboardEntry {
   unlockedAuras?: string[];
   previousRank?: number;
   isCurrentPlayer?: boolean;
+  activeSessionUpdatedAt?: string;
+  lastKnownActivityAt?: string;
+}
+
+/**
+ * Seleciona o maior timestamp ISO real (com hora/minuto, ignorando datas puras YYYY-MM-DD)
+ * entre múltiplas fontes de sessão/atividade.
+ */
+function pickLatestIsoTimestamp(
+  ...values: Array<string | number | undefined | null>
+): string | undefined {
+  let maxMs = 0;
+  let bestIso: string | undefined;
+  for (const raw of values) {
+    if (raw === undefined || raw === null || raw === "") continue;
+    if (typeof raw === "number") {
+      if (!Number.isNaN(raw) && raw > maxMs) {
+        maxMs = raw;
+        bestIso = new Date(raw).toISOString();
+      }
+      continue;
+    }
+    const trimmed = raw.trim();
+    if (!trimmed || /^\d{4}-\d{2}-\d{2}$/.test(trimmed)) continue;
+    const ms = Date.parse(trimmed);
+    if (!Number.isNaN(ms) && ms > maxMs) {
+      maxMs = ms;
+      bestIso = trimmed;
+    }
+  }
+  return bestIso;
+}
+
+/**
+ * Calcula a última atividade real com hora/minuto de uma conta (nunca usando updatedAt do roster ou dailyXpDate).
+ */
+function computeAccountLastKnownActivityIso(
+  profile?: Partial<PlayerProfile> | null,
+  stats?: GameStatRow[] | null,
+  extraIso?: string | null,
+): string | undefined {
+  const candidates: Array<string | undefined | null> = [
+    profile?.lastKnownActivityAt,
+    profile?.activeSessionUpdatedAt,
+    extraIso,
+  ];
+  for (const s of stats ?? []) {
+    if (s?.last_played_at) candidates.push(s.last_played_at);
+  }
+  for (const s of profile?.stats ?? []) {
+    if (s?.last_played_at) candidates.push(s.last_played_at);
+  }
+  return pickLatestIsoTimestamp(...candidates);
 }
 
 interface StoredAccount {
@@ -2717,118 +2773,194 @@ export async function playfabSignIn(
   const resolvedSlug = matchedLocal ? matchedLocal.profile.nickNormalized : slugCandidate;
 
   if (isPlayFabConfigured()) {
-    // 1. Try LoginWithPlayFab (Username + Password) usando o Username sanitizado para PlayFab
-    const pfUsername = playfabUsernameFromNick(resolvedSlug);
-    if (pfUsername.length >= 3 && pfUsername.length <= 20) {
-      const res = await callPlayFabClient<PlayFabLoginPayload>("LoginWithPlayFab", {
-        Username: pfUsername,
-        Password: normalizedPassword,
-        InfoRequestParameters: {
-          GetUserData: true,
-          GetPlayerStatistics: true,
-          GetUserAccountInfo: true,
-        },
-      });
+    // 1. Monta lista deduplicada de Usernames candidatos (nick digitado primeiro, depois cache local e fallback legado sem '0u')
+    const usernameCandidates: string[] = [];
+    const addUsername = (u: string) => {
+      if (u.length >= 3 && u.length <= 20 && !usernameCandidates.includes(u)) {
+        usernameCandidates.push(u);
+      }
+    };
+    addUsername(playfabUsernameFromNick(slugCandidate));
+    addUsername(playfabUsernameFromNick(resolvedSlug));
+    // Fallback para contas antigas com underline '_' criadas antes da codificação '0u'
+    const legacyNoUnderscore = slugCandidate.replace(/[^a-z0-9]/g, "").slice(0, 20);
+    addUsername(legacyNoUnderscore);
 
-      if (!res.error && res.data) {
-        const account = buildAccountFromPlayFabPayload(
-          res.data,
-          matchedLocal?.profile.nick ?? cleanId,
-          normalizedPassword,
-          cfg,
+    // 2. Monta lista deduplicada de Senhas candidatas:
+    //    - normalizedPassword: 6 dígitos DDMMAA padrão de todos os alunos antigos e novos (ex: 20/01/2014 -> 200114)
+    //    - rawTrimmed: senha exata digitada (essencial para contas criadas com 8 dígitos literais ex: 12345678 ou 20012014)
+    const passwordCandidates: string[] = [];
+    const addPassword = (p: string) => {
+      if (p.length >= 6 && !passwordCandidates.includes(p)) {
+        passwordCandidates.push(p);
+      }
+    };
+    addPassword(normalizedPassword);
+    addPassword(rawTrimmed);
+
+    let successRes: { data: PlayFabLoginPayload | null; error: string | null; errorCode?: string } | null = null;
+    let usedPassword = normalizedPassword;
+    let lastErrorCode: string | undefined;
+    let lastErrorMessage: string | null = null;
+
+    outerLoginLoop: for (const pfUsername of usernameCandidates) {
+      for (const candidatePwd of passwordCandidates) {
+        const res = await callPlayFabClient<PlayFabLoginPayload>("LoginWithPlayFab", {
+          Username: pfUsername,
+          Password: candidatePwd,
+          InfoRequestParameters: {
+            GetUserData: true,
+            GetPlayerStatistics: true,
+            GetUserAccountInfo: true,
+          },
+        });
+
+        if (!res.error && res.data) {
+          successRes = res;
+          usedPassword = candidatePwd;
+          break outerLoginLoop;
+        }
+
+        lastErrorCode = res.errorCode;
+        lastErrorMessage = res.error;
+
+        // Em rate limit (429) ou queda de rede, interrompe imediatamente para não agravar o throttling
+        if (
+          res.errorCode === "APIClientRequestRateLimitExceeded" ||
+          (res.error && /rate limit|throttl|conexão|failed to fetch|network/i.test(res.error))
+        ) {
+          break outerLoginLoop;
+        }
+
+        // Se o Username não existe no PlayFab, não desperdiça outra tentativa de senha nele — passa para o próximo Username
+        if (res.errorCode === "AccountNotFound") {
+          break;
+        }
+      }
+    }
+
+    if (successRes && !successRes.error && successRes.data) {
+      const res = successRes;
+      const account = buildAccountFromPlayFabPayload(
+        res.data!,
+        matchedLocal?.profile.nick ?? cleanId,
+        usedPassword,
+        cfg,
+      );
+
+      // Reconcilia possíveis alterações feitas pelo ADM no ROSTER_SHARED_GROUP_ID enquanto o aluno estava desconectado
+      try {
+        const cloudKey = getStudentRosterCloudKey(account.profile);
+        const rosterRes = await callPlayFabClient<{
+          Data?: Record<string, { Value: string }>;
+        }>(
+          "GetSharedGroupData",
+          { SharedGroupId: ROSTER_SHARED_GROUP_ID, Keys: [cloudKey] },
+          res.data!.SessionTicket,
         );
-
-        // Reconcilia possíveis alterações feitas pelo ADM no ROSTER_SHARED_GROUP_ID enquanto o aluno estava desconectado
-        try {
-          const cloudKey = getStudentRosterCloudKey(account.profile);
-          const rosterRes = await callPlayFabClient<{
-            Data?: Record<string, { Value: string }>;
-          }>(
-            "GetSharedGroupData",
-            { SharedGroupId: ROSTER_SHARED_GROUP_ID, Keys: [cloudKey] },
-            res.data.SessionTicket,
-          );
-          const rawRoster = rosterRes.data?.Data?.[cloudKey]?.Value;
-          if (rawRoster) {
-            const rProf = JSON.parse(rawRoster) as Partial<PlayerProfile> & { updatedAt?: string };
-            const rosterTs = rProf.updatedAt ? Date.parse(rProf.updatedAt) : 0;
-            const udTs = account.updatedAt ? Date.parse(account.updatedAt) : 0;
-            if (rosterTs > udTs) {
-              if (rProf.full_name) account.profile.full_name = abbreviateStudentName(rProf.full_name);
-              if (rProf.school && isValidSchool(rProf.school)) account.profile.school = rProf.school;
-              if (rProf.grade !== undefined) account.profile.grade = rProf.grade;
-              if (rProf.turma !== undefined) account.profile.turma = rProf.turma;
-              if (typeof rProf.pointsBalance === "number") account.profile.pointsBalance = rProf.pointsBalance;
-              if (typeof rProf.careerPoints === "number") account.profile.careerPoints = Math.max(account.profile.careerPoints ?? 0, rProf.careerPoints);
-              if (typeof rProf.xp === "number") account.profile.xp = Math.max(account.profile.xp ?? 0, rProf.xp);
-              if (typeof rProf.seasonXp === "number") account.profile.seasonXp = Math.max(account.profile.seasonXp ?? 0, rProf.seasonXp);
-              if (Array.isArray(rProf.unlockedMedals)) {
-                const mMap = new Map<string, PlayerUnlockedMedal>();
-                for (const m of [...(account.profile.unlockedMedals ?? []), ...rProf.unlockedMedals]) {
-                  if (!m?.medalId) continue;
-                  const prev = mMap.get(m.medalId);
-                  if (!prev) mMap.set(m.medalId, { ...m });
-                  else mMap.set(m.medalId, { ...prev, count: Math.max(prev.count ?? 1, m.count ?? 1) });
-                }
-                account.profile.unlockedMedals = Array.from(mMap.values());
+        const rawRoster = rosterRes.data?.Data?.[cloudKey]?.Value;
+        if (rawRoster) {
+          const rProf = JSON.parse(rawRoster) as Partial<PlayerProfile> & { updatedAt?: string };
+          const rosterTs = rProf.updatedAt ? Date.parse(rProf.updatedAt) : 0;
+          const udTs = account.updatedAt ? Date.parse(account.updatedAt) : 0;
+          if (rosterTs > udTs) {
+            if (rProf.full_name) account.profile.full_name = abbreviateStudentName(rProf.full_name);
+            if (rProf.school && isValidSchool(rProf.school)) account.profile.school = rProf.school;
+            if (rProf.grade !== undefined) account.profile.grade = rProf.grade;
+            if (rProf.turma !== undefined) account.profile.turma = rProf.turma;
+            if (typeof rProf.pointsBalance === "number") account.profile.pointsBalance = rProf.pointsBalance;
+            if (typeof rProf.careerPoints === "number") account.profile.careerPoints = Math.max(account.profile.careerPoints ?? 0, rProf.careerPoints);
+            if (typeof rProf.xp === "number") account.profile.xp = Math.max(account.profile.xp ?? 0, rProf.xp);
+            if (typeof rProf.seasonXp === "number") account.profile.seasonXp = Math.max(account.profile.seasonXp ?? 0, rProf.seasonXp);
+            if (Array.isArray(rProf.unlockedMedals)) {
+              const mMap = new Map<string, PlayerUnlockedMedal>();
+              for (const m of [...(account.profile.unlockedMedals ?? []), ...rProf.unlockedMedals]) {
+                if (!m?.medalId) continue;
+                const prev = mMap.get(m.medalId);
+                if (!prev) mMap.set(m.medalId, { ...m });
+                else mMap.set(m.medalId, { ...prev, count: Math.max(prev.count ?? 1, m.count ?? 1) });
               }
+              account.profile.unlockedMedals = Array.from(mMap.values());
             }
           }
-        } catch {
-          /* ignore optional roster merge on signIn */
         }
-        if (
-          account.profile.deletedAt &&
-          !account.profile.isAdmin &&
-          !isSpecialAdminAccount(account.profile)
-        ) {
-          return {
-            account: null,
-            error:
-              "Esta conta foi suspensa e movida para a lixeira pelo administrador. Procure a coordenação escolar.",
-          };
-        }
-
-        // Sessão Única Modelo A: Gera novo activeSessionId e desloga aparelhos anteriores
-        const previousSessionId = account.profile.activeSessionId;
-        const currentLocalSessionId = loadStoredSession()?.activeSessionId;
-        const newActiveSessionId = `sess_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-
-        if (previousSessionId && previousSessionId !== currentLocalSessionId) {
-          recordDeviceSecurityAlert({
-            studentNick: account.profile.nick,
-            studentFullName: account.profile.full_name,
-            studentId: account.profile.nickNormalized,
-            deviceInfo: typeof navigator !== "undefined" ? navigator.userAgent.slice(0, 80) : "Navegador Web",
-            timestamp: Date.now(),
-          });
-        }
-
-        account.profile.activeSessionId = newActiveSessionId;
-        account.profile.activeSessionUpdatedAt = new Date().toISOString();
-        checkAndApplyDailyLoginPoints(account.profile);
-
-        reg[account.profile.nickNormalized] = account;
-        saveRegistry(reg);
-  invalidatePioneersCache();
-        saveStoredSession({
-          playerId: account.profile.nickNormalized,
-          sessionTicket: res.data.SessionTicket,
-          playfabId: res.data.PlayFabId,
-          activeSessionId: newActiveSessionId,
-        });
-        syncLocalBrowserFromAccount(account);
-        try {
-          await pushProfileToPlayFab(account, res.data.SessionTicket);
-        } catch {
-          /* ignore network sync errors during login */
-        }
+      } catch {
+        /* ignore optional roster merge on signIn */
+      }
+      if (
+        account.profile.deletedAt &&
+        !account.profile.isAdmin &&
+        !isSpecialAdminAccount(account.profile)
+      ) {
         return {
-          account,
-          error: null,
-          recoveredNick: typedAsFullName ? account.profile.nick : undefined,
+          account: null,
+          error:
+            "Esta conta foi suspensa e movida para a lixeira pelo administrador. Procure a coordenação escolar.",
         };
       }
+
+      // Sessão Única Modelo A: Gera novo activeSessionId e desloga aparelhos anteriores
+      const previousSessionId = account.profile.activeSessionId;
+      const currentLocalSessionId = loadStoredSession()?.activeSessionId;
+      const newActiveSessionId = `sess_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+
+      if (previousSessionId && previousSessionId !== currentLocalSessionId) {
+        recordDeviceSecurityAlert({
+          studentNick: account.profile.nick,
+          studentFullName: account.profile.full_name,
+          studentId: account.profile.nickNormalized,
+          deviceInfo: typeof navigator !== "undefined" ? navigator.userAgent.slice(0, 80) : "Navegador Web",
+          timestamp: Date.now(),
+        });
+      }
+
+      account.profile.activeSessionId = newActiveSessionId;
+      account.profile.activeSessionUpdatedAt = new Date().toISOString();
+      checkAndApplyDailyLoginPoints(account.profile);
+
+      reg[account.profile.nickNormalized] = account;
+      saveRegistry(reg);
+      invalidatePioneersCache();
+      saveStoredSession({
+        playerId: account.profile.nickNormalized,
+        sessionTicket: res.data!.SessionTicket,
+        playfabId: res.data!.PlayFabId,
+        activeSessionId: newActiveSessionId,
+      });
+      syncLocalBrowserFromAccount(account);
+      try {
+        await pushProfileToPlayFab(account, res.data!.SessionTicket);
+      } catch {
+        /* ignore network sync errors during login */
+      }
+      return {
+        account,
+        error: null,
+        recoveredNick: typedAsFullName ? account.profile.nick : undefined,
+      };
+    }
+
+    if (
+      lastErrorCode === "APIClientRequestRateLimitExceeded" ||
+      (lastErrorMessage && /rate limit|throttl/i.test(lastErrorMessage))
+    ) {
+      return {
+        account: null,
+        error:
+          "Muitas tentativas de acesso seguidas nesta rede. Aguarde cerca de 15 segundos e tente entrar novamente.",
+      };
+    }
+
+    if (
+      lastErrorMessage &&
+      !lastErrorCode &&
+      /conexão|failed to fetch|network|indisponível/i.test(lastErrorMessage)
+    ) {
+      return {
+        account: null,
+        error:
+          "Não foi possível conectar ao servidor no momento. Verifique sua internet e tente novamente.",
+      };
     }
 
     return {
@@ -3067,6 +3199,10 @@ async function pushProfileToPlayFab(
 
   const p = account.profile;
   const isAdminSessionActive = isSpecialAdminAccount(p) && isAdminUnlockedSession();
+  const resolvedLastKnownActivityAt = computeAccountLastKnownActivityIso(p, account.stats);
+  if (resolvedLastKnownActivityAt) {
+    p.lastKnownActivityAt = resolvedLastKnownActivityAt;
+  }
 
   if (options?.requireUserDataSync && (!ticket || (ticket.startsWith("admin-") && !isAdminSessionActive))) {
     throw new Error("Sua sessão expirou. Faça login novamente para salvar suas recompensas com segurança.");
@@ -3138,6 +3274,8 @@ async function pushProfileToPlayFab(
           seasonId: p.seasonId,
           activeSessionId: p.activeSessionId,
           activeSessionUpdatedAt: p.activeSessionUpdatedAt,
+          lastKnownActivityAt: resolvedLastKnownActivityAt,
+          updatedAt: account.updatedAt,
           createdAt: p.createdAt,
         }),
         GameStats: JSON.stringify(account.stats),
@@ -3227,7 +3365,9 @@ async function pushProfileToPlayFab(
               stats: account.stats ?? [],
               isAdmin: p.isAdmin,
               seasonId: p.seasonId,
+              activeSessionId: p.activeSessionId,
               activeSessionUpdatedAt: p.activeSessionUpdatedAt,
+              lastKnownActivityAt: resolvedLastKnownActivityAt,
               updatedAt: account.updatedAt,
             }),
           },
@@ -3294,7 +3434,7 @@ export async function syncStudentRosterFromPlayFab(
     const leaderboardGameScoresBySlug = new Map<string, Map<GameId, number>>();
     const userDataBySlug = new Map<
       string,
-      { profile?: Partial<PlayerProfile>; stats?: GameStatRow[] }
+      { profile?: Partial<PlayerProfile>; stats?: GameStatRow[]; profileLastUpdated?: string }
     >();
 
     if (!isLightweight) {
@@ -3420,7 +3560,7 @@ export async function syncStudentRosterFromPlayFab(
       const slugsWithPfId = Array.from(playfabIdBySlug.entries());
       const userDataResults = await Promise.allSettled(
         slugsWithPfId.map(async ([slug, pfId]) => {
-          const udRes = await callPlayFabClient<{ Data?: Record<string, { Value: string }> }>(
+          const udRes = await callPlayFabClient<{ Data?: Record<string, { Value: string; LastUpdated?: string }> }>(
             "GetUserData",
             { PlayFabId: pfId, Keys: ["PlayerProfile", "GameStats"] },
             ticket,
@@ -3428,6 +3568,7 @@ export async function syncStudentRosterFromPlayFab(
           const ud = udRes.data?.Data;
           let udProfile: Partial<PlayerProfile> | undefined;
           let udStats: GameStatRow[] | undefined;
+          const profileLastUpdated = ud?.PlayerProfile?.LastUpdated;
           if (ud?.PlayerProfile?.Value) {
             try {
               udProfile = JSON.parse(ud.PlayerProfile.Value);
@@ -3442,7 +3583,7 @@ export async function syncStudentRosterFromPlayFab(
               /* ignore */
             }
           }
-          return { slug, udProfile, udStats };
+          return { slug, udProfile, udStats, profileLastUpdated };
         }),
       );
       for (const r of userDataResults) {
@@ -3450,6 +3591,7 @@ export async function syncStudentRosterFromPlayFab(
           userDataBySlug.set(r.value.slug, {
             profile: r.value.udProfile,
             stats: r.value.udStats,
+            profileLastUpdated: r.value.profileLastUpdated,
           });
         }
       }
@@ -3556,6 +3698,10 @@ export async function syncStudentRosterFromPlayFab(
                       sBest,
                     ),
                     best_level: Math.max(cur.best_level ?? 1, s.best_level ?? 1),
+                    last_played_at:
+                      (s.last_played_at || "") > (cur.last_played_at || "")
+                        ? s.last_played_at
+                        : cur.last_played_at,
                   });
                 }
               }
@@ -3598,6 +3744,17 @@ export async function syncStudentRosterFromPlayFab(
               bestTournamentPoints: Math.max(p.bestTournamentPoints ?? 0, parsedItem.bestTournamentPoints ?? 0),
               unlockedMedals: Array.from(dedupMedals.values()),
               stats: Array.from(statMap.values()),
+              activeSessionId: parsedItem.activeSessionId || p.activeSessionId,
+              activeSessionUpdatedAt: pickLatestIsoTimestamp(
+                p.activeSessionUpdatedAt,
+                parsedItem.activeSessionUpdatedAt,
+              ),
+              lastKnownActivityAt: pickLatestIsoTimestamp(
+                p.lastKnownActivityAt,
+                parsedItem.lastKnownActivityAt,
+                p.activeSessionUpdatedAt,
+                parsedItem.activeSessionUpdatedAt,
+              ),
             };
           }
         } catch {
@@ -4226,6 +4383,29 @@ export async function syncStudentRosterFromPlayFab(
                 ...(Array.isArray((udProf as any)?.achievedTournamentTiers) ? (udProf as any).achievedTournamentTiers : []),
               ])
             ),
+            activeSessionId: (() => {
+              const candidates = [
+                { id: parsed.activeSessionId, ts: parsed.activeSessionUpdatedAt ? Date.parse(parsed.activeSessionUpdatedAt) : 0 },
+                { id: existing?.profile.activeSessionId, ts: existing?.profile.activeSessionUpdatedAt ? Date.parse(existing.profile.activeSessionUpdatedAt) : 0 },
+                { id: udProf?.activeSessionId, ts: udProf?.activeSessionUpdatedAt ? Date.parse(udProf.activeSessionUpdatedAt) : 0 },
+              ].filter((c) => Boolean(c.id));
+              candidates.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+              return candidates[0]?.id;
+            })(),
+            activeSessionUpdatedAt: pickLatestIsoTimestamp(
+              parsed.activeSessionUpdatedAt,
+              existing?.profile.activeSessionUpdatedAt,
+              udProf?.activeSessionUpdatedAt,
+            ),
+            lastKnownActivityAt: pickLatestIsoTimestamp(
+              parsed.lastKnownActivityAt,
+              existing?.profile.lastKnownActivityAt,
+              udProf?.lastKnownActivityAt,
+              parsed.activeSessionUpdatedAt,
+              existing?.profile.activeSessionUpdatedAt,
+              udProf?.activeSessionUpdatedAt,
+              recoveredUd?.profileLastUpdated,
+            ),
           };
 
           if (mergedProfile.claimedInboxRewardIds && mergedProfile.claimedInboxRewardIds.length > 0) {
@@ -4322,6 +4502,16 @@ export async function syncStudentRosterFromPlayFab(
           const incomingMatches = parsed.matchesPlayed ?? 0;
           const incomingCareerPoints = parsed.careerPoints ?? 0;
 
+          const finalStats = Array.from(statsMap.values());
+          const computedLastKnown = computeAccountLastKnownActivityIso(
+            mergedProfile,
+            finalStats,
+            recoveredUd?.profileLastUpdated,
+          );
+          if (computedLastKnown) {
+            mergedProfile.lastKnownActivityAt = computedLastKnown;
+          }
+
           const aligned = ensurePlayerSeasonAligned(
             {
               profile: mergedProfile,
@@ -4329,7 +4519,7 @@ export async function syncStudentRosterFromPlayFab(
                 existing?.passwordHash ||
                 simpleHash(passwordFromBirthdate(mergedProfile.birthdate)),
               unlocked: existing?.unlocked || [],
-              stats: Array.from(statsMap.values()),
+              stats: finalStats,
               updatedAt: (parsed as any).updatedAt || new Date().toISOString(),
             },
             cfg,
@@ -6051,9 +6241,12 @@ function buildLeaderboardFromLocal(
     if (value <= 0 && filter.kind === "game") continue;
 
     const titleInfo = levelTitle(p.level);
+    const lastKnownActivityAt = computeAccountLastKnownActivityIso(p, acc.stats);
     rows.push({
       playerId: p.id,
+      playfabId: p.playfabId,
       nick: p.nick,
+      nickNormalized: p.nickNormalized,
       fullName: p.full_name || p.nick,
       school: p.school,
       grade: p.grade ?? (is5thGradeSchool(p.school) ? "5º ano" : null),
@@ -6075,6 +6268,8 @@ function buildLeaderboardFromLocal(
       unlockedAvatars: p.unlockedAvatars,
       unlockedAuras: p.unlockedAuras,
       isCurrentPlayer: p.nickNormalized === currentId,
+      activeSessionUpdatedAt: p.activeSessionUpdatedAt,
+      lastKnownActivityAt,
     });
   }
 
@@ -6287,7 +6482,11 @@ export function getAllRegisteredPlayers(includeDeleted = false): PlayerProfile[]
   const list: PlayerProfile[] = [];
 
   for (const rawAcc of Object.values(reg)) {
-    const p = ensurePlayerSeasonAligned(rawAcc, cfg).profile;
+    const alignedAcc = ensurePlayerSeasonAligned(rawAcc, cfg);
+    const lastKnownActivityAt = computeAccountLastKnownActivityIso(alignedAcc.profile, alignedAcc.stats);
+    const p = lastKnownActivityAt && lastKnownActivityAt !== alignedAcc.profile.lastKnownActivityAt
+      ? { ...alignedAcc.profile, lastKnownActivityAt }
+      : alignedAcc.profile;
     if (!includeDeleted && p.deletedAt) continue;
     if (includeDeleted && !p.deletedAt) {
       /* include */
@@ -7114,7 +7313,10 @@ export function getPlayerPublicProfile(identifier: string): PlayerProfile | null
       pNick.replace(/[^a-z0-9_]/g, "") === cleanStripped
     ) {
       const aligned = ensurePlayerSeasonAligned(acc, cfg);
-      return aligned.profile;
+      const lastKnownActivityAt = computeAccountLastKnownActivityIso(aligned.profile, aligned.stats);
+      return lastKnownActivityAt && lastKnownActivityAt !== aligned.profile.lastKnownActivityAt
+        ? { ...aligned.profile, lastKnownActivityAt }
+        : aligned.profile;
     }
   }
   return null;
@@ -7126,7 +7328,11 @@ export function getPlayerPublicProfile(identifier: string): PlayerProfile | null
  */
 export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<PlayerProfile | null> {
   const localProfile = getPlayerPublicProfile(identifier);
-  const ticket = (await getAdminPlayFabTicket()) ?? loadStoredSession()?.sessionTicket;
+  const rawStoredTicket = loadStoredSession()?.sessionTicket;
+  const ticket =
+    (await getAdminPlayFabTicket()) ??
+    (rawStoredTicket && !rawStoredTicket.startsWith("admin-") ? rawStoredTicket : undefined) ??
+    (await getViewerPlayFabTicket());
   if (!ticket || !isPlayFabConfigured()) {
     return localProfile;
   }
@@ -7142,7 +7348,7 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
     const knownPfId = localProfile?.playfabId;
 
     const [rosterRes, userDataRes] = await Promise.allSettled([
-      callPlayFabClient<{ Data?: Record<string, { Value: string }> }>(
+      callPlayFabClient<{ Data?: Record<string, { Value: string; LastUpdated?: string }> }>(
         "GetSharedGroupData",
         { SharedGroupId: ROSTER_SHARED_GROUP_ID, Keys: [cloudKey] },
         ticket,
@@ -7158,6 +7364,7 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
 
     let cloudProfile: Partial<PlayerProfile> | undefined;
     let cloudStats: GameStatRow[] | undefined;
+    let udProfileLastUpdated: string | undefined;
 
     if (rosterRes.status === "fulfilled") {
       const rawVal = rosterRes.value.data?.Data?.[cloudKey]?.Value;
@@ -7178,16 +7385,44 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
         applyRemotePresenceHeartbeat(ud.PresenceHeartbeat.Value, ud.PresenceHeartbeat.LastUpdated);
       }
       if (ud.PlayerProfile?.Value) {
+        udProfileLastUpdated = ud.PlayerProfile.LastUpdated;
         try {
           const udProf = JSON.parse(ud.PlayerProfile.Value) as Partial<PlayerProfile> & { updatedAt?: string };
           const rosterUpdatedAt = (cloudProfile as { updatedAt?: string } | undefined)?.updatedAt;
           const rosterTs = rosterUpdatedAt ? Date.parse(rosterUpdatedAt) : 0;
-          const udTs = udProf.updatedAt ? Date.parse(udProf.updatedAt) : 0;
+          const udTs = udProf.updatedAt
+            ? Date.parse(udProf.updatedAt)
+            : udProfileLastUpdated
+              ? Date.parse(udProfileLastUpdated)
+              : 0;
+          const mergedActiveSess = pickLatestIsoTimestamp(
+            cloudProfile?.activeSessionUpdatedAt,
+            udProf.activeSessionUpdatedAt,
+          );
+          const mergedLastKnown = pickLatestIsoTimestamp(
+            cloudProfile?.lastKnownActivityAt,
+            udProf.lastKnownActivityAt,
+            mergedActiveSess,
+            udProfileLastUpdated,
+          );
           cloudProfile = cloudProfile
-            ? rosterTs > udTs
-              ? { ...udProf, ...cloudProfile }
-              : { ...cloudProfile, ...udProf }
-            : udProf;
+            ? {
+                ...(rosterTs > udTs ? { ...udProf, ...cloudProfile } : { ...cloudProfile, ...udProf }),
+                xp: Math.max(cloudProfile.xp ?? 0, udProf.xp ?? 0),
+                seasonXp: Math.max(cloudProfile.seasonXp ?? 0, udProf.seasonXp ?? 0),
+                level: Math.max(cloudProfile.level ?? 1, udProf.level ?? 1),
+                matchesPlayed: Math.max(cloudProfile.matchesPlayed ?? 0, udProf.matchesPlayed ?? 0),
+                wins: Math.max(cloudProfile.wins ?? 0, udProf.wins ?? 0),
+                careerPoints: Math.max(cloudProfile.careerPoints ?? 0, udProf.careerPoints ?? 0),
+                pointsBalance: Math.max(cloudProfile.pointsBalance ?? 0, udProf.pointsBalance ?? 0),
+                activeSessionUpdatedAt: mergedActiveSess,
+                lastKnownActivityAt: mergedLastKnown,
+              }
+            : {
+                ...udProf,
+                activeSessionUpdatedAt: mergedActiveSess,
+                lastKnownActivityAt: mergedLastKnown,
+              };
         } catch {
           /* ignore */
         }
@@ -7196,7 +7431,7 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
         try {
           const udStats = JSON.parse(ud.GameStats.Value) as GameStatRow[];
           if (Array.isArray(udStats)) {
-            cloudStats = udStats;
+            cloudStats = [...(cloudStats ?? []), ...udStats];
           }
         } catch {
           /* ignore */
@@ -7244,6 +7479,10 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
               flawless_wins: Math.max(cur.flawless_wins ?? 0, s.flawless_wins ?? 0),
               best_score: Math.max(sanitizeGameBestScore(s.game_id, cur.best_score), sBest),
               best_level: Math.max(cur.best_level ?? 1, s.best_level ?? 1),
+              last_played_at:
+                (s.last_played_at || "") > (cur.last_played_at || "")
+                  ? s.last_played_at
+                  : cur.last_played_at,
             });
           }
         }
@@ -7253,6 +7492,24 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
         const cloudUpdatedRaw = (cloudProfile as { updatedAt?: string }).updatedAt;
         const cloudTs = cloudUpdatedRaw ? Date.parse(cloudUpdatedRaw) : 0;
         const localIsNewer = existingTs > cloudTs;
+        const mergedActiveSessionUpdatedAt = pickLatestIsoTimestamp(
+          existing.profile.activeSessionUpdatedAt,
+          cloudProfile.activeSessionUpdatedAt,
+        );
+        const mergedLastKnownActivityAt = computeAccountLastKnownActivityIso(
+          {
+            ...existing.profile,
+            ...cloudProfile,
+            activeSessionUpdatedAt: mergedActiveSessionUpdatedAt,
+            lastKnownActivityAt: pickLatestIsoTimestamp(
+              existing.profile.lastKnownActivityAt,
+              cloudProfile.lastKnownActivityAt,
+              mergedActiveSessionUpdatedAt,
+            ),
+          },
+          mergedStats,
+          udProfileLastUpdated,
+        );
 
         reg[targetKey] = ensurePlayerSeasonAligned(
           {
@@ -7292,6 +7549,8 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
                 ? (existing.profile.equippedAuraId ?? cloudProfile.equippedAuraId)
                 : (cloudProfile.equippedAuraId ?? existing.profile.equippedAuraId),
               unlockedMedals: Array.from(mergedMedals.values()),
+              activeSessionUpdatedAt: mergedActiveSessionUpdatedAt,
+              lastKnownActivityAt: mergedLastKnownActivityAt,
               stats: mergedStats,
             },
           },

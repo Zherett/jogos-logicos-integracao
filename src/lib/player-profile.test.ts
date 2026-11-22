@@ -196,12 +196,16 @@ describe("Perfil do Jogador, Escolas, Trava de Níveis (1..10) e Limite Diário 
     assert.ok(ids.includes("nivel_10"));
   });
 
-  it("gera a senha de 6 dígitos DDMMAA a partir da data de nascimento (ex: 20/01/2014 -> 200114) e normaliza nomes", () => {
+  it("gera a senha de 6 dígitos DDMMAA a partir da data de nascimento (ex: 20/01/2014 -> 200114), preserva senhas alfanuméricas com dígitos e normaliza nomes", () => {
     assert.equal(passwordFromBirthdate("2014-01-20"), "200114");
     assert.equal(passwordFromBirthdate("20/01/2014"), "200114");
     assert.equal(normalizeBirthdatePasswordInput("200114"), "200114");
     assert.equal(normalizeBirthdatePasswordInput("20/01/2014"), "200114");
     assert.equal(normalizeBirthdatePasswordInput("20012014"), "200114");
+    // Nunca arranca letras de senhas alfanuméricas que contenham 6 ou 8 dígitos
+    assert.equal(passwordFromBirthdate("joao123456"), "joao123456");
+    assert.equal(normalizeBirthdatePasswordInput("joao123456"), "joao123456");
+    assert.equal(normalizeBirthdatePasswordInput("semed20261112"), "semed20261112");
     assert.equal(formatFullNameUpper("joão pedro da conceição"), "JOÃO PEDRO DA CONCEIÇÃO");
     assert.equal(fullNameSlug("  João   Pedro da Conceição "), "joao pedro da conceicao");
     assert.equal(

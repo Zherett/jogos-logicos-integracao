@@ -40,6 +40,7 @@ import { usePlayerAuth } from "@/lib/player-auth";
 import {
   fetchLeaderboard,
   getLeaderboardSnapshotLocal,
+  getPlayerPublicProfile,
   getSchoolStandings,
   type LeaderboardEntry,
   type LeaderboardFilter,
@@ -833,6 +834,7 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
                       row.nick.toLowerCase() === auth.profile?.nick.toLowerCase());
                   const rowPoints = row.tournamentPoints ?? row.totalRankedPoints;
                   const rowRankDef = getTournamentRank(rowPoints).currentRank;
+                  const rowProf = getPlayerPublicProfile(row.playerId || row.nick);
 
                   return (
                     <div
@@ -884,7 +886,11 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
                             </span>
                             <PresenceDot
                               playerId={row.playerId}
+                              playfabId={rowProf?.playfabId}
                               nick={row.nick}
+                              nickNormalized={rowProf?.nickNormalized}
+                              activeSessionUpdatedAt={rowProf?.activeSessionUpdatedAt}
+                              lastKnownActivityAt={rowProf?.lastKnownActivityAt}
                               size="xs"
                               showPingAnimation={false}
                             />
@@ -1070,7 +1076,11 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
                             </span>
                             <PresenceDot
                               playerId={row.playerId}
+                              playfabId={row.playfabId}
                               nick={row.nick}
+                              nickNormalized={row.nickNormalized}
+                              activeSessionUpdatedAt={row.activeSessionUpdatedAt}
+                              lastKnownActivityAt={row.lastKnownActivityAt}
                               size="xs"
                               showPingAnimation={false}
                             />

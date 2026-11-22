@@ -293,13 +293,16 @@ export function passwordFromBirthdate(birthdate: string): string {
     const [, dd, mm, y] = brMatch;
     return `${dd}${mm}${y.slice(-2)}`;
   }
-  const digits = clean.replace(/\D/g, "");
-  if (digits.length === 8) {
-    // Assume DDMMYYYY
-    return `${digits.slice(0, 4)}${digits.slice(6, 8)}`;
-  }
-  if (digits.length === 6) {
-    return digits;
+  // Somente extrai dígitos quando o valor for puramente data/numérico (nunca arranca letras de senhas alfanuméricas como "joao123456")
+  if (/^[0-9/\-.\s]+$/.test(clean)) {
+    const digits = clean.replace(/\D/g, "");
+    if (digits.length === 8) {
+      // Assume DDMMYYYY
+      return `${digits.slice(0, 4)}${digits.slice(6, 8)}`;
+    }
+    if (digits.length === 6) {
+      return digits;
+    }
   }
   return clean;
 }
