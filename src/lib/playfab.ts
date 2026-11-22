@@ -3147,10 +3147,19 @@ async function pushProfileToPlayFab(account: StoredAccount, sessionTicket?: stri
               careerPoints: p.careerPoints ?? 0,
               pointsBalance: p.pointsBalance ?? 0,
               coins: p.coins ?? 0,
+              lifetimeCoins: Math.max(p.lifetimeCoins ?? 0, p.coins ?? 0),
+              peakCoins: Math.max(p.peakCoins ?? 0, p.coins ?? 0),
+              coinsSpentTotal: p.coinsSpentTotal ?? 0,
+              purchasedCosmeticIds: p.purchasedCosmeticIds ?? [],
+              chestsOpenedTotal: p.chestsOpenedTotal ?? 0,
+              packsOpenedTotal: p.packsOpenedTotal ?? 0,
               unlockedAvatars: p.unlockedAvatars,
               equippedAvatar: p.equippedAvatar,
               unlockedAuras: p.unlockedAuras,
               equippedAuraId: p.equippedAuraId,
+              cards: p.cards ?? {},
+              unopenedPacks: p.unopenedPacks ?? {},
+              unopenedChests: p.unopenedChests ?? {},
               claimedInboxRewardIds: p.claimedInboxRewardIds ?? [],
           claimedRankedMilestones: p.claimedRankedMilestones ?? [],
               lastDailyLoginPointsDate: p.lastDailyLoginPointsDate,
@@ -4015,6 +4024,83 @@ export async function syncStudentRosterFromPlayFab(
               existing?.profile.coins ?? 0,
               (udProf as any)?.coins ?? 0,
             ),
+            lifetimeCoins: Math.max(
+              parsed.lifetimeCoins ?? 0,
+              existing?.profile.lifetimeCoins ?? 0,
+              (udProf as any)?.lifetimeCoins ?? 0,
+              parsed.coins ?? 0,
+              existing?.profile.coins ?? 0,
+            ),
+            peakCoins: Math.max(
+              parsed.peakCoins ?? 0,
+              existing?.profile.peakCoins ?? 0,
+              (udProf as any)?.peakCoins ?? 0,
+              parsed.coins ?? 0,
+              existing?.profile.coins ?? 0,
+            ),
+            coinsSpentTotal: Math.max(
+              parsed.coinsSpentTotal ?? 0,
+              existing?.profile.coinsSpentTotal ?? 0,
+              (udProf as any)?.coinsSpentTotal ?? 0,
+            ),
+            purchasedCosmeticIds: Array.from(
+              new Set([
+                ...(Array.isArray(parsed.purchasedCosmeticIds) ? parsed.purchasedCosmeticIds : []),
+                ...(Array.isArray(existing?.profile.purchasedCosmeticIds) ? existing.profile.purchasedCosmeticIds : []),
+                ...(Array.isArray((udProf as any)?.purchasedCosmeticIds) ? (udProf as any).purchasedCosmeticIds : []),
+              ]),
+            ),
+            chestsOpenedTotal: Math.max(
+              parsed.chestsOpenedTotal ?? 0,
+              existing?.profile.chestsOpenedTotal ?? 0,
+              (udProf as any)?.chestsOpenedTotal ?? 0,
+            ),
+            packsOpenedTotal: Math.max(
+              parsed.packsOpenedTotal ?? 0,
+              existing?.profile.packsOpenedTotal ?? 0,
+              (udProf as any)?.packsOpenedTotal ?? 0,
+            ),
+            cards: (() => {
+              const mergedCards: Record<string, number> = {};
+              for (const src of [
+                parsed.cards,
+                existing?.profile.cards,
+                (udProf as any)?.cards,
+              ]) {
+                if (!src || typeof src !== "object") continue;
+                for (const [k, v] of Object.entries(src)) {
+                  const qty = Math.max(0, Math.floor(Number(v) || 0));
+                  if (qty > 0) mergedCards[k] = Math.max(mergedCards[k] ?? 0, qty);
+                }
+              }
+              return mergedCards;
+            })(),
+            unopenedPacks: (() => {
+              const localTs = existing?.updatedAt ? Date.parse(existing.updatedAt) : 0;
+              const parsedTs = (parsed as any).updatedAt ? Date.parse((parsed as any).updatedAt) : 0;
+              if (localTs >= parsedTs && existing?.profile.unopenedPacks) {
+                return existing.profile.unopenedPacks;
+              }
+              return (
+                (parsed.unopenedPacks && typeof parsed.unopenedPacks === "object" ? parsed.unopenedPacks : undefined) ??
+                (udProf && typeof (udProf as any).unopenedPacks === "object" ? (udProf as any).unopenedPacks : undefined) ??
+                existing?.profile.unopenedPacks ??
+                {}
+              );
+            })(),
+            unopenedChests: (() => {
+              const localTs = existing?.updatedAt ? Date.parse(existing.updatedAt) : 0;
+              const parsedTs = (parsed as any).updatedAt ? Date.parse((parsed as any).updatedAt) : 0;
+              if (localTs >= parsedTs && existing?.profile.unopenedChests) {
+                return existing.profile.unopenedChests;
+              }
+              return (
+                (parsed.unopenedChests && typeof parsed.unopenedChests === "object" ? parsed.unopenedChests : undefined) ??
+                (udProf && typeof (udProf as any).unopenedChests === "object" ? (udProf as any).unopenedChests : undefined) ??
+                existing?.profile.unopenedChests ??
+                {}
+              );
+            })(),
             unlockedAvatars: Array.from(
               new Set([
                 ...(Array.isArray(parsed.unlockedAvatars) ? parsed.unlockedAvatars : []),

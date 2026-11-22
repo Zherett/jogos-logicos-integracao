@@ -608,3 +608,77 @@ export function purchaseStoreCardPack<T extends CosmeticProfileSlice>(
     },
   };
 }
+
+export interface InventorySlotEntry<T extends { id: string }> {
+  slotIndex: number;
+  item: T | null;
+  quantity: number;
+}
+
+/**
+ * Aloca itens empilháveis (pacotes de cartas ou baús) em uma grade de até `maxSlots` slots.
+ * Cada tipo de item distinto ocupa 1 slot com quantidade ilimitada; slots vazios completam até `maxSlots`.
+ */
+export function allocateStackedInventorySlots<T extends { id: string }>(
+  catalog: readonly T[],
+  quantitiesMap?: Record<string, number> | null,
+  maxSlots = 15,
+): InventorySlotEntry<T>[] {
+  const safeMax = Math.max(1, Math.floor(maxSlots));
+  const map = quantitiesMap ?? {};
+  const occupied: Array<{ item: T; quantity: number }> = [];
+  const seenIds = new Set<string>();
+
+  for (const item of catalog) {
+    if (!item?.id || seenIds.has(item.id)) continue;
+    const qty = Math.max(0, Math.floor(Number(map[item.id]) || 0));
+    if (qty <= 0) continue;
+    seenIds.add(item.id);
+    occupied.push({ item, quantity: qty });
+    if (occupied.length >= safeMax) break;
+  }
+
+  const slots: InventorySlotEntry<T>[] = [];
+  for (let i = 0; i < safeMax; i++) {
+    const entry = occupied[i];
+    slots.push({
+      slotIndex: i + 1,
+      item: entry ? entry.item : null,
+      quantity: entry ? entry.quantity : 0,
+    });
+  }
+  return slots;
+}
+
+export interface PaginatedInventoryResult<T> {
+  page: number;
+  totalPages: number;
+  totalItems: number;
+  slots: Array<{ slotNumber: number; item: T | null }>;
+}
+
+/**
+ * Pagina uma lista unificada de itens (pacotes + baús) em páginas fixas de `pageSize` slots (padrão 12).
+ */
+export function paginateUnifiedInventorySlots<T>(
+  items: readonly T[],
+  requestedPage = 1,
+  pageSize = 12,
+): PaginatedInventoryResult<T> {
+  const safeSize = Math.max(1, Math.floor(pageSize));
+  const totalItems = items.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / safeSize));
+  const page = Math.max(1, Math.min(totalPages, Math.floor(requestedPage) || 1));
+  const start = (page - 1) * safeSize;
+
+  const slots: Array<{ slotNumber: number; item: T | null }> = [];
+  for (let i = 0; i < safeSize; i++) {
+    const idx = start + i;
+    slots.push({
+      slotNumber: idx + 1,
+      item: idx < totalItems ? items[idx] : null,
+    });
+  }
+
+  return { page, totalPages, totalItems, slots };
+}

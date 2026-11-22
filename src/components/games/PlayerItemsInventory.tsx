@@ -3,6 +3,7 @@ import { Backpack, Lock, Sparkles, Gift, Palette, Ticket, Layers, PackageOpen } 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
+  CARD_PACK_COLOR_META,
   CARD_RARITIES,
   CARD_RARITY_META,
   consumeAndOpenCardPack,
@@ -30,20 +31,25 @@ import { ChestVector } from "./ChestVector";
 import { PackOpeningModal, type PackOpenOutcome } from "./PackOpeningModal";
 import { getAuraPresentation, PlayerAvatarBadge } from "./PlayerAvatarBadge";
 import {
+  allocateStackedInventorySlots,
   getUnlockedAuraIds,
   getUnlockedAvatarIds,
   grantCosmeticToProfile,
   mergeWithDefaultAuras,
   mergeWithDefaultAvatars,
+  paginateUnifiedInventorySlots,
 } from "@/lib/cosmetics-catalog";
 
 const INVENTORY_SLOTS_COUNT = 12;
+const PACK_SLOTS_COUNT = 15;
+const CHEST_SLOTS_COUNT = 15;
 
 export function PlayerItemsInventory() {
   const auth = usePlayerAuth();
   const canViewCards = isAdminOrTestAccount(auth.profile, isAdminUnlockedSession());
 
-  const [activePill, setActivePill] = useState<"mochila" | "album" | "visual">("mochila");
+  const [activePill, setActivePill] = useState<"mochila" | "pacotes" | "baus" | "album" | "visual">("mochila");
+  const [backpackPage, setBackpackPage] = useState(1);
   const [rarityFilter, setRarityFilter] = useState<CardRarity | "todas">("todas");
   const [inspectCard, setInspectCard] = useState<{ card: CardDefinition; count: number } | null>(null);
   const [packToOpen, setPackToOpen] = useState<CardPackDefinition | null>(null);
@@ -86,11 +92,59 @@ export function PlayerItemsInventory() {
     setChestOutcome(res.outcome);
   }
 
-  const slots = Array.from({ length: INVENTORY_SLOTS_COUNT }, (_, idx) => idx + 1);
   const catalog = useMemo(() => auth.adminConfig.cardsCatalog ?? [], [auth.adminConfig.cardsCatalog]);
-  const packs = useMemo(
-    () => mergeWithDefaultCardPacks(auth.adminConfig.cardPacks).filter((p) => p.enabled),
+  const allPacksCatalog = useMemo(
+    () => mergeWithDefaultCardPacks(auth.adminConfig.cardPacks),
     [auth.adminConfig.cardPacks],
+  );
+  const packs = useMemo(
+    () => allPacksCatalog.filter((p) => p.enabled),
+    [allPacksCatalog],
+  );
+  const packSlots = useMemo(
+    () => allocateStackedInventorySlots(allPacksCatalog, auth.profile?.unopenedPacks, PACK_SLOTS_COUNT),
+    [allPacksCatalog, auth.profile?.unopenedPacks],
+  );
+  const chestSlots = useMemo(
+    () => allocateStackedInventorySlots(chests, auth.profile?.unopenedChests, CHEST_SLOTS_COUNT),
+    [chests, auth.profile?.unopenedChests],
+  );
+  const totalUnopenedPacks = useMemo(
+    () => packSlots.reduce((sum, s) => sum + s.quantity, 0),
+    [packSlots],
+  );
+  const occupiedPackSlotsCount = useMemo(
+    () => packSlots.filter((s) => s.item !== null).length,
+    [packSlots],
+  );
+  const totalUnopenedChests = useMemo(
+    () => chestSlots.reduce((sum, s) => sum + s.quantity, 0),
+    [chestSlots],
+  );
+  const occupiedChestSlotsCount = useMemo(
+    () => chestSlots.filter((s) => s.item !== null).length,
+    [chestSlots],
+  );
+  const unifiedBackpackItems = useMemo(() => {
+    type UnifiedItem =
+      | { kind: "pack"; item: CardPackDefinition; quantity: number }
+      | { kind: "chest"; item: ChestDefinition; quantity: number };
+    const list: UnifiedItem[] = [];
+    for (const s of packSlots) {
+      if (s.item && s.quantity > 0) {
+        list.push({ kind: "pack", item: s.item, quantity: s.quantity });
+      }
+    }
+    for (const s of chestSlots) {
+      if (s.item && s.quantity > 0) {
+        list.push({ kind: "chest", item: s.item, quantity: s.quantity });
+      }
+    }
+    return list;
+  }, [packSlots, chestSlots]);
+  const paginatedBackpack = useMemo(
+    () => paginateUnifiedInventorySlots(unifiedBackpackItems, backpackPage, INVENTORY_SLOTS_COUNT),
+    [unifiedBackpackItems, backpackPage],
   );
   const ownedCardsMap = useMemo(() => auth.profile?.cards ?? {}, [auth.profile?.cards]);
 
@@ -179,6 +233,36 @@ export function PlayerItemsInventory() {
           >
             <Backpack className="h-3.5 w-3.5" />
             Mochila de Itens
+          </button>
+          <button
+            type="button"
+            onClick={() => setActivePill("pacotes")}
+            className={`inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-extrabold transition-colors ${
+              activePill === "pacotes"
+                ? "bg-primary text-primary-foreground border-primary shadow-sm"
+                : "bg-card text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <PackageOpen className="h-3.5 w-3.5" />
+            Pacotes de Cartas
+            <span className="rounded-full bg-background/20 px-1.5 py-0.2 font-mono text-[10px]">
+              {totalUnopenedPacks}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActivePill("baus")}
+            className={`inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-extrabold transition-colors ${
+              activePill === "baus"
+                ? "bg-primary text-primary-foreground border-primary shadow-sm"
+                : "bg-card text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <Gift className="h-3.5 w-3.5" />
+            Baús
+            <span className="rounded-full bg-background/20 px-1.5 py-0.2 font-mono text-[10px]">
+              {totalUnopenedChests}
+            </span>
           </button>
           <button
             type="button"
@@ -306,7 +390,163 @@ export function PlayerItemsInventory() {
             </div>
           </div>
         );
-      })() : canViewCards && activePill === "album" ? (
+      })() : canViewCards && activePill === "pacotes" ? (
+        <div className="space-y-4">
+          <div className="rounded-3xl border-2 border-primary/30 bg-gradient-to-br from-primary/10 via-card to-sky-500/10 p-4 sm:p-5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="grid h-9 w-9 place-items-center rounded-2xl bg-primary/15 text-primary">
+                  <PackageOpen className="h-5 w-5" />
+                </span>
+                <div>
+                  <h3 className="font-display text-sm sm:text-base font-black text-foreground">
+                    Pacotes de Cartas ({totalUnopenedPacks})
+                  </h3>
+                  <p className="text-[11px] text-muted-foreground">
+                    Cada tipo de pacote ocupa 1 slot com estoque ilimitado. Pacotes iguais são agrupados no mesmo espaço.
+                  </p>
+                </div>
+              </div>
+              <span className="rounded-full bg-secondary px-3 py-1 font-mono text-[11px] font-extrabold text-foreground">
+                {occupiedPackSlotsCount} / {PACK_SLOTS_COUNT} slots
+              </span>
+            </div>
+          </div>
+
+          <div className="rounded-3xl border bg-card p-4 space-y-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2.5 sm:gap-3">
+              {packSlots.map((slot) => {
+                if (!slot.item) {
+                  return (
+                    <div
+                      key={`pack_slot_${slot.slotIndex}`}
+                      title={`Slot #${slot.slotIndex} — Vazio`}
+                      className="min-h-[8.5rem] flex flex-col items-center justify-center gap-1 rounded-2xl border-2 border-dashed border-border/70 bg-secondary/20 text-muted-foreground/60 select-none p-2"
+                    >
+                      <Lock className="h-4 w-4 opacity-50" />
+                      <span className="font-mono text-[10px] font-bold opacity-60">Slot {slot.slotIndex}</span>
+                    </div>
+                  );
+                }
+                const pack = slot.item;
+                const colorMeta = CARD_PACK_COLOR_META[pack.colorTheme ?? "teal"] ?? CARD_PACK_COLOR_META.teal;
+                return (
+                  <div
+                    key={pack.id}
+                    className="relative flex flex-col justify-between gap-2 rounded-2xl border-2 border-primary/35 bg-card p-2.5 shadow-sm"
+                  >
+                    <div className="flex items-start justify-between gap-1">
+                      <span
+                        className={`grid h-9 w-9 place-items-center rounded-xl text-white shadow-sm ${colorMeta.gradientClass}`}
+                      >
+                        <PackageOpen className="h-4 w-4" />
+                      </span>
+                      <span className="rounded-full bg-primary/15 border border-primary/30 px-2 py-0.5 font-mono text-[10px] font-black text-primary">
+                        x{slot.quantity}
+                      </span>
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-display text-xs font-black text-foreground truncate" title={pack.name}>
+                        {pack.name}
+                      </div>
+                      <div className="text-[10px] text-muted-foreground">
+                        {pack.cardsPerPack} cartas
+                      </div>
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => handleOpenPack(pack)}
+                      className="w-full h-7 rounded-xl text-[11px] font-bold"
+                    >
+                      Abrir
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      ) : canViewCards && activePill === "baus" ? (
+        <div className="space-y-4">
+          <div className="rounded-3xl border-2 border-amber-500/30 bg-gradient-to-br from-amber-500/10 via-card to-orange-500/10 p-4 sm:p-5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="grid h-9 w-9 place-items-center rounded-2xl bg-amber-500/15 text-amber-500">
+                  <Gift className="h-5 w-5" />
+                </span>
+                <div>
+                  <h3 className="font-display text-sm sm:text-base font-black text-foreground">
+                    Baús de Recompensa ({totalUnopenedChests})
+                  </h3>
+                  <p className="text-[11px] text-muted-foreground">
+                    Cada tipo de baú ocupa 1 slot próprio com quantidade ilimitada. Baús iguais são empilhados no mesmo espaço.
+                  </p>
+                </div>
+              </div>
+              <span className="rounded-full bg-secondary px-3 py-1 font-mono text-[11px] font-extrabold text-foreground">
+                {occupiedChestSlotsCount} / {CHEST_SLOTS_COUNT} slots
+              </span>
+            </div>
+          </div>
+
+          <div className="rounded-3xl border bg-card p-4 space-y-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2.5 sm:gap-3">
+              {chestSlots.map((slot) => {
+                if (!slot.item) {
+                  return (
+                    <div
+                      key={`chest_slot_${slot.slotIndex}`}
+                      title={`Slot #${slot.slotIndex} — Vazio`}
+                      className="min-h-[9rem] flex flex-col items-center justify-center gap-1 rounded-2xl border-2 border-dashed border-border/70 bg-secondary/20 text-muted-foreground/60 select-none p-2"
+                    >
+                      <Lock className="h-4 w-4 opacity-50" />
+                      <span className="font-mono text-[10px] font-bold opacity-60">Slot {slot.slotIndex}</span>
+                    </div>
+                  );
+                }
+                const chest = slot.item;
+                const meta = CHEST_RARITY_META[chest.rarity] ?? CHEST_RARITY_META.comum;
+                return (
+                  <div
+                    key={chest.id}
+                    className={`flex flex-col justify-between gap-2 rounded-2xl border-2 p-2.5 ${meta.borderClass} ${meta.bgClass}`}
+                  >
+                    <div className="flex items-start justify-between gap-1">
+                      <ChestVector
+                        primaryColor={chest.primaryColor}
+                        metalColor={chest.metalColor}
+                        shape={chest.shape}
+                        size="sm"
+                        className="shrink-0"
+                      />
+                      <span className="rounded-full bg-background/85 px-2 py-0.5 font-mono text-[10px] font-black text-foreground">
+                        x{slot.quantity}
+                      </span>
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-display text-xs font-black text-foreground truncate" title={chest.name}>
+                        {chest.name}
+                      </div>
+                      <div className="text-[10px] font-bold text-muted-foreground">
+                        {meta.label}
+                      </div>
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => void handleOpenChest(chest)}
+                      className="w-full h-7 rounded-xl text-[11px] font-bold"
+                    >
+                      Abrir
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      ) : canViewCards && activePill === "album" ? (
         <div className="space-y-4">
           {/* Cabeçalho do Álbum */}
           <div className="rounded-3xl border-2 border-primary/30 bg-gradient-to-br from-primary/10 via-card to-purple-500/10 p-4 sm:p-5 space-y-2">
@@ -421,93 +661,157 @@ export function PlayerItemsInventory() {
               </span>
             </div>
 
-            {/* Categorias futuras */}
+            {/* Atalhos rápidos para as abas dedicadas */}
             <div className="flex flex-wrap items-center gap-1.5 pt-1 text-[10px] font-bold text-muted-foreground">
-              <span className="inline-flex items-center gap-1 rounded-lg bg-background/70 border px-2 py-0.5">
-                <Palette className="h-3 w-3 text-primary" /> Visores &amp; Pinturas
-              </span>
-              <span className="inline-flex items-center gap-1 rounded-lg bg-background/70 border px-2 py-0.5">
-                <Gift className="h-3 w-3 text-emerald-500" /> Baús Semanais
-              </span>
-              <span className="inline-flex items-center gap-1 rounded-lg bg-background/70 border px-2 py-0.5">
+              <button
+                type="button"
+                onClick={() => setActivePill("pacotes")}
+                className="inline-flex items-center gap-1 rounded-lg bg-background/70 hover:bg-background border px-2.5 py-1 transition-colors cursor-pointer"
+              >
+                <PackageOpen className="h-3 w-3 text-primary" /> Pacotes de Cartas ({totalUnopenedPacks})
+              </button>
+              <button
+                type="button"
+                onClick={() => setActivePill("baus")}
+                className="inline-flex items-center gap-1 rounded-lg bg-background/70 hover:bg-background border px-2.5 py-1 transition-colors cursor-pointer"
+              >
+                <Gift className="h-3 w-3 text-emerald-500" /> Baús ({totalUnopenedChests})
+              </button>
+              <span className="inline-flex items-center gap-1 rounded-lg bg-background/70 border px-2 py-1">
                 <Ticket className="h-3 w-3 text-amber-500" /> Passes &amp; Boosters
               </span>
             </div>
           </div>
 
-          {/* Baús Fechados (Prévia Restrita ADM) */}
-          {canViewCards && ownedChests.length > 0 && (
-            <div className="rounded-3xl border-2 border-amber-500/30 bg-card p-4 space-y-3">
-              <div className="flex items-center justify-between text-xs font-bold">
-                <span className="flex items-center gap-1.5 text-foreground">
-                  <Gift className="h-4 w-4 text-amber-500" /> Baús na Mochila (Prévia ADM)
-                </span>
-                <span className="font-mono text-amber-600 dark:text-amber-400">
-                  {ownedChests.reduce((sum, i) => sum + i.qty, 0)} fechado(s)
-                </span>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                {ownedChests.map(({ chest, qty }) => {
-                  const meta = CHEST_RARITY_META[chest.rarity] ?? CHEST_RARITY_META.comum;
+          {/* Grade de Slots de Inventário (12 por página com paginação automática) */}
+          <div className="rounded-3xl border bg-card p-4 space-y-3">
+            <div className="flex items-center justify-between text-xs font-bold">
+              <span className="text-foreground">Espaços do Inventário (Todos os Itens)</span>
+              <span className="font-mono text-muted-foreground">
+                {paginatedBackpack.totalItems} tipo(s) • Pág. {paginatedBackpack.page}/{paginatedBackpack.totalPages}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5 sm:gap-3">
+              {paginatedBackpack.slots.map((slot) => {
+                if (!slot.item) {
                   return (
                     <div
-                      key={chest.id}
-                      className={`flex items-center justify-between gap-3 rounded-2xl border-2 p-3 ${meta.borderClass} ${meta.bgClass}`}
+                      key={`unified_slot_${slot.slotNumber}`}
+                      title={`Slot #${slot.slotNumber} — Vazio`}
+                      className="min-h-[8.5rem] flex flex-col items-center justify-center gap-1 rounded-2xl border-2 border-dashed border-border/70 bg-secondary/20 text-muted-foreground/60 transition-colors hover:border-primary/40 hover:bg-secondary/40 select-none p-2"
                     >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <ChestVector
-                          primaryColor={chest.primaryColor}
-                          metalColor={chest.metalColor}
-                          shape={chest.shape}
-                          size="sm"
-                          className="shrink-0"
-                        />
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-display text-xs font-black text-foreground truncate">
-                              {chest.name}
-                            </span>
-                            <span className="rounded-full bg-background/80 px-2 py-0.2 font-mono text-[10px] font-black">
-                              x{qty}
-                            </span>
-                          </div>
-                          <p className="text-[10px] text-muted-foreground truncate">{chest.description}</p>
+                      <Lock className="h-4 w-4 opacity-50" />
+                      <span className="font-mono text-[10px] font-bold opacity-60">Slot {slot.slotNumber}</span>
+                    </div>
+                  );
+                }
+
+                if (slot.item.kind === "pack") {
+                  const pack = slot.item.item;
+                  const colorMeta = CARD_PACK_COLOR_META[pack.colorTheme ?? "teal"] ?? CARD_PACK_COLOR_META.teal;
+                  return (
+                    <div
+                      key={`unified_pack_${pack.id}`}
+                      className="flex flex-col justify-between gap-2 rounded-2xl border-2 border-primary/35 bg-card p-2.5 shadow-sm"
+                    >
+                      <div className="flex items-start justify-between gap-1">
+                        <span
+                          className={`grid h-9 w-9 place-items-center rounded-xl text-white shadow-sm ${colorMeta.gradientClass}`}
+                        >
+                          <PackageOpen className="h-4 w-4" />
+                        </span>
+                        <span className="rounded-full bg-primary/15 border border-primary/30 px-2 py-0.5 font-mono text-[10px] font-black text-primary">
+                          x{slot.item.quantity}
+                        </span>
+                      </div>
+                      <div className="min-w-0">
+                        <div className="font-display text-xs font-black text-foreground truncate" title={pack.name}>
+                          {pack.name}
+                        </div>
+                        <div className="text-[10px] text-muted-foreground">
+                          Pacote • {pack.cardsPerPack} cartas
                         </div>
                       </div>
                       <Button
                         type="button"
                         size="sm"
-                        onClick={() => void handleOpenChest(chest)}
-                        className="rounded-xl text-xs font-bold shrink-0"
+                        onClick={() => handleOpenPack(pack)}
+                        className="w-full h-7 rounded-xl text-[11px] font-bold"
                       >
                         Abrir
                       </Button>
                     </div>
                   );
-                })}
-              </div>
-            </div>
-          )}
+                }
 
-          {/* Grade de Slots de Inventário */}
-          <div className="rounded-3xl border bg-card p-4 space-y-3">
-            <div className="flex items-center justify-between text-xs font-bold">
-              <span className="text-foreground">Espaços do Inventário</span>
-              <span className="font-mono text-muted-foreground">0 / {INVENTORY_SLOTS_COUNT} ocupados</span>
+                const chest = slot.item.item;
+                const meta = CHEST_RARITY_META[chest.rarity] ?? CHEST_RARITY_META.comum;
+                return (
+                  <div
+                    key={`unified_chest_${chest.id}`}
+                    className={`flex flex-col justify-between gap-2 rounded-2xl border-2 p-2.5 ${meta.borderClass} ${meta.bgClass}`}
+                  >
+                    <div className="flex items-start justify-between gap-1">
+                      <ChestVector
+                        primaryColor={chest.primaryColor}
+                        metalColor={chest.metalColor}
+                        shape={chest.shape}
+                        size="sm"
+                        className="shrink-0"
+                      />
+                      <span className="rounded-full bg-background/85 px-2 py-0.5 font-mono text-[10px] font-black text-foreground">
+                        x{slot.item.quantity}
+                      </span>
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-display text-xs font-black text-foreground truncate" title={chest.name}>
+                        {chest.name}
+                      </div>
+                      <div className="text-[10px] font-bold text-muted-foreground">
+                        Baú • {meta.label}
+                      </div>
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => void handleOpenChest(chest)}
+                      className="w-full h-7 rounded-xl text-[11px] font-bold"
+                    >
+                      Abrir
+                    </Button>
+                  </div>
+                );
+              })}
             </div>
 
-            <div className="grid grid-cols-3 sm:grid-cols-4 gap-2.5 sm:gap-3">
-              {slots.map((slotNum) => (
-                <div
-                  key={slotNum}
-                  title={`Slot #${slotNum} — Vazio (Reservado para itens futuros)`}
-                  className="aspect-square flex flex-col items-center justify-center gap-1 rounded-2xl border-2 border-dashed border-border/70 bg-secondary/20 text-muted-foreground/60 transition-colors hover:border-primary/40 hover:bg-secondary/40 select-none"
+            {paginatedBackpack.totalPages > 1 && (
+              <div className="flex items-center justify-between gap-2 pt-2 border-t">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={paginatedBackpack.page <= 1}
+                  onClick={() => setBackpackPage((p) => Math.max(1, p - 1))}
+                  className="rounded-xl text-xs font-bold"
                 >
-                  <Lock className="h-4 w-4 opacity-50" />
-                  <span className="font-mono text-[10px] font-bold opacity-60">Slot {slotNum}</span>
-                </div>
-              ))}
-            </div>
+                  Página Anterior
+                </Button>
+                <span className="font-mono text-xs font-bold text-muted-foreground">
+                  Página {paginatedBackpack.page} de {paginatedBackpack.totalPages}
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={paginatedBackpack.page >= paginatedBackpack.totalPages}
+                  onClick={() => setBackpackPage((p) => Math.min(paginatedBackpack.totalPages, p + 1))}
+                  className="rounded-xl text-xs font-bold"
+                >
+                  Próxima Página
+                </Button>
+              </div>
+            )}
 
             <p className="text-center text-[11px] text-muted-foreground pt-1">
               🔒 Esta aba é privada e visível apenas para você. Outros jogadores não podem acessar seu inventário.

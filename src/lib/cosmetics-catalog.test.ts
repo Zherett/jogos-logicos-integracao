@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  allocateStackedInventorySlots,
   AVATAR_BASIC_COLORS,
   DEFAULT_AURAS,
   DEFAULT_AVATARS,
@@ -9,6 +10,7 @@ import {
   grantCosmeticToProfile,
   mergeWithDefaultAuras,
   mergeWithDefaultAvatars,
+  paginateUnifiedInventorySlots,
   purchaseStoreCardPack,
   purchaseStoreCosmetic,
   resolveEquippedAura,
@@ -106,5 +108,45 @@ describe("Catálogo de Cosméticos e Regras da Loja", () => {
     assert.equal(auras.filter((a) => a.kind === "static").length, 5);
     assert.equal(auras.filter((a) => a.kind === "pulsing").length, 5);
     assert.equal(auras.filter((a) => a.kind === "bicolor").length, 5);
+  });
+
+  it("aloca itens iguais no mesmo slot com quantidade ilimitada e tipos diferentes em slots separados até 15", () => {
+    const p1 = DEFAULT_CARD_PACKS[0];
+    const p2 = DEFAULT_CARD_PACKS[1];
+    const slots = allocateStackedInventorySlots(
+      DEFAULT_CARD_PACKS,
+      { [p1.id]: 999, [p2.id]: 4 },
+      15,
+    );
+    assert.equal(slots.length, 15);
+    assert.equal(slots[0].item?.id, p1.id);
+    assert.equal(slots[0].quantity, 999);
+    assert.equal(slots[1].item?.id, p2.id);
+    assert.equal(slots[1].quantity, 4);
+    assert.equal(slots[2].item, null);
+    assert.equal(slots[14].item, null);
+  });
+
+  it("pagina a mochila unificada de 12 em 12 slots quando há mais de 12 itens diferentes", () => {
+    const items = Array.from({ length: 14 }, (_, idx) => ({ id: `item_${idx + 1}` }));
+
+    const page1 = paginateUnifiedInventorySlots(items, 1, 12);
+    assert.equal(page1.page, 1);
+    assert.equal(page1.totalPages, 2);
+    assert.equal(page1.slots.length, 12);
+    assert.equal(page1.slots[0].item?.id, "item_1");
+    assert.equal(page1.slots[11].item?.id, "item_12");
+
+    const page2 = paginateUnifiedInventorySlots(items, 2, 12);
+    assert.equal(page2.page, 2);
+    assert.equal(page2.slots.length, 12);
+    assert.equal(page2.slots[0].slotNumber, 13);
+    assert.equal(page2.slots[0].item?.id, "item_13");
+    assert.equal(page2.slots[1].item?.id, "item_14");
+    assert.equal(page2.slots[2].item, null);
+
+    // Clamp automático se a página pedida for maior que totalPages
+    const clamped = paginateUnifiedInventorySlots(items, 5, 12);
+    assert.equal(clamped.page, 2);
   });
 });

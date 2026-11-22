@@ -542,35 +542,67 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
         </div>
 
         {/* Player Profile / Login Button */}
-        <button
-          type="button"
-          onClick={() => (profile ? setProfileOpen(true) : setAuthOpen(true))}
-          className={`flex items-center gap-2 rounded-2xl border bg-card px-3 py-1.5 text-left shadow-sm transition-all hover:bg-secondary active:scale-95 ${
-            leftSlot ? "order-2 shrink-0 max-w-[68vw] sm:order-none sm:max-w-none" : ""
-          }`}
-          aria-label={profile ? "Abrir meu perfil" : "Entrar na minha conta"}
-        >
-          <span className="relative grid h-9 w-9 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground">
-            <User className="h-5 w-5" />
-            {profile && (
-              <PresenceDot
-                playerId={profile.id}
-                size="sm"
-                className="absolute -bottom-0.5 -right-0.5 z-10"
-              />
-            )}
-          </span>
-          <span className="min-w-0 pr-1">
-            <span className="flex items-center gap-1.5 max-w-[9rem]">
-              <span className="truncate font-display text-sm font-bold leading-tight">
-                {profile ? profile.nick : "Entrar"}
+        {(() => {
+          const topEquippedAv =
+            profile && showDailyRewards
+              ? resolveEquippedAvatar(profile, auth.adminConfig.avatarsCatalog)
+              : null;
+          const topEquippedAura =
+            profile && showDailyRewards
+              ? resolveEquippedAura(profile, auth.adminConfig.aurasCatalog)
+              : null;
+          const topAuraPres = getAuraPresentation(topEquippedAura);
+          return (
+            <button
+              type="button"
+              onClick={() => (profile ? setProfileOpen(true) : setAuthOpen(true))}
+              className={`flex items-center gap-2 rounded-2xl border bg-card px-3 py-1.5 text-left shadow-sm transition-all hover:bg-secondary active:scale-95 ${
+                leftSlot ? "order-2 shrink-0 max-w-[68vw] sm:order-none sm:max-w-none" : ""
+              } ${topAuraPres.className}`}
+              style={topAuraPres.style}
+              aria-label={profile ? "Abrir meu perfil" : "Entrar na minha conta"}
+            >
+              {topEquippedAv ? (
+                <span className="relative shrink-0">
+                  <PlayerAvatarBadge
+                    avatar={topEquippedAv.avatar}
+                    color={topEquippedAv.color}
+                    aura={topEquippedAura}
+                    size="sm"
+                  />
+                  {profile && (
+                    <PresenceDot
+                      playerId={profile.id}
+                      size="sm"
+                      className="absolute -bottom-0.5 -right-0.5 z-20"
+                    />
+                  )}
+                </span>
+              ) : (
+                <span className="relative grid h-9 w-9 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground">
+                  <User className="h-5 w-5" />
+                  {profile && (
+                    <PresenceDot
+                      playerId={profile.id}
+                      size="sm"
+                      className="absolute -bottom-0.5 -right-0.5 z-10"
+                    />
+                  )}
+                </span>
+              )}
+              <span className="min-w-0 pr-1">
+                <span className="flex items-center gap-1.5 max-w-[9rem]">
+                  <span className="truncate font-display text-sm font-bold leading-tight">
+                    {profile ? profile.nick : "Entrar"}
+                  </span>
+                </span>
+                <span className="block text-[11px] leading-tight text-muted-foreground">
+                  {profile ? `Nível ${progress?.level} • ${profile.xp} XP` : "criar perfil"}
+                </span>
               </span>
-            </span>
-            <span className="block text-[11px] leading-tight text-muted-foreground">
-              {profile ? `Nível ${progress?.level} • ${profile.xp} XP` : "criar perfil"}
-            </span>
-          </span>
-        </button>
+            </button>
+          );
+        })()}
       </div>
 
       {authOpen && (
