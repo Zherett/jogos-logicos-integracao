@@ -2638,23 +2638,9 @@ export async function playfabSignIn(
         adminAuthenticated = true;
         setCachedAdminPlayFabTicket(adminSessionTicket);
       } else if (matchesOfficialAdminCredential) {
-        // 2. Autenticado pela credencial oficial do ADM: abre sessão real no PlayFab via CustomID dedicado
-        // para garantir SessionTicket válido por 24h (necessário para abrir pacotes/baús e salvar na nuvem).
+        // Autenticado pela credencial oficial do ADM: sincroniza via SharedGroup (semedvisitante)
+        // sem depender da senha cadastrada manualmente no PlayFab Game Manager.
         adminAuthenticated = true;
-        const customAdminLogin = await callPlayFabClient<PlayFabLoginPayload>("LoginWithCustomID", {
-          CustomId: `SEMED_ADM_${adminKey.toUpperCase()}_V1`,
-          CreateAccount: true,
-          InfoRequestParameters: {
-            GetUserData: true,
-            GetPlayerStatistics: true,
-            GetUserAccountInfo: true,
-          },
-        });
-        if (customAdminLogin.data?.SessionTicket) {
-          adminSessionTicket = customAdminLogin.data.SessionTicket;
-          adminPlayFabId = customAdminLogin.data.PlayFabId;
-          setCachedAdminPlayFabTicket(adminSessionTicket);
-        }
       }
     } else {
       const expectedPin = getAdminPin().toUpperCase();
@@ -3079,12 +3065,14 @@ async function pushProfileToPlayFab(
   const ticket = sessionTicket ?? loadStoredSession()?.sessionTicket;
   if (!isPlayFabConfigured()) return;
 
-  if (options?.requireUserDataSync && (!ticket || ticket.startsWith("admin-"))) {
+  const p = account.profile;
+  const isAdminSessionActive = isSpecialAdminAccount(p) && isAdminUnlockedSession();
+
+  if (options?.requireUserDataSync && (!ticket || (ticket.startsWith("admin-") && !isAdminSessionActive))) {
     throw new Error("Sua sessão expirou. Faça login novamente para salvar suas recompensas com segurança.");
   }
 
-  const p = account.profile;
-  if (ticket) {
+  if (ticket && !ticket.startsWith("admin-")) {
     try {
       const udRes = await callPlayFabClient(
         "UpdateUserData",
@@ -4888,8 +4876,13 @@ export async function pushInboxClaimToPlayFab(
 
 export function hasValidCloudSessionTicket(): boolean {
   if (!isPlayFabConfigured()) return true;
-  const ticket = loadStoredSession()?.sessionTicket;
-  return Boolean(ticket && !ticket.startsWith("admin-"));
+  const sess = loadStoredSession();
+  const ticket = sess?.sessionTicket;
+  if (!ticket) return false;
+  if (ticket.startsWith("admin-")) {
+    return isAdminUnlockedSession();
+  }
+  return true;
 }
 
 /**
@@ -8060,8 +8053,9 @@ export async function playfabUpdatePlayerCards(args: {
   };
   grantPassiveMedalsForAccount(nextAcc);
 
+  const isAdminSessionActive = isSpecialAdminAccount(nextAcc.profile) && isAdminUnlockedSession();
   if (args.requireServerSync && isPlayFabConfigured()) {
-    if (!session.sessionTicket || session.sessionTicket.startsWith("admin-")) {
+    if (!session.sessionTicket || (session.sessionTicket.startsWith("admin-") && !isAdminSessionActive)) {
       throw new Error("Sessão expirada. Faça login novamente para abrir pacotes.");
     }
     await pushProfileToPlayFab(nextAcc, session.sessionTicket, { requireUserDataSync: true });
@@ -8104,8 +8098,9 @@ export async function syncActiveProfileChangeToPlayFab(
   };
   grantPassiveMedalsForAccount(nextAcc);
 
+  const isAdminSessionActive = isSpecialAdminAccount(nextAcc.profile) && isAdminUnlockedSession();
   if (options?.requireServerSync && isPlayFabConfigured()) {
-    if (!session?.sessionTicket || session.sessionTicket.startsWith("admin-")) {
+    if (!session?.sessionTicket || (session.sessionTicket.startsWith("admin-") && !isAdminSessionActive)) {
       throw new Error("Sessão expirada. Faça login novamente para abrir baús.");
     }
     await pushProfileToPlayFab(nextAcc, session.sessionTicket, { requireUserDataSync: true });

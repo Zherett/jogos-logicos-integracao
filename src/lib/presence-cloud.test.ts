@@ -165,6 +165,7 @@ describe("Presença online/offline na nuvem (fluxo aluno → ADM)", () => {
     g.localStorage = storage;
     g.window = {
       localStorage: storage,
+      sessionStorage: createMemoryStorage(),
       addEventListener: () => {},
       removeEventListener: () => {},
       dispatchEvent: () => true,
