@@ -506,14 +506,14 @@ export function PackOpeningModal({
                 }`}
               >
                 <div
-                  className={`preserve-3d relative min-h-[21rem] w-full will-change-transform transition-transform duration-500 ease-out ${
+                  className={`preserve-3d relative min-h-[21rem] w-full will-change-transform transition-transform duration-600 ease-[cubic-bezier(0.22,1,0.36,1)] ${
                     isFlipped ? "rotate-y-180" : "hover:-translate-y-1"
                   }`}
                 >
                   {/* Verso (de costas) */}
                   <div
-                    className={`backface-hidden absolute inset-0 rounded-2xl transition-opacity duration-100 ${
-                      isFlipped ? "opacity-0 delay-150 pointer-events-none" : "opacity-100"
+                    className={`backface-hidden absolute inset-0 rounded-2xl ${
+                      isFlipped ? "pointer-events-none" : ""
                     }`}
                     style={{ transform: "rotateY(0deg) translateZ(2px)" }}
                   >
@@ -522,10 +522,8 @@ export function PackOpeningModal({
 
                   {/* Frente (carta revelada) */}
                   <div
-                    className={`backface-hidden relative w-full rounded-2xl transition-opacity duration-100 ${
-                      isFlipped
-                        ? `opacity-100 delay-150 ${isHighRarity && !isExiting ? "animate-[pop-in_0.35s_ease-out]" : ""}`
-                        : "opacity-0 pointer-events-none"
+                    className={`backface-hidden relative w-full rounded-2xl ${
+                      isFlipped ? "" : "pointer-events-none"
                     }`}
                     style={{ transform: "rotateY(180deg) translateZ(2px)" }}
                   >
@@ -542,10 +540,18 @@ export function PackOpeningModal({
                         }`}
                       />
                     )}
-                    <CollectibleCardView
-                      card={currentCard}
-                      isNew={newlyDiscovered.includes(currentCard.id)}
-                    />
+                    <div
+                      className={
+                        isFlipped && isHighRarity && !isExiting
+                          ? "transition-transform duration-300 scale-100"
+                          : ""
+                      }
+                    >
+                      <CollectibleCardView
+                        card={currentCard}
+                        isNew={newlyDiscovered.includes(currentCard.id)}
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -640,16 +646,14 @@ export function PackOpeningModal({
                       }}
                     >
                       <div
-                        className={`preserve-3d relative w-full will-change-transform transition-transform duration-500 ease-out ${
+                        className={`preserve-3d relative w-full will-change-transform transition-transform duration-600 ease-[cubic-bezier(0.22,1,0.36,1)] ${
                           summaryPhase !== "gathering" ? "rotate-y-180" : ""
                         }`}
                       >
                         {/* Verso da carta */}
                         <div
-                          className={`backface-hidden absolute inset-0 rounded-2xl transition-opacity duration-100 ${
-                            summaryPhase !== "gathering"
-                              ? "opacity-0 delay-150 pointer-events-none"
-                              : "opacity-100"
+                          className={`backface-hidden absolute inset-0 rounded-2xl ${
+                            summaryPhase !== "gathering" ? "pointer-events-none" : ""
                           }`}
                           style={{ transform: "rotateY(0deg) translateZ(2px)" }}
                         >
@@ -658,10 +662,8 @@ export function PackOpeningModal({
 
                         {/* Frente da carta */}
                         <div
-                          className={`backface-hidden w-full rounded-2xl transition-opacity duration-100 ${
-                            summaryPhase !== "gathering"
-                              ? "opacity-100 delay-150"
-                              : "opacity-0 pointer-events-none"
+                          className={`backface-hidden w-full rounded-2xl ${
+                            summaryPhase !== "gathering" ? "" : "pointer-events-none"
                           }`}
                           style={{ transform: "rotateY(180deg) translateZ(2px)" }}
                         >

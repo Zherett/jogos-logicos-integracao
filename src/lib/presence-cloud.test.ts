@@ -210,4 +210,31 @@ describe("Presença online/offline na nuvem (fluxo aluno → ADM)", () => {
     await syncPresenceFromPlayFab(true);
     assert.equal(getPlayerPresenceStatus(target), "offline");
   });
+
+  it("registro disconnected antigo no SharedGroup NÃO sobrescreve presença online mais recente do UserData", async () => {
+    const fourDaysAgoIso = new Date(Date.now() - 4 * 86_400_000).toISOString();
+    loginAs("TK_ALUNO", "alunoteste");
+    pf.setWriteTime(fourDaysAgoIso);
+    await pushPresenceToPlayFab(
+      rec({ disconnected: true, lastSeenAt: 0, lastActiveAt: Date.now() - 4 * 86_400_000 }),
+    );
+
+    // Simula aluno voltando agora com registro apenas no UserData (ex.: antes do SharedGroup propagar)
+    pf.setWriteTime(null);
+    const now = Date.now();
+    const g = pf.groups.get(PRESENCE_SHARED_GROUP_ID);
+    const oldEntry = g?.data.get("pres_alunoteste");
+    await pushPresenceToPlayFab(rec({ lastSeenAt: now, lastActiveAt: now, disconnected: false }));
+    if (g && oldEntry) {
+      // Força o SharedGroup a ainda conter o disconnected antigo de 4 dias atrás
+      g.data.set("pres_alunoteste", oldEntry);
+    }
+
+    loginAs("TK_ADMIN", "admin");
+    await syncPresenceFromUserData([{ playfabId: "PF_ALUNO_1" }], { force: true });
+    assert.equal(getPlayerPresenceStatus(target), "online");
+
+    await syncPresenceFromPlayFab(true);
+    assert.equal(getPlayerPresenceStatus(target), "online");
+  });
 });

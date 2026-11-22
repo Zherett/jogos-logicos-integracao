@@ -26,8 +26,8 @@ export const PlayerActivityBadge: React.FC<PlayerActivityBadgeProps> = ({
     nickNormalized,
   });
 
-  // O status offline continua do jeito que está: se o aluno estiver offline ou sem atividade, não renderiza nada no espaço extra
-  if (status === "offline" || !activityDetails) {
+  // Só exibe ação em tempo real quando o jogador está realmente Online (ativo)
+  if (status !== "online" || !activityDetails) {
     return null;
   }
 

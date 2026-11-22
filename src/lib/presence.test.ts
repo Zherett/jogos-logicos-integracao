@@ -52,15 +52,15 @@ describe("Player Presence System (computePresenceStatus)", () => {
     assert.equal(computePresenceStatus(boundaryRecord, BASE_NOW), "online");
   });
 
-  it("returns idle (yellow/amber) when user is connected but has had no interaction between 2 and 10 minutes", () => {
-    // Interacted 6 minutes ago, heartbeat 15 seconds ago
+  it("returns idle (yellow/amber) when user is connected but has had no interaction between 90s and 5 minutes", () => {
+    // Interacted 3 minutes ago, heartbeat 15 seconds ago
     const record = {
       lastSeenAt: BASE_NOW - 15_000,
-      lastActiveAt: BASE_NOW - 6 * 60 * 1000,
+      lastActiveAt: BASE_NOW - 3 * 60 * 1000,
     };
     assert.equal(computePresenceStatus(record, BASE_NOW), "idle");
 
-    // Exactly at 10 minute threshold
+    // Exactly at 5 minute threshold
     const boundaryRecord = {
       lastSeenAt: BASE_NOW - 5_000,
       lastActiveAt: BASE_NOW - PRESENCE_IDLE_MAX_AGE_MS,
@@ -68,8 +68,8 @@ describe("Player Presence System (computePresenceStatus)", () => {
     assert.equal(computePresenceStatus(boundaryRecord, BASE_NOW), "idle");
   });
 
-  it("returns offline (red) when user has not interacted for over 10 minutes even if heartbeat was pulsed", () => {
-    // Interacted 10 minutes and 1 second ago
+  it("returns offline (red) when user has not interacted for over 5 minutes even if heartbeat was pulsed", () => {
+    // Interacted 5 minutes and 1 second ago
     const record = {
       lastSeenAt: BASE_NOW - 10_000,
       lastActiveAt: BASE_NOW - (PRESENCE_IDLE_MAX_AGE_MS + 1000),
@@ -82,11 +82,11 @@ describe("Player Presence System (computePresenceStatus)", () => {
     assert.ok(onlineTooltip.includes("Online — Ativo agora"));
 
     const idleTooltip = formatPresenceTooltip("idle", {
-      lastActiveAt: BASE_NOW - 7 * 60 * 1000,
+      lastActiveAt: BASE_NOW - 3 * 60 * 1000,
       lastSeenAt: BASE_NOW,
     }, BASE_NOW);
     assert.ok(idleTooltip.includes("Inativo"));
-    assert.ok(idleTooltip.includes("7 min"));
+    assert.ok(idleTooltip.includes("3 min"));
 
     // Online há 15 minutos
     const fifteenMinAgo = formatPresenceTimeAgo({
@@ -144,13 +144,13 @@ describe("Player Presence System (computePresenceStatus)", () => {
       "online",
     );
 
-    // Heartbeat seen 10s ago on server, student was idle for 6 min on their own clock (idleMs = 360_000) -> idle
+    // Heartbeat seen 10s ago on server, student was idle for 3 min on their own clock (idleMs = 180_000) -> idle
     assert.equal(
       computePresenceStatus(
         {
           lastSeenAt: BASE_NOW - 10_000,
-          lastActiveAt: BASE_NOW - 370_000,
-          idleMs: 6 * 60 * 1000,
+          lastActiveAt: BASE_NOW - 190_000,
+          idleMs: 3 * 60 * 1000,
         },
         BASE_NOW,
       ),

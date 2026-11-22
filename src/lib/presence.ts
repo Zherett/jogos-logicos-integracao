@@ -55,9 +55,9 @@ export interface PresenceStore {
 }
 
 // Limiares de tempo especificados:
-export const PRESENCE_ONLINE_MAX_AGE_MS = 2 * 60 * 1000;   // 2 minutos com atividade do aluno (Verde)
-export const PRESENCE_IDLE_MAX_AGE_MS = 10 * 60 * 1000;    // 10 minutos conectado sem interação (Amarelo/Âmbar)
-export const PRESENCE_DISCONNECT_MAX_AGE_MS = 2 * 60 * 1000; // 2 minutos sem heartbeat = aba fechada/suspensa (Vermelho)
+export const PRESENCE_ONLINE_MAX_AGE_MS = 90 * 1000;       // 1 min 30s com atividade do aluno (Verde)
+export const PRESENCE_IDLE_MAX_AGE_MS = 5 * 60 * 1000;     // 5 minutos conectado sem interação (Âmbar/Inativo)
+export const PRESENCE_DISCONNECT_MAX_AGE_MS = 5 * 60 * 1000; // 5 minutos sem heartbeat = aba fechada/suspensa (Vermelho)
 
 const PRESENCE_STORAGE_KEY = "desafios-presence-store-v1";
 const LOCAL_LAST_ACTIVE_KEY = "desafios-local-last-active-v1";
@@ -125,11 +125,11 @@ export function formatPresenceTimeAgo(
     return "Online agora";
   }
 
-  // Se estiver conectado mas inativo (2 a 10 min)
+  // Se estiver conectado mas inativo (1 min 30s a 5 min)
   if (status === "idle") {
     const lastActive = record.lastActiveAt && record.lastActiveAt > 0 ? record.lastActiveAt : record.lastSeenAt;
-    const diffMs = lastActive ? Math.max(0, now - lastActive) : 2 * 60 * 1000;
-    const mins = Math.max(2, Math.floor(diffMs / 60000));
+    const diffMs = lastActive ? Math.max(0, now - lastActive) : PRESENCE_ONLINE_MAX_AGE_MS;
+    const mins = Math.max(1, Math.floor(diffMs / 60000));
     return `Inativo há ${mins} min (conectado)`;
   }
 
@@ -781,6 +781,34 @@ export async function pushPresenceToPlayFab(record: PlayerPresenceRecord): Promi
   }
 }
 
+function shouldKeepExistingPresence(
+  existing: PlayerPresenceRecord | undefined,
+  incoming: { disconnected?: boolean; lastSeenAt: number; lastActiveAt: number },
+): boolean {
+  if (!existing) return false;
+  if (incoming.disconnected) {
+    // Nunca sobrescreve evidência online mais recente com um logout/disconnect antigo
+    if (!existing.disconnected && existing.lastSeenAt > incoming.lastActiveAt) {
+      return true;
+    }
+    // Entre dois registros offline, preserva o mais recente
+    const existingTs = Math.max(existing.lastSeenAt || 0, existing.lastActiveAt || 0);
+    if (existing.disconnected && existingTs >= incoming.lastActiveAt && incoming.lastActiveAt > 0) {
+      return true;
+    }
+    return false;
+  }
+  // Registro online: nunca sobrescreve um heartbeat mais recente
+  if (!existing.disconnected && existing.lastSeenAt >= incoming.lastSeenAt && incoming.lastSeenAt > 0) {
+    return true;
+  }
+  // Se o registro existente é offline, só sobrescreve se o heartbeat online for mais recente que o disconnect
+  if (existing.disconnected && existing.lastActiveAt > incoming.lastSeenAt) {
+    return true;
+  }
+  return false;
+}
+
 /**
  * Incorpora um pulso de presença vindo do UserData público de um jogador ao cache local de presença.
  */
@@ -802,7 +830,7 @@ export function applyRemotePresenceHeartbeat(rawJson: string, lastUpdated?: stri
         const seen = Math.max(1, nowMs - ageMs);
         if (remote.disconnected) {
           remote.lastSeenAt = 0;
-          remote.lastActiveAt = seen;
+          remote.lastActiveAt = Math.max(1, seen - idle);
         } else {
           remote.lastSeenAt = seen;
           remote.lastActiveAt = Math.max(1, seen - idle);
@@ -819,18 +847,15 @@ export function applyRemotePresenceHeartbeat(rawJson: string, lastUpdated?: stri
 
     const store = loadPresenceStore();
     const existing = store.players[pId] || (slug ? store.players[slug] : undefined);
-    const remoteSeen = typeof remote.lastSeenAt === "number" ? remote.lastSeenAt : 0;
+    const remoteSeen = remote.disconnected ? 0 : (typeof remote.lastSeenAt === "number" ? remote.lastSeenAt : 0);
     const remoteActive = typeof remote.lastActiveAt === "number" ? remote.lastActiveAt : remoteSeen;
 
-    if (existing && existing.lastSeenAt >= remoteSeen && remoteSeen > 0) {
-      return;
-    }
-    // Saída (disconnected) mais antiga que uma evidência online já conhecida não pode sobrescrevê-la
     if (
-      remote.disconnected &&
-      existing &&
-      !existing.disconnected &&
-      existing.lastSeenAt > (remote.lastActiveAt ?? 0)
+      shouldKeepExistingPresence(existing, {
+        disconnected: Boolean(remote.disconnected),
+        lastSeenAt: remoteSeen,
+        lastActiveAt: remoteActive,
+      })
     ) {
       return;
     }
@@ -1006,19 +1031,41 @@ export async function syncPresenceFromPlayFab(force = false): Promise<void> {
           const pId = remote.playerId || `pf_${slug}`;
 
           if (remote.disconnected || !remote.lastSeenAt || remote.lastSeenAt <= 0) {
-            const existingOff = store.players[pId];
-            const preservedActiveAt =
+            const existingOff = store.players[pId] || (slug ? store.players[slug] : undefined);
+            let normalizedOffActive =
               remote.lastActiveAt && remote.lastActiveAt > 0
                 ? remote.lastActiveAt
                 : remote.lastSeenAt && remote.lastSeenAt > 0
                   ? remote.lastSeenAt
-                  : (existingOff?.lastActiveAt || 0);
+                  : 0;
+            if (entry.LastUpdated) {
+              const entryMs = Date.parse(entry.LastUpdated);
+              if (!Number.isNaN(entryMs)) {
+                const ageMs = Math.max(0, curServerNow - entryMs);
+                const idle =
+                  typeof remote.idleMs === "number" && remote.idleMs >= 0
+                    ? remote.idleMs
+                    : 0;
+                normalizedOffActive = Math.max(1, syncNow - ageMs - idle);
+              }
+            }
+            const preservedActiveAt = normalizedOffActive || (existingOff?.lastActiveAt || 0);
+
+            if (
+              shouldKeepExistingPresence(existingOff, {
+                disconnected: true,
+                lastSeenAt: 0,
+                lastActiveAt: preservedActiveAt,
+              })
+            ) {
+              continue;
+            }
 
             const offUnchanged =
               existingOff &&
               existingOff.disconnected === true &&
               existingOff.lastSeenAt === 0 &&
-              existingOff.lastActiveAt === preservedActiveAt;
+              Math.abs((existingOff.lastActiveAt || 0) - preservedActiveAt) < 1500;
 
             if (!offUnchanged) {
               const offRec: PlayerPresenceRecord = {
@@ -1074,6 +1121,15 @@ export async function syncPresenceFromPlayFab(force = false): Promise<void> {
           }
 
           const existingRec = store.players[pId] || (slug ? store.players[slug] : undefined);
+          if (
+            shouldKeepExistingPresence(existingRec, {
+              disconnected: false,
+              lastSeenAt: normalizedSeenAt,
+              lastActiveAt: normalizedActiveAt,
+            })
+          ) {
+            continue;
+          }
           const sameActivity =
             existingRec?.activity?.type === remote.activity?.type &&
             existingRec?.activity?.gameId === remote.activity?.gameId &&
@@ -1615,10 +1671,6 @@ export function usePresenceTracker(player?: {
       }
     };
 
-    const onPageHide = () => {
-      pulse(true);
-    };
-
     const onActivityChange = () => {
       pulse(false);
     };
@@ -1629,8 +1681,6 @@ export function usePresenceTracker(player?: {
     window.addEventListener("scroll", onUserInteraction, { passive: true });
     window.addEventListener("focus", onVisibilityOrFocus);
     document.addEventListener("visibilitychange", onVisibilityOrFocus);
-    window.addEventListener("pagehide", onPageHide);
-    window.addEventListener("beforeunload", onPageHide);
     window.addEventListener(ACTIVITY_CHANGED_EVENT, onActivityChange);
 
     pulse(false);
@@ -1646,8 +1696,6 @@ export function usePresenceTracker(player?: {
       window.removeEventListener("scroll", onUserInteraction);
       window.removeEventListener("focus", onVisibilityOrFocus);
       document.removeEventListener("visibilitychange", onVisibilityOrFocus);
-      window.removeEventListener("pagehide", onPageHide);
-      window.removeEventListener("beforeunload", onPageHide);
       window.removeEventListener(ACTIVITY_CHANGED_EVENT, onActivityChange);
       clearInterval(intervalId);
     };
