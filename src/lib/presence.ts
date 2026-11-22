@@ -802,7 +802,12 @@ export async function pushPresenceToPlayFab(record: PlayerPresenceRecord): Promi
 
 function shouldKeepExistingPresence(
   existing: PlayerPresenceRecord | undefined,
-  incoming: { disconnected?: boolean; lastSeenAt: number; lastActiveAt: number },
+  incoming: {
+    disconnected?: boolean;
+    lastSeenAt: number;
+    lastActiveAt: number;
+    activityUpdatedAt?: number;
+  },
 ): boolean {
   if (!existing) return false;
   if (incoming.disconnected) {
@@ -816,6 +821,14 @@ function shouldKeepExistingPresence(
       return true;
     }
     return false;
+  }
+  // Entre dois registros online do mesmo aluno, se ambos tiverem timestamp de ação (activity.updatedAt),
+  // a ação mais recente do próprio dispositivo do aluno sempre vence (evita congelar na ação anterior)
+  const existingActTs = existing.activity?.updatedAt ?? 0;
+  const incomingActTs = incoming.activityUpdatedAt ?? 0;
+  if (!existing.disconnected && existingActTs > 0 && incomingActTs > 0) {
+    if (incomingActTs < existingActTs) return true;
+    if (incomingActTs > existingActTs) return false;
   }
   // Registro online: nunca sobrescreve um heartbeat estritamente mais recente
   if (!existing.disconnected && existing.lastSeenAt > incoming.lastSeenAt && incoming.lastSeenAt > 0) {
@@ -874,6 +887,7 @@ export function applyRemotePresenceHeartbeat(rawJson: string, lastUpdated?: stri
         disconnected: Boolean(remote.disconnected),
         lastSeenAt: remoteSeen,
         lastActiveAt: remoteActive,
+        activityUpdatedAt: remote.activity?.updatedAt,
       })
     ) {
       return;
@@ -1125,6 +1139,7 @@ export async function syncPresenceFromPlayFab(force = false): Promise<void> {
               disconnected: false,
               lastSeenAt: normalizedSeenAt,
               lastActiveAt: normalizedActiveAt,
+              activityUpdatedAt: remote.activity?.updatedAt,
             })
           ) {
             continue;
@@ -1241,22 +1256,18 @@ function getX1PresenceIndexMap(): Map<string, PlayerPresenceRecord> | null {
   }
 }
 
+/**
+ * Extrai apenas timestamps reais com hora e minuto exatos gerados pela própria sessão/partida do aluno
+ * (activeSessionUpdatedAt e stats[].last_played_at). Nunca utiliza dailyXpDate, updatedAt do roster ou medalhas
+ * reconciliadas pelo ADM, evitando falsos positivos de "Online há instantes" para alunos desconectados.
+ */
 export function getLatestProfileActivityMs(profileLike?: {
   activeSessionUpdatedAt?: string;
-  updatedAt?: string;
-  lastActiveDate?: string;
-  activeDates?: string[];
-  dailyXpDate?: string;
-  lastDailyLoginPointsDate?: string;
-  lastDailyFirstGamePointsDate?: string;
-  unlockedMedals?: Array<{ unlockedAt?: string; lastUnlockedAt?: string }>;
-  tournamentMedals?: Array<{ unlockedAt?: string; awardedAt?: string }>;
   stats?: Array<{ last_played_at?: string }>;
   lastKnownActivityAt?: string | number;
 } | null): number {
   if (!profileLike) return 0;
   let maxMs = 0;
-  const nowMs = Date.now();
   const consider = (raw?: string | number) => {
     if (!raw) return;
     if (typeof raw === "number") {
@@ -1264,16 +1275,8 @@ export function getLatestProfileActivityMs(profileLike?: {
       return;
     }
     const trimmed = raw.trim();
-    if (!trimmed) return;
-    // Datas no formato YYYY-MM-DD: interpreta no fuso local às 12:00 (evita voltar 1 dia em UTC-4)
-    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
-      const localNoonMs = new Date(`${trimmed}T12:00:00`).getTime();
-      if (!Number.isNaN(localNoonMs)) {
-        const clamped = Math.min(nowMs, localNoonMs);
-        if (clamped > maxMs) maxMs = clamped;
-      }
-      return;
-    }
+    // Ignora datas puras YYYY-MM-DD sem horário real
+    if (!trimmed || /^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return;
     const ms = Date.parse(trimmed);
     if (!Number.isNaN(ms) && ms > maxMs) {
       maxMs = ms;
@@ -1281,22 +1284,6 @@ export function getLatestProfileActivityMs(profileLike?: {
   };
   consider(profileLike.lastKnownActivityAt);
   consider(profileLike.activeSessionUpdatedAt);
-  consider(profileLike.updatedAt);
-  consider(profileLike.lastActiveDate);
-  consider(profileLike.dailyXpDate);
-  consider(profileLike.lastDailyLoginPointsDate);
-  consider(profileLike.lastDailyFirstGamePointsDate);
-  for (const d of profileLike.activeDates ?? []) {
-    consider(d);
-  }
-  for (const m of profileLike.unlockedMedals ?? []) {
-    consider(m?.lastUnlockedAt);
-    consider(m?.unlockedAt);
-  }
-  for (const tm of profileLike.tournamentMedals ?? []) {
-    consider(tm?.unlockedAt);
-    consider(tm?.awardedAt);
-  }
   for (const s of profileLike.stats ?? []) {
     consider(s?.last_played_at);
   }
@@ -1709,6 +1696,9 @@ export function usePresenceTracker(player?: {
     };
 
     const onActivityChange = () => {
+      const now = Date.now();
+      lastRecordedActivity = now;
+      recordLocalUserActivity(now);
       pulse(false);
     };
 

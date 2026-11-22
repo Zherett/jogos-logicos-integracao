@@ -244,14 +244,13 @@ describe("Player Presence System (computePresenceStatus)", () => {
       assert.equal(getPlayerCurrentActivity().level, 4);
     });
 
-    it("getLatestProfileActivityMs considera medalhas conquistadas e datas de atividade recentes", () => {
-      const yesterdayIso = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
-      const fiveDaysAgoIso = new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString();
+    it("getLatestProfileActivityMs considera apenas timestamps reais de sessão/partida e ignora datas sem hora ou updatedAt do ADM", () => {
+      const twoHoursAgoIso = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
       const latestMs = getLatestProfileActivityMs({
-        updatedAt: fiveDaysAgoIso,
-        unlockedMedals: [{ unlockedAt: yesterdayIso }],
+        activeSessionUpdatedAt: twoHoursAgoIso,
+        stats: [{ last_played_at: "2026-11-22" }],
       });
-      assert.equal(latestMs, Date.parse(yesterdayIso));
+      assert.equal(latestMs, Date.parse(twoHoursAgoIso));
     });
 
     it("recordPlayerHeartbeat armazena a atividade no registro do jogador", () => {

@@ -4158,7 +4158,7 @@ export async function syncStudentRosterFromPlayFab(
                   flawless_wins: 0,
                   best_score: lbScore,
                   best_level: lbScore >= 60 ? 2 : 1,
-                  last_played_at: (parsed as any).updatedAt || new Date().toISOString(),
+                  last_played_at: (parsed as any).activeSessionUpdatedAt || undefined,
                 });
               } else {
                 statsMap.set(key, {
