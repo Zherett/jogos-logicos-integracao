@@ -573,7 +573,7 @@ function Index() {
           onOpenWeeklyTournament={() => setTournamentOpen(true)}
           onOpenAuth={() => setAuthDialogOpen(true)}
           onOpenDungeon={
-            auth.isAdmin
+            isAdminOrTestAccount(auth.profile, auth.isAdmin)
               ? () => {
                   setActiveRankedGameId(null);
                   setView("masmorra");
@@ -652,8 +652,8 @@ function Index() {
         </Suspense>
       )}
 
-      {/* Masmorra (Expedição Lógica) — Exclusivo ADM */}
-      {!activeX1Room && view === "masmorra" && auth.isAdmin && (
+      {/* Masmorra (Expedição Lógica) — Exclusivo ADM e perfis de teste */}
+      {!activeX1Room && view === "masmorra" && isAdminOrTestAccount(auth.profile, auth.isAdmin) && (
         <Suspense
           fallback={
             <div className="p-10 text-center text-sm font-semibold text-muted-foreground">

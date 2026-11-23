@@ -642,8 +642,8 @@ export function Menu({
           );
         })}
 
-        {/* Card exclusivo ADM: Masmorra (Expedição Lógica) */}
-        {isAdmin && onOpenDungeon && (
+        {/* Card exclusivo ADM e perfis de teste: Masmorra (Expedição Lógica) */}
+        {isAdminBypass && onOpenDungeon && (
           <button
             type="button"
             onClick={onOpenDungeon}
