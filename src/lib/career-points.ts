@@ -2,7 +2,7 @@ import type { PlayerProfile } from "./playfab.ts";
 import { getAllAvailableMedals, type MedalRarity } from "./medals-catalog.ts";
 import { getLocalDateKey } from "./player-profile.ts";
 import { loadAllInboxMessages, getMessageRewards } from "./inbox-messages.ts";
-import { recordScoreLedgerEntry } from "./score-history-ledger.ts";
+import { recordScoreLedgerEntry, type ScoreTransactionSource } from "./score-history-ledger.ts";
 
 /** Pontos concedidos por raridade de medalha */
 export const MEDAL_POINTS_REWARDS: Record<MedalRarity, number> = {
@@ -52,17 +52,34 @@ export function awardCoins(
   profile: PlayerProfile,
   amount: number,
   reason = "Moedas Conquistadas",
+  explicitSource?: ScoreTransactionSource,
 ): { profile: PlayerProfile; coinsAwarded: number } {
   if (!profile) return { profile, coinsAwarded: 0 };
   const coinsAwarded = Math.max(0, Math.round(Number(amount) || 0));
   if (coinsAwarded <= 0) return { profile, coinsAwarded: 0 };
   creditCoinMetrics(profile, coinsAwarded);
   try {
+    const rLower = (reason || "").toLowerCase();
+    const source: ScoreTransactionSource =
+      explicitSource ??
+      (rLower.includes("retroativ")
+        ? "retroatribuicao"
+        : rLower.includes("missão diária") || rLower.includes("missao diaria")
+          ? "missao_diaria"
+          : rLower.includes("missão semanal") || rLower.includes("missao semanal")
+            ? "missao_semanal"
+            : rLower.includes("recompensa diária") || rLower.includes("check-in") || rLower.includes("login")
+              ? "recompensa_diaria"
+              : rLower.includes("baú") || rLower.includes("bau")
+                ? "bau"
+                : rLower.includes("nível") || rLower.includes("nivel")
+                  ? "promocao_nivel"
+                  : "medalha");
     recordScoreLedgerEntry({
       playerId: profile.id || profile.nick,
       playerNick: profile.nick || "Jogador",
       type: "coins",
-      source: "medalha",
+      source,
       amount: coinsAwarded,
       balanceAfter: profile.coins,
       reason,
@@ -483,7 +500,14 @@ export function sanitizeInflatedCareerPoints(
         mId === "explorer_all_games" ||
         (mId === "m_rpg_ametista" && profile.nickNormalized !== "zheret") ||
         (mId === "m_rpg_carmesim" && profile.nickNormalized !== "zheret") ||
-        (mId.startsWith("streak_") && (profile.streakDays ?? 0) < 7)
+        (mId === "streak_3_days" && (profile.streakDays ?? 0) < 3) ||
+        (mId === "streak_5_days" && (profile.streakDays ?? 0) < 5) ||
+        (mId === "streak_7_days" && (profile.streakDays ?? 0) < 7) ||
+        (mId.startsWith("streak_") &&
+          mId !== "streak_3_days" &&
+          mId !== "streak_5_days" &&
+          mId !== "streak_7_days" &&
+          (profile.streakDays ?? 0) < 7)
       ) {
         return false;
       }
@@ -595,9 +619,8 @@ export function sanitizeInflatedCareerPoints(
     currentBalance > maxReasonableThreshold ||
     currentCareer > maxPhysicalCeiling
   ) {
-    const coinsSpent = Math.max(0, profile.coins ?? 0);
     profile.careerPoints = finalLegitimatePoints;
-    profile.pointsBalance = Math.max(0, finalLegitimatePoints - coinsSpent);
+    profile.pointsBalance = Math.max(0, finalLegitimatePoints);
     return { profile, wasSanitized: true };
   }
 
@@ -638,4 +661,145 @@ export function ensurePlayerCareerPointsInitialized(
   }
 
   return profile;
+}
+
+export interface RetroactiveMedalCoinsBreakdownItem {
+  medalId: string;
+  rarity: MedalRarity;
+  unrewardedCount: number;
+  coinsPerUnit: number;
+  totalCoins: number;
+}
+
+export interface RetroactiveMedalCoinsResult {
+  totalExpectedMedalCoins: number;
+  coinsToAward: number;
+  alreadyRewardedOffset: number;
+  breakdown: RetroactiveMedalCoinsBreakdownItem[];
+  nextRewardedMap: Record<string, number>;
+}
+
+/**
+ * Calcula as moedas retroativas devidas EXCLUSIVAMENTE pelas medalhas já desbloqueadas pelo aluno,
+ * utilizando `coinRewardsConfig.medalCoinsByRarity` (fallback: `MEDAL_COINS_REWARDS`).
+ * É 100% idempotente: rastreia `coinRewardedMedalIds` por medalha (inclusive contagem cumulativa)
+ * e, na primeira migração, desconta eventual `lifetimeCoins` já creditado para evitar pagamento em dobro.
+ */
+export function calculateRetroactiveMedalCoins(
+  profile: Partial<PlayerProfile> | null | undefined,
+  options?: {
+    medalCoinsByRarity?: Partial<Record<string, number>>;
+    customMedalRarities?: Record<string, MedalRarity>;
+  },
+): RetroactiveMedalCoinsResult {
+  const empty: RetroactiveMedalCoinsResult = {
+    totalExpectedMedalCoins: 0,
+    coinsToAward: 0,
+    alreadyRewardedOffset: 0,
+    breakdown: [],
+    nextRewardedMap: { ...(profile?.coinRewardedMedalIds ?? {}) },
+  };
+  if (!profile || !Array.isArray(profile.unlockedMedals) || profile.unlockedMedals.length === 0) {
+    return empty;
+  }
+
+  const catalogMap = getBaseMedalRarityMap();
+  const customMap = options?.customMedalRarities ?? {};
+  const rarityCoinsCfg = options?.medalCoinsByRarity ?? {};
+  const prevRewarded = profile.coinRewardedMedalIds ?? {};
+  const isFirstMigration = !profile.retroactiveMedalCoinsGrantedAt && Object.keys(prevRewarded).length === 0;
+
+  // Agrega contagem por medalId (evitando duplicatas caso haja entradas repetidas no array)
+  const countByMedal = new Map<string, { count: number; rarity: MedalRarity }>();
+  for (const m of profile.unlockedMedals) {
+    if (!m) continue;
+    const mId = String((m as any).medalId ?? (m as any).id ?? "").trim();
+    if (!mId) continue;
+    const rarity = (
+      customMap[mId] ??
+      (m as any).rarity ??
+      catalogMap.get(mId) ??
+      "bronze"
+    ) as MedalRarity;
+    const count = Math.max(1, Math.floor(Number((m as any).count ?? 1)));
+    const prev = countByMedal.get(mId);
+    if (prev) {
+      prev.count = Math.max(prev.count, count);
+    } else {
+      countByMedal.set(mId, { count, rarity });
+    }
+  }
+
+  const nextRewardedMap: Record<string, number> = { ...prevRewarded };
+  const breakdown: RetroactiveMedalCoinsBreakdownItem[] = [];
+  let rawDeltaCoins = 0;
+
+  for (const [medalId, info] of countByMedal.entries()) {
+    const alreadyCount = Math.max(0, Math.floor(Number(prevRewarded[medalId] ?? 0)));
+    const unrewardedCount = Math.max(0, info.count - alreadyCount);
+    nextRewardedMap[medalId] = Math.max(alreadyCount, info.count);
+    if (unrewardedCount <= 0) continue;
+
+    const coinsPerUnit = Math.max(
+      0,
+      Math.floor(
+        Number(
+          rarityCoinsCfg[info.rarity] ??
+            MEDAL_COINS_REWARDS[info.rarity] ??
+            MEDAL_COINS_REWARDS.bronze,
+        ),
+      ),
+    );
+    const totalCoins = unrewardedCount * coinsPerUnit;
+    if (totalCoins > 0) {
+      rawDeltaCoins += totalCoins;
+      breakdown.push({
+        medalId,
+        rarity: info.rarity,
+        unrewardedCount,
+        coinsPerUnit,
+        totalCoins,
+      });
+    }
+  }
+
+  const alreadyRewardedOffset = isFirstMigration
+    ? Math.max(0, Math.floor(Number(profile.lifetimeCoins ?? profile.coins ?? 0)))
+    : 0;
+  const coinsToAward = Math.max(0, rawDeltaCoins - alreadyRewardedOffset);
+
+  return {
+    totalExpectedMedalCoins: rawDeltaCoins,
+    coinsToAward,
+    alreadyRewardedOffset,
+    breakdown,
+    nextRewardedMap,
+  };
+}
+
+/**
+ * Aplica a retroatribuição de moedas baseadas em medalhas ao perfil de forma idempotente.
+ */
+export function applyRetroactiveMedalCoins(
+  profile: PlayerProfile,
+  options?: {
+    medalCoinsByRarity?: Partial<Record<string, number>>;
+    customMedalRarities?: Record<string, MedalRarity>;
+    nowIso?: string;
+  },
+): RetroactiveMedalCoinsResult {
+  const calc = calculateRetroactiveMedalCoins(profile, options);
+  profile.coinRewardedMedalIds = calc.nextRewardedMap;
+  if (!profile.retroactiveMedalCoinsGrantedAt) {
+    profile.retroactiveMedalCoinsGrantedAt = options?.nowIso ?? new Date().toISOString();
+  }
+  if (calc.coinsToAward > 0) {
+    awardCoins(
+      profile,
+      calc.coinsToAward,
+      `Retroatribuição de Moedas (${calc.breakdown.length} medalha${calc.breakdown.length === 1 ? "" : "s"})`,
+      "retroatribuicao",
+    );
+  }
+  return calc;
 }

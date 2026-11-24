@@ -267,6 +267,8 @@ export interface PlatformAdminConfig {
     streakXpStep?: number;
     streakCoinsStep?: number;
     streakCoinsCap?: number;
+    /** ID do baú entregue ao concluir o 7º dia do ciclo (padrão: "weekly_epic") */
+    day7ChestId?: string;
     dailyTiers?: Array<{
       day: number;
       title: string;
@@ -282,6 +284,13 @@ export interface PlatformAdminConfig {
       string,
       { target?: number; points?: number; xp?: number; coins?: number }
     >;
+  };
+  /** Flags de liberação gradual para alunos comuns (padrão: tudo false = restrito ao ADM) */
+  rolloutFlags?: {
+    enableDailyRoutineForStudents?: boolean;
+    enableCoinsWalletForStudents?: boolean;
+    enableDefaultAvatarForStudents?: boolean;
+    enableShopForStudents?: boolean;
   };
   /** Optional PlayFab Title ID configured via Admin UI. */
   playfabTitleId?: string;
