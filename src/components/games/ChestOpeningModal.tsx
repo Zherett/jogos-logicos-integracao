@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Coins, Gift, HelpCircle, Package, Sparkles, Zap } from "lucide-react";
+import { Coins, FastForward, Gift, HelpCircle, Package, Sparkles, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { CardPackDefinition } from "@/lib/cards-catalog";
@@ -20,6 +20,7 @@ import {
   playChestUnlock,
 } from "@/lib/sound";
 import { ChestVector } from "./ChestVector";
+import { PackArtwork } from "./PackOpeningModal";
 
 interface ChestOpeningModalProps {
   chest: ChestDefinition | null;
@@ -30,7 +31,7 @@ interface ChestOpeningModalProps {
 }
 
 type OpeningStage = "unlocking" | "opening" | "revealed";
-type RewardStepKind = "points" | "xp" | "coins" | "packs";
+type RewardStepKind = "points" | "xp" | "coins" | "cosmetics" | `pack:${number}`;
 type RewardStepPhase = "mystery" | "reveal" | "flying";
 
 export function ChestOpeningModal({
@@ -46,12 +47,7 @@ export function ChestOpeningModal({
 
   const [activeStep, setActiveStep] = useState<RewardStepKind | null>(null);
   const [stepPhase, setStepPhase] = useState<RewardStepPhase>("mystery");
-  const [settledSteps, setSettledSteps] = useState<Record<RewardStepKind, boolean>>({
-    points: false,
-    xp: false,
-    coins: false,
-    packs: false,
-  });
+  const [settledSteps, setSettledSteps] = useState<Record<string, boolean>>({});
   const [flyTransform, setFlyTransform] = useState<{
     dx: number;
     dy: number;
@@ -63,25 +59,41 @@ export function ChestOpeningModal({
   const timersRef = useRef<number[]>([]);
   const lockpickIntervalRef = useRef<number | null>(null);
   const spotlightRef = useRef<HTMLDivElement | null>(null);
-  const slotRefs = useRef<Record<RewardStepKind, HTMLDivElement | null>>({
+  const slotRefs = useRef<Record<"points" | "xp" | "coins" | "packs", HTMLDivElement | null>>({
     points: null,
     xp: null,
     coins: null,
     packs: null,
   });
 
-  const hasExtras = Boolean(
-    outcome && (outcome.packs.length > 0 || (outcome.cosmetics?.length ?? 0) > 0),
-  );
+  // Agrupa pacotes distintos por packId (ex.: 2 tipos diferentes com 5 unidades cada -> 2 animações)
+  const distinctPacks = useMemo(() => {
+    if (!outcome?.packs?.length) return [];
+    const grouped = new Map<string, number>();
+    for (const pk of outcome.packs) {
+      if (pk.quantity > 0) {
+        grouped.set(pk.packId, (grouped.get(pk.packId) ?? 0) + pk.quantity);
+      }
+    }
+    return Array.from(grouped.entries()).map(([packId, quantity]) => ({
+      packId,
+      quantity,
+      packDef: packsCatalog.find((p) => p.id === packId),
+    }));
+  }, [outcome, packsCatalog]);
+
+  const hasCosmetics = Boolean(outcome?.cosmetics?.length);
+  const hasExtras = distinctPacks.length > 0 || hasCosmetics;
 
   const rewardQueue = useMemo<RewardStepKind[]>(() => {
     const q: RewardStepKind[] = ["points", "xp", "coins"];
-    if (hasExtras) q.push("packs");
+    distinctPacks.forEach((_, idx) => q.push(`pack:${idx}`));
+    if (hasCosmetics) q.push("cosmetics");
     return q;
-  }, [hasExtras]);
+  }, [distinctPacks, hasCosmetics]);
 
   const allSettled = useMemo(
-    () => rewardQueue.every((k) => settledSteps[k]),
+    () => rewardQueue.every((k) => Boolean(settledSteps[k])),
     [rewardQueue, settledSteps],
   );
 
@@ -112,7 +124,7 @@ export function ChestOpeningModal({
     setShakeVariant(1);
     setActiveStep(null);
     setStepPhase("mystery");
-    setSettledSteps({ points: false, xp: false, coins: false, packs: false });
+    setSettledSteps({});
     setFlyTransform({ dx: 0, dy: 0, scaleX: 1, scaleY: 1 });
 
     const resolvedShape: ChestShape =
@@ -180,6 +192,7 @@ export function ChestOpeningModal({
         return;
       }
       const kind = rewardQueue[idx];
+      const isPackStep = kind.startsWith("pack:");
       setFlyTransform({ dx: 0, dy: 0, scaleX: 1, scaleY: 1 });
       setActiveStep(kind);
       setStepPhase("mystery");
@@ -192,6 +205,9 @@ export function ChestOpeningModal({
         else if (kind === "coins") playChestRewardCoins();
         else playChestRewardPack();
 
+        const revealDurationMs = isPackStep ? 900 : 680;
+        const flyDurationMs = isPackStep ? 520 : 460;
+
         schedule(() => {
           if (cancelled) return;
           setStepPhase("flying");
@@ -200,8 +216,8 @@ export function ChestOpeningModal({
             if (cancelled) return;
             setSettledSteps((prev) => ({ ...prev, [kind]: true }));
             runStep(idx + 1);
-          }, 460);
-        }, 680);
+          }, flyDurationMs);
+        }, revealDurationMs);
       }, 220);
     };
 
@@ -217,7 +233,11 @@ export function ChestOpeningModal({
   useLayoutEffect(() => {
     if (stage !== "revealed" || !activeStep || stepPhase !== "flying") return;
     const spotEl = spotlightRef.current;
-    const targetEl = slotRefs.current[activeStep];
+    const slotKey: "points" | "xp" | "coins" | "packs" =
+      activeStep.startsWith("pack:") || activeStep === "cosmetics"
+        ? "packs"
+        : (activeStep as "points" | "xp" | "coins");
+    const targetEl = slotRefs.current[slotKey];
     if (!spotEl || !targetEl) return;
 
     const spotRect = spotEl.getBoundingClientRect();
@@ -229,8 +249,17 @@ export function ChestOpeningModal({
 
     const dx = targetCx - spotCx;
     const dy = targetCy - spotCy;
-    const scaleX = spotRect.width > 0 ? Math.max(0.35, targetRect.width / spotRect.width) : 0.7;
-    const scaleY = spotRect.height > 0 ? Math.max(0.35, targetRect.height / spotRect.height) : 0.7;
+    const isPackStep = activeStep.startsWith("pack:");
+    const scaleX = isPackStep
+      ? 0.25
+      : spotRect.width > 0
+        ? Math.max(0.35, targetRect.width / spotRect.width)
+        : 0.7;
+    const scaleY = isPackStep
+      ? 0.25
+      : spotRect.height > 0
+        ? Math.max(0.35, targetRect.height / spotRect.height)
+        : 0.7;
 
     setFlyTransform({ dx, dy, scaleX, scaleY });
   }, [stage, activeStep, stepPhase]);
@@ -238,34 +267,43 @@ export function ChestOpeningModal({
   function handleSkipSequence() {
     clearTimers();
     setActiveStep(null);
-    setSettledSteps({
-      points: true,
-      xp: true,
-      coins: true,
-      packs: hasExtras,
-    });
+    const nextSettled: Record<string, boolean> = {};
+    for (const k of rewardQueue) {
+      nextSettled[k] = true;
+    }
+    setSettledSteps(nextSettled);
   }
 
   if (!chest || !outcome) return null;
 
-  const packsSummary = outcome.packs
-    .map((pk) => {
-      const pName = packsCatalog.find((p) => p.id === pk.packId)?.name ?? pk.packId;
-      return `${pk.quantity}x ${pName}`;
-    })
+  const settledPacksText = distinctPacks
+    .filter((_, idx) => settledSteps[`pack:${idx}`])
+    .map((pk) => `${pk.quantity}x ${pk.packDef?.name ?? pk.packId}`)
     .join(" • ");
 
   const extrasLabel = [
-    packsSummary,
-    outcome.cosmetics?.length
+    settledPacksText,
+    settledSteps.cosmetics && outcome.cosmetics?.length
       ? `${outcome.cosmetics.length} cosmético(s) desbloqueado(s)`
       : "",
   ]
     .filter(Boolean)
     .join(" • ");
 
+  const anyExtraSettled = Boolean(extrasLabel);
+  const activePackIdx =
+    activeStep && activeStep.startsWith("pack:") ? Number(activeStep.slice(5)) : -1;
+  const activePackItem = activePackIdx >= 0 ? distinctPacks[activePackIdx] : undefined;
+
   return (
-    <Dialog open={Boolean(chest && outcome)} onOpenChange={(v) => !v && onClose()}>
+    <Dialog
+      open={Boolean(chest && outcome)}
+      onOpenChange={(v) => {
+        if (!v && stage === "revealed" && allSettled) {
+          onClose();
+        }
+      }}
+    >
       <DialogContent className="max-h-[90vh] overflow-y-auto rounded-3xl sm:max-w-md p-6 text-center">
         <DialogHeader>
           <DialogTitle className="flex items-center justify-center gap-2 font-display text-xl font-black">
@@ -391,124 +429,179 @@ export function ChestOpeningModal({
                   slotRefs.current.packs = el;
                 }}
                 className={`rounded-2xl border border-primary/30 bg-primary/10 p-3 text-xs font-bold text-primary flex items-center justify-center gap-2 transition-all duration-300 ${
-                  settledSteps.packs
+                  anyExtraSettled
                     ? "opacity-100 scale-100"
                     : "opacity-15 scale-95 border-dashed"
                 }`}
               >
                 <Package className="h-4 w-4 shrink-0" />
-                <span>{settledSteps.packs ? extrasLabel : "Item bônus..."}</span>
+                <span>{anyExtraSettled ? extrasLabel : "Item bônus..."}</span>
               </div>
             )}
 
             {/* Spotlight central: aparece, revela o valor com som e desliza para o slot de destino */}
             {activeStep && (
-              <div
-                onClick={handleSkipSequence}
-                title="Clique para revelar tudo"
-                className="pointer-events-auto absolute inset-0 z-30 flex items-center justify-center cursor-pointer"
-              >
-                <div
-                  ref={spotlightRef}
-                  style={{
-                    transform:
-                      stepPhase === "flying"
-                        ? `translate(${flyTransform.dx}px, ${flyTransform.dy}px) scale(${flyTransform.scaleX}, ${flyTransform.scaleY})`
-                        : "translate(0px, 0px) scale(1)",
-                    transition:
-                      stepPhase === "flying"
-                        ? "transform 440ms cubic-bezier(0.22, 1, 0.36, 1), opacity 440ms ease"
-                        : "transform 220ms cubic-bezier(0.22, 1, 0.36, 1)",
-                    opacity: stepPhase === "flying" ? 0.25 : 1,
-                  }}
-                  className={`flex flex-col items-center justify-center gap-1.5 rounded-3xl border-2 px-6 py-5 shadow-2xl backdrop-blur-md ${
-                    activeStep === "points"
-                      ? "w-44 border-primary/60 bg-card/95 shadow-primary/25"
-                      : activeStep === "xp"
-                        ? "w-44 border-emerald-500/60 bg-card/95 shadow-emerald-500/25"
-                        : activeStep === "coins"
-                          ? "w-44 border-amber-500/60 bg-card/95 shadow-amber-500/25"
-                          : "w-64 border-primary/70 bg-card/95 shadow-primary/30"
-                  }`}
-                >
-                  {activeStep === "points" && (
-                    <>
-                      <Coins className="h-7 w-7 text-primary" />
-                      <span className="text-xs font-extrabold uppercase tracking-wider text-muted-foreground">
-                        Pontos
-                      </span>
-                      <span
-                        className={`font-display text-3xl font-black text-primary transition-all duration-200 ${
-                          stepPhase === "mystery" ? "scale-75 opacity-60" : "scale-110 opacity-100"
-                        }`}
-                      >
-                        {stepPhase === "mystery" ? "?" : `+${outcome.points}`}
-                      </span>
-                    </>
-                  )}
+              <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center">
+                {activePackItem ? (
+                  <div
+                    ref={spotlightRef}
+                    className="perspective-1000 flex flex-col items-center justify-center"
+                    style={{
+                      transform:
+                        stepPhase === "flying"
+                          ? `translate(${flyTransform.dx}px, ${flyTransform.dy}px) scale(${flyTransform.scaleX}, ${flyTransform.scaleY})`
+                          : stepPhase === "mystery"
+                            ? "translate(0px, 0px) scale(0.85)"
+                            : "translate(0px, 0px) scale(1.06)",
+                      transition:
+                        stepPhase === "flying"
+                          ? "transform 500ms cubic-bezier(0.22, 1, 0.36, 1), opacity 480ms ease"
+                          : "transform 280ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease",
+                      opacity: stepPhase === "flying" ? 0 : stepPhase === "mystery" ? 0.75 : 1,
+                    }}
+                  >
+                    <div
+                      className="preserve-3d transition-transform duration-700 ease-[cubic-bezier(0.22,1,0.36,1)]"
+                      style={{
+                        transform:
+                          stepPhase === "mystery" ? "rotateY(0deg)" : "rotateY(360deg)",
+                      }}
+                    >
+                      <PackArtwork
+                        pack={{
+                          name: activePackItem.packDef?.name ?? activePackItem.packId,
+                          colorTheme: activePackItem.packDef?.colorTheme,
+                          icon: activePackItem.packDef?.icon,
+                          isFoil: activePackItem.packDef?.isFoil,
+                        }}
+                        quantity={activePackItem.quantity}
+                        className="w-44 sm:w-48"
+                        bodyHeightClass="h-56 sm:h-60"
+                        iconSizeClass="h-10 w-10"
+                        iconBoxSizeClass="h-20 w-20"
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div
+                    ref={spotlightRef}
+                    style={{
+                      transform:
+                        stepPhase === "flying"
+                          ? `translate(${flyTransform.dx}px, ${flyTransform.dy}px) scale(${flyTransform.scaleX}, ${flyTransform.scaleY})`
+                          : "translate(0px, 0px) scale(1)",
+                      transition:
+                        stepPhase === "flying"
+                          ? "transform 440ms cubic-bezier(0.22, 1, 0.36, 1), opacity 440ms ease"
+                          : "transform 220ms cubic-bezier(0.22, 1, 0.36, 1)",
+                      opacity: stepPhase === "flying" ? 0.25 : 1,
+                    }}
+                    className={`flex flex-col items-center justify-center gap-1.5 rounded-3xl border-2 px-6 py-5 shadow-2xl backdrop-blur-md ${
+                      activeStep === "points"
+                        ? "w-44 border-primary/60 bg-card/95 shadow-primary/25"
+                        : activeStep === "xp"
+                          ? "w-44 border-emerald-500/60 bg-card/95 shadow-emerald-500/25"
+                          : activeStep === "coins"
+                            ? "w-44 border-amber-500/60 bg-card/95 shadow-amber-500/25"
+                            : "w-64 border-primary/70 bg-card/95 shadow-primary/30"
+                    }`}
+                  >
+                    {activeStep === "points" && (
+                      <>
+                        <Coins className="h-7 w-7 text-primary" />
+                        <span className="text-xs font-extrabold uppercase tracking-wider text-muted-foreground">
+                          Pontos
+                        </span>
+                        <span
+                          className={`font-display text-3xl font-black text-primary transition-all duration-200 ${
+                            stepPhase === "mystery" ? "scale-75 opacity-60" : "scale-110 opacity-100"
+                          }`}
+                        >
+                          {stepPhase === "mystery" ? "?" : `+${outcome.points}`}
+                        </span>
+                      </>
+                    )}
 
-                  {activeStep === "xp" && (
-                    <>
-                      <Zap className="h-7 w-7 text-emerald-500" />
-                      <span className="text-xs font-extrabold uppercase tracking-wider text-muted-foreground">
-                        XP
-                      </span>
-                      <span
-                        className={`font-display text-3xl font-black text-emerald-500 transition-all duration-200 ${
-                          stepPhase === "mystery" ? "scale-75 opacity-60" : "scale-110 opacity-100"
-                        }`}
-                      >
-                        {stepPhase === "mystery" ? "?" : `+${outcome.xp}`}
-                      </span>
-                    </>
-                  )}
+                    {activeStep === "xp" && (
+                      <>
+                        <Zap className="h-7 w-7 text-emerald-500" />
+                        <span className="text-xs font-extrabold uppercase tracking-wider text-muted-foreground">
+                          XP
+                        </span>
+                        <span
+                          className={`font-display text-3xl font-black text-emerald-500 transition-all duration-200 ${
+                            stepPhase === "mystery" ? "scale-75 opacity-60" : "scale-110 opacity-100"
+                          }`}
+                        >
+                          {stepPhase === "mystery" ? "?" : `+${outcome.xp}`}
+                        </span>
+                      </>
+                    )}
 
-                  {activeStep === "coins" && (
-                    <>
-                      <Coins className="h-7 w-7 text-amber-500" />
-                      <span className="text-xs font-extrabold uppercase tracking-wider text-muted-foreground">
-                        Moedas
-                      </span>
-                      <span
-                        className={`font-display text-3xl font-black text-amber-500 transition-all duration-200 ${
-                          stepPhase === "mystery" ? "scale-75 opacity-60" : "scale-110 opacity-100"
-                        }`}
-                      >
-                        {stepPhase === "mystery" ? "?" : `+${outcome.coins}`}
-                      </span>
-                    </>
-                  )}
+                    {activeStep === "coins" && (
+                      <>
+                        <Coins className="h-7 w-7 text-amber-500" />
+                        <span className="text-xs font-extrabold uppercase tracking-wider text-muted-foreground">
+                          Moedas
+                        </span>
+                        <span
+                          className={`font-display text-3xl font-black text-amber-500 transition-all duration-200 ${
+                            stepPhase === "mystery" ? "scale-75 opacity-60" : "scale-110 opacity-100"
+                          }`}
+                        >
+                          {stepPhase === "mystery" ? "?" : `+${outcome.coins}`}
+                        </span>
+                      </>
+                    )}
 
-                  {activeStep === "packs" && (
-                    <>
-                      <Package className="h-7 w-7 text-primary" />
-                      <span className="text-xs font-extrabold uppercase tracking-wider text-muted-foreground">
-                        Pacotes &amp; Itens
-                      </span>
-                      <span
-                        className={`font-display text-sm font-black text-primary transition-all duration-200 ${
-                          stepPhase === "mystery" ? "scale-75 opacity-60" : "scale-105 opacity-100"
-                        }`}
-                      >
-                        {stepPhase === "mystery" ? "?" : extrasLabel}
-                      </span>
-                    </>
-                  )}
-                </div>
+                    {activeStep === "cosmetics" && (
+                      <>
+                        <Sparkles className="h-7 w-7 text-primary" />
+                        <span className="text-xs font-extrabold uppercase tracking-wider text-muted-foreground">
+                          Cosméticos
+                        </span>
+                        <span
+                          className={`font-display text-sm font-black text-primary transition-all duration-200 ${
+                            stepPhase === "mystery" ? "scale-75 opacity-60" : "scale-105 opacity-100"
+                          }`}
+                        >
+                          {stepPhase === "mystery"
+                            ? "?"
+                            : `${outcome.cosmetics?.length ?? 0} cosmético(s) desbloqueado(s)`}
+                        </span>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
-            <Button
-              type="button"
-              size="lg"
-              disabled={!allSettled}
-              onClick={onClose}
-              className={`w-full rounded-2xl font-display text-base font-extrabold transition-opacity duration-300 ${
-                allSettled ? "opacity-100" : "opacity-40"
-              }`}
-            >
-              OK
-            </Button>
+            <div className="space-y-2">
+              <Button
+                type="button"
+                size="lg"
+                disabled={!allSettled}
+                onClick={onClose}
+                className={`w-full rounded-2xl font-display text-base font-extrabold transition-opacity duration-300 ${
+                  allSettled ? "opacity-100" : "opacity-40"
+                }`}
+              >
+                OK
+              </Button>
+              {!allSettled && (
+                <div className="flex justify-center">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleSkipSequence}
+                    className="h-7 rounded-xl px-3 text-[11px] font-bold text-muted-foreground hover:text-foreground"
+                  >
+                    <FastForward className="mr-1 h-3 w-3" /> Pular animação
+                  </Button>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </DialogContent>

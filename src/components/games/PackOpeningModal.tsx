@@ -2,6 +2,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ArrowRight,
   Check,
+  ChevronLeft,
+  ChevronRight,
   Crown,
   Flame,
   Gem,
@@ -120,6 +122,57 @@ function FoilOverlay() {
   );
 }
 
+/**
+ * Arte visual reutilizável do pacote fechado (usada na abertura de pacote e na premiação do baú).
+ */
+export function PackArtwork({
+  pack,
+  quantity,
+  className = "w-44",
+  bodyHeightClass = "h-56",
+  iconSizeClass = "h-10 w-10",
+  iconBoxSizeClass = "h-20 w-20",
+}: {
+  pack?: Partial<Pick<CardPackDefinition, "name" | "colorTheme" | "icon" | "isFoil">>;
+  quantity?: number;
+  className?: string;
+  bodyHeightClass?: string;
+  iconSizeClass?: string;
+  iconBoxSizeClass?: string;
+}) {
+  const colorMeta =
+    CARD_PACK_COLOR_META[pack?.colorTheme ?? "teal"] ?? CARD_PACK_COLOR_META.teal;
+  const packIcon = pack?.icon ?? "layers";
+  const isFoilPack = Boolean(pack?.isFoil);
+
+  return (
+    <div className={`relative select-none drop-shadow-xl ${className}`}>
+      <SerratedEdge position="top" bgClass={colorMeta.topBgClass} />
+      <div
+        className={`relative flex ${bodyHeightClass} flex-col items-center justify-center gap-3 overflow-hidden px-3 ${colorMeta.gradientClass}`}
+      >
+        {isFoilPack && <FoilOverlay />}
+        {typeof quantity === "number" && quantity > 0 && (
+          <span className="absolute top-2.5 right-2.5 z-30 rounded-full border border-white/40 bg-slate-950/85 px-2.5 py-0.5 font-mono text-xs font-black text-white shadow-md">
+            x{quantity}
+          </span>
+        )}
+        <div
+          className={`relative z-20 grid ${iconBoxSizeClass} place-items-center rounded-3xl border-2 shadow-inner ${colorMeta.iconBoxClass}`}
+        >
+          <PackIconSvg icon={packIcon} className={`${iconSizeClass} ${colorMeta.iconClass}`} />
+        </div>
+        {pack?.name && (
+          <span className="relative z-20 line-clamp-2 text-center font-display text-xs font-black leading-tight text-white drop-shadow">
+            {pack.name}
+          </span>
+        )}
+      </div>
+      <SerratedEdge position="bottom" bgClass={colorMeta.bottomBgClass} />
+    </div>
+  );
+}
+
 function CardBackFace({ minimal = false }: { minimal?: boolean }) {
   return (
     <div className="flex h-full w-full flex-col items-center justify-between overflow-hidden rounded-2xl border-2 border-teal-400/80 bg-gradient-to-br from-slate-900 via-teal-950 to-slate-900 p-4 shadow-xl select-none">
@@ -164,6 +217,7 @@ export function PackOpeningModal({
   const [summaryOffsets, setSummaryOffsets] = useState<
     Array<{ dx: number; dy: number; scale: number; rot: number }>
   >([]);
+  const [inspectIndex, setInspectIndex] = useState<number | null>(null);
   const timersRef = useRef<number[]>([]);
   const openingLockRef = useRef(false);
   const activePackIdRef = useRef<string | null>(null);
@@ -196,6 +250,7 @@ export function PackOpeningModal({
     setIsFlipped(false);
     setIsExiting(false);
     setSummaryOffsets([]);
+    setInspectIndex(null);
   }, [pack]);
 
   useLayoutEffect(() => {
@@ -335,7 +390,11 @@ export function PackOpeningModal({
       currentCard.rarity === "lendaria" ||
       currentCard.isFoil);
 
+  const inspectedCard =
+    inspectIndex !== null && orderedCards[inspectIndex] ? orderedCards[inspectIndex] : null;
+
   return (
+    <>
     <Dialog
       open={Boolean(pack)}
       onOpenChange={(open) => {
@@ -347,7 +406,7 @@ export function PackOpeningModal({
     >
       <DialogContent
         className={`${
-          stage === "summary" ? "max-w-3xl" : "max-w-md"
+          stage === "summary" ? "max-w-5xl" : "max-w-md"
         } max-h-[90vh] overflow-y-auto rounded-3xl transition-all`}
       >
         <DialogHeader>
@@ -632,7 +691,7 @@ export function PackOpeningModal({
                 summaryPhase === "gathering" ? "animate-summary-gather" : ""
               }`}
             >
-              <div className="grid w-full grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
+              <div className="flex w-full flex-wrap items-stretch justify-center gap-4">
                 {orderedCards.map((card, idx) => {
                   const off = summaryOffsets[idx];
                   const isStacked = summaryPhase !== "spread";
@@ -647,7 +706,7 @@ export function PackOpeningModal({
                       ref={(el) => {
                         slotRefs.current[idx] = el;
                       }}
-                      className="perspective-1000 relative"
+                      className="perspective-1000 relative w-44 sm:w-48"
                       style={{
                         zIndex: isStacked ? idx + 1 : 1,
                         transform,
@@ -683,7 +742,9 @@ export function PackOpeningModal({
                           <CollectibleCardView
                             card={card}
                             isNew={newlyDiscovered.includes(card.id)}
-                            compact
+                            onClick={
+                              summaryPhase === "spread" ? () => setInspectIndex(idx) : undefined
+                            }
                           />
                         </div>
                       </div>
@@ -694,10 +755,13 @@ export function PackOpeningModal({
             </div>
 
             <div
-              className={`flex justify-end transition-opacity duration-500 ${
+              className={`flex flex-wrap items-center justify-between gap-2 transition-opacity duration-500 ${
                 summaryPhase === "spread" ? "opacity-100" : "opacity-0 pointer-events-none"
               }`}
             >
+              <span className="text-xs font-semibold text-muted-foreground">
+                Clique em qualquer carta para vê-la em tamanho real.
+              </span>
               <Button type="button" onClick={onClose} className="rounded-xl font-bold">
                 <Check className="h-4 w-4 mr-1.5" /> Concluir
               </Button>
@@ -706,5 +770,56 @@ export function PackOpeningModal({
         )}
       </DialogContent>
     </Dialog>
+
+    {/* Lightbox de inspeção em tamanho real de uma carta do resumo */}
+    <Dialog open={Boolean(inspectedCard)} onOpenChange={(open) => !open && setInspectIndex(null)}>
+      <DialogContent className="max-w-sm rounded-3xl p-5">
+        <DialogHeader>
+          <DialogTitle className="font-display text-base font-extrabold flex items-center justify-between gap-2">
+            <span>Carta do Pacote</span>
+            {inspectIndex !== null && (
+              <span className="rounded-full bg-secondary px-2.5 py-0.5 font-mono text-xs font-bold text-muted-foreground">
+                {inspectIndex + 1} / {orderedCards.length}
+              </span>
+            )}
+          </DialogTitle>
+        </DialogHeader>
+
+        {inspectedCard && (
+          <div className="mx-auto w-full max-w-[19rem] py-1">
+            <CollectibleCardView
+              card={inspectedCard}
+              isNew={newlyDiscovered.includes(inspectedCard.id)}
+            />
+          </div>
+        )}
+
+        {orderedCards.length > 1 && inspectIndex !== null && (
+          <div className="flex items-center justify-between gap-2 pt-1">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="rounded-xl font-bold"
+              onClick={() =>
+                setInspectIndex((inspectIndex - 1 + orderedCards.length) % orderedCards.length)
+              }
+            >
+              <ChevronLeft className="h-4 w-4 mr-1" /> Anterior
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="rounded-xl font-bold"
+              onClick={() => setInspectIndex((inspectIndex + 1) % orderedCards.length)}
+            >
+              Próxima <ChevronRight className="h-4 w-4 ml-1" />
+            </Button>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+    </>
   );
 }

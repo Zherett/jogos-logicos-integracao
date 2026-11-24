@@ -48,6 +48,7 @@ import { resolveCardDungeonBonus } from "@/lib/dungeon-engine";
 import type { PlatformAdminConfig } from "@/lib/game-codes";
 import { usePlayerAuth } from "@/lib/player-auth";
 import { CollectibleCardView } from "./CollectibleCardView";
+import { CardPagination, paginateItems } from "./CardPagination";
 import { PackIconSvg, PackOpeningModal, type PackOpenOutcome } from "./PackOpeningModal";
 
 interface AdminCardsTabProps {
@@ -77,6 +78,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
   const [cardDungeonSkill, setCardDungeonSkill] = useState<DungeonCardSkillId | "">("");
   const [cardError, setCardError] = useState<string | null>(null);
   const [rarityFilter, setRarityFilter] = useState<CardRarity | "todas">("todas");
+  const [cardsPage, setCardsPage] = useState(1);
   const [previewModalCard, setPreviewModalCard] = useState<CardDefinition | null>(null);
 
   // Formulário de Pacote (Criar Especial / Editar)
@@ -659,7 +661,10 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
                   <button
                     key={r}
                     type="button"
-                    onClick={() => setRarityFilter(r)}
+                    onClick={() => {
+                      setRarityFilter(r);
+                      setCardsPage(1);
+                    }}
                     className={`rounded-full px-2.5 py-1 text-[11px] font-bold border transition-colors ${
                       rarityFilter === r
                         ? "bg-primary text-primary-foreground border-primary"
@@ -677,8 +682,12 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
                 Nenhuma carta cadastrada neste filtro ainda. Crie a primeira acima!
               </div>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                {filteredCards.map((card) => {
+              (() => {
+                const cardsPagination = paginateItems(filteredCards, cardsPage);
+                return (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                      {cardsPagination.pageItems.map((card) => {
                   const dungeonBonus = resolveCardDungeonBonus(card);
                   return (
                   <div key={card.id} className="space-y-1.5">
@@ -725,7 +734,18 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
                   </div>
                   );
                 })}
-              </div>
+                    </div>
+                    <CardPagination
+                      totalItems={filteredCards.length}
+                      currentPage={cardsPagination.currentPage}
+                      totalPages={cardsPagination.totalPages}
+                      startItem={cardsPagination.startItem}
+                      endItem={cardsPagination.endItem}
+                      onPageChange={setCardsPage}
+                    />
+                  </div>
+                );
+              })()
             )}
           </div>
         </div>

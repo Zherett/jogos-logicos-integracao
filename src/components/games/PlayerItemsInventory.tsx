@@ -26,6 +26,7 @@ import { creditCoinMetrics } from "@/lib/career-points";
 import { isAdminUnlockedSession, syncActiveProfileChangeToPlayFab } from "@/lib/playfab";
 import { isAdminOrTestAccount } from "@/lib/player-profile";
 import { CollectibleCardView } from "./CollectibleCardView";
+import { CardPagination, paginateItems } from "./CardPagination";
 import { ChestOpeningModal } from "./ChestOpeningModal";
 import { ChestVector } from "./ChestVector";
 import { PackOpeningModal, type PackOpenOutcome } from "./PackOpeningModal";
@@ -50,6 +51,7 @@ export function PlayerItemsInventory() {
 
   const [activePill, setActivePill] = useState<"mochila" | "pacotes" | "baus" | "album" | "visual">("mochila");
   const [backpackPage, setBackpackPage] = useState(1);
+  const [albumPage, setAlbumPage] = useState(1);
   const [rarityFilter, setRarityFilter] = useState<CardRarity | "todas">("todas");
   const [inspectCard, setInspectCard] = useState<{ card: CardDefinition; count: number } | null>(null);
   const [packToOpen, setPackToOpen] = useState<CardPackDefinition | null>(null);
@@ -646,7 +648,10 @@ export function PlayerItemsInventory() {
               <button
                 key={r}
                 type="button"
-                onClick={() => setRarityFilter(r)}
+                onClick={() => {
+                  setRarityFilter(r);
+                  setAlbumPage(1);
+                }}
                 className={`rounded-full px-2.5 py-1 text-[11px] font-bold border transition-colors ${
                   rarityFilter === r
                     ? "bg-primary text-primary-foreground border-primary"
@@ -664,22 +669,37 @@ export function PlayerItemsInventory() {
               Nenhuma carta cadastrada ainda. Crie cartas no Painel ADM → aba <b>Cartas &amp; Pacotes</b>.
             </div>
           ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-              {filteredCatalog.map((card) => {
-                const count = ownedCardsMap[card.id] ?? 0;
-                const locked = count <= 0;
-                return (
-                  <CollectibleCardView
-                    key={card.id}
-                    card={card}
-                    count={count > 0 ? count : undefined}
-                    locked={locked}
-                    compact
-                    onClick={locked ? undefined : () => setInspectCard({ card, count })}
+            (() => {
+              const albumPagination = paginateItems(filteredCatalog, albumPage);
+              return (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                    {albumPagination.pageItems.map((card) => {
+                      const count = ownedCardsMap[card.id] ?? 0;
+                      const locked = count <= 0;
+                      return (
+                        <CollectibleCardView
+                          key={card.id}
+                          card={card}
+                          count={count > 0 ? count : undefined}
+                          locked={locked}
+                          compact
+                          onClick={locked ? undefined : () => setInspectCard({ card, count })}
+                        />
+                      );
+                    })}
+                  </div>
+                  <CardPagination
+                    totalItems={filteredCatalog.length}
+                    currentPage={albumPagination.currentPage}
+                    totalPages={albumPagination.totalPages}
+                    startItem={albumPagination.startItem}
+                    endItem={albumPagination.endItem}
+                    onPageChange={setAlbumPage}
                   />
-                );
-              })}
-            </div>
+                </div>
+              );
+            })()
           )}
         </div>
       ) : (

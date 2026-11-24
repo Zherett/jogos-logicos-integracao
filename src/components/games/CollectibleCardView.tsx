@@ -77,7 +77,7 @@ export function CollectibleCardView({
       >
         <h4
           aria-hidden={locked || undefined}
-          className={`font-display font-extrabold tracking-tight line-clamp-1 ${
+          className={`font-display font-extrabold tracking-tight leading-tight line-clamp-2 ${
             compact ? "text-[11px] sm:text-xs" : "text-xs sm:text-sm"
           } ${locked ? "blur-[7px] opacity-35" : ""}`}
         >
@@ -151,7 +151,7 @@ export function CollectibleCardView({
       >
         <p
           aria-hidden={locked || undefined}
-          className={`text-justify leading-snug text-slate-700 dark:text-slate-200/95 ${
+          className={`text-left leading-snug text-slate-700 dark:text-slate-200/95 ${
             compact ? "text-[10px] line-clamp-3" : "text-[11px] sm:text-xs line-clamp-6"
           } ${locked ? "blur-[7px] opacity-35" : ""}`}
         >

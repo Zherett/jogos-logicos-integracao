@@ -57,6 +57,7 @@ import { usePlayerAuth } from "@/lib/player-auth";
 import { getLocalDateKey, syncLevelStageProgress } from "@/lib/player-profile";
 import { getAllRegisteredPlayers } from "@/lib/playfab";
 import { CollectibleCardView } from "./CollectibleCardView";
+import { CardPagination, paginateItems } from "./CardPagination";
 import { DungeonEncounterStage } from "./DungeonEncounterStage";
 
 interface DungeonGameProps {
@@ -70,6 +71,7 @@ export function DungeonGame({ onExit }: DungeonGameProps) {
   const profile = auth.profile;
 
   const [activeTab, setActiveTab] = useState<DungeonHubTab>("expedicao");
+  const [cardsPage, setCardsPage] = useState(1);
   const [inRunView, setInRunView] = useState(false);
   const [admPanelOpen, setAdmPanelOpen] = useState(false);
   const [simulatedLevel, setSimulatedLevel] = useState<number | null>(null);
@@ -898,50 +900,65 @@ export function DungeonGame({ onExit }: DungeonGameProps) {
                 <b>Ferramentas ADM → Conceder Cartas de Teste</b> para testar.
               </div>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
-                {ownedCardDefinitions.map((card) => {
-                  const isEquipped = activeEquippedIds.includes(card.id);
-                  const bonus = resolveCardDungeonBonus(card);
-                  return (
-                    <div
-                      key={card.id}
-                      onClick={() => handleToggleEquipCard(card.id)}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          handleToggleEquipCard(card.id);
-                        }
-                      }}
-                      className={`relative rounded-2xl p-1.5 border-2 transition-all cursor-pointer ${
-                        isEquipped
-                          ? "border-primary bg-primary/15 ring-2 ring-primary/30 scale-[1.02]"
-                          : "border-transparent hover:border-border bg-background/40"
-                      }`}
-                    >
-                      {isEquipped && (
-                        <span className="absolute -top-2 -right-2 z-30 flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-md">
-                          <Check className="h-3.5 w-3.5 stroke-[3]" />
-                        </span>
-                      )}
-                      <CollectibleCardView
-                        card={card}
-                        count={ownedCardsMap[card.id]}
-                        compact
-                      />
-                      <div className="mt-1.5 text-center space-y-0.5">
-                        <div className="text-[10px] font-black text-primary truncate">
-                          {bonus.skillEmoji} {bonus.skillName} (+{bonus.totalPowerPercent}%)
-                        </div>
-                        <div className="text-[9px] text-muted-foreground line-clamp-2 leading-tight">
-                          {bonus.effectSummary}
-                        </div>
-                      </div>
+              (() => {
+                const cardsPagination = paginateItems(ownedCardDefinitions, cardsPage);
+                return (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3">
+                      {cardsPagination.pageItems.map((card) => {
+                        const isEquipped = activeEquippedIds.includes(card.id);
+                        const bonus = resolveCardDungeonBonus(card);
+                        return (
+                          <div
+                            key={card.id}
+                            onClick={() => handleToggleEquipCard(card.id)}
+                            role="button"
+                            tabIndex={0}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                handleToggleEquipCard(card.id);
+                              }
+                            }}
+                            className={`relative rounded-2xl p-1.5 border-2 transition-all cursor-pointer ${
+                              isEquipped
+                                ? "border-primary bg-primary/15 ring-2 ring-primary/30 scale-[1.02]"
+                                : "border-transparent hover:border-border bg-background/40"
+                            }`}
+                          >
+                            {isEquipped && (
+                              <span className="absolute -top-2 -right-2 z-30 flex h-6 w-6 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-md">
+                                <Check className="h-3.5 w-3.5 stroke-[3]" />
+                              </span>
+                            )}
+                            <CollectibleCardView
+                              card={card}
+                              count={ownedCardsMap[card.id]}
+                              compact
+                            />
+                            <div className="mt-1.5 text-center space-y-0.5">
+                              <div className="text-[10px] font-black text-primary truncate">
+                                {bonus.skillEmoji} {bonus.skillName} (+{bonus.totalPowerPercent}%)
+                              </div>
+                              <div className="text-[9px] text-muted-foreground line-clamp-2 leading-tight">
+                                {bonus.effectSummary}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
-                  );
-                })}
-              </div>
+                    <CardPagination
+                      totalItems={ownedCardDefinitions.length}
+                      currentPage={cardsPagination.currentPage}
+                      totalPages={cardsPagination.totalPages}
+                      startItem={cardsPagination.startItem}
+                      endItem={cardsPagination.endItem}
+                      onPageChange={setCardsPage}
+                    />
+                  </div>
+                );
+              })()
             )}
           </div>
 
