@@ -534,17 +534,14 @@ export function sanitizeInflatedCareerPoints(
         mId === "explorer_all_games" ||
         (mId === "m_rpg_ametista" && profile.nickNormalized !== "zheret") ||
         (mId === "m_rpg_carmesim" && profile.nickNormalized !== "zheret") ||
-        (mId === "streak_3_days" &&
-          Math.max(profile.streakDays ?? 0, profile.dailyCheckInCount ?? 0) < 3) ||
-        (mId === "streak_5_days" &&
-          Math.max(profile.streakDays ?? 0, profile.dailyCheckInCount ?? 0) < 5) ||
-        (mId === "streak_7_days" &&
-          Math.max(profile.streakDays ?? 0, profile.dailyCheckInCount ?? 0) < 7) ||
+        (mId === "streak_3_days" && (profile.streakDays ?? 0) < 3) ||
+        (mId === "streak_5_days" && (profile.streakDays ?? 0) < 5) ||
+        (mId === "streak_7_days" && (profile.streakDays ?? 0) < 7) ||
         (mId.startsWith("streak_") &&
           mId !== "streak_3_days" &&
           mId !== "streak_5_days" &&
           mId !== "streak_7_days" &&
-          Math.max(profile.streakDays ?? 0, profile.dailyCheckInCount ?? 0) < 7)
+          (profile.streakDays ?? 0) < 7)
       ) {
         return false;
       }

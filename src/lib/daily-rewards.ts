@@ -382,8 +382,8 @@ export function claimDailyRewardForProfile(
     awardCoins(profile, totalCoins, `Recompensa Diária (Dia ${claimedDay})`, "recompensa_diaria");
   }
 
-  // Concede/empilha a medalha de marco correspondente nos Dias 3, 5 e 7 (idempotente no mesmo dia)
-  if (tier.milestoneMedalId) {
+  // Concede/empilha a medalha de marco correspondente nos Dias 3, 5 e 7 SOMENTE se a ofensiva consecutiva atingir 3, 5 ou 7 dias seguidos (idempotente no mesmo dia)
+  if (tier.milestoneMedalId && streak >= tier.day) {
     const unlocked = Array.isArray(profile.unlockedMedals) ? [...profile.unlockedMedals] : [];
     const nowIso = (options?.now ?? new Date()).toISOString();
     const existingIdx = unlocked.findIndex((m) => m?.medalId === tier.milestoneMedalId);

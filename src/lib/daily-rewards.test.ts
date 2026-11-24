@@ -228,7 +228,7 @@ describe("Sistema de Recompensa Diária Progressiva (Check-in Acumulativo + Ofen
     assert.equal(canAccessShopAndCustomization(student, false, rolloutCfg), false);
   });
 
-  it("concede/empilha a medalha de marco ao resgatar o Dia 3 e Dia 7 da trilha", () => {
+  it("concede/empilha a medalha de marco ao resgatar o Dia 3 com ofensiva seguida, mas NÃO concede se faltou dia antes", () => {
     const prof: any = {
       id: "p_milestone",
       nick: "Constante",
@@ -248,6 +248,28 @@ describe("Sistema de Recompensa Diária Progressiva (Check-in Acumulativo + Ofen
     assert.ok(m3);
     assert.equal(m3.count, 1);
     assert.equal(prof.coinRewardedMedalIds?.streak_3_days, 1);
+
+    // Se faltou 1 dia antes de completar o Dia 5 ou Dia 7, recebe os prêmios e o Baú, mas NÃO recebe a medalha
+    const profBroken7: any = {
+      id: "p_broken_7",
+      nick: "FaltouUmDia",
+      xp: 0,
+      seasonXp: 0,
+      careerPoints: 0,
+      pointsBalance: 0,
+      coins: 0,
+      streakDays: 3,
+      dailyCheckInCount: 6, // próximo check-in é Dia 7
+      activeDates: ["2026-11-16", "2026-11-17", "2026-11-19", "2026-11-20", "2026-11-21", "2026-11-22"], // faltou dia 18 e dia 23
+      unlockedMedals: [],
+    };
+    const res7 = claimDailyRewardForProfile(profBroken7, {}, { todayKey: "2026-11-24", rng: () => 0.5 });
+    assert.equal(res7.ok, true);
+    assert.equal(res7.claimedDay, 7);
+    assert.ok(res7.chestDefinition, "Baú do Dia 7 continua sendo entregue na trilha acumulativa");
+    assert.equal(profBroken7.streakDays, 1);
+    assert.equal(profBroken7.unlockedMedals.some((m: any) => m.medalId === "streak_7_days"), false);
+    assert.equal(res7.medalCoinsAwarded ?? 0, 0);
   });
 
   it("aplica retrocoleta idempotente do Dia 1 apenas para alunos ativos nos últimos 3 dias e libera Dia 2 hoje", () => {

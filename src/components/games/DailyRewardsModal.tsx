@@ -45,6 +45,7 @@ import {
   resolveDailyRewardsSchedule,
 } from "@/lib/daily-rewards.ts";
 import { DEFAULT_DAILY_MISSION_COINS, generateDailyMissions } from "@/lib/daily-missions.ts";
+import { getCurrentActiveStreakDays } from "@/lib/medals-catalog.ts";
 import { DEFAULT_WEEKLY_MISSION_COINS, generateWeeklyMissions } from "@/lib/weekly-missions.ts";
 import { getWeekInfo } from "@/lib/weekly-tournament.ts";
 import { Button } from "@/components/ui/button";
@@ -103,9 +104,13 @@ export function DailyRewardsModal({
   }, [open]);
 
   const routineConfig = adminConfig?.weeklyRoutineConfig;
-  const streak = Math.max(1, profile?.streakDays ?? 1);
   const authoritativeNow = useMemo(() => getAuthoritativeNow(), [open, clockTick]);
   const todayKey = getAuthoritativeDateKey(authoritativeNow);
+  const hasPriorActiveDates = Array.isArray(profile?.activeDates) && profile.activeDates.length > 0;
+  const computedStreak = profile ? getCurrentActiveStreakDays(profile, todayKey) : 1;
+  const streak = hasPriorActiveDates
+    ? Math.max(1, computedStreak)
+    : Math.max(1, computedStreak, profile?.streakDays ?? 1);
   const claimState = getDailyRewardClaimState(profile, todayKey);
   const { isTodayClaimed, currentDay, completedCycles } = claimState;
 
@@ -525,11 +530,19 @@ export function DailyRewardsModal({
                               </span>
 
                               {tier.milestoneMedalId && (
-                                <span className="inline-flex items-center gap-1 rounded-lg bg-purple-500/15 border border-purple-500/30 px-2 py-0.5 text-[10px] font-bold text-purple-600 dark:text-purple-400">
+                                <span
+                                  title={`Exige ${tier.day} dias seguidos de coleta sem faltar`}
+                                  className={`inline-flex items-center gap-1 rounded-lg border px-2 py-0.5 text-[10px] font-bold ${
+                                    isToday && streak < tier.day
+                                      ? "bg-muted/60 border-border text-muted-foreground"
+                                      : "bg-purple-500/15 border-purple-500/30 text-purple-600 dark:text-purple-400"
+                                  }`}
+                                >
                                   <Medal className="h-3 w-3" />
-                                  {tier.day === 3 && "🥉 Hábito (Bronze)"}
-                                  {tier.day === 5 && "🥈 Disciplina (Prata)"}
-                                  {tier.day === 7 && "🥇 Constância (Ouro)"}
+                                  {tier.day === 3 && "🥉 Hábito (3d seguidos)"}
+                                  {tier.day === 5 && "🥈 Disciplina (5d seguidos)"}
+                                  {tier.day === 7 && "🥇 Constância (7d seguidos)"}
+                                  {isToday && streak < tier.day && ` • ofensiva ${streak}/${tier.day}`}
                                 </span>
                               )}
 

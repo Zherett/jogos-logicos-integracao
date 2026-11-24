@@ -249,13 +249,13 @@ describe("Sistema de Pontuação e Moeda de Carreira (career-points)", () => {
     assert.ok(student.unlockedMedals?.some((m) => m.medalId === "streak_3_days"));
   });
 
-  it("preserva medalha de marco acumulativo (dailyCheckInCount) e não desconta moedas não-medalha na retroatribuição", () => {
+  it("revoga medalha de ofensiva quando não há dias seguidos suficientes e não desconta moedas não-medalha na retroatribuição", () => {
     const student = createMockProfile({
-      nick: "aluno_check_in_acumulativo",
+      nick: "aluno_check_in_sem_sequencia",
       level: 3,
       matchesPlayed: 4,
       streakDays: 1, // faltou 1 dia na sequência
-      dailyCheckInCount: 3, // mas completou o Dia 3 acumulativo!
+      dailyCheckInCount: 3, // completou o Dia 3 acumulativo, mas sem 3 dias seguidos
       coins: 20, // já tinha 20 moedas de código promocional / Dia 1
       lifetimeCoins: 20,
       careerPoints: 2000,
@@ -265,14 +265,14 @@ describe("Sistema de Pontuação e Moeda de Carreira (career-points)", () => {
       ],
     });
 
-    // Sanitizador deve preservar streak_3_days graças a dailyCheckInCount === 3
+    // Sanitizador deve revogar streak_3_days se o aluno não atingiu 3 dias consecutivos
     sanitizeInflatedCareerPoints(student);
-    assert.ok(student.unlockedMedals?.some((m) => m.medalId === "streak_3_days"));
+    assert.equal(student.unlockedMedals?.some((m) => m.medalId === "streak_3_days"), false);
 
     // Retroatribuição por medalhas não deve descontar as 20 moedas que vieram de outra fonte
     const applied = applyRetroactiveMedalCoins(student);
-    assert.equal(applied.coinsToAward, 5);
-    assert.equal(student.coins, 25);
-    assert.equal(student.lifetimeCoins, 25);
+    assert.equal(applied.coinsToAward, 0);
+    assert.equal(student.coins, 20);
+    assert.equal(student.lifetimeCoins, 20);
   });
 });

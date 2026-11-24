@@ -573,7 +573,30 @@ describe("Regressão da Auditoria Profunda Pré-Lançamento (Waves 1-4)", () => 
     assert.equal(res.ok, true);
     assert.equal(staleStreakProf.streakDays, 1, "Ofensiva antiga quebrada deve voltar para 1");
     assert.equal(res.streakBonusPoints, 0);
-    assert.equal(res.medalCoinsAwarded, 5, "Dia 3 concede medalha bronze (+5 moedas em medalCoinsAwarded)");
+    assert.equal(
+      res.medalCoinsAwarded ?? 0,
+      0,
+      "Ofensiva quebrada no Dia 3 NÃO deve conceder medalha de 3 dias seguidos",
+    );
+    assert.equal(
+      staleStreakProf.unlockedMedals?.some((m) => m.medalId === "streak_3_days") ?? false,
+      false,
+    );
+
+    // 3. Com 3 dias realmente consecutivos no Dia 3, a medalha e suas moedas são concedidas
+    const consecutiveProf = makeStudent({
+      streakDays: 2,
+      dailyCheckInCount: 2,
+      activeDates: ["2026-11-22", "2026-11-23"],
+      lastDailyRewardClaimDate: "2026-11-23",
+    });
+    const resConsecutive = claimDailyRewardForProfile(consecutiveProf, DEFAULT_ADMIN_CONFIG, {
+      todayKey: "2026-11-24",
+      now: new Date(Date.UTC(2026, 10, 24, 14, 0, 0)),
+    });
+    assert.equal(resConsecutive.ok, true);
+    assert.equal(consecutiveProf.streakDays, 3);
+    assert.equal(resConsecutive.medalCoinsAwarded, 5, "Dia 3 consecutivo concede medalha bronze (+5 moedas)");
 
     saveAdminConfig(DEFAULT_ADMIN_CONFIG);
   });
