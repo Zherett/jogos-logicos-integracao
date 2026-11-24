@@ -85,6 +85,7 @@ import {
   getDistinctGamesPlayed,
   getEffectivePlayerProgression,
   getGameMedalsProgress,
+  getMedalProgressStyle,
 } from "@/lib/medals-catalog";
 import {
   getInboxCountsForPlayer,
@@ -774,15 +775,49 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
                   ? resolveEquippedAura(profile, auth.adminConfig.aurasCatalog)
                   : null;
                 const cardAuraPres = getAuraPresentation(equippedAura);
+                const isMaxLevel = progress.level >= MAX_LEVEL;
+                const canonicalTournamentPoints = (() => {
+                  const rec =
+                    getTournamentStoreRecord(profile.id, profile.nick) ||
+                    (profile.playfabId ? getTournamentStoreRecord(profile.playfabId, profile.nick) : null) ||
+                    (profile.nickNormalized ? getTournamentStoreRecord(profile.nickNormalized, profile.nickNormalized) : null);
+                  return resolveCanonicalTournamentPoints({
+                    level: profile.level,
+                    isAdmin: profile.isAdmin,
+                    tournamentPoints: profile.tournamentPoints,
+                    bestTournamentPoints: profile.bestTournamentPoints,
+                    record: rec,
+                  });
+                })();
                 return (
                 <div className="space-y-4">
               {/* CARTÃO UNIFICADO DO JOGADOR */}
               <div
-                className={`w-full rounded-3xl border-2 bg-card p-4 sm:p-5 shadow-sm space-y-3.5 transition-all ${cardAuraPres.className}`}
+                className={`relative mt-3 w-full rounded-3xl border-2 bg-card px-4 sm:px-5 pt-6 pb-4 sm:pb-5 shadow-sm space-y-3.5 transition-all ${cardAuraPres.className}`}
                 style={cardAuraPres.style}
               >
-                    {/* Topo: Avatar Padrão (sem customização até Loja abrir) ou Selo do Nível à esquerda */}
-                    <div className="flex flex-row items-center gap-3.5 sm:gap-4">
+                    {/* Pílula Superior Centralizada sobre a Borda: NVL X (com Aura + Foil no Nível 10) */}
+                    <div
+                      className={`absolute -top-4 left-1/2 -translate-x-1/2 z-20 inline-flex items-center justify-center rounded-full border-2 border-primary/60 bg-card px-4 sm:px-5 py-1 shadow-md ${cardAuraPres.className}`}
+                      style={cardAuraPres.style}
+                      title={`Nível ${progress.level} — ${progress.title}`}
+                    >
+                      {isMaxLevel && (
+                        <div
+                          aria-hidden="true"
+                          className="pointer-events-none absolute inset-0 overflow-hidden rounded-full"
+                        >
+                          <div className="card-foil-gradient absolute inset-0 opacity-85" />
+                          <div className="card-foil-shimmer absolute inset-y-0 w-1/2 opacity-80" />
+                        </div>
+                      )}
+                      <span className="relative z-10 font-display text-xs sm:text-sm font-black uppercase tracking-wider text-foreground">
+                        NVL {progress.level}
+                      </span>
+                    </div>
+
+                    {/* Topo: Avatar à esquerda, Dados Pessoais no centro e Rank da Ranqueada ampliado à direita */}
+                    <div className="flex flex-row items-center gap-3 sm:gap-4">
                       {showDefaultAvatar && equippedAv ? (
                         <div className="flex flex-col items-center gap-1.5 shrink-0">
                           <PlayerAvatarBadge
@@ -803,46 +838,23 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
                           )}
                         </div>
                       ) : (
-                        <div className="relative grid h-18 w-18 sm:h-20 sm:w-20 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-primary via-primary/95 to-primary/80 text-primary-foreground shadow-md border-2 border-primary/50">
-                          <div className="flex flex-col items-center justify-center leading-none text-center">
-                            <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-wider text-primary-foreground/80">
-                              NÍVEL
-                            </span>
-                            <span className="font-display text-2xl sm:text-3xl font-black">
-                              {progress.level}
-                            </span>
-                          </div>
-                          <span className="absolute -bottom-2 rounded-full bg-card px-2 py-0.5 text-[8.5px] sm:text-[9px] font-black text-primary border shadow-xs truncate max-w-[4.6rem] sm:max-w-[4.8rem]">
-                            {progress.title.split(" ")[0]}
-                          </span>
+                        <div className="grid h-16 w-16 sm:h-20 sm:w-20 shrink-0 place-items-center rounded-2xl border-2 border-primary/40 bg-primary/10 text-primary shadow-sm">
+                          <User className="h-8 w-8 sm:h-10 sm:w-10" />
                         </div>
                       )}
 
-                      {/* Informações Pessoais à Direita */}
+                      {/* Informações Pessoais ao Centro */}
                       <div className="min-w-0 flex-1 space-y-0.5">
-                        <div className="flex items-center justify-between gap-1.5">
-                          <div className="flex items-center gap-1.5 truncate">
-                            <h2 className="truncate font-display text-xl sm:text-2xl font-black text-foreground">
-                              {profile.nick}
-                            </h2>
-                            <PresenceDot playerId={profile.id} size="sm" />
-                            {profile.turma && (
-                              <span className="inline-flex items-center gap-0.5 rounded-full bg-primary/15 border border-primary/30 px-2 py-0.5 text-[10px] sm:text-xs font-bold text-primary shrink-0">
-                                <Lock className="h-2.5 w-2.5" /> Turma {profile.turma}
-                              </span>
-                            )}
-                          </div>
-
-                          {/* Botão Sutil de Medalhas no Topo */}
-                          <button
-                            type="button"
-                            onClick={() => setProfileTab("medalhas")}
-                            title="Ir para a aba de Medalhas"
-                            className="shrink-0 flex items-center gap-1 rounded-xl border border-accent/40 bg-accent/10 hover:bg-accent/20 px-2 py-1 text-[10px] sm:text-[11px] font-extrabold text-accent transition-all active:scale-95 cursor-pointer"
-                          >
-                            <Award className="h-3 w-3" />
-                            <span className="hidden sm:inline">Medalhas</span>
-                          </button>
+                        <div className="flex items-center gap-1.5 truncate">
+                          <h2 className="truncate font-display text-lg sm:text-2xl font-black text-foreground">
+                            {profile.nick}
+                          </h2>
+                          <PresenceDot playerId={profile.id} size="sm" />
+                          {profile.turma && (
+                            <span className="inline-flex items-center gap-0.5 rounded-full bg-primary/15 border border-primary/30 px-2 py-0.5 text-[10px] sm:text-xs font-bold text-primary shrink-0">
+                              <Lock className="h-2.5 w-2.5" /> Turma {profile.turma}
+                            </span>
+                          )}
                         </div>
 
                         <p className="truncate text-[11px] sm:text-xs font-semibold uppercase text-muted-foreground">
@@ -862,29 +874,21 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
                           )}
                         </p>
                       </div>
+
+                      {/* Ícone da Ranqueada Ampliado à Direita (com Nome e Pontuação embaixo) */}
+                      <div className="shrink-0 flex flex-col items-center justify-center pl-1">
+                        <TournamentRankBadge
+                          points={canonicalTournamentPoints}
+                          size="lg"
+                          layout="vertical"
+                          showLabel
+                          showPoints
+                        />
+                      </div>
                     </div>
 
-                    {/* Badges de Informações Compactas (Rank, Medalhas, Colocação) subindo e bem encaixadas */}
+                    {/* Badges de Informações Compactas */}
                     <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 pt-0.5">
-                      <TournamentRankBadge
-                        points={(() => {
-                          const rec =
-                            getTournamentStoreRecord(profile.id, profile.nick) ||
-                            (profile.playfabId ? getTournamentStoreRecord(profile.playfabId, profile.nick) : null) ||
-                            (profile.nickNormalized ? getTournamentStoreRecord(profile.nickNormalized, profile.nickNormalized) : null);
-                          return resolveCanonicalTournamentPoints({
-                            level: profile.level,
-                            isAdmin: profile.isAdmin,
-                            tournamentPoints: profile.tournamentPoints,
-                            bestTournamentPoints: profile.bestTournamentPoints,
-                            record: rec,
-                          });
-                        })()}
-                        size="sm"
-                        showLabel
-                        showPoints
-                      />
-
                       <span
                         title="Total de medalhas e troféus desbloqueados em partidas, níveis e desafios."
                         className="inline-flex items-center rounded-full bg-amber-500/15 border border-amber-500/30 px-2.5 py-0.5 text-[10.5px] sm:text-[11px] font-extrabold text-amber-500 dark:text-amber-400"
@@ -898,15 +902,6 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
                       >
                         🪙 {profile.careerPoints ?? profile.pointsBalance ?? 0} Pontos
                       </span>
-
-                      {showDefaultAvatar && (
-                        <span
-                          title="Nível atual e patente na temporada."
-                          className="inline-flex items-center gap-1 rounded-full bg-primary/15 border border-primary/30 px-2.5 py-0.5 text-[10.5px] sm:text-[11px] font-extrabold text-primary"
-                        >
-                          ⭐ Nível {progress.level} • {progress.title.split(" ")[0]}
-                        </span>
-                      )}
 
                       {showCoinsWallet &&
                         (showShopAndCosmetics ? (
@@ -1348,7 +1343,9 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
                           <div className="flex items-center gap-1.5 shrink-0">
                             <span
                               title={`${gameMedalProg.earned} de ${gameMedalProg.total} medalhas conquistadas neste jogo`}
-                              className="inline-flex items-center gap-1 rounded-xl bg-amber-500/15 border border-amber-500/40 px-2 py-1 text-xs font-black text-amber-600 dark:text-amber-400"
+                              className={`inline-flex items-center gap-1 rounded-xl border px-2 py-1 text-xs font-black transition-colors ${
+                                getMedalProgressStyle(gameMedalProg.earned, gameMedalProg.total).pillClass
+                              }`}
                             >
                               <Award className="h-3 w-3" />
                               {gameMedalProg.earned}/{gameMedalProg.total}

@@ -1816,6 +1816,51 @@ export function getX1MedalsProgress(
   };
 }
 
+export type MedalProgressColorTier = "start" | "half" | "complete";
+
+export interface MedalProgressStyle {
+  tier: MedalProgressColorTier;
+  pillClass: string;
+  cardClass: string;
+  textClass: string;
+}
+
+/**
+ * Define a cor dinâmica do contador de medalhas de um jogo conforme o progresso:
+ * - Laranja ("start"): 0 até antes da metade (`earned < Math.ceil(total / 2)`)
+ * - Amarelo claro ("half"): metade (arredondada para cima em ímpares) até antes de 100%
+ * - Verde ("complete"): 100% concluído (`total > 0 && earned >= total`)
+ */
+export function getMedalProgressStyle(earned: number, total: number): MedalProgressStyle {
+  const safeTotal = Math.max(0, Math.floor(Number(total) || 0));
+  const safeEarned = Math.max(0, Math.floor(Number(earned) || 0));
+
+  if (safeTotal > 0 && safeEarned >= safeTotal) {
+    return {
+      tier: "complete",
+      pillClass: "bg-emerald-500/15 border-emerald-500/50 text-emerald-600 dark:text-emerald-400",
+      cardClass: "border-emerald-500/50 bg-emerald-500/10",
+      textClass: "text-emerald-600 dark:text-emerald-400",
+    };
+  }
+
+  if (safeTotal > 0 && safeEarned > 0 && safeEarned >= Math.ceil(safeTotal / 2)) {
+    return {
+      tier: "half",
+      pillClass: "bg-yellow-400/15 border-yellow-400/50 text-yellow-600 dark:text-yellow-300",
+      cardClass: "border-yellow-400/50 bg-yellow-400/10",
+      textClass: "text-yellow-600 dark:text-yellow-300",
+    };
+  }
+
+  return {
+    tier: "start",
+    pillClass: "bg-orange-500/15 border-orange-500/45 text-orange-600 dark:text-orange-400",
+    cardClass: "border-orange-500/45 bg-orange-500/10",
+    textClass: "text-orange-600 dark:text-orange-400",
+  };
+}
+
 /** Selects the up to `limit` (default 8) highest-rarity / most valuable medals to feature in profile highlights */
 export function getTopShowcaseMedals(
   unlockedMedals: PlayerUnlockedMedal[],

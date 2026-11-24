@@ -11,6 +11,7 @@ interface Props {
   rankId?: TournamentRankId | string | null;
   points?: number;
   size?: "xs" | "sm" | "md" | "lg" | "xl";
+  layout?: "horizontal" | "vertical";
   showLabel?: boolean;
   showPoints?: boolean;
   className?: string;
@@ -20,6 +21,7 @@ export function TournamentRankBadge({
   rankId,
   points,
   size = "md",
+  layout = "horizontal",
   showLabel = false,
   showPoints = false,
   className = "",
@@ -100,8 +102,14 @@ export function TournamentRankBadge({
     return `${rank.name} • Requer ${rank.minPoints}+ pontos na Ranqueada`;
   }, [rank, points]);
 
+  const isVertical = layout === "vertical";
+
   return (
-    <div className={`inline-flex items-center gap-2 ${className}`}>
+    <div
+      className={`inline-flex items-center ${
+        isVertical ? "flex-col justify-center gap-1 text-center" : "gap-2"
+      } ${className}`}
+    >
       <div
         className={`relative flex items-center justify-center shrink-0 select-none transition-transform hover:scale-105 ${sizeClasses.box} ${shapeClasses} ${gradientBg} ${rank.borderColor}`}
         style={{ boxShadow: `0 0 12px ${rank.glowHex}40` }}
@@ -132,7 +140,7 @@ export function TournamentRankBadge({
       </div>
 
       {(showLabel || showPoints) && (
-        <div className="min-w-0 text-left leading-tight">
+        <div className={`min-w-0 leading-tight ${isVertical ? "text-center" : "text-left"}`}>
           {showLabel && (
             <div className={`font-display text-xs font-black truncate ${rank.textColor}`}>
               {rank.name}

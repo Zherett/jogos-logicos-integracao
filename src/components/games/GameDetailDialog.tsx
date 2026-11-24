@@ -26,7 +26,11 @@ import type { GameRegistration } from "@/lib/game-registry";
 import type { GameId } from "@/lib/game-storage";
 import type { StageGameRecord, RecordHolder } from "@/lib/game-records";
 import { getGameInstructions } from "@/lib/game-instructions";
-import { getGameMedalsProgress, type PlayerUnlockedMedal } from "@/lib/medals-catalog";
+import {
+  getGameMedalsProgress,
+  getMedalProgressStyle,
+  type PlayerUnlockedMedal,
+} from "@/lib/medals-catalog";
 import { loadAdminConfig } from "@/lib/game-codes";
 import { loadSpecialEvents, loadRecurringEvents } from "@/lib/custom-events";
 
@@ -133,25 +137,34 @@ export function GameDetailDialog({
               </div>
             </div>
 
-            {/* Indicador não clicável: Medalhas do Jogo */}
-            <div className="shrink-0 rounded-2xl border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-right select-none">
-              <div className="flex items-center justify-end gap-1 text-[10px] font-black uppercase tracking-wider text-amber-600 dark:text-amber-400">
-                <Award className="h-3.5 w-3.5" /> Medalhas do Jogo
-              </div>
-              <div className="mt-0.5 flex items-baseline justify-end gap-1.5">
-                <span className="font-display text-lg font-black text-foreground">
-                  {earnedGameMedals}
-                </span>
-                <span className="text-xs font-bold text-muted-foreground">
-                  / {totalGameMedals}
-                </span>
-              </div>
-              <div className="text-[10px] font-semibold text-muted-foreground">
-                {remainingGameMedals === 0
-                  ? "Todas conquistadas!"
-                  : `Faltam ${remainingGameMedals}`}
-              </div>
-            </div>
+            {/* Indicador não clicável: Medalhas do Jogo (Laranja -> Amarelo Claro -> Verde) */}
+            {(() => {
+              const medalStyle = getMedalProgressStyle(earnedGameMedals, totalGameMedals);
+              return (
+                <div
+                  className={`shrink-0 rounded-2xl border px-3 py-2 text-right select-none transition-colors ${medalStyle.cardClass}`}
+                >
+                  <div
+                    className={`flex items-center justify-end gap-1 text-[10px] font-black uppercase tracking-wider ${medalStyle.textClass}`}
+                  >
+                    <Award className="h-3.5 w-3.5" /> Medalhas do Jogo
+                  </div>
+                  <div className={`mt-0.5 flex items-baseline justify-end gap-1 ${medalStyle.textClass}`}>
+                    <span className="font-display text-lg font-black">
+                      {earnedGameMedals}
+                    </span>
+                    <span className="text-xs font-extrabold opacity-80">
+                      / {totalGameMedals}
+                    </span>
+                  </div>
+                  <div className={`text-[10px] font-semibold ${medalStyle.tier === "complete" ? medalStyle.textClass : "text-muted-foreground"}`}>
+                    {remainingGameMedals === 0
+                      ? "Todas conquistadas!"
+                      : `Faltam ${remainingGameMedals}`}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         </DialogHeader>
 

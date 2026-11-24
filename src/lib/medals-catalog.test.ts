@@ -16,6 +16,7 @@ import {
   getGameMedalsProgress,
   getX1MedalsProgress,
   getPlayerStreakDays,
+  getMedalProgressStyle,
   getTopShowcaseMedals,
   isFlawlessMatch,
   RARITY_INFO,
@@ -242,6 +243,22 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
     assert.equal(top3[0].id, "m_diamante");
     assert.equal(top3[1].id, "m_platina");
     assert.equal(top3[2].id, "m_platina_2");
+  });
+
+  it("calcula corretamente as cores dinâmicas do contador de medalhas (laranja, amarelo claro e verde)", () => {
+    // 0 medalhas ou abaixo da metade -> laranja
+    assert.equal(getMedalProgressStyle(0, 7).tier, "start");
+    assert.equal(getMedalProgressStyle(3, 7).tier, "start");
+    assert.equal(getMedalProgressStyle(0, 0).tier, "start");
+
+    // Metade (arredondada para cima em ímpares) até antes de 100% -> amarelo claro
+    assert.equal(getMedalProgressStyle(4, 7).tier, "half");
+    assert.equal(getMedalProgressStyle(6, 7).tier, "half");
+    assert.equal(getMedalProgressStyle(4, 8).tier, "half");
+
+    // 100% concluído -> verde
+    assert.equal(getMedalProgressStyle(7, 7).tier, "complete");
+    assert.equal(getMedalProgressStyle(11, 11).tier, "complete");
   });
 
   it("garante que cada jogo registrado gera automaticamente 11 medalhas dedicadas (além das exclusivas vinculadas)", () => {

@@ -72,7 +72,11 @@ import {
   getDistinctGamesPlayed,
   getEffectivePlayerProgression,
   getGameMedalsProgress,
+  getMedalProgressStyle,
 } from "@/lib/medals-catalog";
+import { resolveEquippedAura, resolveEquippedAvatar } from "@/lib/cosmetics-catalog";
+import { canAccessShopAndCustomization, canUseDefaultAvatar } from "@/lib/daily-rewards";
+import { getAuraPresentation, PlayerAvatarBadge } from "./PlayerAvatarBadge";
 import { loadSpecialEvents, loadRecurringEvents } from "@/lib/custom-events";
 import { ALL_GAME_IDS, GAME_NAMES } from "@/lib/game-storage";
 import { PlayerMedalsInventory } from "./PlayerMedalsInventory";
@@ -391,26 +395,61 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
             </button>
           </div>
 
-          {inspectTab === "perfil" && (
+          {inspectTab === "perfil" && (() => {
+            const viewerShowDefaultAvatar = canUseDefaultAvatar(auth.profile, auth.isAdmin, auth.adminConfig);
+            const viewerShowShopCosmetics = canAccessShopAndCustomization(auth.profile, auth.isAdmin, auth.adminConfig);
+            const inspectedAv = viewerShowDefaultAvatar
+              ? resolveEquippedAvatar(profile, auth.adminConfig.avatarsCatalog)
+              : null;
+            const inspectedAura = viewerShowShopCosmetics
+              ? resolveEquippedAura(profile, auth.adminConfig.aurasCatalog)
+              : null;
+            const cardAuraPres = getAuraPresentation(inspectedAura);
+            const isMaxLevel = progress.level >= MAX_LEVEL;
+            return (
             <div className="space-y-4">
-          {/* Cabeçalho do Perfil Inspecionado */}
-          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 rounded-3xl border bg-secondary/30 p-4">
-            <div className="flex items-center gap-3.5">
-              {/* Nível destacado no lugar do ícone */}
-              <div className="relative grid h-16 w-16 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-primary via-primary/95 to-primary/80 text-primary-foreground shadow-md border-2 border-primary/40">
-                <div className="flex flex-col items-center justify-center leading-none text-center">
-                  <span className="text-[9px] font-black uppercase text-primary-foreground/80">
-                    NÍVEL
-                  </span>
-                  <span className="font-display text-2xl font-black">
-                    {progress.level}
-                  </span>
+          {/* Cabeçalho do Perfil Inspecionado (mesmo padrão do próprio perfil) */}
+          <div
+            className={`relative mt-3 flex flex-row items-center justify-between gap-3 sm:gap-4 rounded-3xl border-2 bg-card px-4 sm:px-5 pt-6 pb-4 shadow-sm transition-all ${cardAuraPres.className}`}
+            style={cardAuraPres.style}
+          >
+            {/* Pílula Superior Centralizada sobre a Borda: NVL X (com Aura + Foil no Nível 10) */}
+            <div
+              className={`absolute -top-4 left-1/2 -translate-x-1/2 z-20 inline-flex items-center justify-center rounded-full border-2 border-primary/60 bg-card px-4 sm:px-5 py-1 shadow-md ${cardAuraPres.className}`}
+              style={cardAuraPres.style}
+              title={`Nível ${progress.level} — ${progress.title}`}
+            >
+              {isMaxLevel && (
+                <div
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-0 overflow-hidden rounded-full"
+                >
+                  <div className="card-foil-gradient absolute inset-0 opacity-85" />
+                  <div className="card-foil-shimmer absolute inset-y-0 w-1/2 opacity-80" />
                 </div>
-              </div>
+              )}
+              <span className="relative z-10 font-display text-xs sm:text-sm font-black uppercase tracking-wider text-foreground">
+                NVL {progress.level}
+              </span>
+            </div>
 
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <h3 className="truncate font-display text-xl font-black text-foreground">
+            <div className="flex items-center gap-3 sm:gap-3.5 min-w-0 flex-1">
+              {viewerShowDefaultAvatar && inspectedAv ? (
+                <PlayerAvatarBadge
+                  avatar={inspectedAv.avatar}
+                  color={inspectedAv.color}
+                  aura={inspectedAura}
+                  size="lg"
+                />
+              ) : (
+                <div className="grid h-16 w-16 sm:h-20 sm:w-20 shrink-0 place-items-center rounded-2xl border-2 border-primary/40 bg-primary/10 text-primary shadow-sm">
+                  <User className="h-8 w-8 sm:h-10 sm:w-10" />
+                </div>
+              )}
+
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="truncate font-display text-lg sm:text-xl font-black text-foreground">
                     {profile.nick}
                   </h3>
                   <PresenceDot
@@ -457,12 +496,6 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                 />
 
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
-                  {/* Rank Ranqueado do Torneio */}
-                  <TournamentRankBadge
-                    points={effectiveTournamentPoints}
-                    size="xs"
-                    showLabel
-                  />
                   <span className="inline-flex items-center rounded-full bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 text-[10px] font-extrabold text-amber-500 dark:text-amber-400">
                     🏅 {profile.unlockedMedals?.length ?? 0} Medalhas
                   </span>
@@ -497,7 +530,19 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-2 text-right">
+            {/* Ícone da Ranqueada Ampliado à Direita (com Nome e Pontuação embaixo) */}
+            <div className="shrink-0 flex flex-col items-center justify-center pl-1">
+              <TournamentRankBadge
+                points={effectiveTournamentPoints}
+                size="lg"
+                layout="vertical"
+                showLabel
+                showPoints
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 text-right">
               <div className="rounded-xl border bg-card px-3 py-1.5">
                 <span className="block text-[10px] font-bold text-muted-foreground">Escola</span>
                 <span className="truncate font-display text-xs font-black text-foreground">
@@ -510,7 +555,6 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                   {totalWins}
                 </span>
               </div>
-            </div>
           </div>
 
           {auth.isAdmin && (
@@ -1210,7 +1254,9 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                         <div className="flex items-center gap-1.5 shrink-0">
                           <span
                             title={`${gameMedalProg.earned} de ${gameMedalProg.total} medalhas conquistadas neste jogo`}
-                            className="inline-flex items-center gap-1 rounded-lg bg-amber-500/15 border border-amber-500/40 px-2 py-0.5 text-xs font-black text-amber-600 dark:text-amber-400"
+                            className={`inline-flex items-center gap-1 rounded-lg border px-2 py-0.5 text-xs font-black transition-colors ${
+                              getMedalProgressStyle(gameMedalProg.earned, gameMedalProg.total).pillClass
+                            }`}
                           >
                             <Award className="h-3 w-3" />
                             {gameMedalProg.earned}/{gameMedalProg.total}
@@ -1234,7 +1280,8 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
             );
           })()}
             </div>
-          )}
+            );
+          })()}
 
           {/* ABA 2: MEDALHAS DO JOGADOR INSPECIONADO */}
           {inspectTab === "medalhas" && (
