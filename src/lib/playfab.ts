@@ -19,6 +19,7 @@ import {
   type ResetHistoryEntry,
 } from "./game-codes.ts";
 import { computeSeasonDates, extendSeasonDate } from "./season-cycle.ts";
+import { ensureLevel5InitialLetterUnlock } from "./cosmetics-catalog.ts";
 import type { PlayerAvatarConfig } from "./avatar.ts";
 import {
   abbreviateStudentName,
@@ -124,12 +125,16 @@ import {
   RANKED_WIN_POINTS,
 } from "./career-points.ts";
 import {
+  applyRetroactiveDay1CheckIn,
+  canAccessDailyRoutine,
   claimDailyRewardForProfile,
+  evaluateRetroactiveDay1CheckIn,
   type ClaimDailyRewardResult,
 } from "./daily-rewards.ts";
 import {
   claimDailyMissionForProfile,
   mergeDailyMissionProgress,
+  pickLeastPlayedGameForPlayer,
   recordMatchIntoDailyMissions,
   type ClaimMissionResult,
   type DailyMissionProgressState,
@@ -315,6 +320,7 @@ export interface PlayerProfile {
   dailyMissionProgress?: DailyMissionProgressState;
   weeklyMissionProgress?: WeeklyMissionProgressState;
   retroactiveMedalCoinsGrantedAt?: string;
+  retroactiveDay1GrantedAt?: string;
   coinRewardedMedalIds?: Record<string, number>;
   streakDays?: number;
   lastActiveDate?: string;
@@ -329,7 +335,8 @@ export interface PlayerProfile {
   chestsOpenedTotal?: number;
   packsOpenedTotal?: number;
   unlockedAvatars?: string[];
-  equippedAvatar?: { id: string; color?: string };
+  equippedAvatar?: { id: string; secondaryId?: string; color?: string };
+  level5InitialAvatarGrantedId?: string;
   unlockedAuras?: string[];
   equippedAuraId?: string;
   cards?: Record<string, number>;
@@ -406,7 +413,7 @@ export interface LeaderboardEntry {
   xpValue?: number;
   wins: number;
   rankTrend?: RankTrendDirection;
-  equippedAvatar?: { id: string; color?: string };
+  equippedAvatar?: { id: string; secondaryId?: string; color?: string };
   equippedAuraId?: string;
   unlockedAvatars?: string[];
   unlockedAuras?: string[];
@@ -1524,9 +1531,11 @@ export async function pushAdminConfigToPlayFab(config: PlatformAdminConfig): Pro
     return saved;
   }
 
-  let ticket = await getAdminPlayFabTicket();
+  // Sempre prioriza a conta dona do config (semedvisitante = ADMIN_CONFIG_OWNER_PLAYFAB_ID),
+  // garantindo que UpdateUserData grave exatamente no PlayFabId que todos os alunos leem em readRemoteAdminConfigRaw.
+  let ticket = (await getViewerPlayFabTicket()) ?? (await getAdminPlayFabTicket());
   if (!ticket) {
-    lastAdminCloudSyncError = "Não foi possível autenticar a conta ADM no PlayFab (aguarde alguns segundos e tente novamente).";
+    lastAdminCloudSyncError = "Não foi possível autenticar a conta de configuração no PlayFab (aguarde alguns segundos e tente novamente).";
     return saved;
   }
   const raw = JSON.stringify(saved);
@@ -1564,10 +1573,11 @@ export async function pushAdminConfigToPlayFab(config: PlatformAdminConfig): Pro
     { Data: dataPayload, Permission: "Public" },
     ticket,
   );
-  // Se o ticket cacheado do ADM expirou, renova uma vez automaticamente
+  // Se o ticket cacheado expirou, renova uma vez automaticamente (viewer canônico primeiro)
   if (res.error) {
+    clearViewerTicket();
     clearCachedAdminPlayFabTicket();
-    ticket = await getAdminPlayFabTicket();
+    ticket = (await getViewerPlayFabTicket()) ?? (await getAdminPlayFabTicket());
     if (ticket) {
       res = await callPlayFabClient(
         "UpdateUserData",
@@ -1660,8 +1670,9 @@ export function ensurePlayerSeasonAligned(
         acc.profile.id === activeSession.playerId ||
         (activeSession.playfabId && acc.profile.playfabId === activeSession.playfabId)),
   );
-  const todayKey = getLocalDateKey();
-  const currentWeekKey = getCurrentWeekKey();
+  const authoritativeNow = getAuthoritativeNow();
+  const todayKey = getAuthoritativeDateKey(authoritativeNow);
+  const currentWeekKey = getCurrentWeekKey(authoritativeNow);
   const currentRankedSeason = cfg.rankedSeasonId ?? 1;
   const playerRankedSeason = acc.profile.rankedSeasonId ?? 1;
   const tourRec =
@@ -1701,8 +1712,13 @@ export function ensurePlayerSeasonAligned(
     acc.passwordHash = simpleHash(passwordFromBirthdate(acc.profile.birthdate));
   }
 
-  // Concede login diário APENAS se este perfil for o jogador realmente autenticado na sessão local ativa
-  if (isCurrentActivePlayer && !acc.profile.isAdmin && !isSpecialAdminAccount(acc.profile)) {
+  // Concede login diário automático legado APENAS se a Central Diária NÃO estiver ativa para este perfil
+  if (
+    isCurrentActivePlayer &&
+    !acc.profile.isAdmin &&
+    !isSpecialAdminAccount(acc.profile) &&
+    !canAccessDailyRoutine(acc.profile, false, cfg)
+  ) {
     checkAndApplyDailyLoginPoints(acc.profile);
   }
 
@@ -2050,7 +2066,10 @@ export function ensurePlayerSeasonAligned(
           return acc.profile.level >= 10;
 
         case "streak_days":
-          return getPlayerStreakDays(acc.profile) >= (cond.threshold ?? 3);
+          return (
+            Math.max(getPlayerStreakDays(acc.profile), acc.profile.dailyCheckInCount ?? 0) >=
+            (cond.threshold ?? 3)
+          );
 
         case "max_daily_xp":
           return acc.profile.xp >= (cond.threshold ?? 1000);
@@ -2199,12 +2218,23 @@ export function ensurePlayerSeasonAligned(
         if (!unlocked.some((u) => u.medalId === m.id)) {
           unlocked.push({ medalId: m.id, unlockedAt: nowIso });
           medalsChangedInFirstPass = true;
-          // Só concede XP e Pontos de Carreira se a medalha realmente NÃO existia antes do filtro
+          // Só concede XP, Pontos de Carreira e Moedas se a medalha realmente NÃO existia antes do filtro
           if (!preExistingMedalIds.has(m.id)) {
             const extraXp = MEDAL_XP_REWARDS[m.rarity] ?? 10;
             bonusXp += extraXp;
             const ptsReward = MEDAL_POINTS_REWARDS[m.rarity] ?? 20;
             awardCareerPoints(acc.profile, ptsReward, `Medalha: ${m.title}`);
+            const coinsReward =
+              cfg.coinRewardsConfig?.medalCoinsByRarity?.[m.rarity] ??
+              MEDAL_COINS_REWARDS[m.rarity] ??
+              5;
+            if (coinsReward > 0) {
+              awardCoins(acc.profile, coinsReward, `Medalha: ${m.title}`, "medalha");
+            }
+            acc.profile.coinRewardedMedalIds = {
+              ...(acc.profile.coinRewardedMedalIds ?? {}),
+              [m.id]: Math.max(1, (acc.profile.coinRewardedMedalIds?.[m.id] ?? 0) + 1),
+            };
           }
         }
       }
@@ -2274,6 +2304,17 @@ export function ensurePlayerSeasonAligned(
       for (const m of earnedPassively) {
         if (!currentUnlocked.some((u) => u.medalId === m.id)) {
           currentUnlocked.push({ medalId: m.id, unlockedAt: nowIso });
+          const coinsReward =
+            cfg.coinRewardsConfig?.medalCoinsByRarity?.[m.rarity] ??
+            MEDAL_COINS_REWARDS[m.rarity] ??
+            5;
+          if (coinsReward > 0) {
+            awardCoins(acc.profile, coinsReward, `Medalha: ${m.title}`, "medalha");
+          }
+          acc.profile.coinRewardedMedalIds = {
+            ...(acc.profile.coinRewardedMedalIds ?? {}),
+            [m.id]: Math.max(1, (acc.profile.coinRewardedMedalIds?.[m.id] ?? 0) + 1),
+          };
           updated = true;
         }
       }
@@ -2368,7 +2409,7 @@ interface PlayFabLoginPayload {
   PlayFabId: string;
   SessionTicket: string;
   InfoResultPayload?: {
-    UserData?: Record<string, { Value: string }>;
+    UserData?: Record<string, { Value: string; LastUpdated?: string }>;
     PlayerStatistics?: { StatisticName: string; Value: number }[];
     AccountInfo?: { Created?: string; TitleInfo?: { DisplayName?: string; Created?: string }; Username?: string };
   };
@@ -2501,6 +2542,7 @@ function buildAccountFromPlayFabPayload(
       ? parsedProfile.unlockedAvatars
       : undefined,
     equippedAvatar: parsedProfile.equippedAvatar,
+    level5InitialAvatarGrantedId: parsedProfile.level5InitialAvatarGrantedId,
     unlockedAuras: Array.isArray(parsedProfile.unlockedAuras)
       ? parsedProfile.unlockedAuras
       : undefined,
@@ -2534,6 +2576,7 @@ function buildAccountFromPlayFabPayload(
     dailyMissionProgress: parsedProfile.dailyMissionProgress,
     weeklyMissionProgress: parsedProfile.weeklyMissionProgress,
     retroactiveMedalCoinsGrantedAt: parsedProfile.retroactiveMedalCoinsGrantedAt,
+    retroactiveDay1GrantedAt: parsedProfile.retroactiveDay1GrantedAt,
     coinRewardedMedalIds:
       parsedProfile.coinRewardedMedalIds && typeof parsedProfile.coinRewardedMedalIds === "object"
         ? parsedProfile.coinRewardedMedalIds
@@ -2556,16 +2599,165 @@ function buildAccountFromPlayFabPayload(
       new Date().toISOString(),
   };
 
+  const resolvedUserDataUpdatedAt =
+    (parsedProfile as { updatedAt?: string }).updatedAt ||
+    userData.PlayerProfile?.LastUpdated ||
+    new Date(0).toISOString();
+
   return ensurePlayerSeasonAligned(
     {
       profile: mergedProfile,
       passwordHash: simpleHash(normalizedPassword),
       unlocked: parsedUnlocked,
       stats: parsedStats,
-      updatedAt: new Date().toISOString(),
+      updatedAt: resolvedUserDataUpdatedAt,
     },
     cfg,
   );
+}
+
+/**
+ * Reconcilia alterações administrativas publicadas no ROSTER_SHARED_GROUP_ID
+ * (moedas retroativas, retrocoleta do Dia 1, edições de perfil/turma e medalhas)
+ * antes de o aluno enviar seu UserData para a nuvem no login ou recuperação.
+ */
+async function reconcileAccountWithCloudRoster(
+  account: StoredAccount,
+  sessionTicket: string,
+): Promise<void> {
+  try {
+    const cloudKey = getStudentRosterCloudKey(account.profile);
+    const rosterRes = await callPlayFabClient<{
+      Data?: Record<string, { Value: string }>;
+    }>(
+      "GetSharedGroupData",
+      { SharedGroupId: ROSTER_SHARED_GROUP_ID, Keys: [cloudKey] },
+      sessionTicket,
+    );
+    const rawRoster = rosterRes.data?.Data?.[cloudKey]?.Value;
+    if (!rawRoster) return;
+
+    const rProf = JSON.parse(rawRoster) as Partial<PlayerProfile> & { updatedAt?: string };
+    const rosterTs = rProf.updatedAt ? Date.parse(rProf.updatedAt) : 0;
+    const udTs = account.updatedAt ? Date.parse(account.updatedAt) : 0;
+    const adoptingRetroDay1 = Boolean(
+      rProf.retroactiveDay1GrantedAt && !account.profile.retroactiveDay1GrantedAt,
+    );
+
+    if (rosterTs > udTs) {
+      if (rProf.full_name) account.profile.full_name = abbreviateStudentName(rProf.full_name);
+      if (rProf.school && isValidSchool(rProf.school)) account.profile.school = rProf.school;
+      if (rProf.grade !== undefined) account.profile.grade = rProf.grade;
+      if (rProf.turma !== undefined) account.profile.turma = rProf.turma;
+      if (typeof rProf.pointsBalance === "number") {
+        account.profile.pointsBalance = Math.max(account.profile.pointsBalance ?? 0, rProf.pointsBalance);
+      }
+      if (typeof rProf.careerPoints === "number") {
+        account.profile.careerPoints = Math.max(account.profile.careerPoints ?? 0, rProf.careerPoints);
+      }
+      if (typeof rProf.xp === "number") {
+        account.profile.xp = Math.max(account.profile.xp ?? 0, rProf.xp);
+      }
+      if (typeof rProf.seasonXp === "number") {
+        account.profile.seasonXp = Math.max(account.profile.seasonXp ?? 0, rProf.seasonXp);
+      }
+      if (typeof rProf.level === "number") {
+        account.profile.level = Math.max(account.profile.level ?? 1, rProf.level);
+      }
+      if (Array.isArray(rProf.unlockedMedals)) {
+        const mMap = new Map<string, PlayerUnlockedMedal>();
+        for (const m of [...(account.profile.unlockedMedals ?? []), ...rProf.unlockedMedals]) {
+          if (!m?.medalId) continue;
+          const prev = mMap.get(m.medalId);
+          if (!prev) mMap.set(m.medalId, { ...m });
+          else mMap.set(m.medalId, { ...prev, count: Math.max(prev.count ?? 1, m.count ?? 1) });
+        }
+        account.profile.unlockedMedals = Array.from(mMap.values());
+      }
+    } else if (adoptingRetroDay1) {
+      // Mesmo com relógio local adiantado, garante pontos/XP da retrocoleta do Dia 1
+      if (typeof rProf.pointsBalance === "number") {
+        account.profile.pointsBalance = Math.max(account.profile.pointsBalance ?? 0, rProf.pointsBalance);
+      }
+      if (typeof rProf.careerPoints === "number") {
+        account.profile.careerPoints = Math.max(account.profile.careerPoints ?? 0, rProf.careerPoints);
+      }
+      if (typeof rProf.xp === "number") {
+        account.profile.xp = Math.max(account.profile.xp ?? 0, rProf.xp);
+      }
+      if (typeof rProf.seasonXp === "number") {
+        account.profile.seasonXp = Math.max(account.profile.seasonXp ?? 0, rProf.seasonXp);
+      }
+      if (typeof rProf.level === "number") {
+        account.profile.level = Math.max(account.profile.level ?? 1, rProf.level);
+      }
+    }
+
+    // Reconcilia moedas retroativas, retrocoleta do Dia 1, check-in e missões independente do relógio
+    const mergedLifetime = Math.max(
+      account.profile.lifetimeCoins ?? 0,
+      rProf.lifetimeCoins ?? 0,
+      account.profile.coins ?? 0,
+      rProf.coins ?? 0,
+    );
+    const mergedSpent = Math.max(
+      account.profile.coinsSpentTotal ?? 0,
+      rProf.coinsSpentTotal ?? 0,
+    );
+    if (
+      mergedLifetime > (account.profile.lifetimeCoins ?? 0) ||
+      mergedSpent > (account.profile.coinsSpentTotal ?? 0) ||
+      (rProf.coins ?? 0) > (account.profile.coins ?? 0)
+    ) {
+      account.profile.lifetimeCoins = mergedLifetime;
+      account.profile.coinsSpentTotal = mergedSpent;
+      account.profile.coins = Math.max(0, mergedLifetime - mergedSpent);
+      account.profile.peakCoins = Math.max(
+        account.profile.peakCoins ?? 0,
+        rProf.peakCoins ?? 0,
+        account.profile.coins,
+      );
+    }
+    if (rProf.retroactiveMedalCoinsGrantedAt && !account.profile.retroactiveMedalCoinsGrantedAt) {
+      account.profile.retroactiveMedalCoinsGrantedAt = rProf.retroactiveMedalCoinsGrantedAt;
+    }
+    if (rProf.coinRewardedMedalIds && typeof rProf.coinRewardedMedalIds === "object") {
+      const mergedRewarded: Record<string, number> = {
+        ...(account.profile.coinRewardedMedalIds ?? {}),
+      };
+      for (const [mId, cnt] of Object.entries(rProf.coinRewardedMedalIds)) {
+        mergedRewarded[mId] = Math.max(mergedRewarded[mId] ?? 0, Number(cnt) || 0);
+      }
+      account.profile.coinRewardedMedalIds = mergedRewarded;
+    }
+    if ((rProf.dailyCheckInCount ?? 0) > (account.profile.dailyCheckInCount ?? 0)) {
+      account.profile.dailyCheckInCount = rProf.dailyCheckInCount;
+    }
+    if (
+      rProf.lastDailyRewardClaimDate &&
+      (!account.profile.lastDailyRewardClaimDate ||
+        rProf.lastDailyRewardClaimDate > account.profile.lastDailyRewardClaimDate)
+    ) {
+      account.profile.lastDailyRewardClaimDate = rProf.lastDailyRewardClaimDate;
+    }
+    if (rProf.retroactiveDay1GrantedAt && !account.profile.retroactiveDay1GrantedAt) {
+      account.profile.retroactiveDay1GrantedAt = rProf.retroactiveDay1GrantedAt;
+    }
+    if (rProf.dailyMissionProgress) {
+      account.profile.dailyMissionProgress = mergeDailyMissionProgress(
+        account.profile.dailyMissionProgress,
+        rProf.dailyMissionProgress,
+      );
+    }
+    if (rProf.weeklyMissionProgress) {
+      account.profile.weeklyMissionProgress = mergeWeeklyMissionProgress(
+        account.profile.weeklyMissionProgress,
+        rProf.weeklyMissionProgress,
+      );
+    }
+  } catch {
+    /* ignore optional roster merge on signIn / recovery */
+  }
 }
 
 export async function playfabSignUp(data: SignUpData): Promise<{
@@ -2716,7 +2908,9 @@ export async function playfabSignUp(data: SignUpData): Promise<{
     updatedAt: new Date().toISOString(),
   };
 
-  checkAndApplyDailyLoginPoints(account.profile);
+  if (!canAccessDailyRoutine(account.profile, false, loadAdminConfig())) {
+    checkAndApplyDailyLoginPoints(account.profile);
+  }
 
   reg[slug] = account;
   saveRegistry(reg);
@@ -2969,44 +3163,9 @@ export async function playfabSignIn(
       );
 
       // Reconcilia possíveis alterações feitas pelo ADM no ROSTER_SHARED_GROUP_ID enquanto o aluno estava desconectado
-      try {
-        const cloudKey = getStudentRosterCloudKey(account.profile);
-        const rosterRes = await callPlayFabClient<{
-          Data?: Record<string, { Value: string }>;
-        }>(
-          "GetSharedGroupData",
-          { SharedGroupId: ROSTER_SHARED_GROUP_ID, Keys: [cloudKey] },
-          res.data!.SessionTicket,
-        );
-        const rawRoster = rosterRes.data?.Data?.[cloudKey]?.Value;
-        if (rawRoster) {
-          const rProf = JSON.parse(rawRoster) as Partial<PlayerProfile> & { updatedAt?: string };
-          const rosterTs = rProf.updatedAt ? Date.parse(rProf.updatedAt) : 0;
-          const udTs = account.updatedAt ? Date.parse(account.updatedAt) : 0;
-          if (rosterTs > udTs) {
-            if (rProf.full_name) account.profile.full_name = abbreviateStudentName(rProf.full_name);
-            if (rProf.school && isValidSchool(rProf.school)) account.profile.school = rProf.school;
-            if (rProf.grade !== undefined) account.profile.grade = rProf.grade;
-            if (rProf.turma !== undefined) account.profile.turma = rProf.turma;
-            if (typeof rProf.pointsBalance === "number") account.profile.pointsBalance = rProf.pointsBalance;
-            if (typeof rProf.careerPoints === "number") account.profile.careerPoints = Math.max(account.profile.careerPoints ?? 0, rProf.careerPoints);
-            if (typeof rProf.xp === "number") account.profile.xp = Math.max(account.profile.xp ?? 0, rProf.xp);
-            if (typeof rProf.seasonXp === "number") account.profile.seasonXp = Math.max(account.profile.seasonXp ?? 0, rProf.seasonXp);
-            if (Array.isArray(rProf.unlockedMedals)) {
-              const mMap = new Map<string, PlayerUnlockedMedal>();
-              for (const m of [...(account.profile.unlockedMedals ?? []), ...rProf.unlockedMedals]) {
-                if (!m?.medalId) continue;
-                const prev = mMap.get(m.medalId);
-                if (!prev) mMap.set(m.medalId, { ...m });
-                else mMap.set(m.medalId, { ...prev, count: Math.max(prev.count ?? 1, m.count ?? 1) });
-              }
-              account.profile.unlockedMedals = Array.from(mMap.values());
-            }
-          }
-        }
-      } catch {
-        /* ignore optional roster merge on signIn */
-      }
+      await reconcileAccountWithCloudRoster(account, res.data!.SessionTicket);
+      void syncPlayFabServerClock(false, res.data!.SessionTicket);
+      account.updatedAt = new Date().toISOString();
       if (
         account.profile.deletedAt &&
         !account.profile.isAdmin &&
@@ -3036,7 +3195,9 @@ export async function playfabSignIn(
 
       account.profile.activeSessionId = newActiveSessionId;
       account.profile.activeSessionUpdatedAt = new Date().toISOString();
-      checkAndApplyDailyLoginPoints(account.profile);
+      if (!canAccessDailyRoutine(account.profile, false, cfg)) {
+        checkAndApplyDailyLoginPoints(account.profile);
+      }
 
       reg[account.profile.nickNormalized] = account;
       saveRegistry(reg);
@@ -3140,7 +3301,11 @@ export async function playfabSignIn(
 
   aligned.profile.activeSessionId = newActiveSessionId;
   aligned.profile.activeSessionUpdatedAt = new Date().toISOString();
-  if (!aligned.profile.isAdmin && !isSpecialAdminAccount(aligned.profile)) {
+  if (
+    !aligned.profile.isAdmin &&
+    !isSpecialAdminAccount(aligned.profile) &&
+    !canAccessDailyRoutine(aligned.profile, false, cfg)
+  ) {
     checkAndApplyDailyLoginPoints(aligned.profile);
   }
 
@@ -3204,10 +3369,15 @@ export async function playfabRecoverByNameAndBirthdate(
         derivedPassword,
         cfg,
       );
+      await reconcileAccountWithCloudRoster(account, customRes.data.SessionTicket);
+      void syncPlayFabServerClock(false, customRes.data.SessionTicket);
+      account.updatedAt = new Date().toISOString();
       const newActiveSessionId = `sess_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
       account.profile.activeSessionId = newActiveSessionId;
       account.profile.activeSessionUpdatedAt = new Date().toISOString();
-      checkAndApplyDailyLoginPoints(account.profile);
+      if (!canAccessDailyRoutine(account.profile, false, loadAdminConfig())) {
+        checkAndApplyDailyLoginPoints(account.profile);
+      }
       reg[account.profile.nickNormalized] = account;
       saveRegistry(reg);
   invalidatePioneersCache();
@@ -3259,7 +3429,11 @@ export async function playfabRecoverByNameAndBirthdate(
 
   aligned.profile.activeSessionId = newActiveSessionId;
   aligned.profile.activeSessionUpdatedAt = new Date().toISOString();
-  if (!aligned.profile.isAdmin && !isSpecialAdminAccount(aligned.profile)) {
+  if (
+    !aligned.profile.isAdmin &&
+    !isSpecialAdminAccount(aligned.profile) &&
+    !canAccessDailyRoutine(aligned.profile, false, cfg)
+  ) {
     checkAndApplyDailyLoginPoints(aligned.profile);
   }
 
@@ -3306,7 +3480,14 @@ export function getActiveAccount(): StoredAccount | null {
   const reg = loadRegistry();
   const acc = reg[session.playerId];
   if (!acc) return null;
-  return ensurePlayerSeasonAligned(acc, cfg);
+  const aligned = ensurePlayerSeasonAligned(acc, cfg);
+  const lvl5 = ensureLevel5InitialLetterUnlock(aligned.profile);
+  if (lvl5.profile !== aligned.profile) {
+    aligned.profile = lvl5.profile;
+    reg[session.playerId] = aligned;
+    saveRegistry(reg);
+  }
+  return aligned;
 }
 
 async function pushProfileToPlayFab(
@@ -3379,6 +3560,9 @@ async function pushProfileToPlayFab(
           packsOpenedTotal: p.packsOpenedTotal ?? 0,
           unlockedAvatars: p.unlockedAvatars,
           equippedAvatar: p.equippedAvatar,
+          ...(p.level5InitialAvatarGrantedId
+            ? { level5InitialAvatarGrantedId: p.level5InitialAvatarGrantedId }
+            : {}),
           unlockedAuras: p.unlockedAuras,
           equippedAuraId: p.equippedAuraId,
           cards: p.cards ?? {},
@@ -3395,6 +3579,9 @@ async function pushProfileToPlayFab(
           ...(p.weeklyMissionProgress ? { weeklyMissionProgress: p.weeklyMissionProgress } : {}),
           ...(p.retroactiveMedalCoinsGrantedAt
             ? { retroactiveMedalCoinsGrantedAt: p.retroactiveMedalCoinsGrantedAt }
+            : {}),
+          ...(p.retroactiveDay1GrantedAt
+            ? { retroactiveDay1GrantedAt: p.retroactiveDay1GrantedAt }
             : {}),
           ...(p.coinRewardedMedalIds ? { coinRewardedMedalIds: p.coinRewardedMedalIds } : {}),
           achievedLevelsPoints: p.achievedLevelsPoints ?? [],
@@ -3438,76 +3625,11 @@ async function pushProfileToPlayFab(
       const rosterPayload = {
         SharedGroupId: ROSTER_SHARED_GROUP_ID,
         Data: {
-          [getStudentRosterCloudKey(p)]: JSON.stringify({
-            id: p.id,
-            playfabId: p.playfabId,
-            nick: p.nick,
-            nickNormalized: p.nickNormalized,
-            full_name: abbreviateStudentName(p.full_name),
-            school: p.school,
-            grade: p.grade,
-            turma: p.turma ?? null,
-            ageStage: p.ageStage ?? stageForPlayer(p.school, p.birthdate, new Date()).id,
-            xp: p.xp,
-            seasonXp: p.seasonXp,
-            level: p.level,
-            levelStageProgress: p.levelStageProgress,
-            wins: p.wins,
-            x1Wins: p.x1Wins ?? 0,
-            weeklyX1Wins: p.weeklyX1Wins ?? 0,
-            weeklyX1WeekKey: p.weeklyX1WeekKey,
-            tournamentPoints: p.tournamentPoints ?? 0,
-            bestTournamentPoints: p.bestTournamentPoints ?? 0,
-            tournamentRankId: p.tournamentRankId ?? "bronze_1",
-            tournamentWeekKey: p.tournamentWeekKey,
-            matchesPlayed: p.matchesPlayed,
-            distinctGamesPlayed: p.distinctGamesPlayed ?? 0,
-            streakDays: getPlayerStreakDays(p),
-            lastActiveDate: p.lastActiveDate,
-            activeDates: p.activeDates ?? [],
-            tournamentMedals: p.tournamentMedals ?? [],
-            unlockedMedals: p.unlockedMedals ?? [],
-            badges: p.badges ?? [],
-            careerPoints: p.careerPoints ?? 0,
-            pointsBalance: p.pointsBalance ?? 0,
-            coins: p.coins ?? 0,
-            lifetimeCoins: Math.max(p.lifetimeCoins ?? 0, p.coins ?? 0),
-            peakCoins: Math.max(p.peakCoins ?? 0, p.coins ?? 0),
-            coinsSpentTotal: p.coinsSpentTotal ?? 0,
-            purchasedCosmeticIds: p.purchasedCosmeticIds ?? [],
-            chestsOpenedTotal: p.chestsOpenedTotal ?? 0,
-            packsOpenedTotal: p.packsOpenedTotal ?? 0,
-            unlockedAvatars: p.unlockedAvatars,
-            equippedAvatar: p.equippedAvatar,
-            unlockedAuras: p.unlockedAuras,
-            equippedAuraId: p.equippedAuraId,
-            cards: p.cards ?? {},
-            unopenedPacks: p.unopenedPacks ?? {},
-            unopenedChests: p.unopenedChests ?? {},
-            ...(p.dungeonState ? { dungeonState: p.dungeonState } : {}),
-            claimedInboxRewardIds: p.claimedInboxRewardIds ?? [],
-            claimedRankedMilestones: p.claimedRankedMilestones ?? [],
-            lastDailyLoginPointsDate: p.lastDailyLoginPointsDate,
-            lastDailyFirstGamePointsDate: p.lastDailyFirstGamePointsDate,
-            dailyCheckInCount: p.dailyCheckInCount ?? 0,
-            lastDailyRewardClaimDate: p.lastDailyRewardClaimDate,
-            ...(p.dailyMissionProgress ? { dailyMissionProgress: p.dailyMissionProgress } : {}),
-            ...(p.weeklyMissionProgress ? { weeklyMissionProgress: p.weeklyMissionProgress } : {}),
-            ...(p.retroactiveMedalCoinsGrantedAt
-              ? { retroactiveMedalCoinsGrantedAt: p.retroactiveMedalCoinsGrantedAt }
-              : {}),
-            ...(p.coinRewardedMedalIds ? { coinRewardedMedalIds: p.coinRewardedMedalIds } : {}),
-            achievedLevelsPoints: p.achievedLevelsPoints ?? [],
-            achievedTournamentTiers: p.achievedTournamentTiers ?? [],
-            eventProgress: p.eventProgress,
-            stats: account.stats ?? [],
-            isAdmin: p.isAdmin,
-            seasonId: p.seasonId,
-            activeSessionId: p.activeSessionId,
-            activeSessionUpdatedAt: p.activeSessionUpdatedAt,
-            lastKnownActivityAt: resolvedLastKnownActivityAt,
-            updatedAt: account.updatedAt,
-          }),
+          [getStudentRosterCloudKey(p)]: buildStudentRosterCloudEntry(
+            account,
+            loadAdminConfig(),
+            resolvedLastKnownActivityAt,
+          ),
         },
         Permission: "Public",
       };
@@ -4414,14 +4536,7 @@ export async function syncStudentRosterFromPlayFab(
                 existing?.profile.coinsSpentTotal ?? 0,
                 (udProf as any)?.coinsSpentTotal ?? 0,
               );
-              if (mSpent > 0) {
-                return Math.max(0, mLifetime - mSpent);
-              }
-              return Math.max(
-                parsed.coins ?? 0,
-                existing?.profile.coins ?? 0,
-                (udProf as any)?.coins ?? 0,
-              );
+              return Math.max(0, mLifetime - mSpent);
             })(),
             lifetimeCoins: Math.max(
               parsed.lifetimeCoins ?? 0,
@@ -4517,10 +4632,17 @@ export async function syncStudentRosterFromPlayFab(
                 ...(Array.isArray((udProf as any)?.unlockedAvatars) ? (udProf as any).unlockedAvatars : []),
               ]),
             ),
-            equippedAvatar:
-              parsed.equippedAvatar ??
-              existing?.profile.equippedAvatar ??
-              (udProf as any)?.equippedAvatar,
+            equippedAvatar: (() => {
+              const localTs = existing?.updatedAt ? Date.parse(existing.updatedAt) : 0;
+              const parsedTs = (parsed as any).updatedAt ? Date.parse((parsed as any).updatedAt) : 0;
+              return localTs >= parsedTs
+                ? (existing?.profile.equippedAvatar ?? parsed.equippedAvatar ?? (udProf as any)?.equippedAvatar)
+                : (parsed.equippedAvatar ?? existing?.profile.equippedAvatar ?? (udProf as any)?.equippedAvatar);
+            })(),
+            level5InitialAvatarGrantedId:
+              parsed.level5InitialAvatarGrantedId ??
+              existing?.profile.level5InitialAvatarGrantedId ??
+              (udProf as any)?.level5InitialAvatarGrantedId,
             unlockedAuras: Array.from(
               new Set([
                 ...(Array.isArray(parsed.unlockedAuras) ? parsed.unlockedAuras : []),
@@ -4528,10 +4650,22 @@ export async function syncStudentRosterFromPlayFab(
                 ...(Array.isArray((udProf as any)?.unlockedAuras) ? (udProf as any).unlockedAuras : []),
               ]),
             ),
-            equippedAuraId:
-              parsed.equippedAuraId ??
-              existing?.profile.equippedAuraId ??
-              (udProf as any)?.equippedAuraId,
+            equippedAuraId: (() => {
+              const localTs = existing?.updatedAt ? Date.parse(existing.updatedAt) : 0;
+              const parsedTs = (parsed as any).updatedAt ? Date.parse((parsed as any).updatedAt) : 0;
+              if (localTs >= parsedTs) {
+                if (typeof existing?.profile.equippedAuraId === "string") {
+                  return existing.profile.equippedAuraId;
+                }
+                if (typeof parsed.equippedAuraId === "string") return parsed.equippedAuraId;
+                return (udProf as any)?.equippedAuraId;
+              }
+              if (typeof parsed.equippedAuraId === "string") return parsed.equippedAuraId;
+              if (typeof existing?.profile.equippedAuraId === "string") {
+                return existing.profile.equippedAuraId;
+              }
+              return (udProf as any)?.equippedAuraId;
+            })(),
             claimedInboxRewardIds: Array.from(
               new Set([
                 ...(Array.isArray(parsed.claimedInboxRewardIds) ? parsed.claimedInboxRewardIds : []),
@@ -4590,6 +4724,10 @@ export async function syncStudentRosterFromPlayFab(
               parsed.retroactiveMedalCoinsGrantedAt ??
               existing?.profile.retroactiveMedalCoinsGrantedAt ??
               (udProf as any)?.retroactiveMedalCoinsGrantedAt,
+            retroactiveDay1GrantedAt:
+              parsed.retroactiveDay1GrantedAt ??
+              existing?.profile.retroactiveDay1GrantedAt ??
+              (udProf as any)?.retroactiveDay1GrantedAt,
             coinRewardedMedalIds: (() => {
               const out: Record<string, number> = {};
               for (const src of [
@@ -4830,6 +4968,35 @@ export async function syncStudentRosterFromPlayFab(
           careerPoints: acc.profile.careerPoints ?? 0,
           pointsBalance: acc.profile.pointsBalance ?? 0,
           coins: acc.profile.coins ?? 0,
+          lifetimeCoins: Math.max(acc.profile.lifetimeCoins ?? 0, acc.profile.coins ?? 0),
+          peakCoins: Math.max(acc.profile.peakCoins ?? 0, acc.profile.coins ?? 0),
+          coinsSpentTotal: acc.profile.coinsSpentTotal ?? 0,
+          dailyCheckInCount: acc.profile.dailyCheckInCount ?? 0,
+          lastDailyRewardClaimDate: acc.profile.lastDailyRewardClaimDate,
+          ...(acc.profile.retroactiveMedalCoinsGrantedAt
+            ? { retroactiveMedalCoinsGrantedAt: acc.profile.retroactiveMedalCoinsGrantedAt }
+            : {}),
+          ...(acc.profile.retroactiveDay1GrantedAt
+            ? { retroactiveDay1GrantedAt: acc.profile.retroactiveDay1GrantedAt }
+            : {}),
+          ...(acc.profile.coinRewardedMedalIds
+            ? { coinRewardedMedalIds: acc.profile.coinRewardedMedalIds }
+            : {}),
+          ...(acc.profile.dailyMissionProgress
+            ? { dailyMissionProgress: acc.profile.dailyMissionProgress }
+            : {}),
+          ...(acc.profile.weeklyMissionProgress
+            ? { weeklyMissionProgress: acc.profile.weeklyMissionProgress }
+            : {}),
+          ...(acc.profile.equippedAvatar ? { equippedAvatar: acc.profile.equippedAvatar } : {}),
+          ...(acc.profile.level5InitialAvatarGrantedId
+            ? { level5InitialAvatarGrantedId: acc.profile.level5InitialAvatarGrantedId }
+            : {}),
+          ...(acc.profile.equippedAuraId !== undefined
+            ? { equippedAuraId: acc.profile.equippedAuraId }
+            : {}),
+          ...(acc.profile.unlockedAvatars ? { unlockedAvatars: acc.profile.unlockedAvatars } : {}),
+          ...(acc.profile.unlockedAuras ? { unlockedAuras: acc.profile.unlockedAuras } : {}),
           claimedInboxRewardIds: acc.profile.claimedInboxRewardIds ?? [],
           lastDailyLoginPointsDate: acc.profile.lastDailyLoginPointsDate,
           lastDailyFirstGamePointsDate: acc.profile.lastDailyFirstGamePointsDate,
@@ -5619,8 +5786,9 @@ export async function playfabRecordMatch(args: {
     mode,
   });
   const rawEarnedXp = xpFromMatch(safeScore, args.correct, wrong, safeLevel);
-  const todayKey = getLocalDateKey();
-  const currentWeekKey = getCurrentWeekKey();
+  const authoritativeNow = getAuthoritativeNow();
+  const todayKey = getAuthoritativeDateKey(authoritativeNow);
+  const currentWeekKey = getCurrentWeekKey(authoritativeNow);
 
   const prevTournamentPoints = acc.profile.tournamentPoints ?? 0;
   const prevTournamentRankId = acc.profile.tournamentRankId;
@@ -5834,7 +6002,27 @@ export async function playfabRecordMatch(args: {
   ensurePlayerCareerPointsInitialized(acc.profile);
   checkAndApplyFirstGameOfDayPoints(acc.profile, undefined, pointsMultiplier);
 
-  // Atualiza progresso real das Missões Diárias e Semanais
+  // Atualiza progresso real das Missões Diárias e Semanais (travando nível inicial e jogo pessoal no ciclo)
+  const existingTodayDm =
+    acc.profile.dailyMissionProgress?.dateKey === todayKey
+      ? acc.profile.dailyMissionProgress
+      : null;
+  const preMatchTodayPlays: Record<string, number> = {
+    ...(existingTodayDm?.playsByGame ?? {}),
+    [args.gameId]: (existingTodayDm?.playsByGame?.[args.gameId] ?? 0) + 1,
+  };
+  const resolvedPersonalGameId =
+    existingTodayDm?.personalizedGameId ??
+    pickLeastPlayedGameForPlayer({
+      playerId: acc.profile.id || acc.profile.nick || "guest",
+      level: existingTodayDm?.lockedLevel ?? acc.profile.level ?? 1,
+      isAdmin: Boolean(acc.profile.isAdmin),
+      stats: acc.stats,
+      adminConfig: cfg,
+      dateKey: todayKey,
+      todayPlaysByGame: preMatchTodayPlays,
+    }).gameId;
+
   acc.profile.dailyMissionProgress = recordMatchIntoDailyMissions(
     acc.profile.dailyMissionProgress,
     {
@@ -5843,6 +6031,8 @@ export async function playfabRecordMatch(args: {
       flawless,
       mode,
       dateKey: todayKey,
+      playerLevel: acc.profile.level,
+      personalizedGameId: resolvedPersonalGameId,
     },
   );
   acc.profile.weeklyMissionProgress = recordMatchIntoWeeklyMissions(
@@ -5851,6 +6041,7 @@ export async function playfabRecordMatch(args: {
       gameId: args.gameId,
       earnedXp,
       mode,
+      playerLevel: acc.profile.level,
       tournamentPointsBefore: prevTournamentPoints,
       tournamentRankIdBefore: prevTournamentRankId,
       tournamentPointsAfter: acc.profile.tournamentPoints ?? prevTournamentPoints,
@@ -5911,7 +6102,12 @@ export async function playfabRecordMatch(args: {
   });
   acc.profile.level = stageRes.level;
   acc.profile.levelStageProgress = stageRes.stageProgress;
-  checkLevelPromotionPoints(acc.profile.level, acc.profile, pointsMultiplier);
+  checkLevelPromotionPoints(
+    acc.profile.level,
+    acc.profile,
+    pointsMultiplier,
+    cfg.coinRewardsConfig?.levelCoinStep ?? 10,
+  );
 
   // Recarrega estamina da Masmorra com base nas partidas concluídas nos jogos da plataforma
   if (
@@ -6219,7 +6415,12 @@ export async function playfabRecordMatch(args: {
       });
       acc.profile.level = syncedAfterBonus.level;
       acc.profile.levelStageProgress = syncedAfterBonus.stageProgress;
-      checkLevelPromotionPoints(acc.profile.level, acc.profile, pointsMultiplier);
+      checkLevelPromotionPoints(
+    acc.profile.level,
+    acc.profile,
+    pointsMultiplier,
+    cfg.coinRewardsConfig?.levelCoinStep ?? 10,
+  );
 
       // Re-evaluate in case the bonus XP or newly added medals unlocked a level/meta medal
       const secondaryAwarded = evaluatePlayerMedals(
@@ -6247,7 +6448,11 @@ export async function playfabRecordMatch(args: {
             cfg.coinRewardsConfig?.medalCoinsByRarity?.[sm.rarity] ??
             MEDAL_COINS_REWARDS[sm.rarity] ??
             5;
-          awardCoins(acc.profile, coinsReward, `Medalha: ${sm.title}`);
+          awardCoins(acc.profile, coinsReward, `Medalha: ${sm.title}`, "medalha");
+          acc.profile.coinRewardedMedalIds = {
+            ...(acc.profile.coinRewardedMedalIds ?? {}),
+            [sm.id]: Math.max(1, (acc.profile.coinRewardedMedalIds?.[sm.id] ?? 0) + 1),
+          };
         }
       }
       acc.profile.unlockedMedals = currentUnlocked;
@@ -7713,6 +7918,60 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
                 wins: Math.max(cloudProfile.wins ?? 0, udProf.wins ?? 0),
                 careerPoints: Math.max(cloudProfile.careerPoints ?? 0, udProf.careerPoints ?? 0),
                 pointsBalance: Math.max(cloudProfile.pointsBalance ?? 0, udProf.pointsBalance ?? 0),
+                lifetimeCoins: Math.max(
+                  cloudProfile.lifetimeCoins ?? 0,
+                  udProf.lifetimeCoins ?? 0,
+                  cloudProfile.coins ?? 0,
+                  udProf.coins ?? 0,
+                ),
+                coinsSpentTotal: Math.max(
+                  cloudProfile.coinsSpentTotal ?? 0,
+                  udProf.coinsSpentTotal ?? 0,
+                ),
+                coins: (() => {
+                  const ml = Math.max(
+                    cloudProfile.lifetimeCoins ?? 0,
+                    udProf.lifetimeCoins ?? 0,
+                    cloudProfile.coins ?? 0,
+                    udProf.coins ?? 0,
+                  );
+                  const ms = Math.max(
+                    cloudProfile.coinsSpentTotal ?? 0,
+                    udProf.coinsSpentTotal ?? 0,
+                  );
+                  return Math.max(0, ml - ms);
+                })(),
+                dailyCheckInCount: Math.max(
+                  cloudProfile.dailyCheckInCount ?? 0,
+                  udProf.dailyCheckInCount ?? 0,
+                ),
+                lastDailyRewardClaimDate:
+                  [cloudProfile.lastDailyRewardClaimDate, udProf.lastDailyRewardClaimDate]
+                    .filter((d): d is string => Boolean(d))
+                    .sort()
+                    .pop(),
+                retroactiveMedalCoinsGrantedAt:
+                  cloudProfile.retroactiveMedalCoinsGrantedAt ?? udProf.retroactiveMedalCoinsGrantedAt,
+                retroactiveDay1GrantedAt:
+                  cloudProfile.retroactiveDay1GrantedAt ?? udProf.retroactiveDay1GrantedAt,
+                coinRewardedMedalIds: (() => {
+                  const out: Record<string, number> = {};
+                  for (const src of [cloudProfile.coinRewardedMedalIds, udProf.coinRewardedMedalIds]) {
+                    if (!src || typeof src !== "object") continue;
+                    for (const [mId, cnt] of Object.entries(src)) {
+                      out[mId] = Math.max(out[mId] ?? 0, Number(cnt) || 0);
+                    }
+                  }
+                  return Object.keys(out).length > 0 ? out : undefined;
+                })(),
+                dailyMissionProgress: mergeDailyMissionProgress(
+                  cloudProfile.dailyMissionProgress,
+                  udProf.dailyMissionProgress,
+                ),
+                weeklyMissionProgress: mergeWeeklyMissionProgress(
+                  cloudProfile.weeklyMissionProgress,
+                  udProf.weeklyMissionProgress,
+                ),
                 packsOpenedTotal: Math.max(cloudProfile.packsOpenedTotal ?? 0, udProf.packsOpenedTotal ?? 0),
                 chestsOpenedTotal: Math.max(cloudProfile.chestsOpenedTotal ?? 0, udProf.chestsOpenedTotal ?? 0),
                 cards: mergedCloudCards,
@@ -7864,12 +8123,7 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
                   existing.profile.coinsSpentTotal ?? 0,
                   cloudProfile.coinsSpentTotal ?? 0,
                 );
-                if (mSpent > 0) {
-                  return Math.max(0, mLifetime - mSpent);
-                }
-                return localIsNewer
-                  ? (existing.profile.coins ?? cloudProfile.coins ?? 0)
-                  : Math.max(existing.profile.coins ?? 0, cloudProfile.coins ?? 0);
+                return Math.max(0, mLifetime - mSpent);
               })(),
               lifetimeCoins: Math.max(
                 existing.profile.lifetimeCoins ?? 0,
@@ -7901,6 +8155,9 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
               retroactiveMedalCoinsGrantedAt:
                 existing.profile.retroactiveMedalCoinsGrantedAt ??
                 cloudProfile.retroactiveMedalCoinsGrantedAt,
+              retroactiveDay1GrantedAt:
+                existing.profile.retroactiveDay1GrantedAt ??
+                cloudProfile.retroactiveDay1GrantedAt,
               coinRewardedMedalIds: (() => {
                 const out: Record<string, number> = {};
                 for (const src of [
@@ -7964,6 +8221,9 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
               equippedAvatar: localIsNewer
                 ? (existing.profile.equippedAvatar ?? cloudProfile.equippedAvatar)
                 : (cloudProfile.equippedAvatar ?? existing.profile.equippedAvatar),
+              level5InitialAvatarGrantedId:
+                existing.profile.level5InitialAvatarGrantedId ??
+                cloudProfile.level5InitialAvatarGrantedId,
               unlockedAuras: Array.from(
                 new Set([
                   ...(existing.profile.unlockedAuras ?? []),
@@ -7971,8 +8231,12 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
                 ]),
               ),
               equippedAuraId: localIsNewer
-                ? (existing.profile.equippedAuraId ?? cloudProfile.equippedAuraId)
-                : (cloudProfile.equippedAuraId ?? existing.profile.equippedAuraId),
+                ? typeof existing.profile.equippedAuraId === "string"
+                  ? existing.profile.equippedAuraId
+                  : cloudProfile.equippedAuraId
+                : typeof cloudProfile.equippedAuraId === "string"
+                  ? cloudProfile.equippedAuraId
+                  : existing.profile.equippedAuraId,
               unlockedMedals: Array.from(mergedMedals.values()),
               activeSessionUpdatedAt: mergedActiveSessionUpdatedAt,
               lastKnownActivityAt: mergedLastKnownActivityAt,
@@ -8668,6 +8932,10 @@ export async function runGlobalStudentsIntegrityAudit(
 
 function grantPassiveMedalsForAccount(acc: StoredAccount): void {
   try {
+    const lvl5 = ensureLevel5InitialLetterUnlock(acc.profile);
+    if (lvl5.profile !== acc.profile) {
+      acc.profile = lvl5.profile;
+    }
     const cfg = loadAdminConfig();
     const allMedals = getAllAvailableMedals(cfg.customMedals);
     const newlyAwarded = evaluatePlayerMedals(
@@ -8802,7 +9070,7 @@ export async function syncActiveProfileChangeToPlayFab(
   const isAdminSessionActive = isSpecialAdminAccount(nextAcc.profile) && isAdminUnlockedSession();
   if (options?.requireServerSync && isPlayFabConfigured()) {
     if (!session?.sessionTicket || (session.sessionTicket.startsWith("admin-") && !isAdminSessionActive)) {
-      throw new Error("Sessão expirada. Faça login novamente para abrir baús.");
+      throw new Error("Sessão expirada. Faça login novamente para salvar sua ação com segurança.");
     }
     await pushProfileToPlayFab(nextAcc, session.sessionTicket, { requireUserDataSync: true });
     reg[key] = nextAcc;
@@ -8859,8 +9127,296 @@ export async function playfabSaveDungeonProfileUpdate(
   return nextAcc.profile;
 }
 
+function syncLevelAndPromotionAfterRoutineXp(
+  profile: PlayerProfile,
+  cfg: PlatformAdminConfig,
+): void {
+  const prevLevel = profile.level ?? 1;
+  const synced = syncLevelStageProgress({
+    xp: profile.xp ?? 0,
+    lifetimeMatches: profile.matchesPlayed ?? 0,
+    lifetimeWins: profile.wins ?? 0,
+    lifetimeDistinctGames: profile.distinctGamesPlayed ?? 0,
+    currentLevel: prevLevel,
+    existingStage: profile.levelStageProgress,
+    maxAvailableGames: ALL_GAME_IDS.length,
+  });
+  profile.level = synced.level;
+  profile.levelStageProgress = synced.stageProgress;
+  if (synced.level > prevLevel) {
+    checkLevelPromotionPoints(
+      synced.level,
+      profile,
+      1,
+      cfg.coinRewardsConfig?.levelCoinStep ?? 10,
+    );
+  }
+}
+
+function buildStudentRosterCloudEntry(
+  acc: StoredAccount,
+  cfg: PlatformAdminConfig,
+  resolvedLastKnownActivityAt?: string,
+): string {
+  const p = acc.profile;
+  const lastKnown = resolvedLastKnownActivityAt ?? computeAccountLastKnownActivityIso(p, acc.stats);
+  return JSON.stringify({
+    id: p.id,
+    playfabId: p.playfabId,
+    nick: p.nick,
+    nickNormalized: p.nickNormalized,
+    full_name: abbreviateStudentName(p.full_name),
+    school: p.school,
+    grade: p.grade,
+    turma: p.turma ?? null,
+    ageStage: p.ageStage ?? stageForPlayer(p.school, p.birthdate, new Date()).id,
+    xp: p.xp,
+    seasonXp: p.seasonXp,
+    level: p.level,
+    levelStageProgress: p.levelStageProgress,
+    wins: p.wins,
+    x1Wins: p.x1Wins ?? 0,
+    weeklyX1Wins: p.weeklyX1Wins ?? 0,
+    weeklyX1WeekKey: p.weeklyX1WeekKey,
+    tournamentPoints: p.tournamentPoints ?? 0,
+    bestTournamentPoints: p.bestTournamentPoints ?? 0,
+    tournamentRankId: p.tournamentRankId ?? "bronze_1",
+    rankedSeasonId: p.rankedSeasonId ?? cfg.rankedSeasonId ?? 1,
+    tournamentWeekKey: p.tournamentWeekKey,
+    matchesPlayed: p.matchesPlayed,
+    distinctGamesPlayed: p.distinctGamesPlayed ?? 0,
+    streakDays: getPlayerStreakDays(p),
+    lastActiveDate: p.lastActiveDate,
+    activeDates: p.activeDates ?? [],
+    tournamentMedals: p.tournamentMedals ?? [],
+    unlockedMedals: p.unlockedMedals ?? [],
+    badges: p.badges ?? [],
+    careerPoints: p.careerPoints ?? 0,
+    pointsBalance: p.pointsBalance ?? 0,
+    coins: p.coins ?? 0,
+    lifetimeCoins: Math.max(p.lifetimeCoins ?? 0, p.coins ?? 0),
+    peakCoins: Math.max(p.peakCoins ?? 0, p.coins ?? 0),
+    coinsSpentTotal: p.coinsSpentTotal ?? 0,
+    purchasedCosmeticIds: p.purchasedCosmeticIds ?? [],
+    chestsOpenedTotal: p.chestsOpenedTotal ?? 0,
+    packsOpenedTotal: p.packsOpenedTotal ?? 0,
+    dailyCheckInCount: p.dailyCheckInCount ?? 0,
+    lastDailyRewardClaimDate: p.lastDailyRewardClaimDate,
+    ...(p.retroactiveMedalCoinsGrantedAt
+      ? { retroactiveMedalCoinsGrantedAt: p.retroactiveMedalCoinsGrantedAt }
+      : {}),
+    ...(p.retroactiveDay1GrantedAt
+      ? { retroactiveDay1GrantedAt: p.retroactiveDay1GrantedAt }
+      : {}),
+    ...(p.coinRewardedMedalIds ? { coinRewardedMedalIds: p.coinRewardedMedalIds } : {}),
+    ...(p.dailyMissionProgress ? { dailyMissionProgress: p.dailyMissionProgress } : {}),
+    ...(p.weeklyMissionProgress ? { weeklyMissionProgress: p.weeklyMissionProgress } : {}),
+    ...(p.equippedAvatar ? { equippedAvatar: p.equippedAvatar } : {}),
+    ...(p.level5InitialAvatarGrantedId
+      ? { level5InitialAvatarGrantedId: p.level5InitialAvatarGrantedId }
+      : {}),
+    ...(p.equippedAuraId !== undefined ? { equippedAuraId: p.equippedAuraId } : {}),
+    ...(p.unlockedAvatars ? { unlockedAvatars: p.unlockedAvatars } : {}),
+    ...(p.unlockedAuras ? { unlockedAuras: p.unlockedAuras } : {}),
+    cards: p.cards ?? {},
+    unopenedPacks: p.unopenedPacks ?? {},
+    unopenedChests: p.unopenedChests ?? {},
+    ...(p.dungeonState ? { dungeonState: p.dungeonState } : {}),
+    claimedInboxRewardIds: p.claimedInboxRewardIds ?? [],
+    claimedRankedMilestones: p.claimedRankedMilestones ?? [],
+    lastDailyLoginPointsDate: p.lastDailyLoginPointsDate,
+    lastDailyFirstGamePointsDate: p.lastDailyFirstGamePointsDate,
+    achievedLevelsPoints: p.achievedLevelsPoints ?? [],
+    achievedTournamentTiers: p.achievedTournamentTiers ?? [],
+    eventProgress: p.eventProgress,
+    stats: acc.stats ?? [],
+    deletedAt: p.deletedAt,
+    deleteScheduledPermanentAt: p.deleteScheduledPermanentAt,
+    isAdmin: p.isAdmin,
+    seasonId: p.seasonId,
+    activeSessionId: p.activeSessionId,
+    activeSessionUpdatedAt: p.activeSessionUpdatedAt,
+    lastKnownActivityAt: lastKnown,
+    updatedAt: acc.updatedAt,
+  });
+}
+
+async function pushRosterUpdatesInBatches(
+  updates: Record<string, string>,
+): Promise<{ pushedCount: number; failedCount: number; error?: string }> {
+  const entries = Object.entries(updates);
+  if (entries.length === 0 || !isPlayFabConfigured()) {
+    return { pushedCount: 0, failedCount: 0 };
+  }
+
+  const pickValidTicket = (tk?: string | null): string | null =>
+    tk && !tk.startsWith("admin-") ? tk : null;
+
+  const viewerTicket = pickValidTicket(await getViewerPlayFabTicket());
+  const adminTicket = pickValidTicket(await getAdminPlayFabTicket());
+  const sessionTicket = pickValidTicket(loadStoredSession()?.sessionTicket);
+  let activeTicket = viewerTicket ?? adminTicket ?? sessionTicket;
+  const fallbackTicket =
+    activeTicket === viewerTicket
+      ? (adminTicket ?? sessionTicket)
+      : (viewerTicket ?? sessionTicket);
+
+  if (!activeTicket) {
+    return {
+      pushedCount: 0,
+      failedCount: entries.length,
+      error: "Sem sessão PlayFab válida para enviar os lotes ao servidor.",
+    };
+  }
+
+  let pushedCount = 0;
+  let failedCount = 0;
+  let lastError: string | undefined;
+
+  for (let i = 0; i < entries.length; i += 10) {
+    const chunkEntries = entries.slice(i, i + 10);
+    const chunk = Object.fromEntries(chunkEntries);
+    const payload = {
+      SharedGroupId: ROSTER_SHARED_GROUP_ID,
+      Data: chunk,
+      Permission: "Public",
+    };
+
+    let res = await callPlayFabClient("UpdateSharedGroupData", payload, activeTicket);
+
+    if (
+      res.errorCode === "SharedGroupNotFound" ||
+      (res.error && /SharedGroupNotFound|not found/i.test(res.error))
+    ) {
+      await callPlayFabClient("CreateSharedGroup", { SharedGroupId: ROSTER_SHARED_GROUP_ID }, activeTicket);
+      res = await callPlayFabClient("UpdateSharedGroupData", payload, activeTicket);
+    }
+
+    if (
+      (res.errorCode === "NotAuthorized" || (res.error && /NotAuthorized/i.test(res.error))) &&
+      fallbackTicket &&
+      fallbackTicket !== activeTicket
+    ) {
+      activeTicket = fallbackTicket;
+      res = await callPlayFabClient("UpdateSharedGroupData", payload, activeTicket);
+    }
+
+    if (
+      res.errorCode === "APIClientRequestRateLimitExceeded" ||
+      (res.error && /rate limit|throttl/i.test(res.error))
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      res = await callPlayFabClient("UpdateSharedGroupData", payload, activeTicket);
+    }
+
+    if (!res.error) {
+      pushedCount += chunkEntries.length;
+    } else {
+      failedCount += chunkEntries.length;
+      lastError = res.error;
+    }
+
+    if (i + 10 < entries.length) {
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+  }
+
+  return { pushedCount, failedCount, error: lastError };
+}
+
+/** Fuso oficial da rede SEMED Coari/AM (UTC-4 fixo, sem horário de verão) */
+const OFFICIAL_SEMED_TZ_OFFSET_MS = -4 * 60 * 60 * 1000;
+const SERVER_CLOCK_SYNC_TTL_MS = 3 * 60_000;
+
+let playfabServerClockOffsetMs: number | null = null;
+let lastPlayFabClockSyncAt = 0;
+
+export function formatUtcMsToOfficialDateKey(utcMs: number): string {
+  const shifted = new Date(utcMs + OFFICIAL_SEMED_TZ_OFFSET_MS);
+  const y = shifted.getUTCFullYear();
+  const m = String(shifted.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(shifted.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+export function createOfficialWallDateFromUtcMs(utcMs: number): Date {
+  const shifted = new Date(utcMs + OFFICIAL_SEMED_TZ_OFFSET_MS);
+  return new Date(
+    shifted.getUTCFullYear(),
+    shifted.getUTCMonth(),
+    shifted.getUTCDate(),
+    shifted.getUTCHours(),
+    shifted.getUTCMinutes(),
+    shifted.getUTCSeconds(),
+  );
+}
+
+export function __setPlayFabServerClockOffsetForTests(offsetMs: number | null): void {
+  playfabServerClockOffsetMs = offsetMs;
+  lastPlayFabClockSyncAt = offsetMs === null ? 0 : Date.now();
+}
+
+export function getAuthoritativeNow(): Date {
+  if (playfabServerClockOffsetMs !== null) {
+    return createOfficialWallDateFromUtcMs(Date.now() + playfabServerClockOffsetMs);
+  }
+  return new Date();
+}
+
+export function getAuthoritativeDateKey(now?: Date): string {
+  if (now) return getLocalDateKey(now);
+  if (playfabServerClockOffsetMs !== null) {
+    return formatUtcMsToOfficialDateKey(Date.now() + playfabServerClockOffsetMs);
+  }
+  return getLocalDateKey();
+}
+
 /**
- * Resgata a recompensa diária do jogador logado e sincroniza imediatamente no PlayFab.
+ * Consulta o horário UTC oficial do servidor PlayFab (`Client/GetTime`) para impedir
+ * fraude por alteração manual da data/hora do celular ou computador.
+ */
+export async function syncPlayFabServerClock(
+  force = false,
+  explicitTicket?: string,
+): Promise<number | null> {
+  if (!isPlayFabConfigured()) return null;
+  const nowLocal = Date.now();
+  if (!force && playfabServerClockOffsetMs !== null && nowLocal - lastPlayFabClockSyncAt < SERVER_CLOCK_SYNC_TTL_MS) {
+    return nowLocal + playfabServerClockOffsetMs;
+  }
+
+  const pickValidTicket = (tk?: string | null): string | null =>
+    tk && !tk.startsWith("admin-") ? tk : null;
+
+  const ticket =
+    pickValidTicket(explicitTicket) ??
+    pickValidTicket(loadStoredSession()?.sessionTicket) ??
+    pickValidTicket(await getViewerPlayFabTicket());
+  if (!ticket) return null;
+
+  try {
+    const t0 = Date.now();
+    const res = await callPlayFabClient<{ Time?: string }>("GetTime", {}, ticket);
+    const t1 = Date.now();
+    if (!res.error && res.data?.Time) {
+      const serverMs = Date.parse(res.data.Time);
+      if (Number.isFinite(serverMs)) {
+        const halfRtt = Math.max(0, Math.round((t1 - t0) / 2));
+        const estimatedNowServerMs = serverMs + halfRtt;
+        playfabServerClockOffsetMs = estimatedNowServerMs - t1;
+        lastPlayFabClockSyncAt = t1;
+        return estimatedNowServerMs;
+      }
+    }
+  } catch {
+    /* ignore network error and return null */
+  }
+  return null;
+}
+
+/**
+ * Resgata a recompensa diária do jogador logado usando o relógio oficial do PlayFab (`Client/GetTime`)
+ * e sincroniza imediatamente no servidor.
  */
 export async function claimCurrentPlayerDailyReward(): Promise<ClaimDailyRewardResult & { profile?: PlayerProfile }> {
   const session = loadStoredSession();
@@ -8893,10 +9449,46 @@ export async function claimCurrentPlayerDailyReward(): Promise<ClaimDailyRewardR
     };
   }
 
+  const isAdminSessionActive = isSpecialAdminAccount(acc.profile) && isAdminUnlockedSession();
+  let authoritativeTodayKey = getAuthoritativeDateKey();
+
+  if (isPlayFabConfigured()) {
+    if (!session.sessionTicket || (session.sessionTicket.startsWith("admin-") && !isAdminSessionActive)) {
+      return {
+        ok: false,
+        error: "Sessão expirada (24h). Renove o login para resgatar sua recompensa diária.",
+        claimedDay: 1,
+        pointsAwarded: 0,
+        streakBonusPoints: 0,
+        xpAwarded: 0,
+        streakBonusXp: 0,
+        coinsAwarded: 0,
+        streakBonusCoins: 0,
+      };
+    }
+    const serverUtcMs = await syncPlayFabServerClock(true, session.sessionTicket);
+    if (serverUtcMs === null) {
+      return {
+        ok: false,
+        error: "Não foi possível validar a data oficial do servidor. Verifique sua conexão e tente novamente.",
+        claimedDay: 1,
+        pointsAwarded: 0,
+        streakBonusPoints: 0,
+        xpAwarded: 0,
+        streakBonusXp: 0,
+        coinsAwarded: 0,
+        streakBonusCoins: 0,
+      };
+    }
+    authoritativeTodayKey = formatUtcMsToOfficialDateKey(serverUtcMs);
+  }
+
   const cfg = loadAdminConfig();
   const cloned = structuredClone(acc.profile);
-  const res = claimDailyRewardForProfile(cloned, cfg);
+  const res = claimDailyRewardForProfile(cloned, cfg, { todayKey: authoritativeTodayKey });
   if (!res.ok) return res;
+
+  syncLevelAndPromotionAfterRoutineXp(cloned, cfg);
 
   const nextAcc: StoredAccount = {
     ...acc,
@@ -8904,26 +9496,29 @@ export async function claimCurrentPlayerDailyReward(): Promise<ClaimDailyRewardR
     updatedAt: new Date().toISOString(),
   };
   grantPassiveMedalsForAccount(nextAcc);
-  reg[session.playerId] = nextAcc;
-  saveRegistry(reg);
 
-  const isAdminSessionActive = isSpecialAdminAccount(nextAcc.profile) && isAdminUnlockedSession();
-  if (
-    session.sessionTicket &&
-    (!session.sessionTicket.startsWith("admin-") || isAdminSessionActive) &&
-    isPlayFabConfigured()
-  ) {
+  if (isPlayFabConfigured()) {
     try {
-      await pushProfileToPlayFab(nextAcc, session.sessionTicket);
-    } catch {
-      /* ignore network sync error */
+      await pushProfileToPlayFab(nextAcc, session.sessionTicket, { requireUserDataSync: true });
+    } catch (err) {
+      return {
+        ...res,
+        ok: false,
+        error:
+          err instanceof Error && err.message
+            ? err.message
+            : "Sem conexão com o servidor. Tente novamente para resgatar.",
+      };
     }
   }
+
+  reg[session.playerId] = nextAcc;
+  saveRegistry(reg);
   return { ...res, profile: nextAcc.profile };
 }
 
 /**
- * Resgata uma missão diária concluída do jogador logado e sincroniza no PlayFab.
+ * Resgata uma missão diária concluída do jogador logado usando o relógio oficial do PlayFab (`Client/GetTime`).
  */
 export async function claimCurrentPlayerDailyMission(
   missionId: string,
@@ -8938,13 +9533,47 @@ export async function claimCurrentPlayerDailyMission(
     return { ok: false, error: "Perfil não encontrado.", missionId, pointsAwarded: 0, xpAwarded: 0, coinsAwarded: 0 };
   }
 
+  const isAdminSessionActive = isSpecialAdminAccount(acc.profile) && isAdminUnlockedSession();
+  let authoritativeDateKey = getAuthoritativeDateKey();
+  let authoritativeNow = getAuthoritativeNow();
+
+  if (isPlayFabConfigured()) {
+    if (!session.sessionTicket || (session.sessionTicket.startsWith("admin-") && !isAdminSessionActive)) {
+      return {
+        ok: false,
+        error: "Sessão expirada (24h). Renove o login para resgatar esta missão.",
+        missionId,
+        pointsAwarded: 0,
+        xpAwarded: 0,
+        coinsAwarded: 0,
+      };
+    }
+    const serverUtcMs = await syncPlayFabServerClock(true, session.sessionTicket);
+    if (serverUtcMs === null) {
+      return {
+        ok: false,
+        error: "Não foi possível validar a data oficial do servidor. Verifique sua conexão e tente novamente.",
+        missionId,
+        pointsAwarded: 0,
+        xpAwarded: 0,
+        coinsAwarded: 0,
+      };
+    }
+    authoritativeDateKey = formatUtcMsToOfficialDateKey(serverUtcMs);
+    authoritativeNow = createOfficialWallDateFromUtcMs(serverUtcMs);
+  }
+
   const cfg = loadAdminConfig();
   const cloned = structuredClone(acc.profile);
   const res = claimDailyMissionForProfile(cloned, missionId, {
     stats: acc.stats,
     adminConfig: cfg,
+    dateKey: authoritativeDateKey,
+    now: authoritativeNow,
   });
   if (!res.ok) return res;
+
+  syncLevelAndPromotionAfterRoutineXp(cloned, cfg);
 
   const nextAcc: StoredAccount = {
     ...acc,
@@ -8952,26 +9581,29 @@ export async function claimCurrentPlayerDailyMission(
     updatedAt: new Date().toISOString(),
   };
   grantPassiveMedalsForAccount(nextAcc);
-  reg[session.playerId] = nextAcc;
-  saveRegistry(reg);
 
-  const isAdminSessionActive = isSpecialAdminAccount(nextAcc.profile) && isAdminUnlockedSession();
-  if (
-    session.sessionTicket &&
-    (!session.sessionTicket.startsWith("admin-") || isAdminSessionActive) &&
-    isPlayFabConfigured()
-  ) {
+  if (isPlayFabConfigured()) {
     try {
-      await pushProfileToPlayFab(nextAcc, session.sessionTicket);
-    } catch {
-      /* ignore network sync error */
+      await pushProfileToPlayFab(nextAcc, session.sessionTicket, { requireUserDataSync: true });
+    } catch (err) {
+      return {
+        ...res,
+        ok: false,
+        error:
+          err instanceof Error && err.message
+            ? err.message
+            : "Sem conexão com o servidor. Tente novamente para resgatar.",
+      };
     }
   }
+
+  reg[session.playerId] = nextAcc;
+  saveRegistry(reg);
   return { ...res, profile: nextAcc.profile };
 }
 
 /**
- * Resgata uma missão semanal concluída do jogador logado e sincroniza no PlayFab.
+ * Resgata uma missão semanal concluída do jogador logado usando o relógio oficial do PlayFab (`Client/GetTime`).
  */
 export async function claimCurrentPlayerWeeklyMission(
   missionId: string,
@@ -8986,12 +9618,43 @@ export async function claimCurrentPlayerWeeklyMission(
     return { ok: false, error: "Perfil não encontrado.", missionId, pointsAwarded: 0, xpAwarded: 0, coinsAwarded: 0 };
   }
 
+  const isAdminSessionActive = isSpecialAdminAccount(acc.profile) && isAdminUnlockedSession();
+  let authoritativeNow = getAuthoritativeNow();
+
+  if (isPlayFabConfigured()) {
+    if (!session.sessionTicket || (session.sessionTicket.startsWith("admin-") && !isAdminSessionActive)) {
+      return {
+        ok: false,
+        error: "Sessão expirada (24h). Renove o login para resgatar esta missão semanal.",
+        missionId,
+        pointsAwarded: 0,
+        xpAwarded: 0,
+        coinsAwarded: 0,
+      };
+    }
+    const serverUtcMs = await syncPlayFabServerClock(true, session.sessionTicket);
+    if (serverUtcMs === null) {
+      return {
+        ok: false,
+        error: "Não foi possível validar a data oficial do servidor. Verifique sua conexão e tente novamente.",
+        missionId,
+        pointsAwarded: 0,
+        xpAwarded: 0,
+        coinsAwarded: 0,
+      };
+    }
+    authoritativeNow = createOfficialWallDateFromUtcMs(serverUtcMs);
+  }
+
   const cfg = loadAdminConfig();
   const cloned = structuredClone(acc.profile);
   const res = claimWeeklyMissionForProfile(cloned, missionId, {
     adminConfig: cfg,
+    now: authoritativeNow,
   });
   if (!res.ok) return res;
+
+  syncLevelAndPromotionAfterRoutineXp(cloned, cfg);
 
   const nextAcc: StoredAccount = {
     ...acc,
@@ -8999,21 +9662,24 @@ export async function claimCurrentPlayerWeeklyMission(
     updatedAt: new Date().toISOString(),
   };
   grantPassiveMedalsForAccount(nextAcc);
-  reg[session.playerId] = nextAcc;
-  saveRegistry(reg);
 
-  const isAdminSessionActive = isSpecialAdminAccount(nextAcc.profile) && isAdminUnlockedSession();
-  if (
-    session.sessionTicket &&
-    (!session.sessionTicket.startsWith("admin-") || isAdminSessionActive) &&
-    isPlayFabConfigured()
-  ) {
+  if (isPlayFabConfigured()) {
     try {
-      await pushProfileToPlayFab(nextAcc, session.sessionTicket);
-    } catch {
-      /* ignore network sync error */
+      await pushProfileToPlayFab(nextAcc, session.sessionTicket, { requireUserDataSync: true });
+    } catch (err) {
+      return {
+        ...res,
+        ok: false,
+        error:
+          err instanceof Error && err.message
+            ? err.message
+            : "Sem conexão com o servidor. Tente novamente para resgatar.",
+      };
     }
   }
+
+  reg[session.playerId] = nextAcc;
+  saveRegistry(reg);
   return { ...res, profile: nextAcc.profile };
 }
 
@@ -9032,19 +9698,29 @@ export interface RetroactiveCoinsAuditResult {
   scannedCount: number;
   eligibleStudentsCount: number;
   totalCoinsToAward: number;
+  cloudPushedCount: number;
+  cloudFailedCount?: number;
+  cloudSyncError?: string;
   students: RetroactiveCoinsAuditStudentSummary[];
 }
 
 /**
  * Audita e (quando `dryRun` é false) retroatribui moedas EXCLUSIVAMENTE com base nas medalhas
- * já conquistadas pelos alunos, usando `coinRewardsConfig.medalCoinsByRarity` (fallback `MEDAL_COINS_REWARDS`).
- * 100% idempotente: nunca paga duas vezes pela mesma medalha.
+ * já conquistadas pelos alunos, enviando os registros atualizados em lotes diretos para o Roster PlayFab.
  */
 export async function runRetroactiveCoinsAudit(options?: {
   dryRun?: boolean;
   skipCloudSync?: boolean;
 }): Promise<RetroactiveCoinsAuditResult> {
   const dryRun = Boolean(options?.dryRun);
+  if (!options?.skipCloudSync && isPlayFabConfigured()) {
+    try {
+      await syncStudentRosterFromPlayFab(undefined, true);
+    } catch {
+      /* segue com o cache local mais recente */
+    }
+  }
+
   const cfg = loadAdminConfig();
   const reg = loadRegistry();
   const customMedalRarities: Record<string, any> = {};
@@ -9053,6 +9729,7 @@ export async function runRetroactiveCoinsAudit(options?: {
   }
 
   const students: RetroactiveCoinsAuditStudentSummary[] = [];
+  const cloudRosterUpdates: Record<string, string> = {};
   let scannedCount = 0;
   let totalCoinsToAward = 0;
   let anyChanged = false;
@@ -9073,7 +9750,7 @@ export async function runRetroactiveCoinsAudit(options?: {
         students.push({
           playerId: acc.profile.id,
           nick: acc.profile.nick,
-          fullName: acc.profile.fullName,
+          fullName: acc.profile.full_name,
           medalsCount: calc.breakdown.length,
           coinsBefore,
           coinsToAward: calc.coinsToAward,
@@ -9081,22 +9758,27 @@ export async function runRetroactiveCoinsAudit(options?: {
         });
       }
     } else {
+      const hadGrantBefore = Boolean(acc.profile.retroactiveMedalCoinsGrantedAt);
       const calc = applyRetroactiveMedalCoins(acc.profile, {
         medalCoinsByRarity: cfg.coinRewardsConfig?.medalCoinsByRarity,
         customMedalRarities,
         nowIso,
       });
-      if (calc.coinsToAward > 0 || !acc.profile.retroactiveMedalCoinsGrantedAt) {
+      if (calc.coinsToAward > 0 || !hadGrantBefore) {
         acc.updatedAt = nowIso;
         reg[key] = acc;
         anyChanged = true;
+        if (!isSpecialAdminAccount(acc.profile)) {
+          const cloudKey = getStudentRosterCloudKey(acc.profile);
+          cloudRosterUpdates[cloudKey] = buildStudentRosterCloudEntry(acc, cfg);
+        }
       }
       if (calc.coinsToAward > 0) {
         totalCoinsToAward += calc.coinsToAward;
         students.push({
           playerId: acc.profile.id,
           nick: acc.profile.nick,
-          fullName: acc.profile.fullName,
+          fullName: acc.profile.full_name,
           medalsCount: calc.breakdown.length,
           coinsBefore,
           coinsToAward: calc.coinsToAward,
@@ -9106,13 +9788,21 @@ export async function runRetroactiveCoinsAudit(options?: {
     }
   }
 
+  let cloudPushedCount = 0;
+  let cloudFailedCount = 0;
+  let cloudSyncError: string | undefined;
   if (!dryRun && anyChanged) {
     saveRegistry(reg);
     if (!options?.skipCloudSync && isPlayFabConfigured()) {
       try {
-        await syncStudentsRegistryWithPlayFab();
-      } catch {
-        /* ignore network sync error */
+        const pushRes = await pushRosterUpdatesInBatches(cloudRosterUpdates);
+        cloudPushedCount = pushRes.pushedCount;
+        cloudFailedCount = pushRes.failedCount;
+        cloudSyncError = pushRes.error;
+      } catch (err) {
+        console.warn("[RetroCoinsAudit] Falha ao enviar atualizações em lote para o Roster:", err);
+        cloudFailedCount = Object.keys(cloudRosterUpdates).length;
+        cloudSyncError = err instanceof Error ? err.message : "Erro ao sincronizar lotes com o PlayFab.";
       }
     }
   }
@@ -9124,6 +9814,163 @@ export async function runRetroactiveCoinsAudit(options?: {
     scannedCount,
     eligibleStudentsCount: students.length,
     totalCoinsToAward,
+    cloudPushedCount,
+    cloudFailedCount,
+    cloudSyncError,
+    students,
+  };
+}
+
+export interface RetroactiveDay1StudentSummary {
+  playerId: string;
+  nick: string;
+  fullName: string;
+  latestActivityDate: string | null;
+  day1DateKey: string;
+  pointsToAward: number;
+  xpToAward: number;
+  coinsToAward: number;
+}
+
+export interface RetroactiveDay1AuditResult {
+  dryRun: boolean;
+  scannedCount: number;
+  eligibleStudentsCount: number;
+  totalPointsToAward: number;
+  totalXpToAward: number;
+  totalCoinsToAward: number;
+  cloudPushedCount: number;
+  cloudFailedCount?: number;
+  cloudSyncError?: string;
+  students: RetroactiveDay1StudentSummary[];
+}
+
+/**
+ * Audita e (quando `dryRun` é false) aplica a Retrocoleta do Dia 1 (Segunda-feira)
+ * para alunos que estiveram ativos/logados nos últimos `daysWindow` dias (padrão: 3),
+ * enviando os registros atualizados em lotes diretos para o Roster PlayFab.
+ */
+export async function runRetroactiveDay1CheckInAudit(options?: {
+  dryRun?: boolean;
+  skipCloudSync?: boolean;
+  todayKey?: string;
+  day1DateKey?: string;
+  daysWindow?: number;
+  grantMissingRewards?: boolean;
+}): Promise<RetroactiveDay1AuditResult> {
+  const dryRun = Boolean(options?.dryRun);
+  if (!options?.skipCloudSync && isPlayFabConfigured()) {
+    try {
+      await syncStudentRosterFromPlayFab(undefined, true);
+    } catch {
+      /* segue com o cache local mais recente */
+    }
+  }
+
+  const cfg = loadAdminConfig();
+  const reg = loadRegistry();
+  const students: RetroactiveDay1StudentSummary[] = [];
+  const cloudRosterUpdates: Record<string, string> = {};
+  let scannedCount = 0;
+  let totalPointsToAward = 0;
+  let totalXpToAward = 0;
+  let totalCoinsToAward = 0;
+  let anyChanged = false;
+  const nowIso = new Date().toISOString();
+
+  for (const [key, acc] of Object.entries(reg)) {
+    if (!acc?.profile || acc.profile.deletedAt) continue;
+    scannedCount++;
+
+    if (dryRun) {
+      const ev = evaluateRetroactiveDay1CheckIn(acc.profile, cfg, {
+        todayKey: options?.todayKey,
+        day1DateKey: options?.day1DateKey,
+        daysWindow: options?.daysWindow ?? 3,
+        grantMissingRewards: options?.grantMissingRewards !== false,
+      });
+      if (ev.eligible) {
+        totalPointsToAward += ev.pointsToAward;
+        totalXpToAward += ev.xpToAward;
+        totalCoinsToAward += ev.coinsToAward;
+        students.push({
+          playerId: acc.profile.id,
+          nick: acc.profile.nick,
+          fullName: acc.profile.full_name,
+          latestActivityDate: ev.latestActivityDate,
+          day1DateKey: ev.day1DateKey,
+          pointsToAward: ev.pointsToAward,
+          xpToAward: ev.xpToAward,
+          coinsToAward: ev.coinsToAward,
+        });
+      }
+    } else {
+      const ev = applyRetroactiveDay1CheckIn(acc.profile, cfg, {
+        todayKey: options?.todayKey,
+        day1DateKey: options?.day1DateKey,
+        daysWindow: options?.daysWindow ?? 3,
+        grantMissingRewards: options?.grantMissingRewards !== false,
+        nowIso,
+      });
+      if (ev.eligible) {
+        if (ev.xpToAward > 0) {
+          syncLevelAndPromotionAfterRoutineXp(acc.profile, cfg);
+        }
+        acc.updatedAt = nowIso;
+        reg[key] = acc;
+        anyChanged = true;
+        if (!isSpecialAdminAccount(acc.profile)) {
+          const cloudKey = getStudentRosterCloudKey(acc.profile);
+          cloudRosterUpdates[cloudKey] = buildStudentRosterCloudEntry(acc, cfg);
+        }
+        totalPointsToAward += ev.pointsToAward;
+        totalXpToAward += ev.xpToAward;
+        totalCoinsToAward += ev.coinsToAward;
+        students.push({
+          playerId: acc.profile.id,
+          nick: acc.profile.nick,
+          fullName: acc.profile.full_name,
+          latestActivityDate: ev.latestActivityDate,
+          day1DateKey: ev.day1DateKey,
+          pointsToAward: ev.pointsToAward,
+          xpToAward: ev.xpToAward,
+          coinsToAward: ev.coinsToAward,
+        });
+      }
+    }
+  }
+
+  let cloudPushedCount = 0;
+  let cloudFailedCount = 0;
+  let cloudSyncError: string | undefined;
+  if (!dryRun && anyChanged) {
+    saveRegistry(reg);
+    if (!options?.skipCloudSync && isPlayFabConfigured()) {
+      try {
+        const pushRes = await pushRosterUpdatesInBatches(cloudRosterUpdates);
+        cloudPushedCount = pushRes.pushedCount;
+        cloudFailedCount = pushRes.failedCount;
+        cloudSyncError = pushRes.error;
+      } catch (err) {
+        console.warn("[RetroDay1Audit] Falha ao enviar atualizações em lote para o Roster:", err);
+        cloudFailedCount = Object.keys(cloudRosterUpdates).length;
+        cloudSyncError = err instanceof Error ? err.message : "Erro ao sincronizar lotes com o PlayFab.";
+      }
+    }
+  }
+
+  students.sort((a, b) => (b.latestActivityDate ?? "").localeCompare(a.latestActivityDate ?? ""));
+
+  return {
+    dryRun,
+    scannedCount,
+    eligibleStudentsCount: students.length,
+    totalPointsToAward,
+    totalXpToAward,
+    totalCoinsToAward,
+    cloudPushedCount,
+    cloudFailedCount,
+    cloudSyncError,
     students,
   };
 }

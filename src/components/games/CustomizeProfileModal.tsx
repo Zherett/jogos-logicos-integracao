@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, Palette, Sparkles, UserCheck } from "lucide-react";
+import { Check, Lock, Palette, RefreshCw, Sparkles, UserCheck, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   AVATAR_BASIC_COLORS,
+  canUseDualAvatar,
   DEFAULT_AVATAR_COLOR,
   DEFAULT_AVATAR_ID,
+  DUAL_AVATAR_MIN_LEVEL,
   getUnlockedAuraIds,
   getUnlockedAvatarIds,
   mergeWithDefaultAuras,
@@ -54,35 +56,76 @@ export function CustomizeProfileModal({ open, onOpenChange }: CustomizeProfileMo
     [profile, aurasCatalog],
   );
 
+  const dualUnlocked = canUseDualAvatar(profile);
+  const [activeSlot, setActiveSlot] = useState<"primary" | "secondary">("primary");
   const [selectedAvatarId, setSelectedAvatarId] = useState(currentAvatar.avatar.id);
+  const [selectedSecondaryAvatarId, setSelectedSecondaryAvatarId] = useState<string>(
+    currentAvatar.secondaryAvatar?.id ?? "",
+  );
   const [selectedColor, setSelectedColor] = useState(currentAvatar.color);
   const [selectedAuraId, setSelectedAuraId] = useState<string>(currentAura?.id ?? "");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (open) {
+      setActiveSlot("primary");
       setSelectedAvatarId(currentAvatar.avatar.id || DEFAULT_AVATAR_ID);
+      setSelectedSecondaryAvatarId(currentAvatar.secondaryAvatar?.id ?? "");
       setSelectedColor(currentAvatar.color || DEFAULT_AVATAR_COLOR);
       setSelectedAuraId(currentAura?.id ?? "");
     }
-  }, [open, currentAvatar.avatar.id, currentAvatar.color, currentAura?.id]);
+  }, [
+    open,
+    currentAvatar.avatar.id,
+    currentAvatar.secondaryAvatar?.id,
+    currentAvatar.color,
+    currentAura?.id,
+  ]);
 
   const previewAvatar =
     unlockedAvatars.find((a) => a.id === selectedAvatarId) ?? unlockedAvatars[0];
+  const previewSecondaryAvatar =
+    dualUnlocked && selectedSecondaryAvatarId && selectedSecondaryAvatarId !== selectedAvatarId
+      ? unlockedAvatars.find((a) => a.id === selectedSecondaryAvatarId) ?? null
+      : null;
   const previewAura = unlockedAuras.find((a) => a.id === selectedAuraId) ?? null;
   const previewCardAura = getAuraPresentation(previewAura);
+
+  function handleSelectAvatar(avatarId: string) {
+    if (!dualUnlocked || activeSlot === "primary") {
+      setSelectedAvatarId(avatarId);
+      if (selectedSecondaryAvatarId === avatarId) {
+        setSelectedSecondaryAvatarId("");
+      }
+      return;
+    }
+    if (avatarId === selectedAvatarId) {
+      // Clicar no mesmo avatar já principal no slot secundário desativa o 2º avatar
+      setSelectedSecondaryAvatarId("");
+      return;
+    }
+    setSelectedSecondaryAvatarId((prev) => (prev === avatarId ? "" : avatarId));
+  }
 
   async function handleSave() {
     if (!profile) return;
     setSaving(true);
     try {
+      const validSecondary =
+        dualUnlocked &&
+        selectedSecondaryAvatarId &&
+        selectedSecondaryAvatarId !== (selectedAvatarId || DEFAULT_AVATAR_ID)
+          ? selectedSecondaryAvatarId
+          : undefined;
+
       await syncActiveProfileChangeToPlayFab({
         ...profile,
         equippedAvatar: {
           id: selectedAvatarId || DEFAULT_AVATAR_ID,
+          ...(validSecondary ? { secondaryId: validSecondary } : {}),
           color: selectedColor || DEFAULT_AVATAR_COLOR,
         },
-        equippedAuraId: selectedAuraId || undefined,
+        equippedAuraId: selectedAuraId || "",
       });
       await auth.refresh();
       onOpenChange(false);
@@ -109,6 +152,7 @@ export function CustomizeProfileModal({ open, onOpenChange }: CustomizeProfileMo
           >
             <PlayerAvatarBadge
               avatar={previewAvatar}
+              secondaryAvatar={previewSecondaryAvatar}
               color={selectedColor}
               aura={previewAura}
               size="lg"
@@ -119,35 +163,117 @@ export function CustomizeProfileModal({ open, onOpenChange }: CustomizeProfileMo
               </div>
               <div className="text-xs text-muted-foreground">
                 Avatar: <b className="text-foreground">{previewAvatar?.name}</b>
+                {previewSecondaryAvatar && (
+                  <span className="text-primary font-bold">
+                    {" "}⇄ {previewSecondaryAvatar.name}
+                  </span>
+                )}
               </div>
               <div className="text-xs text-muted-foreground">
                 Aura: <b className="text-foreground">{previewAura?.name ?? "Nenhuma"}</b>
               </div>
+              {previewSecondaryAvatar && (
+                <div className="mt-0.5 inline-flex items-center gap-1 text-[10px] font-bold text-amber-600 dark:text-amber-400">
+                  <RefreshCw className="h-3 w-3" />
+                  Alternância 3D + Foil ativa
+                </div>
+              )}
             </div>
           </div>
 
           {/* 1. Avatares Desbloqueados */}
           <div className="space-y-2">
-            <div className="flex items-center justify-between text-xs font-bold text-foreground">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-foreground">
               <span className="flex items-center gap-1.5">
                 <UserCheck className="h-4 w-4 text-primary" />
                 Seus Avatares Desbloqueados ({unlockedAvatars.length})
               </span>
             </div>
+
+            {dualUnlocked ? (
+              <div className="space-y-1.5 rounded-2xl border border-amber-500/35 bg-amber-500/10 p-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-1.5">
+                  <span className="flex items-center gap-1 text-[11px] font-black text-amber-700 dark:text-amber-300">
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    Bônus Nível {DUAL_AVATAR_MIN_LEVEL}: Avatar Duplo Animado
+                  </span>
+                  {selectedSecondaryAvatarId && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedSecondaryAvatarId("")}
+                      className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-background/80 px-2 py-0.5 text-[10px] font-bold text-muted-foreground hover:text-foreground cursor-pointer"
+                    >
+                      <X className="h-3 w-3" />
+                      Usar só 1
+                    </button>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setActiveSlot("primary")}
+                    className={`rounded-xl border px-2.5 py-1.5 text-left text-[11px] font-bold transition-all cursor-pointer ${
+                      activeSlot === "primary"
+                        ? "border-primary bg-primary text-primary-foreground shadow-xs"
+                        : "border-border/60 bg-background/80 text-foreground hover:bg-secondary/50"
+                    }`}
+                  >
+                    <div className="text-[10px] opacity-80">1º Avatar (Principal)</div>
+                    <div className="truncate font-extrabold">{previewAvatar?.name}</div>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveSlot("secondary")}
+                    className={`rounded-xl border px-2.5 py-1.5 text-left text-[11px] font-bold transition-all cursor-pointer ${
+                      activeSlot === "secondary"
+                        ? "border-primary bg-primary text-primary-foreground shadow-xs"
+                        : "border-border/60 bg-background/80 text-foreground hover:bg-secondary/50"
+                    }`}
+                  >
+                    <div className="text-[10px] opacity-80">2º Avatar (Opcional)</div>
+                    <div className="truncate font-extrabold">
+                      {previewSecondaryAvatar ? previewSecondaryAvatar.name : "Nenhum (sem giro)"}
+                    </div>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 rounded-2xl border border-border/60 bg-secondary/25 px-3 py-2 text-[11px] text-muted-foreground">
+                <Lock className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+                <span>
+                  No <b className="text-foreground">Nível {DUAL_AVATAR_MIN_LEVEL}</b> você libera um <b>2º Avatar</b> que gira alternando com brilho <b>Foil</b>!
+                </span>
+              </div>
+            )}
+
             <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 max-h-44 overflow-y-auto pr-1">
               {unlockedAvatars.map((av) => {
-                const isSelected = av.id === selectedAvatarId;
+                const isPrimary = av.id === selectedAvatarId;
+                const isSecondary = dualUnlocked && av.id === selectedSecondaryAvatarId;
                 return (
                   <button
                     key={av.id}
                     type="button"
-                    onClick={() => setSelectedAvatarId(av.id)}
-                    className={`flex flex-col items-center gap-1.5 rounded-2xl border-2 p-2.5 text-center transition-all cursor-pointer ${
-                      isSelected
+                    onClick={() => handleSelectAvatar(av.id)}
+                    className={`relative flex flex-col items-center gap-1.5 rounded-2xl border-2 p-2.5 text-center transition-all cursor-pointer ${
+                      isPrimary
                         ? "border-primary bg-primary/10 shadow-xs"
-                        : "border-border/60 bg-secondary/20 hover:bg-secondary/40"
+                        : isSecondary
+                          ? "border-amber-500 bg-amber-500/10 shadow-xs"
+                          : "border-border/60 bg-secondary/20 hover:bg-secondary/40"
                     }`}
                   >
+                    {(isPrimary || isSecondary) && dualUnlocked && (
+                      <span
+                        className={`absolute right-1.5 top-1.5 rounded-full px-1.5 py-0.2 text-[9px] font-black ${
+                          isPrimary
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-amber-500 text-white"
+                        }`}
+                      >
+                        {isPrimary ? "1º" : "2º"}
+                      </span>
+                    )}
                     <PlayerAvatarBadge avatar={av} color={selectedColor} size="sm" />
                     <span className="text-[10px] font-bold leading-tight line-clamp-1">
                       {av.name}

@@ -23,6 +23,8 @@ export interface WeeklyMissionProgressState {
   rankedMatches: number;
   startRankIndex?: number;
   maxRankIndex?: number;
+  /** Faixa de nível travada na primeira atividade da semana para evitar mudança de missões no meio do ciclo */
+  lockedLevel?: number;
   claimedIds: string[];
 }
 
@@ -45,6 +47,7 @@ export const WEEKLY_MISSIONS_COUNT = 4;
 export function createEmptyWeeklyMissionProgress(
   weekKey = getWeekInfo().weekKey,
   initialRankIndex?: number,
+  lockedLevel?: number,
 ): WeeklyMissionProgressState {
   return {
     weekKey,
@@ -55,6 +58,9 @@ export function createEmptyWeeklyMissionProgress(
     rankedMatches: 0,
     ...(typeof initialRankIndex === "number"
       ? { startRankIndex: initialRankIndex, maxRankIndex: initialRankIndex }
+      : {}),
+    ...(typeof lockedLevel === "number"
+      ? { lockedLevel: Math.max(1, Math.floor(lockedLevel)) }
       : {}),
     claimedIds: [],
   };
@@ -78,6 +84,7 @@ export function recordMatchIntoWeeklyMissions(
     gameId: GameId;
     earnedXp: number;
     mode?: string;
+    playerLevel?: number;
     tournamentPointsBefore?: number;
     tournamentRankIdBefore?: string;
     tournamentPointsAfter?: number;
@@ -103,9 +110,14 @@ export function recordMatchIntoWeeklyMissions(
             typeof prev.startRankIndex === "number" ? prev.startRankIndex : rankBefore,
           maxRankIndex:
             typeof prev.maxRankIndex === "number" ? prev.maxRankIndex : rankBefore,
+          ...(typeof prev.lockedLevel === "number"
+            ? { lockedLevel: prev.lockedLevel }
+            : typeof args.playerLevel === "number"
+              ? { lockedLevel: Math.max(1, Math.floor(args.playerLevel)) }
+              : {}),
           claimedIds: Array.isArray(prev.claimedIds) ? [...prev.claimedIds] : [],
         }
-      : createEmptyWeeklyMissionProgress(weekKey, rankBefore);
+      : createEmptyWeeklyMissionProgress(weekKey, rankBefore, args.playerLevel);
 
   base.matches += 1;
   if (!base.distinctGameIds.includes(args.gameId)) {
@@ -127,16 +139,35 @@ export function recordDailyMissionCompletedIntoWeekly(
   prev: WeeklyMissionProgressState | undefined | null,
   now?: Date,
   explicitWeekKey?: string,
+  options?: {
+    playerLevel?: number;
+    tournamentPoints?: number;
+    tournamentRankId?: string;
+  },
 ): WeeklyMissionProgressState {
   const weekKey = explicitWeekKey ?? getWeekInfo(now ?? new Date()).weekKey;
-  const base =
+  const initialRank =
+    options?.tournamentPoints !== undefined || options?.tournamentRankId
+      ? resolveRankIndex(options.tournamentPoints, options.tournamentRankId)
+      : undefined;
+  const base: WeeklyMissionProgressState =
     prev && prev.weekKey === weekKey
       ? {
           ...prev,
           distinctGameIds: Array.isArray(prev.distinctGameIds) ? [...prev.distinctGameIds] : [],
           claimedIds: Array.isArray(prev.claimedIds) ? [...prev.claimedIds] : [],
+          ...(typeof prev.lockedLevel === "number"
+            ? { lockedLevel: prev.lockedLevel }
+            : typeof options?.playerLevel === "number"
+              ? { lockedLevel: Math.max(1, Math.floor(options.playerLevel)) }
+              : {}),
+          ...(typeof prev.startRankIndex === "number"
+            ? { startRankIndex: prev.startRankIndex }
+            : typeof initialRank === "number"
+              ? { startRankIndex: initialRank, maxRankIndex: initialRank }
+              : {}),
         }
-      : createEmptyWeeklyMissionProgress(weekKey);
+      : createEmptyWeeklyMissionProgress(weekKey, initialRank, options?.playerLevel);
   base.dailyMissionsCompleted = Math.max(0, base.dailyMissionsCompleted ?? 0) + 1;
   return base;
 }
@@ -161,6 +192,9 @@ export function mergeWeeklyMissionProgress(
   const maxCandidates = [a.maxRankIndex, b.maxRankIndex].filter(
     (v): v is number => typeof v === "number",
   );
+  const levelCandidates = [a.lockedLevel, b.lockedLevel].filter(
+    (v): v is number => typeof v === "number" && v >= 1,
+  );
   return {
     weekKey: a.weekKey,
     matches: Math.max(a.matches ?? 0, b.matches ?? 0),
@@ -170,22 +204,27 @@ export function mergeWeeklyMissionProgress(
     rankedMatches: Math.max(a.rankedMatches ?? 0, b.rankedMatches ?? 0),
     ...(startCandidates.length > 0 ? { startRankIndex: Math.min(...startCandidates) } : {}),
     ...(maxCandidates.length > 0 ? { maxRankIndex: Math.max(...maxCandidates) } : {}),
+    ...(levelCandidates.length > 0 ? { lockedLevel: Math.min(...levelCandidates) } : {}),
     claimedIds: Array.from(new Set([...(a.claimedIds ?? []), ...(b.claimedIds ?? [])])),
   };
 }
 
 /**
- * Avalia o rank atual do jogador no Torneio Semanal e retorna a missão ranqueada
- * balanceada (apenas para jogadores de Nível 4+).
+ * Avalia o rank do jogador no Torneio Semanal (ancorado no início da semana quando disponível)
+ * e retorna a missão ranqueada balanceada (apenas para jogadores de Nível 4+).
  */
 export function resolveRankedWeeklyMission(args: {
   level: number;
   weekKey: string;
   tournamentPoints?: number;
   tournamentRankId?: string;
+  startRankIndex?: number;
 }): WeeklyMission {
   const safeLevel = Math.max(4, Math.floor(args.level));
-  const currentIdx = resolveRankIndex(args.tournamentPoints, args.tournamentRankId);
+  const currentIdx =
+    typeof args.startRankIndex === "number"
+      ? Math.max(0, Math.min(TOURNAMENT_RANKS.length - 1, Math.floor(args.startRankIndex)))
+      : resolveRankIndex(args.tournamentPoints, args.tournamentRankId);
   const currentRank = TOURNAMENT_RANKS[currentIdx] ?? TOURNAMENT_RANKS[0];
   const remainingRanks = Math.max(0, TOURNAMENT_RANKS.length - 1 - currentIdx);
 
@@ -243,7 +282,10 @@ export function getEligibleGamesForWeeklyMissions(args: {
   const safeLevel = Math.max(1, Math.floor(args.level));
   const enabledMap = args.adminConfig?.enabledGames;
   const adminOnlyMap = args.adminConfig?.adminOnlyGames;
-  const minLevelsMap = args.adminConfig?.gameMinLevels;
+  const minLevelsMap =
+    args.adminConfig?.gameLevelRequirements ??
+    (args.adminConfig as { gameMinLevels?: Partial<Record<GameId, number>> } | null | undefined)
+      ?.gameMinLevels;
 
   const eligible = ALL_GAME_IDS.filter((gId) => {
     if (enabledMap && enabledMap[gId] === false) return false;
@@ -391,9 +433,17 @@ export function claimWeeklyMissionForProfile(
   const prev =
     profile.weeklyMissionProgress && profile.weeklyMissionProgress.weekKey === weekKey
       ? profile.weeklyMissionProgress
-      : createEmptyWeeklyMissionProgress(weekKey);
+      : createEmptyWeeklyMissionProgress(
+          weekKey,
+          resolveRankIndex(profile.tournamentPoints, profile.tournamentRankId),
+          profile.level,
+        );
   const claimedIds = Array.from(new Set([...(prev.claimedIds ?? []), missionId]));
-  profile.weeklyMissionProgress = { ...prev, claimedIds };
+  profile.weeklyMissionProgress = {
+    ...prev,
+    claimedIds,
+    lockedLevel: prev.lockedLevel ?? Math.max(1, Math.floor(profile.level ?? 1)),
+  };
   profile.weeklyMissionsCompleted = (profile.weeklyMissionsCompleted ?? 0) + 1;
 
   const pointsAwarded = Math.max(0, mission.rewardPoints);
@@ -421,11 +471,15 @@ function buildWeeklyMissionsList(args: {
   weekKey?: string;
   weekIndex?: number;
 }): WeeklyMission[] {
-  const level = Math.max(1, Math.floor(args.profile?.level ?? 1));
-  const isAdmin = Boolean(args.profile?.isAdmin);
   const weekInfo = getWeekInfo(args.now ?? new Date());
   const weekKey = args.weekKey ?? weekInfo.weekKey;
   const weekIndex = args.weekIndex ?? weekInfo.weekIndex;
+  const weekProgress =
+    args.profile?.weeklyMissionProgress?.weekKey === weekKey
+      ? args.profile.weeklyMissionProgress
+      : null;
+  const level = Math.max(1, Math.floor(weekProgress?.lockedLevel ?? args.profile?.level ?? 1));
+  const isAdmin = Boolean(args.profile?.isAdmin);
   const variant = Math.abs(weekIndex) % 2;
 
   const eligibleGames = getEligibleGamesForWeeklyMissions({
@@ -541,6 +595,7 @@ function buildWeeklyMissionsList(args: {
         weekKey,
         tournamentPoints: args.profile?.tournamentPoints,
         tournamentRankId: args.profile?.tournamentRankId,
+        startRankIndex: weekProgress?.startRankIndex,
       }),
     ];
   }
@@ -600,6 +655,7 @@ function buildWeeklyMissionsList(args: {
       weekKey,
       tournamentPoints: args.profile?.tournamentPoints,
       tournamentRankId: args.profile?.tournamentRankId,
+      startRankIndex: weekProgress?.startRankIndex,
     }),
   ];
 }

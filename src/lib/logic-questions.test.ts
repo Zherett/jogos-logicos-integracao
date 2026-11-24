@@ -62,4 +62,54 @@ describe("Lógica Matemática — Escalonamento Progressivo de Operações (logi
     assert.equal(sawMul, true, "Nível 4 deve gerar questões com ×");
     assert.equal(sawDiv, true, "Nível 4 deve gerar questões com ÷");
   });
+
+  it("gera respostas V/F com aleatoriedade real 50/50 sem padrão previsível após V,V,V ou V,V,V,F,F,F", () => {
+    const sampleSize = 400;
+
+    // 1. Mesmo passando histórico [V, V, V], não deve forçar F (deve ficar próximo de 50/50)
+    let truesAfterThreeTrues = 0;
+    for (let i = 0; i < sampleSize; i++) {
+      const q = generateBalanced(2, [], [true, true, true]);
+      if (q.answer) truesAfterThreeTrues++;
+    }
+    assert.ok(
+      truesAfterThreeTrues >= sampleSize * 0.35 && truesAfterThreeTrues <= sampleSize * 0.65,
+      `Esperado ~50% de Verdadeiras após [V,V,V], obtido ${truesAfterThreeTrues}/${sampleSize}`,
+    );
+
+    // 2. Mesmo passando histórico [V, V, V, F, F, F], não deve forçar F (quebra o ciclo de período 7)
+    let truesAfterTie = 0;
+    for (let i = 0; i < sampleSize; i++) {
+      const q = generateBalanced(4, [], [true, true, true, false, false, false]);
+      if (q.answer) truesAfterTie++;
+    }
+    assert.ok(
+      truesAfterTie >= sampleSize * 0.35 && truesAfterTie <= sampleSize * 0.65,
+      `Esperado ~50% de Verdadeiras após [V,V,V,F,F,F], obtido ${truesAfterTie}/${sampleSize}`,
+    );
+
+    // 3. Simulação contínua de 500 questões: a regra antiga (trues < len/2) não deve prever acima do acaso
+    const history: boolean[] = [];
+    const texts: string[] = [];
+    let oldRuleHits = 0;
+    let evaluated = 0;
+    for (let i = 0; i < 500; i++) {
+      const last = history.slice(-6);
+      const q = generateBalanced((i % 4) + 1, texts, history);
+      if (last.length >= 3) {
+        const predictedByOldBug = last.filter(Boolean).length < last.length / 2;
+        if (q.answer === predictedByOldBug) oldRuleHits++;
+        evaluated++;
+      }
+      texts.push(q.text);
+      if (texts.length > 15) texts.shift();
+      history.push(q.answer);
+      if (history.length > 15) history.shift();
+    }
+    const oldRuleRate = oldRuleHits / evaluated;
+    assert.ok(
+      oldRuleRate >= 0.38 && oldRuleRate <= 0.62,
+      `Taxa de previsão do padrão antigo deveria ser ~50% (acaso), mas foi ${(oldRuleRate * 100).toFixed(1)}%`,
+    );
+  });
 });

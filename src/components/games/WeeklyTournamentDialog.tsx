@@ -20,7 +20,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import type { GameId } from "@/lib/game-storage";
 import type { RankedMilestoneReward } from "@/lib/game-codes";
 import { usePlayerAuth } from "@/lib/player-auth";
-import { syncActiveProfileChangeToPlayFab } from "@/lib/playfab";
+import { getActiveAccount, syncActiveProfileChangeToPlayFab } from "@/lib/playfab";
 import {
   claimRankedMilestoneReward,
   countUnlockedRankedMedals,
@@ -55,6 +55,7 @@ export function WeeklyTournamentDialog({
   const [activeTab, setActiveTab] = useState<"geral" | "trilha">("geral");
   const [rulesOpen, setRulesOpen] = useState(false);
   const [claimFeedback, setClaimFeedback] = useState<string | null>(null);
+  const [claimingMilestone, setClaimingMilestone] = useState(false);
   const [confirmPaidOpen, setConfirmPaidOpen] = useState(false);
   const [spendingEntry, setSpendingEntry] = useState(false);
 
@@ -146,22 +147,35 @@ export function WeeklyTournamentDialog({
   const rankedSeasonId = auth.adminConfig.rankedSeasonId ?? 1;
 
   async function handleClaimMilestone(rankId: TournamentRankId, reward: RankedMilestoneReward) {
-    if (!profile) return;
-    const res = claimRankedMilestoneReward({
-      profile,
-      rankId,
-      seasonId: rankedSeasonId,
-      reward,
-      currentPoints,
-    });
-    if (!res.ok || !res.updatedProfile) {
-      setClaimFeedback(res.error ?? "Não foi possível resgatar a recompensa.");
-      return;
+    if (!profile || claimingMilestone) return;
+    setClaimingMilestone(true);
+    setClaimFeedback(null);
+    try {
+      const liveProfile = getActiveAccount()?.profile ?? profile;
+      const res = claimRankedMilestoneReward({
+        profile: liveProfile,
+        rankId,
+        seasonId: rankedSeasonId,
+        reward,
+        currentPoints,
+      });
+      if (!res.ok || !res.updatedProfile) {
+        setClaimFeedback(res.error ?? "Não foi possível resgatar a recompensa.");
+        return;
+      }
+      await syncActiveProfileChangeToPlayFab(res.updatedProfile, { requireServerSync: true });
+      await auth.refresh();
+      setClaimFeedback("Recompensa resgatada e adicionada ao seu inventário!");
+      setTick((t) => t + 1);
+    } catch (err) {
+      setClaimFeedback(
+        err instanceof Error && err.message
+          ? err.message
+          : "Sem conexão ou sessão expirada. Faça login novamente para resgatar.",
+      );
+    } finally {
+      setClaimingMilestone(false);
     }
-    await syncActiveProfileChangeToPlayFab(res.updatedProfile);
-    await auth.refresh();
-    setClaimFeedback("Recompensa resgatada e adicionada ao seu inventário!");
-    setTick((t) => t + 1);
   }
 
   return (

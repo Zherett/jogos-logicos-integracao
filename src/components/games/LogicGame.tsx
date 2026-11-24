@@ -94,7 +94,10 @@ export function LogicGame({ onExit, onStatsChange, isRanked }: Props) {
     setShowLevelUp(null);
     setCorrect(0); setWrong(0); setLevel(1); setStreak(0);
     setFinished(false);
-    setQuestion(generateBalanced(1, [], []));
+    const first = generateBalanced(1, [], []);
+    recentTexts.current = [first.text];
+    recentAnswers.current = [first.answer];
+    setQuestion(first);
     setPhase("playing");
     setRunning(true);
   }

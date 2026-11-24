@@ -3,11 +3,19 @@ import assert from "node:assert/strict";
 import {
   allocateStackedInventorySlots,
   AVATAR_BASIC_COLORS,
+  buildLetterAvatarId,
+  canUseDualAvatar,
   DEFAULT_AURAS,
   DEFAULT_AVATARS,
   DEFAULT_AVATAR_COLOR,
   DEFAULT_AVATAR_ID,
+  ensureLevel5InitialLetterUnlock,
+  getAvatarCategory,
+  getInitialLetterAvatarIdForNick,
+  getInitialLetterFromNick,
+  getUnlockedAvatarIds,
   grantCosmeticToProfile,
+  isSafeCosmeticImageUrl,
   mergeWithDefaultAuras,
   mergeWithDefaultAvatars,
   paginateUnifiedInventorySlots,
@@ -148,5 +156,170 @@ describe("Catálogo de Cosméticos e Regras da Loja", () => {
     // Clamp automático se a página pedida for maior que totalPages
     const clamped = paginateUnifiedInventorySlots(items, 5, 12);
     assert.equal(clamped.page, 2);
+  });
+
+  it("preserva lifetimeCoins >= coins + coinsSpentTotal em compras de contas legadas para evitar desconto em dobro no sync", () => {
+    const legacyProfile: { coins: number; lifetimeCoins?: number; coinsSpentTotal?: number } = {
+      coins: 200,
+    };
+    const aura = mergeWithDefaultAuras()[0];
+    const buyAura = purchaseStoreCosmetic(legacyProfile, "aura", aura);
+    assert.equal(buyAura.ok, true);
+    assert.equal(buyAura.profile.lifetimeCoins, 200);
+    assert.equal(buyAura.profile.coinsSpentTotal, aura.priceCoins);
+    assert.equal(
+      buyAura.profile.coins,
+      (buyAura.profile.lifetimeCoins ?? 0) - (buyAura.profile.coinsSpentTotal ?? 0),
+    );
+
+    const pack = { ...DEFAULT_CARD_PACKS[0], priceCoins: 40 };
+    const buyPack = purchaseStoreCardPack(buyAura.profile, pack, 1);
+    assert.equal(buyPack.ok, true);
+    assert.equal(buyPack.profile.lifetimeCoins, 200);
+    assert.equal(buyPack.profile.coinsSpentTotal, aura.priceCoins + 40);
+    assert.equal(
+      buyPack.profile.coins,
+      (buyPack.profile.lifetimeCoins ?? 0) - (buyPack.profile.coinsSpentTotal ?? 0),
+    );
+  });
+
+  it("gera 78 avatares de letras (A-Z em 3 variações) com preços e subcategorias corretos", () => {
+    const letters = DEFAULT_AVATARS.filter((a) => getAvatarCategory(a) === "letter");
+    const icons = DEFAULT_AVATARS.filter((a) => getAvatarCategory(a) === "icon");
+    assert.equal(letters.length, 26 * 3);
+    assert.ok(icons.length >= 19);
+
+    const simple = letters.filter((a) => a.letterVariant === "simple");
+    const round = letters.filter((a) => a.letterVariant === "round");
+    const square = letters.filter((a) => a.letterVariant === "square");
+    assert.equal(simple.length, 26);
+    assert.equal(round.length, 26);
+    assert.equal(square.length, 26);
+
+    assert.ok(simple.every((a) => a.priceCoins === 50));
+    assert.ok(round.every((a) => a.priceCoins === 80));
+    assert.ok(square.every((a) => a.priceCoins === 100));
+    assert.equal(buildLetterAvatarId("J", "simple"), "avatar_letter_simple_j");
+  });
+
+  it("desbloqueia gratuitamente a letra inicial simples ao atingir Nível 5+ (incluindo retroativo)", () => {
+    assert.equal(getInitialLetterFromNick("José"), "J");
+    assert.equal(getInitialLetterFromNick("Ágata"), "A");
+    assert.equal(getInitialLetterFromNick("_lucas99"), "L");
+    assert.equal(getInitialLetterFromNick("12345"), null);
+    assert.equal(getInitialLetterAvatarIdForNick("José"), "avatar_letter_simple_j");
+
+    // Nível 4 ainda não recebe
+    const lvl4: CosmeticProfileSlice = { nick: "José", level: 4, coins: 100, unlockedAvatars: [] };
+    const res4 = ensureLevel5InitialLetterUnlock(lvl4);
+    assert.equal(res4.grantedAvatarId, null);
+    assert.equal(getUnlockedAvatarIds(lvl4).includes("avatar_letter_simple_j"), false);
+
+    // Nível 5 recebe automaticamente sem descontar moedas
+    const lvl5: CosmeticProfileSlice = { nick: "José", level: 5, coins: 100, coinsSpentTotal: 0 };
+    const res5 = ensureLevel5InitialLetterUnlock(lvl5);
+    assert.equal(res5.grantedAvatarId, "avatar_letter_simple_j");
+    assert.equal(res5.profile.coins, 100);
+    assert.equal(res5.profile.coinsSpentTotal, 0);
+    assert.ok(res5.profile.unlockedAvatars?.includes("avatar_letter_simple_j"));
+    assert.equal(res5.profile.level5InitialAvatarGrantedId, "avatar_letter_simple_j");
+
+    // Jogador já no Nível 8 (retroativo) também recebe automaticamente
+    const lvl8: CosmeticProfileSlice = { nick: "Érica", level: 8, coins: 250 };
+    assert.ok(getUnlockedAvatarIds(lvl8).includes("avatar_letter_simple_e"));
+    const res8 = ensureLevel5InitialLetterUnlock(lvl8);
+    assert.equal(res8.grantedAvatarId, "avatar_letter_simple_e");
+
+    // Idempotente: não concede novamente
+    const res8Again = ensureLevel5InitialLetterUnlock(res8.profile);
+    assert.equal(res8Again.grantedAvatarId, null);
+  });
+
+  it("permite equipar 2 avatares distintos apenas no Nível 10 (e desativa animação se só 1)", () => {
+    assert.equal(canUseDualAvatar({ level: 9 }), false);
+    assert.equal(canUseDualAvatar({ level: 10 }), true);
+
+    // Nível 9 com secondaryId configurado: ignora o segundo avatar
+    const lvl9: CosmeticProfileSlice = {
+      level: 9,
+      unlockedAvatars: [DEFAULT_AVATAR_ID, "avatar_bot", "avatar_crown"],
+      equippedAvatar: { id: "avatar_bot", secondaryId: "avatar_crown", color: "#3b82f6" },
+    };
+    const resolved9 = resolveEquippedAvatar(lvl9);
+    assert.equal(resolved9.avatar.id, "avatar_bot");
+    assert.equal(resolved9.secondaryAvatar, null);
+
+    // Nível 10 com 2 avatares desbloqueados distintos: retorna ambos
+    const lvl10: CosmeticProfileSlice = {
+      level: 10,
+      unlockedAvatars: [DEFAULT_AVATAR_ID, "avatar_bot", "avatar_crown"],
+      equippedAvatar: { id: "avatar_bot", secondaryId: "avatar_crown", color: "#8b5cf6" },
+    };
+    const resolved10 = resolveEquippedAvatar(lvl10);
+    assert.equal(resolved10.avatar.id, "avatar_bot");
+    assert.equal(resolved10.secondaryAvatar?.id, "avatar_crown");
+    assert.equal(resolved10.color, "#8b5cf6");
+
+    // Nível 10 com apenas 1 avatar (ou duplicado ou não desbloqueado): secondaryAvatar é null
+    const resolvedSame = resolveEquippedAvatar({
+      ...lvl10,
+      equippedAvatar: { id: "avatar_bot", secondaryId: "avatar_bot", color: "#8b5cf6" },
+    });
+    assert.equal(resolvedSame.secondaryAvatar, null);
+
+    const resolvedLocked = resolveEquippedAvatar({
+      ...lvl10,
+      equippedAvatar: { id: "avatar_bot", secondaryId: "avatar_gem", color: "#8b5cf6" },
+    });
+    assert.equal(resolvedLocked.secondaryAvatar, null);
+  });
+
+  it("bloqueia URLs perigosas (javascript:, data:image/svg+xml, protocol-relative) em avatares customizados", () => {
+    assert.equal(isSafeCosmeticImageUrl("https://cdn.exemplo.com/avatar.gif"), true);
+    assert.equal(isSafeCosmeticImageUrl("http://cdn.exemplo.com/avatar.png"), true);
+    assert.equal(isSafeCosmeticImageUrl("/assets/avatar.webp"), true);
+    assert.equal(
+      isSafeCosmeticImageUrl("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"),
+      true,
+    );
+
+    assert.equal(isSafeCosmeticImageUrl("javascript:alert(1)"), false);
+    assert.equal(isSafeCosmeticImageUrl("  JAVASCRIPT:alert(1) "), false);
+    assert.equal(isSafeCosmeticImageUrl("data:image/svg+xml;base64,PHN2Zz48c2NyaXB0Lz48L3N2Zz4="), false);
+    assert.equal(isSafeCosmeticImageUrl("data:text/html,<script>alert(1)</script>"), false);
+    assert.equal(isSafeCosmeticImageUrl("//evil.example/a.png"), false);
+    assert.equal(isSafeCosmeticImageUrl("vbscript:msgbox(1)"), false);
+    assert.equal(isSafeCosmeticImageUrl(""), false);
+
+    const malicious: AvatarDefinition[] = [
+      {
+        id: "avatar_xss_1",
+        name: "XSS JS",
+        description: "Tentativa XSS via javascript:",
+        priceCoins: 50,
+        enabled: true,
+        imageUrl: "javascript:alert(1)",
+      },
+      {
+        id: "avatar_xss_2",
+        name: "XSS SVG",
+        description: "Tentativa XSS via SVG",
+        priceCoins: 50,
+        enabled: true,
+        imageUrl: "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=",
+      },
+      {
+        id: "avatar_ok",
+        name: "Seguro",
+        description: "Avatar com URL HTTPS válida",
+        priceCoins: 50,
+        enabled: true,
+        imageUrl: "https://cdn.exemplo.com/ok.png",
+      },
+    ];
+    const merged = mergeWithDefaultAvatars(malicious);
+    assert.equal(merged.some((a) => a.id === "avatar_xss_1"), false);
+    assert.equal(merged.some((a) => a.id === "avatar_xss_2"), false);
+    assert.equal(merged.some((a) => a.id === "avatar_ok"), true);
   });
 });

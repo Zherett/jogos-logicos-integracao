@@ -48,6 +48,7 @@ export type ScoreTransactionSource =
   | "missao_semanal"
   | "bau"
   | "retroatribuicao"
+  | "compra_loja"
   | "primeiro_jogo"
   | "promocao_nivel"
   | "promocao_torneio"
@@ -521,6 +522,12 @@ export function calculateStudentScoreBreakdown(
     arena_x1: { xp: 0, points: 0, count: 0 },
     medalha: { xp: 0, points: 0, count: 0 },
     login_diario: { xp: 0, points: 0, count: 0 },
+    recompensa_diaria: { xp: 0, points: 0, count: 0 },
+    missao_diaria: { xp: 0, points: 0, count: 0 },
+    missao_semanal: { xp: 0, points: 0, count: 0 },
+    bau: { xp: 0, points: 0, count: 0 },
+    retroatribuicao: { xp: 0, points: 0, count: 0 },
+    compra_loja: { xp: 0, points: 0, count: 0 },
     primeiro_jogo: { xp: 0, points: 0, count: 0 },
     promocao_nivel: { xp: 0, points: 0, count: 0 },
     promocao_torneio: { xp: 0, points: 0, count: 0 },
@@ -575,6 +582,12 @@ export const TRANSACTION_SOURCE_LABELS: Record<ScoreTransactionSource, { label: 
   arena_x1: { label: "Arena X1 Versus", icon: "Swords", badgeColor: "bg-red-500/10 text-red-600 border-red-500/30" },
   medalha: { label: "Bônus de Medalha", icon: "Medal", badgeColor: "bg-purple-500/10 text-purple-600 border-purple-500/30" },
   login_diario: { label: "Login Diário (+25)", icon: "Calendar", badgeColor: "bg-emerald-500/10 text-emerald-600 border-emerald-500/30" },
+  recompensa_diaria: { label: "Recompensa Diária", icon: "Calendar", badgeColor: "bg-amber-500/10 text-amber-600 border-amber-500/30" },
+  missao_diaria: { label: "Missão Diária", icon: "CheckCircle", badgeColor: "bg-blue-500/10 text-blue-600 border-blue-500/30" },
+  missao_semanal: { label: "Missão Semanal", icon: "Trophy", badgeColor: "bg-amber-500/10 text-amber-600 border-amber-500/30" },
+  bau: { label: "Abertura de Baú", icon: "Gift", badgeColor: "bg-emerald-500/10 text-emerald-600 border-emerald-500/30" },
+  retroatribuicao: { label: "Retroatribuição", icon: "Coins", badgeColor: "bg-yellow-500/10 text-yellow-600 border-yellow-500/30" },
+  compra_loja: { label: "Compra na Loja", icon: "BadgeDollarSign", badgeColor: "bg-rose-500/10 text-rose-600 border-rose-500/30" },
   primeiro_jogo: { label: "1º Jogo do Dia (+10)", icon: "Flame", badgeColor: "bg-orange-500/10 text-orange-600 border-orange-500/30" },
   promocao_nivel: { label: "Subida de Nível", icon: "Sparkles", badgeColor: "bg-yellow-500/10 text-yellow-600 border-yellow-500/30" },
   promocao_torneio: { label: "Promoção de Liga", icon: "Crown", badgeColor: "bg-amber-500/10 text-amber-600 border-amber-500/30" },

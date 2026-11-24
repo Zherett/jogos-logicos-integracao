@@ -8,12 +8,15 @@ import {
   getCompletedCyclesCount,
   getStreakBonusPoints,
   getDayStatus,
+  applyRetroactiveDay1CheckIn,
   canAccessDailyRewardsPreview,
   canAccessDailyRoutine,
   canAccessShopAndCustomization,
   canUseDefaultAvatar,
   canViewCoinsWallet,
   claimDailyRewardForProfile,
+  evaluateRetroactiveDay1CheckIn,
+  getDailyRewardClaimState,
   resolveDailyRewardsSchedule,
 } from "./daily-rewards.ts";
 import { evaluatePlayerMedals, getAllAvailableMedals } from "./medals-catalog.ts";
@@ -223,5 +226,79 @@ describe("Sistema de Recompensa Diária Progressiva (Check-in Acumulativo + Ofen
     assert.equal(canViewCoinsWallet(student, false, rolloutCfg), true);
     assert.equal(canUseDefaultAvatar(student, false, rolloutCfg), true);
     assert.equal(canAccessShopAndCustomization(student, false, rolloutCfg), false);
+  });
+
+  it("concede/empilha a medalha de marco ao resgatar o Dia 3 e Dia 7 da trilha", () => {
+    const prof: any = {
+      id: "p_milestone",
+      nick: "Constante",
+      xp: 0,
+      seasonXp: 0,
+      careerPoints: 0,
+      pointsBalance: 0,
+      coins: 0,
+      streakDays: 3,
+      dailyCheckInCount: 2, // próximo check-in é Dia 3
+      unlockedMedals: [],
+    };
+    const res = claimDailyRewardForProfile(prof, {}, { todayKey: "2026-11-24" });
+    assert.equal(res.ok, true);
+    assert.equal(res.claimedDay, 3);
+    const m3 = prof.unlockedMedals.find((m: any) => m.medalId === "streak_3_days");
+    assert.ok(m3);
+    assert.equal(m3.count, 1);
+    assert.equal(prof.coinRewardedMedalIds?.streak_3_days, 1);
+  });
+
+  it("aplica retrocoleta idempotente do Dia 1 apenas para alunos ativos nos últimos 3 dias e libera Dia 2 hoje", () => {
+    const todayKey = "2026-11-24"; // Terça-feira
+    const activeStudent: any = {
+      id: "s_active",
+      nick: "AlunoAtivo",
+      xp: 100,
+      seasonXp: 100,
+      careerPoints: 50,
+      pointsBalance: 50,
+      coins: 0,
+      lastActiveDate: "2026-11-23",
+      lastDailyLoginPointsDate: "2026-11-23", // já ganhou +25 pts ontem
+      activeDates: ["2026-11-23"],
+    };
+    const inactiveStudent: any = {
+      id: "s_inactive",
+      nick: "AlunoInativo",
+      xp: 100,
+      lastActiveDate: "2026-11-18",
+      activeDates: ["2026-11-18"],
+    };
+
+    // Mesmo se acc.updatedAt tiver sido atualizado hoje (ex.: logo após a Retroatribuição de Moedas),
+    // um aluno inativo NÃO pode ser promovido a elegível
+    const evalInactive = evaluateRetroactiveDay1CheckIn(inactiveStudent, {}, {
+      todayKey,
+      daysWindow: 3,
+      accountUpdatedAt: "2026-11-24T12:00:00.000Z",
+    });
+    assert.equal(evalInactive.eligible, false);
+    assert.equal(evalInactive.latestActivityDate, "2026-11-18");
+
+    const applied = applyRetroactiveDay1CheckIn(activeStudent, {}, { todayKey, daysWindow: 3 });
+    assert.equal(applied.eligible, true);
+    assert.equal(applied.day1DateKey, "2026-11-23");
+    assert.equal(applied.pointsToAward, 0); // não duplicou +25 pts do login de ontem
+    assert.equal(applied.xpToAward, 10); // creditou XP faltante do Dia 1
+    assert.equal(activeStudent.dailyCheckInCount, 1);
+    assert.equal(activeStudent.lastDailyRewardClaimDate, "2026-11-23");
+
+    // Hoje (terça-feira), o aluno vê Dia 1 Coletado e Dia 2 liberado para coleta manual!
+    const stateToday = getDailyRewardClaimState(activeStudent, todayKey);
+    assert.equal(stateToday.isTodayClaimed, false);
+    assert.equal(stateToday.currentDay, 2);
+    assert.equal(getDayStatus(1, stateToday.currentDay, stateToday.isTodayClaimed), "collected");
+    assert.equal(getDayStatus(2, stateToday.currentDay, stateToday.isTodayClaimed), "today");
+
+    // Segunda execução é 100% idempotente
+    const applied2 = applyRetroactiveDay1CheckIn(activeStudent, {}, { todayKey, daysWindow: 3 });
+    assert.equal(applied2.eligible, false);
   });
 });

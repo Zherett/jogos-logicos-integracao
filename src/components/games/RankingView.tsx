@@ -36,6 +36,7 @@ import {
 import { StudentNameDisplay } from "./StudentNameDisplay";
 import { PlayerAvatarBadge } from "./PlayerAvatarBadge";
 import { resolveEquippedAura, resolveEquippedAvatar } from "@/lib/cosmetics-catalog";
+import { canAccessShopAndCustomization, canUseDefaultAvatar } from "@/lib/daily-rewards";
 import { usePlayerAuth } from "@/lib/player-auth";
 import {
   fetchLeaderboard,
@@ -330,6 +331,8 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
   const normalizedQuery = searchQuery.trim().toLowerCase();
 
   const isAdminViewer = Boolean(auth.isAdmin || auth.profile?.isAdmin);
+  const showRankingAvatars = canUseDefaultAvatar(auth.profile, auth.isAdmin, auth.adminConfig);
+  const showRankingAuras = canAccessShopAndCustomization(auth.profile, auth.isAdmin, auth.adminConfig);
 
   const filteredEntries = useMemo(() => {
     if (!normalizedQuery) return entries;
@@ -864,12 +867,15 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
                           {row.rank <= 3 ? <Medal className="h-5 w-5" /> : `${row.rank}º`}
                         </span>
 
-                        {isAdminViewer && (() => {
-                          const rowAv = resolveEquippedAvatar(row, auth.adminConfig.avatarsCatalog);
-                          const rowAura = resolveEquippedAura(row, auth.adminConfig.aurasCatalog);
+                        {showRankingAvatars && (() => {
+                          const rowAv = resolveEquippedAvatar(rowProf, auth.adminConfig.avatarsCatalog);
+                          const rowAura = showRankingAuras
+                            ? resolveEquippedAura(rowProf, auth.adminConfig.aurasCatalog)
+                            : null;
                           return (
                             <PlayerAvatarBadge
                               avatar={rowAv.avatar}
+                              secondaryAvatar={rowAv.secondaryAvatar}
                               color={rowAv.color}
                               aura={rowAura}
                               size="sm"
@@ -1056,12 +1062,15 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
                           {row.rank <= 3 ? <Medal className="h-5 w-5" /> : `${row.rank}º`}
                         </span>
 
-                        {isAdminViewer && (() => {
+                        {showRankingAvatars && (() => {
                           const rowAv = resolveEquippedAvatar(row, auth.adminConfig.avatarsCatalog);
-                          const rowAura = resolveEquippedAura(row, auth.adminConfig.aurasCatalog);
+                          const rowAura = showRankingAuras
+                            ? resolveEquippedAura(row, auth.adminConfig.aurasCatalog)
+                            : null;
                           return (
                             <PlayerAvatarBadge
                               avatar={rowAv.avatar}
+                              secondaryAvatar={rowAv.secondaryAvatar}
                               color={rowAv.color}
                               aura={rowAura}
                               size="sm"

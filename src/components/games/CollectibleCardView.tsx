@@ -150,8 +150,9 @@ export function CollectibleCardView({
         }`}
       >
         <p
+          lang="pt-BR"
           aria-hidden={locked || undefined}
-          className={`text-left leading-snug text-slate-700 dark:text-slate-200/95 ${
+          className={`text-justify hyphens-auto leading-snug text-slate-700 dark:text-slate-200/95 ${
             compact ? "text-[10px] line-clamp-3" : "text-[11px] sm:text-xs line-clamp-6"
           } ${locked ? "blur-[7px] opacity-35" : ""}`}
         >

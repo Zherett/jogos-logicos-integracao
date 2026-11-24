@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { Calendar, CheckCircle2, Flame, Gift, RotateCcw, Save, Trophy } from "lucide-react";
+import { Calendar, CheckCircle2, Eye, Flame, Gift, RotateCcw, Save, ShieldCheck, Trophy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { DAYS_OF_WEEK } from "@/lib/custom-events";
 import { mergeWithDefaultChests } from "@/lib/chests-catalog";
 import {
@@ -15,6 +16,11 @@ import {
 import { DEFAULT_DAILY_MISSION_COINS } from "@/lib/daily-missions";
 import { DEFAULT_WEEKLY_MISSION_COINS } from "@/lib/weekly-missions";
 import type { PlatformAdminConfig } from "@/lib/game-codes";
+import {
+  getLastAdminCloudSyncError,
+  runRetroactiveDay1CheckInAudit,
+  type RetroactiveDay1AuditResult,
+} from "@/lib/playfab";
 
 interface AdminRoutineTabProps {
   draft: PlatformAdminConfig;
@@ -49,8 +55,12 @@ export function AdminRoutineTab({
 }: AdminRoutineTabProps) {
   const [subTab, setSubTab] = useState<"semana" | "diarias" | "missoes_d" | "missoes_s">("semana");
   const [saving, setSaving] = useState(false);
+  const [retroDay1Loading, setRetroDay1Loading] = useState(false);
+  const [retroDay1GrantRewards, setRetroDay1GrantRewards] = useState(true);
+  const [retroDay1Preview, setRetroDay1Preview] = useState<RetroactiveDay1AuditResult | null>(null);
 
   const routine = draft.weeklyRoutineConfig ?? {};
+  const rollout = draft.rolloutFlags ?? {};
   const availableChests = mergeWithDefaultChests(draft.chestsCatalog).filter((c) => c.enabled !== false);
   const selectedDay7ChestId = routine.day7ChestId || DEFAULT_DAY7_CHEST_ID;
   const tiers = resolveDailyRewardsSchedule(routine, draft.chestsCatalog);
@@ -90,7 +100,12 @@ export function AdminRoutineTab({
     setSaving(true);
     try {
       await onSaveConfig(draft);
-      onShowFeedback?.("✅ Rotina Semanal & Diária salva como verdade absoluta na nuvem!");
+      const cloudErr = getLastAdminCloudSyncError();
+      onShowFeedback?.(
+        cloudErr
+          ? `⚠️ Salvo apenas localmente — erro ao publicar no PlayFab: ${cloudErr}`
+          : "✅ Rotina Semanal & Diária salva como verdade absoluta na nuvem!",
+      );
     } finally {
       setSaving(false);
     }
@@ -122,7 +137,12 @@ export function AdminRoutineTab({
     };
     setDraft(nextCfg);
     await onSaveConfig(nextCfg);
-    onShowFeedback?.("🔄 Rotina restaurada para os padrões (com moedas zeradas).");
+    const cloudErr = getLastAdminCloudSyncError();
+    onShowFeedback?.(
+      cloudErr
+        ? `⚠️ Padrões restaurados apenas localmente — erro ao publicar no PlayFab: ${cloudErr}`
+        : "🔄 Rotina restaurada para os padrões (com moedas zeradas).",
+    );
   }
 
   return (
@@ -307,6 +327,205 @@ export function AdminRoutineTab({
                 </option>
               ))}
             </select>
+          </div>
+
+          {/* Retrocoleta do Dia 1 (Segunda-feira • Alunos logados nos últimos 3 dias) */}
+          <div className="border-t pt-4 space-y-3">
+            <div className="space-y-0.5">
+              <div className="font-display text-xs font-black uppercase tracking-wider text-amber-600 dark:text-amber-400 flex items-center gap-1.5">
+                <Calendar className="h-3.5 w-3.5" /> Retrocoleta do Dia 1 (Alunos Ativos nos Últimos 3 Dias)
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Marca o <b>Dia 1 (Segunda-feira)</b> como coletado para alunos que entraram nos últimos 3 dias e ainda não iniciaram a trilha, liberando o <b>Dia 2</b> para coleta manual hoje. 100% idempotente.
+              </p>
+            </div>
+
+            <label className="inline-flex items-center gap-2 text-xs font-semibold text-foreground cursor-pointer">
+              <input
+                type="checkbox"
+                checked={retroDay1GrantRewards}
+                onChange={(e) => setRetroDay1GrantRewards(e.target.checked)}
+                className="h-4 w-4 rounded border-border"
+              />
+              Creditar também os prêmios faltantes do Dia 1 (XP/moedas e pontos apenas se não recebeu login ontem)
+            </label>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={retroDay1Loading}
+                onClick={async () => {
+                  setRetroDay1Loading(true);
+                  try {
+                    const res = await runRetroactiveDay1CheckInAudit({
+                      dryRun: true,
+                      grantMissingRewards: retroDay1GrantRewards,
+                    });
+                    setRetroDay1Preview(res);
+                    onShowFeedback?.(
+                      `🔍 Simulação Dia 1: ${res.eligibleStudentsCount} de ${res.scannedCount} aluno(s) elegíveis (ativos nos últimos 3 dias).`,
+                    );
+                  } finally {
+                    setRetroDay1Loading(false);
+                  }
+                }}
+                className="rounded-xl text-xs font-bold gap-1.5"
+              >
+                <Eye className="h-3.5 w-3.5" />
+                {retroDay1Loading ? "Analisando..." : "Simular Retrocoleta Dia 1"}
+              </Button>
+
+              <Button
+                type="button"
+                size="sm"
+                disabled={retroDay1Loading}
+                onClick={async () => {
+                  if (
+                    !window.confirm(
+                      "Deseja aplicar a retrocoleta do Dia 1 para todos os alunos ativos nos últimos 3 dias e enviar para a nuvem PlayFab?",
+                    )
+                  ) {
+                    return;
+                  }
+                  setRetroDay1Loading(true);
+                  try {
+                    const res = await runRetroactiveDay1CheckInAudit({
+                      dryRun: false,
+                      grantMissingRewards: retroDay1GrantRewards,
+                    });
+                    setRetroDay1Preview(res);
+                    onShowFeedback?.(
+                      res.cloudSyncError || (res.cloudFailedCount ?? 0) > 0
+                        ? `⚠️ Retrocoleta Dia 1 aplicada localmente (${res.eligibleStudentsCount} aluno(s)), mas ${res.cloudFailedCount ?? 0} registro(s) falharam ao enviar à nuvem (${res.cloudPushedCount} sincronizados): ${res.cloudSyncError ?? "erro de rede"}`
+                        : `✅ Retrocoleta Dia 1 aplicada! ${res.eligibleStudentsCount} aluno(s) atualizados (${res.cloudPushedCount} enviados à nuvem).`,
+                    );
+                  } finally {
+                    setRetroDay1Loading(false);
+                  }
+                }}
+                className="rounded-xl text-xs font-bold gap-1.5 bg-amber-500 hover:bg-amber-600 text-zinc-950"
+              >
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                {retroDay1Loading ? "Aplicando..." : "Aplicar Retrocoleta Dia 1 na Nuvem"}
+              </Button>
+            </div>
+
+            {retroDay1Preview && (
+              <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-3 space-y-2 text-xs">
+                <div className="flex flex-wrap items-center justify-between gap-2 font-bold">
+                  <span>
+                    {retroDay1Preview.dryRun ? "📋 Prévia Dia 1 (não aplicada)" : "✅ Retrocoleta Dia 1 Aplicada"}
+                  </span>
+                  <span className="font-mono text-amber-600 dark:text-amber-400">
+                    {retroDay1Preview.eligibleStudentsCount} / {retroDay1Preview.scannedCount} alunos
+                    {retroDay1Preview.totalPointsToAward > 0 ? ` • +${retroDay1Preview.totalPointsToAward} pts` : ""}
+                    {retroDay1Preview.totalXpToAward > 0 ? ` • +${retroDay1Preview.totalXpToAward} XP` : ""}
+                    {retroDay1Preview.totalCoinsToAward > 0 ? ` • +${retroDay1Preview.totalCoinsToAward} moedas` : ""}
+                  </span>
+                </div>
+                {retroDay1Preview.students.length === 0 ? (
+                  <p className="text-[11px] text-muted-foreground">
+                    Nenhum aluno elegível pendente para retrocoleta do Dia 1.
+                  </p>
+                ) : (
+                  <div className="max-h-40 overflow-y-auto divide-y divide-border/50 rounded-xl border bg-background/80">
+                    {retroDay1Preview.students.slice(0, 30).map((st) => (
+                      <div
+                        key={st.playerId}
+                        className="flex items-center justify-between gap-2 px-2.5 py-1.5 text-[11px]"
+                      >
+                        <div className="min-w-0">
+                          <span className="font-bold text-foreground">{st.nick}</span>
+                          <span className="text-muted-foreground ml-1.5">
+                            (Últ. acesso: {st.latestActivityDate ?? "—"})
+                          </span>
+                        </div>
+                        <span className="font-mono font-bold text-emerald-600 dark:text-emerald-400 shrink-0">
+                          Dia 1 ✅ → Dia 2 Hoje
+                        </span>
+                      </div>
+                    ))}
+                    {retroDay1Preview.students.length > 30 && (
+                      <div className="px-2.5 py-1.5 text-[10px] text-muted-foreground text-center">
+                        ... e mais {retroDay1Preview.students.length - 30} aluno(s).
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Chaves de Liberação para Alunos Comuns (rolloutFlags) */}
+          <div className="border-t pt-4 space-y-3">
+            <div className="space-y-0.5">
+              <div className="font-display text-xs font-black uppercase tracking-wider text-primary flex items-center gap-1.5">
+                <ShieldCheck className="h-3.5 w-3.5" /> Chaves de Liberação para Alunos Comuns
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Tudo começa <b>desligado (somente ADM)</b>. Ative os módulos abaixo e clique em <b>Salvar Tudo</b> somente quando finalizar os testes e as retroatribuições.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {(
+                [
+                  {
+                    key: "enableDailyRoutineForStudents",
+                    label: "Central Diária & Missões",
+                    desc: "Libera trilha de 7 dias, Baú do Dia 7, 5 missões diárias e 4 semanais.",
+                  },
+                  {
+                    key: "enableCoinsWalletForStudents",
+                    label: "Saldo de Moedas no Perfil",
+                    desc: "Exibe a carteira de moedas dos alunos no perfil.",
+                  },
+                  {
+                    key: "enableDefaultAvatarForStudents",
+                    label: "Avatar Padrão (Perfil & Ranking)",
+                    desc: "Exibe o avatar dos alunos no perfil, topo e ranking.",
+                  },
+                  {
+                    key: "enableShopForStudents",
+                    label: "Loja, Inventário & Personalização",
+                    desc: "Libera Loja de Moedas, Pacotes/Cartas, Baús, Álbum e Personalizar Perfil.",
+                  },
+                ] as const
+              ).map((item) => {
+                const checked = Boolean(rollout[item.key]);
+                return (
+                  <div
+                    key={item.key}
+                    className={`flex items-center justify-between gap-3 rounded-2xl border p-3 ${
+                      checked
+                        ? "border-emerald-500/40 bg-emerald-500/5"
+                        : "border-border/70 bg-secondary/20"
+                    }`}
+                  >
+                    <div className="min-w-0 space-y-0.5">
+                      <div className="text-xs font-black text-foreground">{item.label}</div>
+                      <div className="text-[10.5px] text-muted-foreground leading-snug">
+                        {item.desc}
+                      </div>
+                    </div>
+                    <Switch
+                      checked={checked}
+                      onCheckedChange={(val) =>
+                        setDraft({
+                          ...draft,
+                          rolloutFlags: {
+                            ...rollout,
+                            [item.key]: val,
+                          },
+                        })
+                      }
+                    />
+                  </div>
+                );
+              })}
+            </div>
           </div>
         </div>
       )}

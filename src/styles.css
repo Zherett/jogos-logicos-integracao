@@ -491,3 +491,89 @@
   animation: profile-aura-bicolor-pulse 2.4s ease-in-out infinite;
 }
 
+/* Avatar Duplo Nível 10: Giro 3D alternando 2 avatares + Brilho Foil ao completar cada giro */
+@keyframes avatar-dual-spin {
+  0%, 36% {
+    transform: rotateY(0deg) scale(1);
+  }
+  39.5% {
+    transform: rotateY(90deg) scale(1.06);
+  }
+  43%, 86% {
+    transform: rotateY(180deg) scale(1);
+  }
+  89.5% {
+    transform: rotateY(270deg) scale(1.06);
+  }
+  93%, 100% {
+    transform: rotateY(360deg) scale(1);
+  }
+}
+
+@keyframes avatar-dual-foil-overlay {
+  0%, 42.5% {
+    opacity: 0;
+  }
+  44.5% {
+    opacity: 0.95;
+  }
+  52% {
+    opacity: 0;
+  }
+  52.5%, 92.5% {
+    opacity: 0;
+  }
+  94.5% {
+    opacity: 0.95;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes avatar-dual-foil-sweep {
+  0%, 42.5% {
+    transform: translateX(-165%) skewX(-22deg);
+    opacity: 0;
+  }
+  43.5% {
+    opacity: 1;
+  }
+  52% {
+    transform: translateX(230%) skewX(-22deg);
+    opacity: 0;
+  }
+  52.5%, 92.5% {
+    transform: translateX(-165%) skewX(-22deg);
+    opacity: 0;
+  }
+  93.5% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(230%) skewX(-22deg);
+    opacity: 0;
+  }
+}
+
+.animate-avatar-dual-spin {
+  transform-style: preserve-3d;
+  animation: avatar-dual-spin 10s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+}
+
+.animate-avatar-dual-foil-overlay {
+  animation: avatar-dual-foil-overlay 10s ease-in-out infinite;
+}
+
+.animate-avatar-dual-foil-sweep {
+  animation: avatar-dual-foil-sweep 10s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-avatar-dual-spin,
+  .animate-avatar-dual-foil-overlay,
+  .animate-avatar-dual-foil-sweep {
+    animation: none;
+  }
+}
+

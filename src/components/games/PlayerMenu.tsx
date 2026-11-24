@@ -97,7 +97,6 @@ import { PresenceDot } from "./PresenceDot";
 import { OPEN_REAUTH_LOGIN_EVENT, usePlayerAuth } from "@/lib/player-auth";
 import {
   DEFAULT_DAILY_XP_CAP,
-  getLocalDateKey,
   is5thGradeSchool,
   isOfficialSemedSchool,
   isSecondStageSchool,
@@ -118,6 +117,8 @@ import { ALL_GAME_IDS, GAME_NAMES, type GameId } from "@/lib/game-storage";
 import { useSoundMuted, playNotificationChime } from "@/lib/sound";
 import {
   fetchLeaderboard,
+  getAuthoritativeDateKey,
+  getAuthoritativeNow,
   playfabCompleteInitialSchoolSetup,
   playfabSetInitialTurma,
   playfabRequestTurmaChange,
@@ -227,7 +228,8 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
     [effProg],
   );
   const dailyCap = auth.adminConfig.dailyXpCap ?? DEFAULT_DAILY_XP_CAP;
-  const todayKey = getLocalDateKey();
+  const authoritativeNow = getAuthoritativeNow();
+  const todayKey = getAuthoritativeDateKey(authoritativeNow);
   const isTodayRecord = profile && profile.dailyXpDate === todayKey;
   const dailyXp = isTodayRecord ? Math.max(0, profile.dailyXp ?? 0) : 0;
   const dailyX1Xp = isTodayRecord ? Math.max(0, profile.dailyX1Xp ?? 0) : 0;
@@ -256,6 +258,7 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
     const wMissions = generateWeeklyMissions({
       profile,
       adminConfig: auth.adminConfig,
+      now: authoritativeNow,
     });
     count += wMissions.filter((m) => m.current >= m.target && !m.claimed).length;
     return count;
@@ -303,6 +306,14 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
     window.addEventListener(OPEN_REAUTH_LOGIN_EVENT, onOpenReauth);
     return () => window.removeEventListener(OPEN_REAUTH_LOGIN_EVENT, onOpenReauth);
   }, []);
+
+  // Em tablets compartilhados, fecha automaticamente modais abertos quando o aluno sai ou troca de conta
+  useEffect(() => {
+    setShopOpen(false);
+    setDailyRewardsOpen(false);
+    setCustomizeOpen(false);
+    setPromoCodeOpen(false);
+  }, [profile?.id]);
 
   // Atualiza em tempo real a atividade do aluno quando ele visualiza perfil, medalhas ou caixa de entrada
   const hadOverlayOpenRef = useRef(false);
@@ -517,7 +528,11 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
               onClick={() => setShopOpen(true)}
               className="grid h-11 w-11 place-items-center rounded-2xl border border-amber-500/50 bg-gradient-to-br from-amber-500/20 to-yellow-500/10 text-amber-600 dark:text-amber-400 shadow-sm transition-all hover:bg-amber-500/30 active:scale-95 cursor-pointer"
               aria-label="Abrir Loja"
-              title="Loja de Moedas (Prévia ADM)"
+              title={
+                auth.adminConfig.rolloutFlags?.enableShopForStudents
+                  ? "Loja de Moedas"
+                  : "Loja de Moedas (Prévia ADM)"
+              }
             >
               <BadgeDollarSign className="h-5 w-5" />
             </button>
@@ -617,6 +632,7 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
                 <span className="relative shrink-0">
                   <PlayerAvatarBadge
                     avatar={topEquippedAv.avatar}
+                    secondaryAvatar={topEquippedAv.secondaryAvatar}
                     color={topEquippedAv.color}
                     aura={topEquippedAura}
                     size="sm"
@@ -818,30 +834,31 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
 
                     {/* Topo: Avatar à esquerda, Dados Pessoais no centro e Rank da Ranqueada ampliado à direita */}
                     <div className="flex flex-row items-center gap-3 sm:gap-4">
-                      {showDefaultAvatar && equippedAv ? (
-                        <div className="flex flex-col items-center gap-1.5 shrink-0">
+                      <div className="flex flex-col items-center gap-1.5 shrink-0">
+                        {showDefaultAvatar && equippedAv ? (
                           <PlayerAvatarBadge
                             avatar={equippedAv.avatar}
+                            secondaryAvatar={equippedAv.secondaryAvatar}
                             color={equippedAv.color}
                             aura={equippedAura}
                             size="lg"
                           />
-                          {showShopAndCosmetics && (
-                            <button
-                              type="button"
-                              onClick={() => setCustomizeOpen(true)}
-                              className="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 hover:bg-primary/20 px-2 py-0.5 text-[9.5px] font-extrabold text-primary transition-all cursor-pointer"
-                              title="Personalizar Avatar e Aura do Perfil"
-                            >
-                              <Palette className="h-2.5 w-2.5" /> Personalizar
-                            </button>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="grid h-16 w-16 sm:h-20 sm:w-20 shrink-0 place-items-center rounded-2xl border-2 border-primary/40 bg-primary/10 text-primary shadow-sm">
-                          <User className="h-8 w-8 sm:h-10 sm:w-10" />
-                        </div>
-                      )}
+                        ) : (
+                          <div className="grid h-16 w-16 sm:h-20 sm:w-20 shrink-0 place-items-center rounded-2xl border-2 border-primary/40 bg-primary/10 text-primary shadow-sm">
+                            <User className="h-8 w-8 sm:h-10 sm:w-10" />
+                          </div>
+                        )}
+                        {showShopAndCosmetics && (
+                          <button
+                            type="button"
+                            onClick={() => setCustomizeOpen(true)}
+                            className="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 hover:bg-primary/20 px-2 py-0.5 text-[9.5px] font-extrabold text-primary transition-all cursor-pointer"
+                            title="Personalizar Avatar e Aura do Perfil"
+                          >
+                            <Palette className="h-2.5 w-2.5" /> Personalizar
+                          </button>
+                        )}
+                      </div>
 
                       {/* Informações Pessoais ao Centro */}
                       <div className="min-w-0 flex-1 space-y-0.5">

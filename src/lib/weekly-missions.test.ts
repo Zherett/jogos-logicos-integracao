@@ -37,7 +37,7 @@ describe("Sistema de Missões Semanais (4 Missões + Faixas de Nível + Ciclo Se
 
   it("respeita o nível mínimo exigido pelos jogos ao calcular jogos elegíveis e meta de jogos distintos", () => {
     const adminConfig = {
-      gameMinLevels: {
+      gameLevelRequirements: {
         logica: 1,
         completar: 1,
         formas: 1,
@@ -162,5 +162,47 @@ describe("Sistema de Missões Semanais (4 Missões + Faixas de Nível + Ciclo Se
     const claim2 = claimWeeklyMissionForProfile(prof, xpMission.id, { weekKey, weekIndex: 10 });
     assert.equal(claim2.ok, false);
     assert.equal(claim2.alreadyClaimed, true);
+  });
+
+  it("mantém a missão ranqueada e a faixa de nível travadas na semana mesmo ao atingir o Rank Máximo ou subir de faixa", () => {
+    const weekKey = "2026-W48";
+    // Começa a semana em Nível 6, Diamante V (820 pts; falta 1 rank para Mestre em 850 pts)
+    const wProg = recordMatchIntoWeeklyMissions(undefined, {
+      gameId: "logica",
+      earnedXp: 100,
+      mode: "torneio_semanal",
+      playerLevel: 6,
+      tournamentRankIdBefore: "diamante_5",
+      tournamentPointsBefore: 820,
+      tournamentRankIdAfter: "mestre", // atingiu o rank máximo nesta partida!
+      tournamentPointsAfter: 860,
+      weekKey,
+    });
+
+    const prof: any = {
+      id: "aluno_mestre",
+      nick: "MestreSemana",
+      level: 7, // também subiu para Nível 7 na mesma semana
+      tournamentRankId: "mestre",
+      tournamentPoints: 860,
+      xp: 0,
+      seasonXp: 0,
+      careerPoints: 0,
+      pointsBalance: 0,
+      coins: 0,
+      weeklyMissionProgress: wProg,
+    };
+
+    const missions = generateWeeklyMissions({ profile: prof, weekKey, weekIndex: 10 });
+    const rankMission = missions.find((m) => m.type === "weekly_ranked_ranks");
+    assert.ok(rankMission, "a missão de subir 1 rank não pode sumir ao alcançar Mestre");
+    assert.equal(rankMission.target, 1);
+    assert.equal(rankMission.current, 1);
+    // Faixa Nível 4-6 travada: meta de partidas continua 25 (não pulou para 35)
+    const matchesMission = missions.find((m) => m.type === "weekly_matches")!;
+    assert.equal(matchesMission.target, 25);
+
+    const claim = claimWeeklyMissionForProfile(prof, rankMission.id, { weekKey, weekIndex: 10 });
+    assert.equal(claim.ok, true);
   });
 });

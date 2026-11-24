@@ -9,24 +9,32 @@ import {
   Palette,
   Plus,
   Save,
+  Search,
   Sparkles,
   Star,
   Trash2,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { mergeWithDefaultCardPacks, type CardPackDefinition } from "@/lib/cards-catalog";
-import { MEDAL_COINS_REWARDS } from "@/lib/career-points";
+import { creditCoinMetrics, MEDAL_COINS_REWARDS } from "@/lib/career-points";
 import {
+  AVATAR_LETTER_VARIANTS,
+  getAvatarCategory,
+  isSafeCosmeticImageUrl,
   mergeWithDefaultAuras,
   mergeWithDefaultAvatars,
   type AuraDefinition,
+  type AvatarCategory,
   type AvatarDefinition,
+  type AvatarLetterVariant,
 } from "@/lib/cosmetics-catalog";
 import type { PlatformAdminConfig } from "@/lib/game-codes";
 import { usePlayerAuth } from "@/lib/player-auth";
 import {
+  getLastAdminCloudSyncError,
   runRetroactiveCoinsAudit,
   syncActiveProfileChangeToPlayFab,
   type RetroactiveCoinsAuditResult,
@@ -54,6 +62,9 @@ export function AdminStoreTab({
   const [newAvatarPrice, setNewAvatarPrice] = useState(250);
   const [newAvatarFeatured, setNewAvatarFeatured] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [avatarSubcategory, setAvatarSubcategory] = useState<AvatarCategory>("icon");
+  const [letterVariantFilter, setLetterVariantFilter] = useState<"all" | AvatarLetterVariant>("all");
+  const [letterSearch, setLetterSearch] = useState("");
   const [retroAuditLoading, setRetroAuditLoading] = useState(false);
   const [retroAuditPreview, setRetroAuditPreview] = useState<RetroactiveCoinsAuditResult | null>(null);
 
@@ -61,6 +72,30 @@ export function AdminStoreTab({
     () => mergeWithDefaultAvatars(draft.avatarsCatalog),
     [draft.avatarsCatalog],
   );
+  const iconAvatars = useMemo(
+    () => avatars.filter((a) => getAvatarCategory(a) === "icon"),
+    [avatars],
+  );
+  const letterAvatars = useMemo(
+    () => avatars.filter((a) => getAvatarCategory(a) === "letter"),
+    [avatars],
+  );
+  const filteredLetterAvatars = useMemo(() => {
+    const q = letterSearch
+      .trim()
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+    return letterAvatars.filter((av) => {
+      if (letterVariantFilter !== "all" && av.letterVariant !== letterVariantFilter) return false;
+      if (!q) return true;
+      const hay = `${av.letterChar ?? ""} ${av.name} ${av.description}`
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+      return hay.includes(q);
+    });
+  }, [letterAvatars, letterVariantFilter, letterSearch]);
   const auras = useMemo(() => mergeWithDefaultAuras(draft.aurasCatalog), [draft.aurasCatalog]);
   const packs = useMemo(() => mergeWithDefaultCardPacks(draft.cardPacks), [draft.cardPacks]);
 
@@ -79,7 +114,12 @@ export function AdminStoreTab({
     try {
       setDraft(next);
       await onSaveConfig(next);
-      onShowFeedback?.(msg);
+      const cloudErr = getLastAdminCloudSyncError();
+      onShowFeedback?.(
+        cloudErr
+          ? `⚠️ Salvo apenas localmente — erro ao publicar no PlayFab: ${cloudErr}`
+          : msg,
+      );
     } finally {
       setSaving(false);
     }
@@ -90,6 +130,12 @@ export function AdminStoreTab({
     const cleanName = newAvatarName.trim();
     const cleanUrl = newAvatarUrl.trim();
     if (!cleanName || !cleanUrl) return;
+    if (!isSafeCosmeticImageUrl(cleanUrl)) {
+      onShowFeedback?.(
+        "⚠️ URL de imagem inválida ou insegura. Use apenas links https://, http://, caminhos / ou imagens PNG/JPG/GIF/WEBP.",
+      );
+      return;
+    }
     const item: AvatarDefinition = {
       id: `avatar_custom_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       name: cleanName,
@@ -131,21 +177,38 @@ export function AdminStoreTab({
 
   async function handleGrantSelfTestCoins() {
     if (!auth.profile) return;
-    await syncActiveProfileChangeToPlayFab({
-      ...auth.profile,
-      coins: (auth.profile.coins ?? 0) + 200,
-    });
+    const nextProf = { ...auth.profile };
+    creditCoinMetrics(nextProf, 200);
+    await syncActiveProfileChangeToPlayFab(nextProf);
     await auth.refresh();
     onShowFeedback?.("🪙 +200 moedas adicionadas ao seu perfil (Teste ADM)!");
   }
 
+  const isShopReleased = Boolean(draft.rolloutFlags?.enableShopForStudents);
+
   return (
     <div className="space-y-4">
-      <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3.5 text-xs flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-amber-800 dark:text-amber-300 font-bold">
-          <BadgeDollarSign className="h-4 w-4 text-amber-500 shrink-0" />
+      <div
+        className={`rounded-2xl border p-3.5 text-xs flex flex-wrap items-center justify-between gap-2 ${
+          isShopReleased
+            ? "border-emerald-500/40 bg-emerald-500/10"
+            : "border-amber-500/40 bg-amber-500/10"
+        }`}
+      >
+        <div
+          className={`flex items-center gap-2 font-bold ${
+            isShopReleased
+              ? "text-emerald-800 dark:text-emerald-300"
+              : "text-amber-800 dark:text-amber-300"
+          }`}
+        >
+          <BadgeDollarSign
+            className={`h-4 w-4 shrink-0 ${isShopReleased ? "text-emerald-500" : "text-amber-500"}`}
+          />
           <span>
-            Loja & Cosméticos em Prévia ADM — Apenas administradores visualizam e testam por enquanto.
+            {isShopReleased
+              ? "Loja & Cosméticos Liberada para os Alunos — alterações salvas aqui ficam ativas para toda a rede."
+              : "Loja & Cosméticos em Prévia ADM — Apenas administradores visualizam e testam por enquanto."}
           </span>
         </div>
         {auth.profile && (
@@ -347,7 +410,9 @@ export function AdminStoreTab({
                     setRetroAuditPreview(res);
                     auth.refresh();
                     onShowFeedback?.(
-                      `🪙 Retroatribuição aplicada! ${res.eligibleStudentsCount} aluno(s) receberam ${res.totalCoinsToAward} moedas.`,
+                      res.cloudSyncError || (res.cloudFailedCount ?? 0) > 0
+                        ? `⚠️ Retroatribuição aplicada localmente (${res.eligibleStudentsCount} aluno(s), +${res.totalCoinsToAward} moedas), mas ${res.cloudFailedCount ?? 0} registro(s) falharam ao enviar à nuvem (${res.cloudPushedCount} sincronizados): ${res.cloudSyncError ?? "erro de rede"}`
+                        : `🪙 Retroatribuição aplicada! ${res.eligibleStudentsCount} aluno(s) receberam ${res.totalCoinsToAward} moedas (${res.cloudPushedCount} enviados à nuvem).`,
                     );
                   } finally {
                     setRetroAuditLoading(false);
@@ -470,8 +535,85 @@ export function AdminStoreTab({
             </Button>
           </form>
 
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-secondary/40 p-0.5">
+              <button
+                type="button"
+                onClick={() => setAvatarSubcategory("icon")}
+                className={`rounded-full px-3 py-1 text-xs font-extrabold transition-all cursor-pointer ${
+                  avatarSubcategory === "icon"
+                    ? "bg-primary text-primary-foreground shadow-xs"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Ícones ({iconAvatars.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setAvatarSubcategory("letter")}
+                className={`rounded-full px-3 py-1 text-xs font-extrabold transition-all cursor-pointer ${
+                  avatarSubcategory === "letter"
+                    ? "bg-primary text-primary-foreground shadow-xs"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Letras ({letterAvatars.length})
+              </button>
+            </div>
+
+            {avatarSubcategory === "letter" && (
+              <div className="flex flex-wrap items-center gap-1.5 flex-1 justify-end min-w-[220px]">
+                <div className="relative flex-1 max-w-xs">
+                  <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    type="text"
+                    value={letterSearch}
+                    onChange={(e) => setLetterSearch(e.target.value)}
+                    placeholder="Pesquisar letra..."
+                    className="h-8 rounded-xl pl-8 pr-7 text-xs"
+                  />
+                  {letterSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setLetterSearch("")}
+                      aria-label="Limpar pesquisa"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setLetterVariantFilter("all")}
+                  className={`rounded-full px-2.5 py-1 text-[11px] font-bold border transition-all cursor-pointer ${
+                    letterVariantFilter === "all"
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-secondary/40 text-muted-foreground border-border/60"
+                  }`}
+                >
+                  Todas
+                </button>
+                {AVATAR_LETTER_VARIANTS.map((v) => (
+                  <button
+                    key={v.id}
+                    type="button"
+                    onClick={() => setLetterVariantFilter(v.id)}
+                    className={`rounded-full px-2.5 py-1 text-[11px] font-bold border transition-all cursor-pointer ${
+                      letterVariantFilter === v.id
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-secondary/40 text-muted-foreground border-border/60"
+                    }`}
+                  >
+                    {v.shortLabel}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-96 overflow-y-auto pr-1">
-            {avatars.map((av) => (
+            {(avatarSubcategory === "icon" ? iconAvatars : filteredLetterAvatars).map((av) => (
               <div
                 key={av.id}
                 className={`flex items-center justify-between gap-2.5 rounded-2xl border bg-card p-3 ${

@@ -36,6 +36,7 @@ import {
 import { getAllAvailableMedals, RARITY_INFO } from "@/lib/medals-catalog";
 import { usePlayerAuth } from "@/lib/player-auth";
 import {
+  getActiveAccount,
   hasValidCloudSessionTicket,
   pushInboxReadToPlayFab,
   pushInboxClaimToPlayFab,
@@ -62,6 +63,7 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
 
   // Estados da Revelação de Recompensa Secreta
   const [isRevealing, setIsRevealing] = useState(false);
+  const [claimingMsgId, setClaimingMsgId] = useState<string | null>(null);
   const [revealProgress, setRevealProgress] = useState(0);
   const [revealedRewardModal, setRevealedRewardModal] = useState<InboxReward | null>(null);
   const [selectedEventModal, setSelectedEventModal] = useState<{
@@ -171,21 +173,23 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
 
   // Confirmar Resgate (Atômico: só marca resgatada na nuvem após confirmar gravação no UserData)
   const handleClaimReward = async (msgId: string) => {
-    if (!profile) return;
+    if (!profile || claimingMsgId) return;
     if (!hasValidCloudSessionTicket()) {
       alert("Sua sessão expirou. Faça login novamente para resgatar esta recompensa com segurança.");
       return;
     }
-    const profileSnapshot = JSON.parse(JSON.stringify(profile)) as typeof profile;
+    setClaimingMsgId(msgId);
+    const liveProfile = getActiveAccount()?.profile ?? profile;
+    const profileSnapshot = JSON.parse(JSON.stringify(liveProfile)) as typeof liveProfile;
     const prevClaimsRaw =
       typeof window !== "undefined" ? window.localStorage.getItem("desafios-inbox-student-claims-v1") : null;
 
-    const res = claimInboxReward(msgId, profileSnapshot);
-    if (!res.success) {
-      alert(res.error || "Erro ao resgatar recompensa.");
-      return;
-    }
     try {
+      const res = claimInboxReward(msgId, profileSnapshot);
+      if (!res.success) {
+        alert(res.error || "Erro ao resgatar recompensa.");
+        return;
+      }
       await savePlayerProfile(res.profile, { requireServerSync: true });
       setRevealedRewardModal(null);
       markInboxMessageAsRead(msgId, res.profile);
@@ -206,6 +210,8 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
           ? err.message
           : "Sua sessão expirou ou está sem conexão. Faça login novamente para resgatar esta recompensa.",
       );
+    } finally {
+      setClaimingMsgId(null);
     }
   };
 

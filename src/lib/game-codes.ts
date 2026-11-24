@@ -297,6 +297,8 @@ export interface PlatformAdminConfig {
   updatedAt: string;
 }
 
+export type AdminConfig = PlatformAdminConfig;
+
 export const DEFAULT_ENABLED_DEFAULT_NOTICES: Record<string, boolean> = {
   default_weekly_tournament: true,
   default_x1_arena: true,

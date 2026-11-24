@@ -248,4 +248,31 @@ describe("Sistema de Pontuação e Moeda de Carreira (career-points)", () => {
     assert.equal(student.pointsBalance, student.careerPoints);
     assert.ok(student.unlockedMedals?.some((m) => m.medalId === "streak_3_days"));
   });
+
+  it("preserva medalha de marco acumulativo (dailyCheckInCount) e não desconta moedas não-medalha na retroatribuição", () => {
+    const student = createMockProfile({
+      nick: "aluno_check_in_acumulativo",
+      level: 3,
+      matchesPlayed: 4,
+      streakDays: 1, // faltou 1 dia na sequência
+      dailyCheckInCount: 3, // mas completou o Dia 3 acumulativo!
+      coins: 20, // já tinha 20 moedas de código promocional / Dia 1
+      lifetimeCoins: 20,
+      careerPoints: 2000,
+      pointsBalance: 2000,
+      unlockedMedals: [
+        { medalId: "streak_3_days", unlockedAt: "2026-11-24T10:00:00Z" } as any, // bronze (5)
+      ],
+    });
+
+    // Sanitizador deve preservar streak_3_days graças a dailyCheckInCount === 3
+    sanitizeInflatedCareerPoints(student);
+    assert.ok(student.unlockedMedals?.some((m) => m.medalId === "streak_3_days"));
+
+    // Retroatribuição por medalhas não deve descontar as 20 moedas que vieram de outra fonte
+    const applied = applyRetroactiveMedalCoins(student);
+    assert.equal(applied.coinsToAward, 5);
+    assert.equal(student.coins, 25);
+    assert.equal(student.lifetimeCoins, 25);
+  });
 });

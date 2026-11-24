@@ -149,4 +149,74 @@ describe("Sistema de Missões Diárias (Faixas de Nível + Missão Personalizada
     assert.equal(claim2.ok, false);
     assert.equal(claim2.alreadyClaimed, true);
   });
+
+  it("mantém a 5ª missão pessoal e a faixa de nível travadas no dia mesmo após jogar o jogo menos jogado ou subir de nível", () => {
+    const dateKey = "2026-11-24";
+    // Empate nos menos jogados: 'porcentagem' e 'formas' com 2 partidas cada
+    const stats = ALL_GAME_IDS.map((gId) => ({
+      game_id: gId,
+      mode: "normal" as const,
+      plays: gId === "porcentagem" || gId === "formas" ? 2 : 10,
+      wins: 1,
+      flawless_wins: 0,
+      best_score: 100,
+      best_level: 1,
+      last_played_at: "2026-11-23T10:00:00Z",
+    }));
+
+    const beforeMissions = generateDailyMissions({
+      profile: { id: "p_lock", level: 3, isAdmin: true },
+      stats,
+      dateKey,
+    });
+    const personalBefore = beforeMissions[4];
+    assert.equal(personalBefore.isPersonalized, true);
+    const chosenGame = personalBefore.gameId!;
+    assert.equal(personalBefore.target, 1);
+
+    // Aluno joga 1 partida do jogo escolhido (seu histórico agora sobe para 3, ultrapassando o empatado que tem 2)
+    // E ainda sobe para o Nível 4 nessa mesma partida!
+    const updatedStats = stats.map((row) =>
+      row.game_id === chosenGame ? { ...row, plays: row.plays + 1 } : row,
+    );
+    const prog = recordMatchIntoDailyMissions(undefined, {
+      gameId: chosenGame,
+      won: true,
+      flawless: false,
+      mode: "padrao",
+      dateKey,
+      playerLevel: 3,
+      personalizedGameId: chosenGame,
+    });
+
+    const profAfter: any = {
+      id: "p_lock",
+      nick: "LockTest",
+      level: 4, // subiu de faixa no meio do dia!
+      isAdmin: true,
+      xp: 500,
+      seasonXp: 500,
+      careerPoints: 0,
+      pointsBalance: 0,
+      coins: 0,
+      dailyMissionProgress: prog,
+    };
+
+    const afterMissions = generateDailyMissions({
+      profile: profAfter,
+      stats: updatedStats,
+      dateKey,
+    });
+    const personalAfter = afterMissions[4];
+    assert.equal(personalAfter.gameId, chosenGame);
+    assert.equal(personalAfter.target, 1); // faixa Nvl 1-3 preservada no dia
+    assert.equal(personalAfter.current, 1);
+
+    // Consegue resgatar normalmente sem o jogo mudar debaixo do pé
+    const claim = claimDailyMissionForProfile(profAfter, personalAfter.id, {
+      stats: updatedStats,
+      dateKey,
+    });
+    assert.equal(claim.ok, true);
+  });
 });

@@ -22,8 +22,13 @@ import {
   type ChestOpenOutcome,
 } from "@/lib/chests-catalog";
 import { usePlayerAuth } from "@/lib/player-auth";
-import { creditCoinMetrics } from "@/lib/career-points";
-import { isAdminUnlockedSession, syncActiveProfileChangeToPlayFab } from "@/lib/playfab";
+import { checkLevelPromotionPoints, creditCoinMetrics } from "@/lib/career-points";
+import { canAccessShopAndCustomization } from "@/lib/daily-rewards";
+import {
+  getActiveAccount,
+  isAdminUnlockedSession,
+  syncActiveProfileChangeToPlayFab,
+} from "@/lib/playfab";
 import { isAdminOrTestAccount, syncLevelStageProgress } from "@/lib/player-profile";
 import { CollectibleCardView } from "./CollectibleCardView";
 import { CardPagination, paginateItems } from "./CardPagination";
@@ -47,7 +52,13 @@ const CHEST_SLOTS_COUNT = 15;
 
 export function PlayerItemsInventory() {
   const auth = usePlayerAuth();
-  const canViewCards = isAdminOrTestAccount(auth.profile, isAdminUnlockedSession());
+  const isAdminTester = isAdminOrTestAccount(auth.profile, isAdminUnlockedSession());
+  const canViewCards = canAccessShopAndCustomization(
+    auth.profile,
+    isAdminUnlockedSession(),
+    auth.adminConfig,
+  );
+  const isShopReleasedForStudents = Boolean(auth.adminConfig.rolloutFlags?.enableShopForStudents);
 
   const [activePill, setActivePill] = useState<"mochila" | "pacotes" | "baus" | "album" | "visual">("mochila");
   const [backpackPage, setBackpackPage] = useState(1);
@@ -77,8 +88,13 @@ export function PlayerItemsInventory() {
 
   async function handleOpenChest(chest: ChestDefinition, requestedQty?: number) {
     if (!auth.profile || !canViewCards || isOpeningChest) return;
-    const available = Math.max(0, Math.floor(Number(auth.profile.unopenedChests?.[chest.id]) || 0));
-    if (available <= 0) return;
+    const liveProfile = getActiveAccount()?.profile ?? auth.profile;
+    const available = Math.max(0, Math.floor(Number(liveProfile.unopenedChests?.[chest.id]) || 0));
+    if (available <= 0) {
+      setChestError("Você não possui unidades fechadas deste baú no momento.");
+      void auth.refresh();
+      return;
+    }
 
     // Se houver 2+ unidades e a quantidade ainda não foi escolhida, pergunta "1 unidade" vs "Abrir todos"
     if (requestedQty === undefined && available >= 2) {
@@ -86,27 +102,29 @@ export function PlayerItemsInventory() {
       return;
     }
 
-    const qtyToOpen = Math.max(1, Math.min(available, Math.floor(requestedQty ?? 1)));
+    const safeRequested =
+      typeof requestedQty === "number" && Number.isFinite(requestedQty) ? Math.floor(requestedQty) : 1;
+    const qtyToOpen = Math.max(1, Math.min(available, safeRequested));
     setChestError(null);
     setIsOpeningChest(true);
     try {
-      const res = consumeAndOpenChestsBatch(chest, qtyToOpen, auth.profile.unopenedChests ?? {});
+      const res = consumeAndOpenChestsBatch(chest, qtyToOpen, liveProfile.unopenedChests ?? {});
       if (!res.ok || !res.outcome) return;
 
-      const nextPacks = { ...(auth.profile.unopenedPacks ?? {}) };
+      const nextPacks = { ...(liveProfile.unopenedPacks ?? {}) };
       for (const pk of res.outcome.packs) {
         nextPacks[pk.packId] = (Number(nextPacks[pk.packId]) || 0) + pk.quantity;
       }
 
       let updatedProfile = {
-        ...auth.profile,
+        ...liveProfile,
         unopenedChests: res.updatedUnopenedChests,
         unopenedPacks: nextPacks,
-        chestsOpenedTotal: Math.max(0, auth.profile.chestsOpenedTotal ?? 0) + res.openedCount,
-        pointsBalance: (auth.profile.pointsBalance ?? 0) + res.outcome.points,
-        careerPoints: (auth.profile.careerPoints ?? 0) + res.outcome.points,
-        xp: (auth.profile.xp ?? 0) + res.outcome.xp,
-        seasonXp: (auth.profile.seasonXp ?? 0) + res.outcome.xp,
+        chestsOpenedTotal: Math.max(0, liveProfile.chestsOpenedTotal ?? 0) + res.openedCount,
+        pointsBalance: (liveProfile.pointsBalance ?? 0) + res.outcome.points,
+        careerPoints: (liveProfile.careerPoints ?? 0) + res.outcome.points,
+        xp: (liveProfile.xp ?? 0) + res.outcome.xp,
+        seasonXp: (liveProfile.seasonXp ?? 0) + res.outcome.xp,
       };
       // Recalcula o nível imediatamente caso o XP acumulado em lote tenha ultrapassado um nível
       const syncedLevel = syncLevelStageProgress({
@@ -122,6 +140,14 @@ export function PlayerItemsInventory() {
         level: syncedLevel.level,
         levelStageProgress: syncedLevel.stageProgress,
       };
+      if (syncedLevel.level > (liveProfile.level ?? 1)) {
+        checkLevelPromotionPoints(
+          syncedLevel.level,
+          updatedProfile,
+          1,
+          auth.adminConfig.coinRewardsConfig?.levelCoinStep ?? 10,
+        );
+      }
       creditCoinMetrics(updatedProfile, res.outcome.coins);
 
       const newlyGrantedCosmetics: Array<{ kind: "avatar" | "aura"; itemId: string }> = [];
@@ -238,16 +264,19 @@ export function PlayerItemsInventory() {
     pack: CardPackDefinition,
     quantity = 1,
   ): Promise<PackOpenOutcome | null> {
-    const unopenedMap = auth.profile?.unopenedPacks ?? {};
+    const liveProfile = getActiveAccount()?.profile ?? auth.profile;
+    const unopenedMap = liveProfile?.unopenedPacks ?? {};
+    const liveCardsMap = liveProfile?.cards ?? ownedCardsMap;
     const hasStock = (Number(unopenedMap[pack.id]) || 0) > 0;
+    const safeQuantity = Number.isFinite(quantity) ? Math.max(1, Math.floor(quantity)) : 1;
     const foilChance = auth.adminConfig.cardFoilChancePercent ?? DEFAULT_CARD_FOIL_CHANCE_PERCENT;
 
     if (hasStock) {
       const res = consumeAndOpenCardPacksBatch(
         pack,
-        quantity,
+        safeQuantity,
         catalog,
-        ownedCardsMap,
+        liveCardsMap,
         unopenedMap,
         Math.random,
         foilChance,
@@ -274,7 +303,14 @@ export function PlayerItemsInventory() {
       };
     }
 
-    // Modo teste ADM (sem estoque de pacotes fechados)
+    // Modo teste ADM (sem estoque de pacotes fechados) — estritamente bloqueado para alunos comuns
+    if (!isAdminTester) {
+      return {
+        drawn: [],
+        newlyDiscovered: [],
+        error: "Você não possui unidades fechadas deste pacote no momento.",
+      };
+    }
     const res = openCardPack(pack, catalog, ownedCardsMap, Math.random, foilChance);
     if (res.error) {
       return { drawn: [], newlyDiscovered: [], error: res.error };
@@ -421,7 +457,9 @@ export function PlayerItemsInventory() {
             <div className="rounded-3xl border bg-card p-4 space-y-3">
               <div className="font-display text-sm font-black flex items-center justify-between">
                 <span>Seus Avatares Desbloqueados ({myAvatars.length})</span>
-                <span className="text-[10px] font-bold uppercase text-amber-500">Prévia ADM</span>
+                {!isShopReleasedForStudents && (
+                  <span className="text-[10px] font-bold uppercase text-amber-500">Prévia ADM</span>
+                )}
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
                 {myAvatars.map((av) => {
@@ -432,10 +470,14 @@ export function PlayerItemsInventory() {
                       type="button"
                       onClick={async () => {
                         if (!auth.profile) return;
+                        const prevSecondary = auth.profile.equippedAvatar?.secondaryId;
                         await syncActiveProfileChangeToPlayFab({
                           ...auth.profile,
                           equippedAvatar: {
                             id: av.id,
+                            ...(prevSecondary && prevSecondary !== av.id
+                              ? { secondaryId: prevSecondary }
+                              : {}),
                             color: auth.profile.equippedAvatar?.color,
                           },
                         });
@@ -483,7 +525,7 @@ export function PlayerItemsInventory() {
                           if (!auth.profile) return;
                           await syncActiveProfileChangeToPlayFab({
                             ...auth.profile,
-                            equippedAuraId: equipped ? undefined : aura.id,
+                            equippedAuraId: equipped ? "" : aura.id,
                           });
                           await auth.refresh();
                         }}
@@ -678,14 +720,16 @@ export function PlayerItemsInventory() {
                   </p>
                 </div>
               </div>
-              <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/15 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-amber-600 dark:text-amber-400">
-                <Lock className="h-3 w-3" /> Prévia Restrita ADM
-              </span>
+              {!isShopReleasedForStudents && (
+                <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/15 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-amber-600 dark:text-amber-400">
+                  <Lock className="h-3 w-3" /> Prévia Restrita ADM
+                </span>
+              )}
             </div>
           </div>
 
-          {/* Abertura rápida de pacotes para teste do ADM */}
-          {catalog.length > 0 && packs.length > 0 && (
+          {/* Abertura rápida de pacotes exclusivamente para teste do ADM */}
+          {isAdminTester && catalog.length > 0 && packs.length > 0 && (
             <div className="rounded-3xl border bg-card p-4 space-y-2.5">
               <div className="flex items-center gap-1.5 text-xs font-extrabold text-foreground">
                 <PackageOpen className="h-4 w-4 text-primary" />
@@ -733,7 +777,13 @@ export function PlayerItemsInventory() {
           {/* Grade do Álbum */}
           {filteredCatalog.length === 0 ? (
             <div className="rounded-3xl border border-dashed p-8 text-center text-xs text-muted-foreground">
-              Nenhuma carta cadastrada ainda. Crie cartas no Painel ADM → aba <b>Cartas &amp; Pacotes</b>.
+              {isAdminTester ? (
+                <>
+                  Nenhuma carta cadastrada ainda. Crie cartas no Painel ADM → aba <b>Cartas &amp; Pacotes</b>.
+                </>
+              ) : (
+                <>Nenhuma carta disponível nesta categoria no momento.</>
+              )}
             </div>
           ) : (
             (() => {
@@ -783,14 +833,16 @@ export function PlayerItemsInventory() {
                     Mochila de Colecionáveis &amp; Itens
                   </h3>
                   <p className="text-[11px] text-muted-foreground">
-                    Seus cosméticos de robô, baús fechados e passes especiais ficarão armazenados aqui.
+                    Seus pacotes de cartas fechados, baús especiais e itens desbloqueados ficam armazenados aqui.
                   </p>
                 </div>
               </div>
 
-              <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/15 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-amber-600 dark:text-amber-400">
-                <Sparkles className="h-3 w-3" /> Prévia ADM • Em Estruturação
-              </span>
+              {!isShopReleasedForStudents && (
+                <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/15 px-3 py-1 text-[10px] font-black uppercase tracking-wider text-amber-600 dark:text-amber-400">
+                  <Sparkles className="h-3 w-3" /> Prévia ADM • Em Estruturação
+                </span>
+              )}
             </div>
 
             {/* Atalhos rápidos para as abas dedicadas */}
@@ -809,9 +861,6 @@ export function PlayerItemsInventory() {
               >
                 <Gift className="h-3 w-3 text-emerald-500" /> Baús ({totalUnopenedChests})
               </button>
-              <span className="inline-flex items-center gap-1 rounded-lg bg-background/70 border px-2 py-1">
-                <Ticket className="h-3 w-3 text-amber-500" /> Passes &amp; Boosters
-              </span>
             </div>
           </div>
 

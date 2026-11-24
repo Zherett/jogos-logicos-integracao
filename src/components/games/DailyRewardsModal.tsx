@@ -23,11 +23,13 @@ import {
   claimCurrentPlayerDailyMission,
   claimCurrentPlayerDailyReward,
   claimCurrentPlayerWeeklyMission,
+  getAuthoritativeDateKey,
+  getAuthoritativeNow,
+  syncPlayFabServerClock,
   type GameStatRow,
   type PlayerProfile,
 } from "@/lib/playfab.ts";
 import type { AdminConfig } from "@/lib/game-codes.ts";
-import { getLocalDateKey } from "@/lib/player-profile.ts";
 import { mergeWithDefaultCardPacks } from "@/lib/cards-catalog.ts";
 import type { ChestDefinition, ChestOpenOutcome } from "@/lib/chests-catalog.ts";
 import {
@@ -43,6 +45,8 @@ import {
 import { DEFAULT_DAILY_MISSION_COINS, generateDailyMissions } from "@/lib/daily-missions.ts";
 import { DEFAULT_WEEKLY_MISSION_COINS, generateWeeklyMissions } from "@/lib/weekly-missions.ts";
 import { getWeekInfo } from "@/lib/weekly-tournament.ts";
+import { Button } from "@/components/ui/button";
+import { usePlayerAuth } from "@/lib/player-auth";
 import { ChestOpeningModal } from "./ChestOpeningModal";
 
 interface DailyRewardsModalProps {
@@ -62,25 +66,32 @@ export function DailyRewardsModal({
   adminConfig,
   onProfileUpdated,
 }: DailyRewardsModalProps) {
+  const auth = usePlayerAuth();
   const [activeTab, setActiveTab] = useState<"recompensas" | "missoes" | "semanais">("recompensas");
   const [claimingDaily, setClaimingDaily] = useState(false);
   const [claimingMissionId, setClaimingMissionId] = useState<string | null>(null);
-  const [feedbackMsg, setFeedbackMsg] = useState<string | null>(null);
+  const [feedbackMsg, setFeedbackMsg] = useState<{ text: string; tone: "success" | "error" } | null>(null);
   const [openedChest, setOpenedChest] = useState<{
     chest: ChestDefinition;
     outcome: ChestOpenOutcome;
   } | null>(null);
 
+  const [clockTick, setClockTick] = useState(0);
+
   useEffect(() => {
     if (open) {
       setActiveTab("recompensas");
       setFeedbackMsg(null);
+      void syncPlayFabServerClock().then((ms) => {
+        if (ms !== null) setClockTick((v) => v + 1);
+      });
     }
   }, [open]);
 
   const routineConfig = adminConfig?.weeklyRoutineConfig;
   const streak = Math.max(1, profile?.streakDays ?? 1);
-  const todayKey = getLocalDateKey();
+  const authoritativeNow = useMemo(() => getAuthoritativeNow(), [open, clockTick]);
+  const todayKey = getAuthoritativeDateKey(authoritativeNow);
   const claimState = getDailyRewardClaimState(profile, todayKey);
   const { isTodayClaimed, currentDay, completedCycles } = claimState;
 
@@ -123,7 +134,7 @@ export function DailyRewardsModal({
     [missions],
   );
 
-  const weekInfo = useMemo(() => getWeekInfo(), []);
+  const weekInfo = useMemo(() => getWeekInfo(authoritativeNow), [authoritativeNow]);
   const weeklyLevelTierLabel =
     playerLevel <= 3
       ? "Nível 1–3 (4 Missões)"
@@ -164,14 +175,14 @@ export function DailyRewardsModal({
     try {
       const res = await claimCurrentPlayerDailyReward();
       if (!res.ok) {
-        setFeedbackMsg(res.error ?? "Não foi possível resgatar hoje.");
+        setFeedbackMsg({ text: res.error ?? "Não foi possível resgatar hoje.", tone: "error" });
         return;
       }
       const parts: string[] = [];
       if (res.pointsAwarded > 0) parts.push(`+${res.pointsAwarded} pts`);
       if (res.xpAwarded > 0) parts.push(`+${res.xpAwarded} XP`);
       if (res.coinsAwarded > 0) parts.push(`+${res.coinsAwarded} moedas`);
-      setFeedbackMsg(`✅ Dia ${res.claimedDay} resgatado! ${parts.join(" • ")}`);
+      setFeedbackMsg({ text: `✅ Dia ${res.claimedDay} resgatado! ${parts.join(" • ")}`, tone: "success" });
       onProfileUpdated?.();
       if (res.chestDefinition && res.chestOutcome) {
         setOpenedChest({ chest: res.chestDefinition, outcome: res.chestOutcome });
@@ -188,14 +199,14 @@ export function DailyRewardsModal({
     try {
       const res = await claimCurrentPlayerDailyMission(missionId);
       if (!res.ok) {
-        setFeedbackMsg(res.error ?? "Não foi possível resgatar esta missão.");
+        setFeedbackMsg({ text: res.error ?? "Não foi possível resgatar esta missão.", tone: "error" });
         return;
       }
       const parts: string[] = [];
       if (res.pointsAwarded > 0) parts.push(`+${res.pointsAwarded} pts`);
       if (res.xpAwarded > 0) parts.push(`+${res.xpAwarded} XP`);
       if (res.coinsAwarded > 0) parts.push(`+${res.coinsAwarded} moedas`);
-      setFeedbackMsg(`✅ Missão diária resgatada! ${parts.join(" • ")}`);
+      setFeedbackMsg({ text: `✅ Missão diária resgatada! ${parts.join(" • ")}`, tone: "success" });
       onProfileUpdated?.();
     } finally {
       setClaimingMissionId(null);
@@ -209,14 +220,14 @@ export function DailyRewardsModal({
     try {
       const res = await claimCurrentPlayerWeeklyMission(missionId);
       if (!res.ok) {
-        setFeedbackMsg(res.error ?? "Não foi possível resgatar esta missão semanal.");
+        setFeedbackMsg({ text: res.error ?? "Não foi possível resgatar esta missão semanal.", tone: "error" });
         return;
       }
       const parts: string[] = [];
       if (res.pointsAwarded > 0) parts.push(`+${res.pointsAwarded} pts`);
       if (res.xpAwarded > 0) parts.push(`+${res.xpAwarded} XP`);
       if (res.coinsAwarded > 0) parts.push(`+${res.coinsAwarded} moedas`);
-      setFeedbackMsg(`🏆 Missão semanal resgatada! ${parts.join(" • ")}`);
+      setFeedbackMsg({ text: `🏆 Missão semanal resgatada! ${parts.join(" • ")}`, tone: "success" });
       onProfileUpdated?.();
     } finally {
       setClaimingMissionId(null);
@@ -331,9 +342,30 @@ export function DailyRewardsModal({
               </button>
             </div>
 
+            {auth.cloudSessionExpired && (
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-700 dark:text-amber-300">
+                <span>🔑 Sessão na nuvem expirada (24h). Renove o login para resgatar recompensas com segurança.</span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => auth.openReloginDialog()}
+                  className="h-7 rounded-xl border-amber-500/50 bg-background/80 text-xs font-extrabold"
+                >
+                  Renovar Login
+                </Button>
+              </div>
+            )}
+
             {feedbackMsg && (
-              <div className="mt-2 rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-bold text-emerald-700 dark:text-emerald-300">
-                {feedbackMsg}
+              <div
+                className={`mt-2 rounded-xl border px-3 py-1.5 text-xs font-bold ${
+                  feedbackMsg.tone === "error"
+                    ? "border-destructive/40 bg-destructive/10 text-destructive"
+                    : "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                }`}
+              >
+                {feedbackMsg.text}
               </div>
             )}
           </DialogHeader>

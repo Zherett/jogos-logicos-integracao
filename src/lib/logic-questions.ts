@@ -168,18 +168,21 @@ export function generateQuestion(level: number, recent: string[], ops?: OpKind[]
   return gen(safeOps as OpKind[]);
 }
 
+/**
+ * Gera uma questão com alvo Verdadeiro/Falso 100% aleatório e independente (50/50).
+ * Não depende do histórico de respostas anteriores (`recentAnswers`), impedindo
+ * qualquer padrão previsível ou exploração de sequências (ex.: V,V,V -> F,F,F,F)
+ * e corrigindo o viés natural de comparações nos níveis 3 e 4.
+ */
 export function generateBalanced(
   level: number,
   recent: string[],
-  recentAnswers: boolean[],
+  _recentAnswers: boolean[],
   ops?: OpKind[],
 ): Question {
-  const last = recentAnswers.slice(-6);
-  const trues = last.filter(Boolean).length;
-  const wantTrue = trues < last.length / 2;
-  for (let i = 0; i < 8; i++) {
+  const wantTrue = Math.random() < 0.5;
+  for (let i = 0; i < 12; i++) {
     const q = generateQuestion(level, recent, ops);
-    if (last.length < 3) return q;
     if (q.answer === wantTrue) return q;
   }
   return generateQuestion(level, recent, ops);

@@ -16,6 +16,10 @@ export interface DailyMissionProgressState {
   competitiveCount: number;
   playsByGame: Record<string, number>;
   claimedIds: string[];
+  /** Faixa de nível travada na primeira atividade do dia para evitar salto de metas antes do resgate */
+  lockedLevel?: number;
+  /** Jogo pessoal (5ª missão) travado no dia para nunca mudar após o aluno jogar partidas dele */
+  personalizedGameId?: GameId;
 }
 
 export interface DailyMission {
@@ -57,10 +61,12 @@ export function recordMatchIntoDailyMissions(
     flawless: boolean;
     mode?: string;
     dateKey?: string;
+    playerLevel?: number;
+    personalizedGameId?: GameId;
   },
 ): DailyMissionProgressState {
   const dateKey = args.dateKey ?? getLocalDateKey();
-  const base =
+  const base: DailyMissionProgressState =
     prev && prev.dateKey === dateKey
       ? {
           dateKey,
@@ -71,8 +77,24 @@ export function recordMatchIntoDailyMissions(
           competitiveCount: Math.max(0, prev.competitiveCount ?? 0),
           playsByGame: { ...(prev.playsByGame ?? {}) },
           claimedIds: Array.isArray(prev.claimedIds) ? [...prev.claimedIds] : [],
+          ...(typeof prev.lockedLevel === "number"
+            ? { lockedLevel: prev.lockedLevel }
+            : typeof args.playerLevel === "number"
+              ? { lockedLevel: Math.max(1, Math.floor(args.playerLevel)) }
+              : {}),
+          ...(prev.personalizedGameId
+            ? { personalizedGameId: prev.personalizedGameId }
+            : args.personalizedGameId
+              ? { personalizedGameId: args.personalizedGameId }
+              : {}),
         }
-      : createEmptyDailyMissionProgress(dateKey);
+      : {
+          ...createEmptyDailyMissionProgress(dateKey),
+          ...(typeof args.playerLevel === "number"
+            ? { lockedLevel: Math.max(1, Math.floor(args.playerLevel)) }
+            : {}),
+          ...(args.personalizedGameId ? { personalizedGameId: args.personalizedGameId } : {}),
+        };
 
   base.plays += 1;
   if (args.won) base.wins += 1;
@@ -112,6 +134,10 @@ export function mergeDailyMissionProgress(
   for (const [gId, count] of Object.entries(b.playsByGame ?? {})) {
     playsByGame[gId] = Math.max(playsByGame[gId] ?? 0, count ?? 0);
   }
+  const levelCandidates = [a.lockedLevel, b.lockedLevel].filter(
+    (v): v is number => typeof v === "number" && v >= 1,
+  );
+  const personalizedGameId = a.personalizedGameId ?? b.personalizedGameId;
   return {
     dateKey: a.dateKey,
     plays: Math.max(a.plays ?? 0, b.plays ?? 0),
@@ -121,6 +147,8 @@ export function mergeDailyMissionProgress(
     competitiveCount: Math.max(a.competitiveCount ?? 0, b.competitiveCount ?? 0),
     playsByGame,
     claimedIds: Array.from(new Set([...(a.claimedIds ?? []), ...(b.claimedIds ?? [])])),
+    ...(levelCandidates.length > 0 ? { lockedLevel: Math.min(...levelCandidates) } : {}),
+    ...(personalizedGameId ? { personalizedGameId } : {}),
   };
 }
 
@@ -153,11 +181,16 @@ export function pickLeastPlayedGameForPlayer(args: {
   stats?: GameStatRow[];
   adminConfig?: Partial<AdminConfig> | null;
   dateKey?: string;
+  /** Partidas jogadas hoje (subtraídas do histórico para manter a escolha fixa o dia inteiro) */
+  todayPlaysByGame?: Record<string, number>;
 }): { gameId: GameId; gameName: string; plays: number } {
   const dateKey = args.dateKey ?? getLocalDateKey();
   const enabledMap = args.adminConfig?.enabledGames;
   const adminOnlyMap = args.adminConfig?.adminOnlyGames;
-  const minLevelsMap = args.adminConfig?.gameMinLevels;
+  const minLevelsMap =
+    args.adminConfig?.gameLevelRequirements ??
+    (args.adminConfig as { gameMinLevels?: Partial<Record<GameId, number>> } | null | undefined)
+      ?.gameMinLevels;
 
   const eligibleGames = ALL_GAME_IDS.filter((gId) => {
     if (enabledMap && enabledMap[gId] === false) return false;
@@ -176,6 +209,15 @@ export function pickLeastPlayedGameForPlayer(args: {
   for (const row of args.stats ?? []) {
     if (!row?.game_id || !playsByGame.has(row.game_id)) continue;
     playsByGame.set(row.game_id, (playsByGame.get(row.game_id) ?? 0) + Math.max(0, row.plays ?? 0));
+  }
+  // Subtrai as partidas jogadas hoje para que o jogo escolhido pela manhã não mude ao jogar nele
+  if (args.todayPlaysByGame) {
+    for (const gId of pool) {
+      const todayCount = Math.max(0, Math.floor(args.todayPlaysByGame[gId] ?? 0));
+      if (todayCount > 0) {
+        playsByGame.set(gId, Math.max(0, (playsByGame.get(gId) ?? 0) - todayCount));
+      }
+    }
   }
 
   let minPlays = Infinity;
@@ -327,14 +369,30 @@ export function claimDailyMissionForProfile(
     profile.dailyMissionProgress && profile.dailyMissionProgress.dateKey === dateKey
       ? profile.dailyMissionProgress
       : createEmptyDailyMissionProgress(dateKey);
+  const personalizedMission = missions.find((m) => m.isPersonalized && m.gameId);
   const claimedIds = Array.from(new Set([...(prev.claimedIds ?? []), missionId]));
-  profile.dailyMissionProgress = { ...prev, claimedIds };
+  profile.dailyMissionProgress = {
+    ...prev,
+    claimedIds,
+    lockedLevel: prev.lockedLevel ?? Math.max(1, Math.floor(profile.level ?? 1)),
+    ...(prev.personalizedGameId
+      ? { personalizedGameId: prev.personalizedGameId }
+      : personalizedMission?.gameId
+        ? { personalizedGameId: personalizedMission.gameId }
+        : {}),
+  };
   profile.dailyMissionsCompleted = (profile.dailyMissionsCompleted ?? 0) + 1;
 
   // Atualiza também o progresso da missão semanal "Missões Diárias Concluídas"
   profile.weeklyMissionProgress = recordDailyMissionCompletedIntoWeekly(
     profile.weeklyMissionProgress,
     args?.now,
+    undefined,
+    {
+      playerLevel: profile.level,
+      tournamentPoints: profile.tournamentPoints,
+      tournamentRankId: profile.tournamentRankId,
+    },
   );
 
   const pointsAwarded = Math.max(0, mission.rewardPoints);
@@ -361,19 +419,34 @@ function buildDailyMissionsList(args: {
   adminConfig?: Partial<AdminConfig> | null;
   dateKey?: string;
 }): DailyMission[] {
-  const level = Math.max(1, Math.floor(args.profile?.level ?? 1));
+  const dateKey = args.dateKey ?? getLocalDateKey();
+  const todayProgress =
+    args.profile?.dailyMissionProgress?.dateKey === dateKey
+      ? args.profile.dailyMissionProgress
+      : null;
+  const level = Math.max(1, Math.floor(todayProgress?.lockedLevel ?? args.profile?.level ?? 1));
   const playerId = args.profile?.id || args.profile?.nick || "guest";
   const isAdmin = Boolean(args.profile?.isAdmin);
-  const dateKey = args.dateKey ?? getLocalDateKey();
 
-  const leastPlayed = pickLeastPlayedGameForPlayer({
-    playerId,
-    level,
-    isAdmin,
-    stats: args.stats,
-    adminConfig: args.adminConfig,
-    dateKey,
-  });
+  const lockedGameId =
+    todayProgress?.personalizedGameId && ALL_GAME_IDS.includes(todayProgress.personalizedGameId)
+      ? todayProgress.personalizedGameId
+      : null;
+  const leastPlayed = lockedGameId
+    ? {
+        gameId: lockedGameId,
+        gameName: GAME_NAMES[lockedGameId] ?? lockedGameId,
+        plays: 0,
+      }
+    : pickLeastPlayedGameForPlayer({
+        playerId,
+        level,
+        isAdmin,
+        stats: args.stats,
+        adminConfig: args.adminConfig,
+        dateKey,
+        todayPlaysByGame: todayProgress?.playsByGame,
+      });
 
   if (level <= 3) {
     return [

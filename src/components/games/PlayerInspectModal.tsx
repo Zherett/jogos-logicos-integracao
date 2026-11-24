@@ -437,6 +437,7 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
               {viewerShowDefaultAvatar && inspectedAv ? (
                 <PlayerAvatarBadge
                   avatar={inspectedAv.avatar}
+                  secondaryAvatar={inspectedAv.secondaryAvatar}
                   color={inspectedAv.color}
                   aura={inspectedAura}
                   size="lg"

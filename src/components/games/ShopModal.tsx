@@ -1,9 +1,12 @@
 import { useMemo, useState } from "react";
-import { BadgeDollarSign, Check, Coins, Package, Palette, Sparkles, Star } from "lucide-react";
+import { BadgeDollarSign, Check, Coins, Package, Palette, Search, Sparkles, Star, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { mergeWithDefaultCardPacks, type CardPackDefinition } from "@/lib/cards-catalog";
 import {
+  AVATAR_LETTER_VARIANTS,
+  getAvatarCategory,
   getUnlockedAuraIds,
   getUnlockedAvatarIds,
   mergeWithDefaultAuras,
@@ -11,10 +14,12 @@ import {
   purchaseStoreCardPack,
   purchaseStoreCosmetic,
   type AuraDefinition,
+  type AvatarCategory,
   type AvatarDefinition,
+  type AvatarLetterVariant,
 } from "@/lib/cosmetics-catalog";
 import { usePlayerAuth } from "@/lib/player-auth";
-import { syncActiveProfileChangeToPlayFab } from "@/lib/playfab";
+import { getActiveAccount, syncActiveProfileChangeToPlayFab } from "@/lib/playfab";
 import { recordScoreLedgerEntry } from "@/lib/score-history-ledger";
 import { getAuraPresentation, PlayerAvatarBadge } from "./PlayerAvatarBadge";
 
@@ -31,6 +36,9 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
 
   const [activePill, setActivePill] = useState<ShopPill>("destaques");
   const [cosmeticFilter, setCosmeticFilter] = useState<"todos" | "avatares" | "auras">("todos");
+  const [avatarSubcategory, setAvatarSubcategory] = useState<AvatarCategory>("icon");
+  const [letterVariantFilter, setLetterVariantFilter] = useState<"all" | AvatarLetterVariant>("all");
+  const [letterSearch, setLetterSearch] = useState("");
   const [feedback, setFeedback] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -48,6 +56,32 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
       ),
     [auth.adminConfig.avatarsCatalog],
   );
+  const iconAvatars = useMemo(
+    () => avatars.filter((a) => getAvatarCategory(a) === "icon"),
+    [avatars],
+  );
+  const letterAvatars = useMemo(
+    () => avatars.filter((a) => getAvatarCategory(a) === "letter"),
+    [avatars],
+  );
+  const filteredLetterAvatars = useMemo(() => {
+    const q = letterSearch
+      .trim()
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+    return letterAvatars.filter((av) => {
+      if (letterVariantFilter !== "all" && av.letterVariant !== letterVariantFilter) {
+        return false;
+      }
+      if (!q) return true;
+      const hay = `${av.letterChar ?? ""} ${av.name} ${av.description}`
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+      return hay.includes(q);
+    });
+  }, [letterAvatars, letterVariantFilter, letterSearch]);
   const auras = useMemo(
     () =>
       mergeWithDefaultAuras(auth.adminConfig.aurasCatalog).filter(
@@ -66,24 +100,32 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
   );
 
   const coinsBalance = Math.max(0, Math.floor(Number(profile?.coins) || 0));
+  const isShopReleasedForStudents = Boolean(auth.adminConfig.rolloutFlags?.enableShopForStudents);
+  const hasCardCatalog = (auth.adminConfig.cardsCatalog ?? []).length > 0;
 
   async function handleBuyPack(pack: CardPackDefinition) {
-    if (!profile) return;
+    if (!profile || busyId) return;
+    if (!hasCardCatalog) {
+      setFeedback("⚠️ Catálogo de cartas em preparação — pacotes temporariamente indisponíveis.");
+      return;
+    }
     setBusyId(pack.id);
     setFeedback(null);
     try {
-      const res = purchaseStoreCardPack(profile, pack, 1);
+      // Lê o estado mais recente direto do localStorage para impedir gasto duplicado em múltiplas abas
+      const liveProfile = getActiveAccount()?.profile ?? profile;
+      const res = purchaseStoreCardPack(liveProfile, pack, 1);
       if (!res.ok) {
         setFeedback(res.error ?? "Não foi possível comprar o pacote.");
         return;
       }
-      await syncActiveProfileChangeToPlayFab(res.profile);
+      await syncActiveProfileChangeToPlayFab(res.profile, { requireServerSync: true });
       try {
         recordScoreLedgerEntry({
-          playerId: profile.id,
-          playerNick: profile.nick,
+          playerId: liveProfile.id,
+          playerNick: liveProfile.nick,
           type: "coins",
-          source: "correio",
+          source: "compra_loja",
           amount: -res.totalCost,
           balanceAfter: res.profile.coins,
           reason: `Compra na Loja: 1x ${pack.name}`,
@@ -93,28 +135,35 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
       }
       await auth.refresh();
       setFeedback(`✅ Você comprou 1x ${pack.name}! Confira na sua Mochila.`);
+    } catch (err) {
+      setFeedback(
+        err instanceof Error && err.message
+          ? `⚠️ ${err.message}`
+          : "⚠️ Não foi possível concluir a compra no servidor. Tente novamente.",
+      );
     } finally {
       setBusyId(null);
     }
   }
 
   async function handleBuyAvatar(avatar: AvatarDefinition) {
-    if (!profile) return;
+    if (!profile || busyId) return;
     setBusyId(avatar.id);
     setFeedback(null);
     try {
-      const res = purchaseStoreCosmetic(profile, "avatar", avatar);
+      const liveProfile = getActiveAccount()?.profile ?? profile;
+      const res = purchaseStoreCosmetic(liveProfile, "avatar", avatar);
       if (!res.ok) {
         setFeedback(res.error ?? "Não foi possível comprar o avatar.");
         return;
       }
-      await syncActiveProfileChangeToPlayFab(res.profile);
+      await syncActiveProfileChangeToPlayFab(res.profile, { requireServerSync: true });
       try {
         recordScoreLedgerEntry({
-          playerId: profile.id,
-          playerNick: profile.nick,
+          playerId: liveProfile.id,
+          playerNick: liveProfile.nick,
           type: "coins",
-          source: "correio",
+          source: "compra_loja",
           amount: -avatar.priceCoins,
           balanceAfter: res.profile.coins,
           reason: `Compra na Loja (Avatar): ${avatar.name}`,
@@ -124,28 +173,35 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
       }
       await auth.refresh();
       setFeedback(`✅ Avatar "${avatar.name}" desbloqueado! Já disponível em Personalizar Perfil.`);
+    } catch (err) {
+      setFeedback(
+        err instanceof Error && err.message
+          ? `⚠️ ${err.message}`
+          : "⚠️ Não foi possível concluir a compra no servidor. Tente novamente.",
+      );
     } finally {
       setBusyId(null);
     }
   }
 
   async function handleBuyAura(aura: AuraDefinition) {
-    if (!profile) return;
+    if (!profile || busyId) return;
     setBusyId(aura.id);
     setFeedback(null);
     try {
-      const res = purchaseStoreCosmetic(profile, "aura", aura);
+      const liveProfile = getActiveAccount()?.profile ?? profile;
+      const res = purchaseStoreCosmetic(liveProfile, "aura", aura);
       if (!res.ok) {
         setFeedback(res.error ?? "Não foi possível comprar a aura.");
         return;
       }
-      await syncActiveProfileChangeToPlayFab(res.profile);
+      await syncActiveProfileChangeToPlayFab(res.profile, { requireServerSync: true });
       try {
         recordScoreLedgerEntry({
-          playerId: profile.id,
-          playerNick: profile.nick,
+          playerId: liveProfile.id,
+          playerNick: liveProfile.nick,
           type: "coins",
-          source: "correio",
+          source: "compra_loja",
           amount: -aura.priceCoins,
           balanceAfter: res.profile.coins,
           reason: `Compra na Loja (Aura): ${aura.name}`,
@@ -155,32 +211,52 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
       }
       await auth.refresh();
       setFeedback(`✅ ${aura.name} desbloqueada! Já disponível em Personalizar Perfil.`);
+    } catch (err) {
+      setFeedback(
+        err instanceof Error && err.message
+          ? `⚠️ ${err.message}`
+          : "⚠️ Não foi possível concluir a compra no servidor. Tente novamente.",
+      );
     } finally {
       setBusyId(null);
     }
   }
 
   async function handleEquipAvatar(avatarId: string) {
-    if (!profile) return;
-    await syncActiveProfileChangeToPlayFab({
-      ...profile,
-      equippedAvatar: {
-        id: avatarId,
-        color: profile.equippedAvatar?.color,
-      },
-    });
-    await auth.refresh();
-    setFeedback("✨ Avatar equipado no seu perfil!");
+    if (!profile || busyId) return;
+    setBusyId(`equip:${avatarId}`);
+    try {
+      const liveProfile = getActiveAccount()?.profile ?? profile;
+      const prevSecondary = liveProfile.equippedAvatar?.secondaryId;
+      await syncActiveProfileChangeToPlayFab({
+        ...liveProfile,
+        equippedAvatar: {
+          id: avatarId,
+          ...(prevSecondary && prevSecondary !== avatarId ? { secondaryId: prevSecondary } : {}),
+          color: liveProfile.equippedAvatar?.color,
+        },
+      });
+      await auth.refresh();
+      setFeedback("✨ Avatar equipado no seu perfil!");
+    } finally {
+      setBusyId(null);
+    }
   }
 
   async function handleEquipAura(auraId: string) {
-    if (!profile) return;
-    await syncActiveProfileChangeToPlayFab({
-      ...profile,
-      equippedAuraId: auraId,
-    });
-    await auth.refresh();
-    setFeedback("✨ Aura equipada no seu perfil!");
+    if (!profile || busyId) return;
+    setBusyId(`equip:${auraId}`);
+    try {
+      const liveProfile = getActiveAccount()?.profile ?? profile;
+      await syncActiveProfileChangeToPlayFab({
+        ...liveProfile,
+        equippedAuraId: auraId,
+      });
+      await auth.refresh();
+      setFeedback("✨ Aura equipada no seu perfil!");
+    } finally {
+      setBusyId(null);
+    }
   }
 
   const featuredPacks = packs.filter((p) => p.featuredInStore);
@@ -195,9 +271,11 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
             <DialogTitle className="flex items-center gap-2 font-display text-xl sm:text-2xl font-black">
               <BadgeDollarSign className="h-6 w-6 text-amber-500" />
               Loja de Moedas
-              <span className="rounded-full border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 text-[10px] font-black uppercase text-amber-600 dark:text-amber-400">
-                Prévia ADM
-              </span>
+              {!isShopReleasedForStudents && (
+                <span className="rounded-full border border-amber-500/40 bg-amber-500/15 px-2 py-0.5 text-[10px] font-black uppercase text-amber-600 dark:text-amber-400">
+                  Prévia ADM
+                </span>
+              )}
             </DialogTitle>
 
             <div className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/15 px-3 py-1 font-mono text-sm font-black text-amber-600 dark:text-amber-400">
@@ -205,6 +283,21 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
               <span>{coinsBalance} moedas</span>
             </div>
           </div>
+
+          {auth.cloudSessionExpired && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-700 dark:text-amber-300">
+              <span>🔑 Sessão na nuvem expirada (24h). Renove o login para comprar na Loja.</span>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => auth.openReloginDialog()}
+                className="h-7 rounded-xl border-amber-500/50 bg-background/80 text-xs font-extrabold"
+              >
+                Renovar Login
+              </Button>
+            </div>
+          )}
 
           {/* Navegação em Pílulas */}
           <div className="grid grid-cols-3 gap-1 rounded-full border border-border/70 bg-secondary/40 p-1">
@@ -297,7 +390,7 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
                               type="button"
                               size="sm"
                               variant={equipped ? "secondary" : "outline"}
-                              disabled={equipped}
+                              disabled={busyId !== null || equipped}
                               onClick={() => void handleEquipAvatar(av.id)}
                               className="w-full rounded-xl text-xs font-bold"
                             >
@@ -308,7 +401,7 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
                             <Button
                               type="button"
                               size="sm"
-                              disabled={busyId === av.id || coinsBalance < av.priceCoins}
+                              disabled={busyId !== null || coinsBalance < av.priceCoins}
                               onClick={() => void handleBuyAvatar(av)}
                               className="w-full rounded-xl text-xs font-bold"
                             >
@@ -347,7 +440,7 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
                               type="button"
                               size="sm"
                               variant={equipped ? "secondary" : "outline"}
-                              disabled={equipped}
+                              disabled={busyId !== null || equipped}
                               onClick={() => void handleEquipAura(aura.id)}
                               className="shrink-0 rounded-xl text-xs font-bold"
                             >
@@ -357,7 +450,7 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
                             <Button
                               type="button"
                               size="sm"
-                              disabled={busyId === aura.id || coinsBalance < aura.priceCoins}
+                              disabled={busyId !== null || coinsBalance < aura.priceCoins}
                               onClick={() => void handleBuyAura(aura)}
                               className="shrink-0 rounded-xl text-xs font-bold"
                             >
@@ -391,11 +484,12 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
                           <Button
                             type="button"
                             size="sm"
-                            disabled={busyId === pack.id || coinsBalance < price}
+                            disabled={busyId !== null || !hasCardCatalog || coinsBalance < price}
                             onClick={() => void handleBuyPack(pack)}
                             className="shrink-0 rounded-xl text-xs font-bold"
+                            title={!hasCardCatalog ? "Catálogo de cartas em preparação" : undefined}
                           >
-                            🪙 {price}
+                            {hasCardCatalog ? `🪙 ${price}` : "Em breve"}
                           </Button>
                         </div>
                       );
@@ -407,37 +501,44 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
           )}
 
           {activePill === "pacotes" && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {packs.map((pack) => {
-                const price = Math.max(1, Math.floor(Number(pack.priceCoins) || 40));
-                return (
-                  <div
-                    key={pack.id}
-                    className="flex flex-col justify-between gap-3 rounded-2xl border bg-card p-3.5 shadow-2xs"
-                  >
-                    <div className="space-y-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="font-display text-sm font-black text-foreground">
-                          {pack.name}
-                        </span>
-                        <span className="rounded-full bg-secondary px-2 py-0.5 font-mono text-[10px] font-bold">
-                          {pack.cardsPerPack} cartas
-                        </span>
-                      </div>
-                      <p className="text-xs text-muted-foreground">{pack.description}</p>
-                    </div>
-                    <Button
-                      type="button"
-                      size="sm"
-                      disabled={busyId === pack.id || coinsBalance < price}
-                      onClick={() => void handleBuyPack(pack)}
-                      className="w-full rounded-xl text-xs font-bold"
+            <div className="space-y-3">
+              {!hasCardCatalog && (
+                <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 px-3.5 py-2.5 text-xs font-semibold text-amber-700 dark:text-amber-300">
+                  📦 O catálogo de cartas colecionáveis ainda está sendo finalizado pela equipe. Os pacotes ficarão disponíveis para compra assim que as cartas forem publicadas!
+                </div>
+              )}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {packs.map((pack) => {
+                  const price = Math.max(1, Math.floor(Number(pack.priceCoins) || 40));
+                  return (
+                    <div
+                      key={pack.id}
+                      className="flex flex-col justify-between gap-3 rounded-2xl border bg-card p-3.5 shadow-2xs"
                     >
-                      Comprar por 🪙 {price} moedas
-                    </Button>
-                  </div>
-                );
-              })}
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-display text-sm font-black text-foreground">
+                            {pack.name}
+                          </span>
+                          <span className="rounded-full bg-secondary px-2 py-0.5 font-mono text-[10px] font-bold">
+                            {pack.cardsPerPack} cartas
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground">{pack.description}</p>
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={busyId !== null || !hasCardCatalog || coinsBalance < price}
+                        onClick={() => void handleBuyPack(pack)}
+                        className="w-full rounded-xl text-xs font-bold"
+                      >
+                        {hasCardCatalog ? `Comprar por 🪙 ${price} moedas` : "Indisponível (sem cartas no catálogo)"}
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
 
@@ -461,52 +562,151 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
               </div>
 
               {(cosmeticFilter === "todos" || cosmeticFilter === "avatares") && (
-                <div className="space-y-2">
-                  <div className="text-xs font-black uppercase tracking-wider text-muted-foreground">
-                    Avatares
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="text-xs font-black uppercase tracking-wider text-muted-foreground">
+                      Avatares
+                    </div>
+                    {/* Subcategoria em pílulas: Ícones | Letras */}
+                    <div className="inline-flex items-center gap-1 rounded-full border border-border/70 bg-secondary/40 p-0.5">
+                      <button
+                        type="button"
+                        onClick={() => setAvatarSubcategory("icon")}
+                        className={`rounded-full px-3 py-1 text-[11px] font-extrabold transition-all cursor-pointer ${
+                          avatarSubcategory === "icon"
+                            ? "bg-primary text-primary-foreground shadow-xs"
+                            : "text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        Ícones ({iconAvatars.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAvatarSubcategory("letter")}
+                        className={`rounded-full px-3 py-1 text-[11px] font-extrabold transition-all cursor-pointer ${
+                          avatarSubcategory === "letter"
+                            ? "bg-primary text-primary-foreground shadow-xs"
+                            : "text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        Letras ({letterAvatars.length})
+                      </button>
+                    </div>
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
-                    {avatars.map((av) => {
-                      const owned = unlockedAvatarSet.has(av.id);
-                      const equipped = profile?.equippedAvatar?.id === av.id;
-                      return (
-                        <div
-                          key={av.id}
-                          className="flex flex-col justify-between gap-2.5 rounded-2xl border bg-card p-3"
-                        >
-                          <div className="flex items-center gap-2.5">
-                            <PlayerAvatarBadge avatar={av} size="sm" />
-                            <div className="min-w-0">
-                              <div className="font-display text-sm font-black truncate">{av.name}</div>
-                              <p className="text-[11px] text-muted-foreground line-clamp-2">{av.description}</p>
-                            </div>
-                          </div>
-                          {owned ? (
-                            <Button
+
+                  {avatarSubcategory === "letter" && (
+                    <div className="space-y-2.5 rounded-2xl border border-border/60 bg-secondary/20 p-3">
+                      <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                        <div className="relative flex-1">
+                          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                          <Input
+                            type="text"
+                            value={letterSearch}
+                            onChange={(e) => setLetterSearch(e.target.value)}
+                            placeholder="Pesquisar letra (ex.: A, J, Simples, Arredondada, Quadrada)..."
+                            className="h-8 rounded-xl pl-8 pr-8 text-xs bg-background"
+                          />
+                          {letterSearch && (
+                            <button
                               type="button"
-                              size="sm"
-                              variant={equipped ? "secondary" : "outline"}
-                              disabled={equipped}
-                              onClick={() => void handleEquipAvatar(av.id)}
-                              className="w-full rounded-xl text-xs font-bold"
+                              onClick={() => setLetterSearch("")}
+                              aria-label="Limpar pesquisa"
+                              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer"
                             >
-                              {equipped ? "Equipado" : "Adquirido • Equipar"}
-                            </Button>
-                          ) : (
-                            <Button
-                              type="button"
-                              size="sm"
-                              disabled={busyId === av.id || coinsBalance < av.priceCoins}
-                              onClick={() => void handleBuyAvatar(av)}
-                              className="w-full rounded-xl text-xs font-bold"
-                            >
-                              🪙 {av.priceCoins} moedas
-                            </Button>
+                              <X className="h-3.5 w-3.5" />
+                            </button>
                           )}
                         </div>
+
+                        <div className="flex flex-wrap gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setLetterVariantFilter("all")}
+                            className={`rounded-full px-2.5 py-1 text-[11px] font-bold border transition-all cursor-pointer ${
+                              letterVariantFilter === "all"
+                                ? "bg-primary text-primary-foreground border-primary"
+                                : "bg-background text-muted-foreground border-border/60 hover:text-foreground"
+                            }`}
+                          >
+                            Todas
+                          </button>
+                          {AVATAR_LETTER_VARIANTS.map((v) => (
+                            <button
+                              key={v.id}
+                              type="button"
+                              onClick={() => setLetterVariantFilter(v.id)}
+                              className={`rounded-full px-2.5 py-1 text-[11px] font-bold border transition-all cursor-pointer ${
+                                letterVariantFilter === v.id
+                                  ? "bg-primary text-primary-foreground border-primary"
+                                  : "bg-background text-muted-foreground border-border/60 hover:text-foreground"
+                              }`}
+                            >
+                              {v.shortLabel}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground">
+                        💡 Ao alcançar o <b>Nível 5</b>, a letra inicial do seu apelido na fonte <b>Simples</b> é liberada gratuitamente no seu inventário!
+                      </p>
+                    </div>
+                  )}
+
+                  {(() => {
+                    const visibleAvatars =
+                      avatarSubcategory === "icon" ? iconAvatars : filteredLetterAvatars;
+                    if (visibleAvatars.length === 0) {
+                      return (
+                        <div className="rounded-2xl border border-dashed border-border/70 bg-secondary/15 p-6 text-center text-xs text-muted-foreground">
+                          Nenhuma letra encontrada para "{letterSearch}".
+                        </div>
                       );
-                    })}
-                  </div>
+                    }
+                    return (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                        {visibleAvatars.map((av) => {
+                          const owned = unlockedAvatarSet.has(av.id);
+                          const equipped = profile?.equippedAvatar?.id === av.id;
+                          return (
+                            <div
+                              key={av.id}
+                              className="flex flex-col justify-between gap-2.5 rounded-2xl border bg-card p-3"
+                            >
+                              <div className="flex items-center gap-2.5">
+                                <PlayerAvatarBadge avatar={av} size="sm" />
+                                <div className="min-w-0">
+                                  <div className="font-display text-sm font-black truncate">{av.name}</div>
+                                  <p className="text-[11px] text-muted-foreground line-clamp-2">{av.description}</p>
+                                </div>
+                              </div>
+                              {owned ? (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant={equipped ? "secondary" : "outline"}
+                                  disabled={busyId !== null || equipped}
+                                  onClick={() => void handleEquipAvatar(av.id)}
+                                  className="w-full rounded-xl text-xs font-bold"
+                                >
+                                  {equipped ? "Equipado" : "Adquirido • Equipar"}
+                                </Button>
+                              ) : (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  disabled={busyId !== null || coinsBalance < av.priceCoins}
+                                  onClick={() => void handleBuyAvatar(av)}
+                                  className="w-full rounded-xl text-xs font-bold"
+                                >
+                                  🪙 {av.priceCoins} moedas
+                                </Button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
 
@@ -535,7 +735,7 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
                               type="button"
                               size="sm"
                               variant={equipped ? "secondary" : "outline"}
-                              disabled={equipped}
+                              disabled={busyId !== null || equipped}
                               onClick={() => void handleEquipAura(aura.id)}
                               className="shrink-0 rounded-xl text-xs font-bold"
                             >
@@ -545,7 +745,7 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
                             <Button
                               type="button"
                               size="sm"
-                              disabled={busyId === aura.id || coinsBalance < aura.priceCoins}
+                              disabled={busyId !== null || coinsBalance < aura.priceCoins}
                               onClick={() => void handleBuyAura(aura)}
                               className="shrink-0 rounded-xl text-xs font-bold"
                             >

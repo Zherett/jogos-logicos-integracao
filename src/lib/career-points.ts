@@ -500,14 +500,17 @@ export function sanitizeInflatedCareerPoints(
         mId === "explorer_all_games" ||
         (mId === "m_rpg_ametista" && profile.nickNormalized !== "zheret") ||
         (mId === "m_rpg_carmesim" && profile.nickNormalized !== "zheret") ||
-        (mId === "streak_3_days" && (profile.streakDays ?? 0) < 3) ||
-        (mId === "streak_5_days" && (profile.streakDays ?? 0) < 5) ||
-        (mId === "streak_7_days" && (profile.streakDays ?? 0) < 7) ||
+        (mId === "streak_3_days" &&
+          Math.max(profile.streakDays ?? 0, profile.dailyCheckInCount ?? 0) < 3) ||
+        (mId === "streak_5_days" &&
+          Math.max(profile.streakDays ?? 0, profile.dailyCheckInCount ?? 0) < 5) ||
+        (mId === "streak_7_days" &&
+          Math.max(profile.streakDays ?? 0, profile.dailyCheckInCount ?? 0) < 7) ||
         (mId.startsWith("streak_") &&
           mId !== "streak_3_days" &&
           mId !== "streak_5_days" &&
           mId !== "streak_7_days" &&
-          (profile.streakDays ?? 0) < 7)
+          Math.max(profile.streakDays ?? 0, profile.dailyCheckInCount ?? 0) < 7)
       ) {
         return false;
       }
@@ -707,7 +710,6 @@ export function calculateRetroactiveMedalCoins(
   const customMap = options?.customMedalRarities ?? {};
   const rarityCoinsCfg = options?.medalCoinsByRarity ?? {};
   const prevRewarded = profile.coinRewardedMedalIds ?? {};
-  const isFirstMigration = !profile.retroactiveMedalCoinsGrantedAt && Object.keys(prevRewarded).length === 0;
 
   // Agrega contagem por medalId (evitando duplicatas caso haja entradas repetidas no array)
   const countByMedal = new Map<string, { count: number; rarity: MedalRarity }>();
@@ -763,10 +765,10 @@ export function calculateRetroactiveMedalCoins(
     }
   }
 
-  const alreadyRewardedOffset = isFirstMigration
-    ? Math.max(0, Math.floor(Number(profile.lifetimeCoins ?? profile.coins ?? 0)))
-    : 0;
-  const coinsToAward = Math.max(0, rawDeltaCoins - alreadyRewardedOffset);
+  // Não desconta `lifetimeCoins` de outras fontes (correio, promo, Dia 1 ou loja):
+  // a idempotência é garantida exclusivamente por `coinRewardedMedalIds` por medalha.
+  const alreadyRewardedOffset = 0;
+  const coinsToAward = Math.max(0, rawDeltaCoins);
 
   return {
     totalExpectedMedalCoins: rawDeltaCoins,

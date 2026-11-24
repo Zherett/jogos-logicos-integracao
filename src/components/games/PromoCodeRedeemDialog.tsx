@@ -27,7 +27,7 @@ import {
   syncPromoCodesToPlayFab,
   type PromoCodeRewardPayload,
 } from "@/lib/promo-codes";
-import { savePlayerProfile } from "@/lib/playfab";
+import { getActiveAccount, savePlayerProfile } from "@/lib/playfab";
 import { usePlayerAuth } from "@/lib/player-auth";
 
 interface Props {
@@ -108,32 +108,51 @@ export function PromoCodeRedeemDialog({ open, onOpenChange, onRewardClaimed }: P
 
   // Etapa 2: Confirmação e Resgate Atômico
   async function handleClaim() {
-    if (!profile) {
-      setErrorMsg("Sessão de jogador não encontrada.");
+    if (!profile || loading) {
+      if (!profile) setErrorMsg("Sessão de jogador não encontrada.");
       return;
     }
     setLoading(true);
     setErrorMsg(null);
 
+    const prevCodesRaw =
+      typeof window !== "undefined" ? window.localStorage.getItem("desafios_promo_codes_v1") : null;
+
     try {
       // Re-sincroniza com a nuvem imediatamente antes de consumir (trava anti-duplicidade cross-browser)
       await fetchPromoCodesFromPlayFab();
 
-      const profileSnapshot = { ...profile };
+      // Usa o perfil ao vivo do localStorage (trava anti-duplicidade em múltiplas abas)
+      const liveProfile = getActiveAccount()?.profile ?? profile;
+      const profileSnapshot = JSON.parse(JSON.stringify(liveProfile)) as typeof liveProfile;
       const res = claimPromoCode(confirmedCode || codeInput, profileSnapshot);
       if (!res.success) {
         setErrorMsg(res.errorMessage || "Falha ao resgatar o código.");
         return;
       }
 
-      // Persiste XP, nível e pontos do aluno no PlayFab e sincroniza o código como resgatado na nuvem
+      // Persiste XP, nível, moedas e itens no PlayFab com confirmação obrigatória do servidor ANTES de consumir o código na nuvem
       if (res.updatedProfile) {
-        await savePlayerProfile(res.updatedProfile);
+        await savePlayerProfile(res.updatedProfile, { requireServerSync: true });
         await syncPromoCodesToPlayFab();
         await auth.refresh();
       }
       onRewardClaimed?.();
       setStep("success");
+    } catch (err) {
+      // Rollback local se a gravação no servidor falhar (evita queimar o código sem entregar o prêmio)
+      if (typeof window !== "undefined") {
+        if (prevCodesRaw !== null) {
+          window.localStorage.setItem("desafios_promo_codes_v1", prevCodesRaw);
+        } else {
+          window.localStorage.removeItem("desafios_promo_codes_v1");
+        }
+      }
+      setErrorMsg(
+        err instanceof Error && err.message
+          ? err.message
+          : "Sua sessão expirou ou está sem conexão. Faça login novamente para resgatar este código.",
+      );
     } finally {
       setLoading(false);
     }

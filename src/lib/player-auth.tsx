@@ -43,6 +43,7 @@ import {
   pushAdminConfigToPlayFab,
   setAdminUnlockedSession,
   syncAdminConfigFromPlayFab,
+  syncPlayFabServerClock,
   syncSinglePlayerFromPlayFab,
   isPlayFabConfigured,
   grantSpecialRobotMedal,
@@ -179,6 +180,7 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
       setStats([...active.stats]);
       syncCloudSessionStatus(true);
       if (isPlayFabConfigured()) {
+        void syncPlayFabServerClock();
         const targetId = active.profile.nickNormalized || active.profile.id;
         void syncSinglePlayerFromPlayFab(targetId).then(() => {
           const synced = getActiveAccount();
@@ -303,17 +305,32 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
     setCloudSessionExpired(false);
   }, []);
 
-  // Monitora expiração do SessionTicket do PlayFab (24h) para alertar o usuário na UI
+  // Monitora expiração do SessionTicket do PlayFab (24h) e atualizações em outras abas (anti-duplicidade)
   useEffect(() => {
     if (typeof window === "undefined") return;
     const onExpired = () => {
       syncCloudSessionStatus(Boolean(getActiveAccount()));
     };
+    const onStorage = (evt: StorageEvent) => {
+      syncCloudSessionStatus(Boolean(getActiveAccount()));
+      if (!evt.key || evt.key === "desafios-playfab-registry-v1" || evt.key === "desafios-playfab-session-v1") {
+        const latest = getActiveAccount();
+        if (latest) {
+          setProfile({ ...latest.profile });
+          setUnlocked([...latest.unlocked]);
+          setStats([...latest.stats]);
+        } else {
+          setProfile(null);
+          setUnlocked([]);
+          setStats([]);
+        }
+      }
+    };
     window.addEventListener(CLOUD_SESSION_EXPIRED_EVENT, onExpired);
-    window.addEventListener("storage", onExpired);
+    window.addEventListener("storage", onStorage);
     return () => {
       window.removeEventListener(CLOUD_SESSION_EXPIRED_EVENT, onExpired);
-      window.removeEventListener("storage", onExpired);
+      window.removeEventListener("storage", onStorage);
     };
   }, [syncCloudSessionStatus]);
 
