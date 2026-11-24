@@ -410,7 +410,7 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
             <div className="space-y-4">
           {/* Cabeçalho do Perfil Inspecionado (mesmo padrão do próprio perfil) */}
           <div
-            className={`relative mt-3 flex flex-row items-center justify-between gap-3 sm:gap-4 rounded-3xl border-2 bg-card px-4 sm:px-5 pt-6 pb-4 shadow-sm transition-all ${cardAuraPres.className}`}
+            className={`relative mt-3 flex min-h-[8.75rem] flex-row items-center justify-between gap-3 sm:gap-4 rounded-3xl border-2 bg-card px-4 sm:px-5 pt-6 pb-5 sm:pb-6 shadow-sm transition-all ${cardAuraPres.className}`}
             style={cardAuraPres.style}
           >
             {/* Pílula Superior Centralizada sobre a Borda: NVL X (com Aura + Foil no Nível 10) */}
@@ -467,16 +467,6 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                       VOCÊ
                     </span>
                   )}
-                  {Boolean(
-                    profile.turma &&
-                      profile.school &&
-                      profile.school !== "Nenhuma" &&
-                      profile.school !== "Outro"
-                  ) && (
-                    <span className="rounded-full bg-primary/15 border border-primary/30 px-2 py-0.5 text-[10px] font-extrabold text-primary">
-                      {profile.grade ? `${profile.grade} ` : ""}Turma {profile.turma}
-                    </span>
-                  )}
                 </div>
                 <p className="truncate text-xs font-semibold text-muted-foreground uppercase">
                   <StudentNameDisplay
@@ -484,6 +474,26 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                     canViewFull={Boolean(auth.isAdmin || auth.profile?.isAdmin || isMe)}
                   />
                 </p>
+
+                {/* Escola (sem pílula) + Turma à direita quando existir */}
+                <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
+                  <span className="truncate font-bold text-foreground/85">
+                    {profile.school || "Nenhuma"}
+                  </span>
+                  {Boolean(
+                    profile.turma &&
+                      profile.school &&
+                      profile.school !== "Nenhuma" &&
+                      profile.school !== "Outro"
+                  ) && (
+                    <>
+                      <span className="text-muted-foreground">•</span>
+                      <span className="font-extrabold text-primary">
+                        {profile.grade ? `${profile.grade} ` : ""}Turma {profile.turma}
+                      </span>
+                    </>
+                  )}
+                </div>
                 
                 {/* Status Extra de Atividade em Tempo Real (Separado do Online/Offline) */}
                 <PlayerActivityBadge
@@ -495,7 +505,7 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                   className="mt-1.5 mb-0.5"
                 />
 
-                <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs">
+                <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
                   <span className="inline-flex items-center rounded-full bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 text-[10px] font-extrabold text-amber-500 dark:text-amber-400">
                     🏅 {profile.unlockedMedals?.length ?? 0} Medalhas
                   </span>
@@ -540,21 +550,6 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                 showPoints
               />
             </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-2 text-right">
-              <div className="rounded-xl border bg-card px-3 py-1.5">
-                <span className="block text-[10px] font-bold text-muted-foreground">Escola</span>
-                <span className="truncate font-display text-xs font-black text-foreground">
-                  {profile.school}
-                </span>
-              </div>
-              <div className="rounded-xl border bg-card px-3 py-1.5">
-                <span className="block text-[10px] font-bold text-muted-foreground">Vitórias</span>
-                <span className="font-display text-xs font-black text-accent">
-                  {totalWins}
-                </span>
-              </div>
           </div>
 
           {auth.isAdmin && (
