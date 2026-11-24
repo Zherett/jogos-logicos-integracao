@@ -286,7 +286,7 @@ export function PlayerAvatarBadge({
       <div className="relative h-full w-full preserve-3d animate-avatar-dual-spin">
         {/* Face A (Avatar Principal) */}
         <div
-          className="absolute inset-0 grid place-items-center overflow-hidden backface-hidden"
+          className="absolute inset-0 grid place-items-center backface-hidden animate-avatar-dual-face-a"
           style={{
             backgroundColor: activeAvatar.imageUrl ? undefined : `${color}22`,
           }}
@@ -296,7 +296,7 @@ export function PlayerAvatarBadge({
 
         {/* Face B (Avatar Secundário) */}
         <div
-          className="absolute inset-0 grid place-items-center overflow-hidden backface-hidden rotate-y-180"
+          className="absolute inset-0 grid place-items-center backface-hidden animate-avatar-dual-face-b"
           style={{
             backgroundColor: secondaryAvatar.imageUrl ? undefined : `${color}22`,
           }}

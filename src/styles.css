@@ -561,6 +561,46 @@
   animation: avatar-dual-spin 10s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
 }
 
+@keyframes avatar-dual-face-a {
+  0%, 39.49% {
+    opacity: 1;
+    visibility: visible;
+  }
+  39.5%, 89.49% {
+    opacity: 0;
+    visibility: hidden;
+  }
+  89.5%, 100% {
+    opacity: 1;
+    visibility: visible;
+  }
+}
+
+@keyframes avatar-dual-face-b {
+  0%, 39.49% {
+    opacity: 0;
+    visibility: hidden;
+  }
+  39.5%, 89.49% {
+    opacity: 1;
+    visibility: visible;
+  }
+  89.5%, 100% {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+
+.animate-avatar-dual-face-a {
+  transform: rotateY(0deg);
+  animation: avatar-dual-face-a 10s linear infinite;
+}
+
+.animate-avatar-dual-face-b {
+  transform: rotateY(180deg);
+  animation: avatar-dual-face-b 10s linear infinite;
+}
+
 .animate-avatar-dual-foil-overlay {
   animation: avatar-dual-foil-overlay 10s ease-in-out infinite;
 }
@@ -571,9 +611,19 @@
 
 @media (prefers-reduced-motion: reduce) {
   .animate-avatar-dual-spin,
+  .animate-avatar-dual-face-a,
+  .animate-avatar-dual-face-b,
   .animate-avatar-dual-foil-overlay,
   .animate-avatar-dual-foil-sweep {
     animation: none;
+  }
+  .animate-avatar-dual-face-a {
+    opacity: 1;
+    visibility: visible;
+  }
+  .animate-avatar-dual-face-b {
+    opacity: 0;
+    visibility: hidden;
   }
 }
 
