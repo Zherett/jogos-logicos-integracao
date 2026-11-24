@@ -20,7 +20,7 @@ import {
   type ResetHistoryEntry,
 } from "./game-codes.ts";
 import { computeSeasonDates, extendSeasonDate } from "./season-cycle.ts";
-import { ensureLevel5InitialLetterUnlock } from "./cosmetics-catalog.ts";
+import { ensureLevel5InitialLetterUnlock, mergeMonotonicCountRecords } from "./cosmetics-catalog.ts";
 import type { PlayerAvatarConfig } from "./avatar.ts";
 import {
   abbreviateStudentName,
@@ -339,6 +339,8 @@ export interface PlayerProfile {
   peakCoins?: number;
   coinsSpentTotal?: number;
   purchasedCosmeticIds?: string[];
+  purchasedPackCounts?: Record<string, number>;
+  storeCoinsSpentByItem?: Record<string, number>;
   chestsOpenedTotal?: number;
   packsOpenedTotal?: number;
   unlockedAvatars?: string[];
@@ -2613,6 +2615,8 @@ function buildAccountFromPlayFabPayload(
     purchasedCosmeticIds: Array.isArray(parsedProfile.purchasedCosmeticIds)
       ? parsedProfile.purchasedCosmeticIds
       : [],
+    purchasedPackCounts: mergeMonotonicCountRecords(parsedProfile.purchasedPackCounts),
+    storeCoinsSpentByItem: mergeMonotonicCountRecords(parsedProfile.storeCoinsSpentByItem),
     chestsOpenedTotal: parsedProfile.chestsOpenedTotal ?? 0,
     packsOpenedTotal: parsedProfile.packsOpenedTotal ?? 0,
     unlockedAvatars: Array.isArray(parsedProfile.unlockedAvatars)
@@ -2865,6 +2869,18 @@ async function reconcileAccountWithCloudRoster(
     if (Array.isArray(rProf.purchasedCosmeticIds)) {
       account.profile.purchasedCosmeticIds = Array.from(
         new Set([...(account.profile.purchasedCosmeticIds ?? []), ...rProf.purchasedCosmeticIds]),
+      );
+    }
+    if (rProf.purchasedPackCounts && typeof rProf.purchasedPackCounts === "object") {
+      account.profile.purchasedPackCounts = mergeMonotonicCountRecords(
+        account.profile.purchasedPackCounts,
+        rProf.purchasedPackCounts,
+      );
+    }
+    if (rProf.storeCoinsSpentByItem && typeof rProf.storeCoinsSpentByItem === "object") {
+      account.profile.storeCoinsSpentByItem = mergeMonotonicCountRecords(
+        account.profile.storeCoinsSpentByItem,
+        rProf.storeCoinsSpentByItem,
       );
     }
     if (Array.isArray(rProf.claimedInboxRewardIds)) {
@@ -3822,6 +3838,8 @@ async function pushProfileToPlayFab(
           peakCoins: Math.max(p.peakCoins ?? 0, p.coins ?? 0),
           coinsSpentTotal: p.coinsSpentTotal ?? 0,
           purchasedCosmeticIds: p.purchasedCosmeticIds ?? [],
+          purchasedPackCounts: mergeMonotonicCountRecords(p.purchasedPackCounts),
+          storeCoinsSpentByItem: mergeMonotonicCountRecords(p.storeCoinsSpentByItem),
           chestsOpenedTotal: p.chestsOpenedTotal ?? 0,
           packsOpenedTotal: p.packsOpenedTotal ?? 0,
           unlockedAvatars: p.unlockedAvatars,
@@ -4894,6 +4912,16 @@ export async function syncStudentRosterFromPlayFab(
                 ...(Array.isArray(existing?.profile.purchasedCosmeticIds) ? existing.profile.purchasedCosmeticIds : []),
                 ...(Array.isArray((udProf as any)?.purchasedCosmeticIds) ? (udProf as any).purchasedCosmeticIds : []),
               ]),
+            ),
+            purchasedPackCounts: mergeMonotonicCountRecords(
+              parsed.purchasedPackCounts,
+              existing?.profile.purchasedPackCounts,
+              (udProf as any)?.purchasedPackCounts,
+            ),
+            storeCoinsSpentByItem: mergeMonotonicCountRecords(
+              parsed.storeCoinsSpentByItem,
+              existing?.profile.storeCoinsSpentByItem,
+              (udProf as any)?.storeCoinsSpentByItem,
             ),
             claimedPromoCodeIds: Array.from(
               new Set([
@@ -8442,6 +8470,14 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
                     ...(udProf.purchasedCosmeticIds ?? []),
                   ]),
                 ),
+                purchasedPackCounts: mergeMonotonicCountRecords(
+                  cloudProfile.purchasedPackCounts,
+                  udProf.purchasedPackCounts,
+                ),
+                storeCoinsSpentByItem: mergeMonotonicCountRecords(
+                  cloudProfile.storeCoinsSpentByItem,
+                  udProf.storeCoinsSpentByItem,
+                ),
                 claimedInboxRewardIds: Array.from(
                   new Set([
                     ...(cloudProfile.claimedInboxRewardIds ?? []),
@@ -8831,6 +8867,14 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
                   ...(existing.profile.purchasedCosmeticIds ?? []),
                   ...(cloudProfile.purchasedCosmeticIds ?? []),
                 ]),
+              ),
+              purchasedPackCounts: mergeMonotonicCountRecords(
+                existing.profile.purchasedPackCounts,
+                cloudProfile.purchasedPackCounts,
+              ),
+              storeCoinsSpentByItem: mergeMonotonicCountRecords(
+                existing.profile.storeCoinsSpentByItem,
+                cloudProfile.storeCoinsSpentByItem,
               ),
               unlockedAvatars: Array.from(
                 new Set([
@@ -9899,6 +9943,8 @@ function buildStudentRosterCloudEntry(
     peakCoins: Math.max(p.peakCoins ?? 0, p.coins ?? 0),
     coinsSpentTotal: p.coinsSpentTotal ?? 0,
     purchasedCosmeticIds: p.purchasedCosmeticIds ?? [],
+    purchasedPackCounts: p.purchasedPackCounts ?? {},
+    storeCoinsSpentByItem: p.storeCoinsSpentByItem ?? {},
     chestsOpenedTotal: p.chestsOpenedTotal ?? 0,
     packsOpenedTotal: p.packsOpenedTotal ?? 0,
     dailyCheckInCount: p.dailyCheckInCount ?? 0,

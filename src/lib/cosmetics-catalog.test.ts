@@ -16,6 +16,7 @@ import {
   getUnlockedAvatarIds,
   grantCosmeticToProfile,
   isSafeCosmeticImageUrl,
+  mergeMonotonicCountRecords,
   mergeWithDefaultAuras,
   mergeWithDefaultAvatars,
   paginateUnifiedInventorySlots,
@@ -321,5 +322,42 @@ describe("Catálogo de Cosméticos e Regras da Loja", () => {
     assert.equal(merged.some((a) => a.id === "avatar_xss_1"), false);
     assert.equal(merged.some((a) => a.id === "avatar_xss_2"), false);
     assert.equal(merged.some((a) => a.id === "avatar_ok"), true);
+  });
+
+  it("registra purchasedPackCounts, storeCoinsSpentByItem e mescla contadores monotonicamente", () => {
+    const targetAvatar = DEFAULT_AVATARS.find((a) => a.id === "avatar_bot")!;
+    const targetAura = DEFAULT_AURAS.find((a) => a.id === "aura_azul_pulse")!;
+    const pack = { ...DEFAULT_CARD_PACKS[0], priceCoins: 40 };
+
+    const start: CosmeticProfileSlice = { coins: 1000 };
+    const buyAvatar = purchaseStoreCosmetic(start, "avatar", targetAvatar);
+    assert.equal(buyAvatar.ok, true);
+    assert.equal(buyAvatar.profile.storeCoinsSpentByItem?.[`avatar:${targetAvatar.id}`], targetAvatar.priceCoins);
+
+    const buyAura = purchaseStoreCosmetic(buyAvatar.profile, "aura", targetAura);
+    assert.equal(buyAura.ok, true);
+    assert.equal(buyAura.profile.storeCoinsSpentByItem?.[`aura:${targetAura.id}`], targetAura.priceCoins);
+
+    const buyPack1 = purchaseStoreCardPack(buyAura.profile, pack, 2);
+    assert.equal(buyPack1.ok, true);
+    assert.equal(buyPack1.profile.purchasedPackCounts?.[pack.id], 2);
+    assert.equal(buyPack1.profile.storeCoinsSpentByItem?.[`pack:${pack.id}`], 80);
+
+    // Nova compra do mesmo pacote soma na quantidade comprada e nas moedas gastas por item
+    const buyPack2 = purchaseStoreCardPack(buyPack1.profile, pack, 3);
+    assert.equal(buyPack2.ok, true);
+    assert.equal(buyPack2.profile.purchasedPackCounts?.[pack.id], 5);
+    assert.equal(buyPack2.profile.storeCoinsSpentByItem?.[`pack:${pack.id}`], 200);
+    assert.equal(
+      buyPack2.profile.coinsSpentTotal,
+      targetAvatar.priceCoins + targetAura.priceCoins + 200,
+    );
+
+    const mergedCounts = mergeMonotonicCountRecords(
+      { [pack.id]: 2, invalid_neg: -3, invalid_zero: 0 },
+      { [pack.id]: 5, other: 1.9 },
+      null,
+    );
+    assert.deepEqual(mergedCounts, { [pack.id]: 5, other: 1 });
   });
 });

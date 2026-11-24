@@ -634,6 +634,8 @@ export interface CosmeticProfileSlice {
   lifetimeCoins?: number;
   coinsSpentTotal?: number;
   purchasedCosmeticIds?: string[];
+  purchasedPackCounts?: Record<string, number>;
+  storeCoinsSpentByItem?: Record<string, number>;
   unlockedAvatars?: string[];
   equippedAvatar?: { id: string; secondaryId?: string; color?: string };
   level5InitialAvatarGrantedId?: string;
@@ -643,6 +645,29 @@ export interface CosmeticProfileSlice {
   unlockedAuras?: string[];
   equippedAuraId?: string;
   unopenedPacks?: Record<string, number>;
+}
+
+/**
+ * Mescla mapas de contadores não-negativos (ex.: pacotes comprados, moedas gastas por item)
+ * preservando o maior valor observado para cada chave.
+ */
+export function mergeMonotonicCountRecords(
+  ...records: Array<Record<string, number> | undefined | null>
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const rec of records) {
+    if (!rec || typeof rec !== "object") continue;
+    for (const [key, rawVal] of Object.entries(rec)) {
+      if (!key) continue;
+      const n = Number(rawVal);
+      if (!Number.isFinite(n) || n <= 0) continue;
+      const safeVal = Math.floor(n);
+      if (safeVal > (out[key] ?? 0)) {
+        out[key] = safeVal;
+      }
+    }
+  }
+  return out;
 }
 
 const VALID_LEVEL5_FREE_LETTER_REGEX = /^avatar_letter_simple_[a-z]$/;
@@ -859,6 +884,9 @@ export function purchaseStoreCosmetic<T extends CosmeticProfileSlice>(
   const nextPurchased = prevPurchased.includes(purchasedKey)
     ? prevPurchased
     : [...prevPurchased, purchasedKey];
+  const prevSpentByItem = { ...(profile.storeCoinsSpentByItem ?? {}) };
+  prevSpentByItem[purchasedKey] =
+    Math.max(0, Math.floor(Number(prevSpentByItem[purchasedKey]) || 0)) + price;
   const prevSpent = Number.isFinite(Number(profile.coinsSpentTotal))
     ? Math.max(0, Math.floor(Number(profile.coinsSpentTotal)))
     : 0;
@@ -875,6 +903,7 @@ export function purchaseStoreCosmetic<T extends CosmeticProfileSlice>(
       lifetimeCoins: safeLifetime,
       coinsSpentTotal: prevSpent + price,
       purchasedCosmeticIds: nextPurchased,
+      storeCoinsSpentByItem: prevSpentByItem,
     },
   };
 }
@@ -913,6 +942,12 @@ export function purchaseStoreCardPack<T extends CosmeticProfileSlice>(
   }
   const nextPacks = { ...(profile.unopenedPacks ?? {}) };
   nextPacks[pack.id] = (Math.max(0, Math.floor(Number(nextPacks[pack.id]) || 0))) + safeQty;
+  const nextPackCounts = { ...(profile.purchasedPackCounts ?? {}) };
+  nextPackCounts[pack.id] = Math.max(0, Math.floor(Number(nextPackCounts[pack.id]) || 0)) + safeQty;
+  const nextSpentByItem = { ...(profile.storeCoinsSpentByItem ?? {}) };
+  const packItemKey = `pack:${pack.id}`;
+  nextSpentByItem[packItemKey] =
+    Math.max(0, Math.floor(Number(nextSpentByItem[packItemKey]) || 0)) + totalCost;
   const prevSpent = Number.isFinite(Number(profile.coinsSpentTotal))
     ? Math.max(0, Math.floor(Number(profile.coinsSpentTotal)))
     : 0;
@@ -929,6 +964,8 @@ export function purchaseStoreCardPack<T extends CosmeticProfileSlice>(
       lifetimeCoins: safeLifetime,
       coinsSpentTotal: prevSpent + totalCost,
       unopenedPacks: nextPacks,
+      purchasedPackCounts: nextPackCounts,
+      storeCoinsSpentByItem: nextSpentByItem,
     },
   };
 }

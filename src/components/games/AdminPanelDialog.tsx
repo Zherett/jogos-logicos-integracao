@@ -5436,6 +5436,9 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                 <AdminStoreTab
                   draft={draft}
                   setDraft={setDraft}
+                  students={registeredStudents}
+                  syncingStudents={syncingRoster}
+                  onSyncStudents={handleRefreshRoster}
                   onSaveConfig={async (nextCfg) => {
                     setDraft(nextCfg);
                     await auth.updateAdminConfig(nextCfg);

@@ -1,23 +1,30 @@
 import { useMemo, useState } from "react";
 import {
   BadgeDollarSign,
+  BarChart3,
+  ChevronDown,
+  ChevronUp,
   Coins,
   Eye,
   EyeOff,
   ImagePlus,
+  Info,
   Package,
   Palette,
   Plus,
+  RefreshCw,
   Save,
   Search,
   Sparkles,
   Star,
   Trash2,
+  Users,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { mergeWithDefaultCardPacks, type CardPackDefinition } from "@/lib/cards-catalog";
 import { creditCoinMetrics, MEDAL_COINS_REWARDS } from "@/lib/career-points";
 import {
@@ -36,13 +43,22 @@ import {
 } from "@/lib/cosmetics-catalog";
 import type { PlatformAdminConfig } from "@/lib/game-codes";
 import { usePlayerAuth } from "@/lib/player-auth";
+import { isAdminOrTestAccount } from "@/lib/player-profile";
 import {
   getActiveAccount,
+  getAllRegisteredPlayers,
   getLastAdminCloudSyncError,
   runRetroactiveCoinsAudit,
   syncActiveProfileChangeToPlayFab,
+  type PlayerProfile,
   type RetroactiveCoinsAuditResult,
 } from "@/lib/playfab";
+import {
+  computeStoreSalesReport,
+  filterAndSortStoreReportItems,
+  type StoreAnalyticsItemKind,
+  type StoreAnalyticsSortBy,
+} from "@/lib/store-analytics";
 import { getAuraPresentation, PlayerAvatarBadge } from "./PlayerAvatarBadge";
 
 interface AdminStoreTabProps {
@@ -50,6 +66,9 @@ interface AdminStoreTabProps {
   setDraft: (next: PlatformAdminConfig) => void;
   onSaveConfig: (next: PlatformAdminConfig) => Promise<void> | void;
   onShowFeedback?: (msg: string) => void;
+  students?: PlayerProfile[];
+  syncingStudents?: boolean;
+  onSyncStudents?: () => Promise<void> | void;
 }
 
 export function AdminStoreTab({
@@ -57,9 +76,20 @@ export function AdminStoreTab({
   setDraft,
   onSaveConfig,
   onShowFeedback,
+  students,
+  syncingStudents = false,
+  onSyncStudents,
 }: AdminStoreTabProps) {
   const auth = usePlayerAuth();
-  const [section, setSection] = useState<"economia" | "avatares" | "auras" | "pacotes">("economia");
+  const [section, setSection] = useState<
+    "economia" | "avatares" | "auras" | "pacotes" | "vendas"
+  >("economia");
+  const [includeAdminAndTest, setIncludeAdminAndTest] = useState(false);
+  const [salesKindFilter, setSalesKindFilter] = useState<"all" | StoreAnalyticsItemKind>("all");
+  const [salesSearch, setSalesSearch] = useState("");
+  const [salesSortBy, setSalesSortBy] = useState<StoreAnalyticsSortBy>("quantity");
+  const [expandedSalesItems, setExpandedSalesItems] = useState<Record<string, boolean>>({});
+  const [localSyncingStudents, setLocalSyncingStudents] = useState(false);
   const [newAvatarName, setNewAvatarName] = useState("");
   const [newAvatarDesc, setNewAvatarDesc] = useState("");
   const [newAvatarUrl, setNewAvatarUrl] = useState("");
@@ -102,6 +132,65 @@ export function AdminStoreTab({
   }, [letterAvatars, letterVariantFilter, letterSearch]);
   const auras = useMemo(() => mergeWithDefaultAuras(draft.aurasCatalog), [draft.aurasCatalog]);
   const packs = useMemo(() => mergeWithDefaultCardPacks(draft.cardPacks), [draft.cardPacks]);
+
+  const avatarById = useMemo(() => new Map(avatars.map((a) => [a.id, a])), [avatars]);
+  const auraById = useMemo(() => new Map(auras.map((a) => [a.id, a])), [auras]);
+
+  const resolvedStudents = useMemo(
+    () => (students && students.length > 0 ? students : getAllRegisteredPlayers()),
+    [students],
+  );
+
+  const salesReport = useMemo(
+    () =>
+      computeStoreSalesReport(
+        resolvedStudents,
+        {
+          avatarsCatalog: draft.avatarsCatalog,
+          aurasCatalog: draft.aurasCatalog,
+          cardPacks: draft.cardPacks,
+        },
+        { includeAdminAndTest },
+      ),
+    [
+      resolvedStudents,
+      draft.avatarsCatalog,
+      draft.aurasCatalog,
+      draft.cardPacks,
+      includeAdminAndTest,
+    ],
+  );
+
+  const filteredSalesItems = useMemo(
+    () =>
+      filterAndSortStoreReportItems(salesReport.items, {
+        kind: salesKindFilter,
+        search: salesSearch,
+        sortBy: salesSortBy,
+      }),
+    [salesReport.items, salesKindFilter, salesSearch, salesSortBy],
+  );
+
+  const hasHiddenAdminPurchases = useMemo(() => {
+    if (includeAdminAndTest || salesReport.excludedAdminAndTestCount === 0) return false;
+    return resolvedStudents.some((p) => {
+      if (!isAdminOrTestAccount(p)) return false;
+      const spent = Number(p.coinsSpentTotal) || 0;
+      const cosLen = Array.isArray(p.purchasedCosmeticIds) ? p.purchasedCosmeticIds.length : 0;
+      const hasPacks = Object.values(p.purchasedPackCounts ?? {}).some((v) => Number(v) > 0);
+      return spent > 0 || cosLen > 0 || hasPacks;
+    });
+  }, [includeAdminAndTest, salesReport.excludedAdminAndTestCount, resolvedStudents]);
+
+  async function handleRefreshSalesFromCloud() {
+    if (!onSyncStudents || syncingStudents || localSyncingStudents) return;
+    setLocalSyncingStudents(true);
+    try {
+      await onSyncStudents();
+    } finally {
+      setLocalSyncingStudents(false);
+    }
+  }
 
   const coinCfg = draft.coinRewardsConfig ?? {};
   const medalCoins = {
@@ -256,13 +345,14 @@ export function AdminStoreTab({
       </div>
 
       {/* Sub-navegação em pílulas */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 rounded-2xl border bg-secondary/40 p-1">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5 rounded-2xl border bg-secondary/40 p-1">
         {(
           [
             { id: "economia", label: "Moedas & Regras", icon: Coins },
             { id: "avatares", label: `Avatares (${avatars.length})`, icon: Palette },
             { id: "auras", label: `Auras (${auras.length})`, icon: Sparkles },
             { id: "pacotes", label: `Pacotes (${packs.length})`, icon: Package },
+            { id: "vendas", label: "Vendas & Relatório", icon: BarChart3 },
           ] as const
         ).map((tab) => {
           const Icon = tab.icon;
@@ -825,6 +915,414 @@ export function AdminStoreTab({
             </div>
             );
           })}
+        </div>
+      )}
+
+      {section === "vendas" && (
+        <div className="space-y-4">
+          {/* Cabeçalho e ações */}
+          <div className="rounded-2xl border bg-card p-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="space-y-0.5">
+              <div className="font-display text-sm font-black text-foreground flex items-center gap-2">
+                <BarChart3 className="h-4 w-4 text-primary" />
+                Relatório de Compras da Loja
+              </div>
+              <div className="text-[11px] text-muted-foreground">
+                {salesReport.analyzedPlayersCount} perfil(is) analisado(s)
+                {!includeAdminAndTest && salesReport.excludedAdminAndTestCount > 0 && (
+                  <span>
+                    {" "}
+                    • {salesReport.excludedAdminAndTestCount} conta(s) ADM/Teste ocultada(s)
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="flex items-center gap-2 text-xs font-bold cursor-pointer select-none">
+                <Switch
+                  checked={includeAdminAndTest}
+                  onCheckedChange={(checked) => setIncludeAdminAndTest(Boolean(checked))}
+                />
+                <span>Incluir contas ADM/Teste</span>
+              </label>
+
+              {onSyncStudents && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={syncingStudents || localSyncingStudents}
+                  onClick={() => void handleRefreshSalesFromCloud()}
+                  className="h-8 rounded-xl text-xs font-bold gap-1.5"
+                >
+                  <RefreshCw
+                    className={`h-3.5 w-3.5 ${
+                      syncingStudents || localSyncingStudents ? "animate-spin" : ""
+                    }`}
+                  />
+                  Atualizar da Nuvem
+                </Button>
+              )}
+            </div>
+          </div>
+
+          {/* 4 KPIs de resumo */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3.5 space-y-1">
+              <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wide text-amber-700 dark:text-amber-300">
+                <span>Total de Moedas Gastas</span>
+                <Coins className="h-4 w-4 text-amber-500" />
+              </div>
+              <div className="font-display text-2xl font-black text-amber-600 dark:text-amber-400">
+                {salesReport.totalCoinsSpent.toLocaleString("pt-BR")}
+              </div>
+              <div className="text-[11px] text-amber-800/80 dark:text-amber-200/80">
+                moedas gastas na loja
+              </div>
+            </div>
+
+            <div className="rounded-2xl border bg-card p-3.5 space-y-1">
+              <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+                <span>Itens Comprados</span>
+                <Package className="h-4 w-4 text-primary" />
+              </div>
+              <div className="font-display text-2xl font-black text-foreground">
+                {salesReport.totalItemsPurchased.toLocaleString("pt-BR")}
+              </div>
+              <div className="text-[11px] text-muted-foreground">
+                {salesReport.distinctItemsPurchased} ite{salesReport.distinctItemsPurchased === 1 ? "m" : "ns"} distinto(s)
+              </div>
+            </div>
+
+            <div className="rounded-2xl border bg-card p-3.5 space-y-1">
+              <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+                <span>Compradores Únicos</span>
+                <Users className="h-4 w-4 text-primary" />
+              </div>
+              <div className="font-display text-2xl font-black text-foreground">
+                {salesReport.uniqueBuyersCount.toLocaleString("pt-BR")}
+              </div>
+              <div className="text-[11px] text-muted-foreground">
+                de {salesReport.analyzedPlayersCount} perfis analisados
+              </div>
+            </div>
+
+            <div className="rounded-2xl border bg-card p-3.5 space-y-1.5">
+              <div className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground">
+                Por Categoria
+              </div>
+              <div className="space-y-1 text-[11px]">
+                <div className="flex items-center justify-between">
+                  <span className="flex items-center gap-1 font-semibold text-foreground">
+                    <Palette className="h-3 w-3 text-sky-500" /> Avatares
+                  </span>
+                  <span className="font-mono font-bold">
+                    {salesReport.byKind.avatar.units} un. • 🪙{" "}
+                    {salesReport.byKind.avatar.coinsSpent.toLocaleString("pt-BR")}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="flex items-center gap-1 font-semibold text-foreground">
+                    <Sparkles className="h-3 w-3 text-violet-500" /> Auras
+                  </span>
+                  <span className="font-mono font-bold">
+                    {salesReport.byKind.aura.units} un. • 🪙{" "}
+                    {salesReport.byKind.aura.coinsSpent.toLocaleString("pt-BR")}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="flex items-center gap-1 font-semibold text-foreground">
+                    <Package className="h-3 w-3 text-amber-500" /> Pacotes
+                  </span>
+                  <span className="font-mono font-bold">
+                    {salesReport.byKind.pack.units} un. • 🪙{" "}
+                    {salesReport.byKind.pack.coinsSpent.toLocaleString("pt-BR")}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Aviso opcional de moedas legadas sem rastreamento por pacote */}
+          {salesReport.untrackedLegacyCoins > 0 && (
+            <div className="rounded-2xl border border-amber-500/35 bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-200 flex items-start gap-2">
+              <Info className="h-4 w-4 shrink-0 mt-0.5 text-amber-500" />
+              <div>
+                Há{" "}
+                <strong className="font-mono">
+                  {salesReport.untrackedLegacyCoins.toLocaleString("pt-BR")} moedas
+                </strong>{" "}
+                de compras antigas de pacotes (anteriores ao rastreamento individual por pacote),
+                já somadas no Total de Moedas Gastas acima.
+              </div>
+            </div>
+          )}
+
+          {/* Filtros e ordenação */}
+          <div className="rounded-2xl border bg-card p-3 flex flex-wrap items-center justify-between gap-2.5">
+            <div className="inline-flex flex-wrap items-center gap-1 rounded-xl border border-border/70 bg-secondary/40 p-0.5">
+              {(
+                [
+                  { id: "all", label: `Todos (${salesReport.items.length})` },
+                  {
+                    id: "avatar",
+                    label: `Avatares (${salesReport.byKind.avatar.distinctItems})`,
+                  },
+                  {
+                    id: "aura",
+                    label: `Auras (${salesReport.byKind.aura.distinctItems})`,
+                  },
+                  {
+                    id: "pack",
+                    label: `Pacotes (${salesReport.byKind.pack.distinctItems})`,
+                  },
+                ] as const
+              ).map((pill) => (
+                <button
+                  key={pill.id}
+                  type="button"
+                  onClick={() => setSalesKindFilter(pill.id)}
+                  className={`rounded-lg px-2.5 py-1 text-xs font-extrabold transition-all cursor-pointer ${
+                    salesKindFilter === pill.id
+                      ? "bg-primary text-primary-foreground shadow-xs"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {pill.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 flex-1 justify-end min-w-[240px]">
+              <div className="relative flex-1 max-w-xs min-w-[160px]">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  type="text"
+                  value={salesSearch}
+                  onChange={(e) => setSalesSearch(e.target.value)}
+                  placeholder="Buscar item comprado..."
+                  className="h-8 rounded-xl pl-8 pr-7 text-xs"
+                />
+                {salesSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setSalesSearch("")}
+                    aria-label="Limpar busca"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+
+              <select
+                value={salesSortBy}
+                onChange={(e) => setSalesSortBy(e.target.value as StoreAnalyticsSortBy)}
+                aria-label="Ordenar relatório de vendas"
+                className="h-8 rounded-xl border border-input bg-background px-2.5 text-xs font-bold text-foreground focus:outline-none focus:ring-2 focus:ring-ring"
+              >
+                <option value="quantity">Mais comprados</option>
+                <option value="coins">Mais moedas</option>
+                <option value="name">Nome A–Z</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Lista detalhada de itens comprados ou estado vazio */}
+          {salesReport.items.length === 0 ? (
+            <div className="rounded-2xl border border-dashed bg-card/60 p-8 text-center space-y-3">
+              <BarChart3 className="h-8 w-8 mx-auto text-muted-foreground/70" />
+              <div className="space-y-1">
+                <div className="font-display text-sm font-black text-foreground">
+                  Nenhuma compra registrada até o momento
+                </div>
+                <p className="text-xs text-muted-foreground max-w-md mx-auto">
+                  {hasHiddenAdminPurchases
+                    ? "Ainda não há compras feitas por alunos, mas existem compras registradas em contas ADM/Teste ocultadas pelo filtro."
+                    : "Assim que os alunos comprarem avatares, auras ou pacotes de cartas na Loja de Moedas, o detalhamento aparecerá aqui."}
+                </p>
+              </div>
+              {hasHiddenAdminPurchases && !includeAdminAndTest && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setIncludeAdminAndTest(true)}
+                  className="rounded-xl text-xs font-bold"
+                >
+                  Incluir contas ADM/Teste
+                </Button>
+              )}
+            </div>
+          ) : filteredSalesItems.length === 0 ? (
+            <div className="rounded-2xl border border-dashed bg-card/60 p-6 text-center space-y-2">
+              <div className="font-display text-sm font-black text-foreground">
+                Nenhum item encontrado para o filtro atual
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setSalesKindFilter("all");
+                  setSalesSearch("");
+                }}
+                className="rounded-xl text-xs font-bold"
+              >
+                Limpar filtros
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-2 max-h-[28rem] overflow-y-auto pr-1">
+              {filteredSalesItems.map((item) => {
+                const isExpanded = Boolean(expandedSalesItems[item.key]);
+                const avatarDef = item.kind === "avatar" ? avatarById.get(item.itemId) : undefined;
+                const auraDef = item.kind === "aura" ? auraById.get(item.itemId) : undefined;
+                const auraPres = auraDef ? getAuraPresentation(auraDef) : null;
+                const categoryLabel =
+                  item.kind === "avatar" ? "Avatar" : item.kind === "aura" ? "Aura" : "Pacote";
+                const categoryBadgeClass =
+                  item.kind === "avatar"
+                    ? "border-sky-500/35 bg-sky-500/10 text-sky-600 dark:text-sky-400"
+                    : item.kind === "aura"
+                      ? "border-violet-500/35 bg-violet-500/10 text-violet-600 dark:text-violet-400"
+                      : "border-amber-500/35 bg-amber-500/10 text-amber-600 dark:text-amber-400";
+
+                return (
+                  <div key={item.key} className="rounded-2xl border bg-card p-3 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        {item.kind === "avatar" ? (
+                          avatarDef ? (
+                            <PlayerAvatarBadge avatar={avatarDef} size="sm" />
+                          ) : (
+                            <div className="h-10 w-10 shrink-0 rounded-xl border bg-secondary/50 grid place-items-center text-muted-foreground">
+                              <Palette className="h-5 w-5" />
+                            </div>
+                          )
+                        ) : item.kind === "aura" ? (
+                          <div
+                            className={`h-10 w-10 shrink-0 rounded-xl border-2 bg-background grid place-items-center ${auraPres?.className ?? "border-border"}`}
+                            style={auraPres?.style}
+                          >
+                            <Sparkles className="h-4 w-4 text-violet-500" />
+                          </div>
+                        ) : (
+                          <div className="h-10 w-10 shrink-0 rounded-xl border border-amber-500/35 bg-amber-500/10 grid place-items-center text-amber-500">
+                            <Package className="h-5 w-5" />
+                          </div>
+                        )}
+
+                        <div className="min-w-0 space-y-0.5">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="font-display text-xs sm:text-sm font-black truncate">
+                              {item.name}
+                            </span>
+                            <span
+                              className={`rounded-full border px-2 py-0.5 text-[10px] font-extrabold ${categoryBadgeClass}`}
+                            >
+                              {categoryLabel}
+                            </span>
+                            {item.isRemovedFromCatalog && (
+                              <span className="rounded-full border border-border bg-secondary px-2 py-0.5 text-[10px] font-bold text-muted-foreground">
+                                Removido do catálogo
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-muted-foreground">
+                            {item.currentPriceCoins !== null
+                              ? `Preço atual: 🪙 ${item.currentPriceCoins.toLocaleString("pt-BR")} moedas`
+                              : "Item sem preço ativo no catálogo"}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-3 sm:gap-4 shrink-0">
+                        <div className="text-right">
+                          <div className="text-[10px] font-bold uppercase text-muted-foreground">
+                            Comprados
+                          </div>
+                          <div className="font-display text-sm font-black text-foreground">
+                            {item.quantitySold.toLocaleString("pt-BR")}x
+                          </div>
+                        </div>
+
+                        <div className="text-right">
+                          <div className="text-[10px] font-bold uppercase text-muted-foreground">
+                            Moedas Gastas
+                          </div>
+                          <div
+                            className="font-mono text-sm font-black text-amber-600 dark:text-amber-400"
+                            title={
+                              item.hasEstimatedCoins
+                                ? "Inclui estimativa pelo preço atual para compras anteriores ao rastreamento individual"
+                                : undefined
+                            }
+                          >
+                            🪙 {item.hasEstimatedCoins ? "~" : ""}
+                            {item.coinsSpent.toLocaleString("pt-BR")}
+                          </div>
+                        </div>
+
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() =>
+                            setExpandedSalesItems((prev) => ({
+                              ...prev,
+                              [item.key]: !prev[item.key],
+                            }))
+                          }
+                          className="h-8 rounded-xl text-[11px] font-bold gap-1"
+                        >
+                          <span>Ver compradores ({item.buyers.length})</span>
+                          {isExpanded ? (
+                            <ChevronUp className="h-3.5 w-3.5" />
+                          ) : (
+                            <ChevronDown className="h-3.5 w-3.5" />
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+
+                    {isExpanded && (
+                      <div className="rounded-xl border border-border/70 bg-secondary/25 p-2.5 space-y-1.5">
+                        <div className="text-[10px] font-extrabold uppercase tracking-wide text-muted-foreground">
+                          Compradores ({item.buyers.length})
+                        </div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                          {item.buyers.map((buyer) => (
+                            <div
+                              key={buyer.playerId}
+                              className="flex items-center justify-between gap-2 rounded-lg border bg-background/80 px-2.5 py-1.5 text-xs"
+                            >
+                              <div className="min-w-0">
+                                <div className="font-bold truncate">{buyer.nick}</div>
+                                {buyer.school && (
+                                  <div className="text-[10px] text-muted-foreground truncate">
+                                    {buyer.school}
+                                  </div>
+                                )}
+                              </div>
+                              <div className="shrink-0 text-right font-mono text-[11px] font-bold">
+                                <span className="text-foreground mr-2">{buyer.quantity}x</span>
+                                <span className="text-amber-600 dark:text-amber-400">
+                                  🪙 {buyer.hasEstimatedCoins ? "~" : ""}
+                                  {buyer.coinsSpent.toLocaleString("pt-BR")}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
     </div>
