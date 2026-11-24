@@ -1816,11 +1816,11 @@ export function getX1MedalsProgress(
   };
 }
 
-/** Selects the up to `limit` (default 6) highest-rarity / most valuable medals to feature in profile highlights */
+/** Selects the up to `limit` (default 8) highest-rarity / most valuable medals to feature in profile highlights */
 export function getTopShowcaseMedals(
   unlockedMedals: PlayerUnlockedMedal[],
   allMedals = getAllAvailableMedals(),
-  limit = 6,
+  limit = 8,
 ): MedalDefinition[] {
   if (!unlockedMedals || unlockedMedals.length === 0 || limit <= 0) return [];
 

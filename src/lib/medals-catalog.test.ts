@@ -197,14 +197,45 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
       { medalId: "m_diamante", unlockedAt: "2026-10-31" },
     ];
 
-    const top6 = getTopShowcaseMedals(unlocked, extraMedals);
-    assert.equal(top6.length, 6);
-    assert.equal(top6[0].id, "m_diamante"); // peso 5
-    assert.equal(top6[1].id, "m_platina"); // peso 4 (A antes de B)
-    assert.equal(top6[2].id, "m_platina_2"); // peso 4
-    assert.equal(top6[3].id, "m_ouro"); // peso 3 (A antes de B)
-    assert.equal(top6[4].id, "m_ouro_2"); // peso 3
-    assert.equal(top6[5].id, "m_prata"); // peso 2
+    const topDefault = getTopShowcaseMedals(unlocked, extraMedals);
+    assert.equal(topDefault.length, 7);
+    assert.equal(topDefault[0].id, "m_diamante"); // peso 5
+    assert.equal(topDefault[1].id, "m_platina"); // peso 4 (A antes de B)
+    assert.equal(topDefault[2].id, "m_platina_2"); // peso 4
+    assert.equal(topDefault[3].id, "m_ouro"); // peso 3 (A antes de B)
+    assert.equal(topDefault[4].id, "m_ouro_2"); // peso 3
+    assert.equal(topDefault[5].id, "m_prata"); // peso 2
+    assert.equal(topDefault[6].id, "m_bronze"); // peso 1
+
+    const extra8 = [
+      ...extraMedals,
+      {
+        id: "m_heroi",
+        title: "Herói Supremo",
+        description: "Herói",
+        rarity: "heroi" as const,
+        category: "meta" as const,
+        iconName: "Crown",
+        condition: { type: "total_medals_count" as const, threshold: 50 },
+      },
+      {
+        id: "m_bronze_2",
+        title: "Bronze Extra",
+        description: "Bronze Extra",
+        rarity: "bronze" as const,
+        category: "meta" as const,
+        iconName: "Award",
+        condition: { type: "total_medals_count" as const, threshold: 2 },
+      },
+    ];
+    const unlocked9 = [
+      ...unlocked,
+      { medalId: "m_heroi", unlockedAt: "2026-10-31" },
+      { medalId: "m_bronze_2", unlockedAt: "2026-10-31" },
+    ];
+    const top8 = getTopShowcaseMedals(unlocked9, extra8);
+    assert.equal(top8.length, 8);
+    assert.equal(top8[0].id, "m_heroi");
 
     const top3 = getTopShowcaseMedals(unlocked, extraMedals, 3);
     assert.equal(top3.length, 3);
