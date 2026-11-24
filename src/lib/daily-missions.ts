@@ -124,17 +124,14 @@ export function mergeDailyMissionProgress(
   };
 }
 
+export const DAILY_MISSIONS_COUNT = 5;
+
 /**
- * Retorna a quantidade de missões diárias conforme a faixa de nível do jogador:
- * - Nível 1 a 3: 4 missões (3 padrão + 1 personalizada)
- * - Nível 4 a 6: 5 missões (4 padrão + 1 personalizada)
- * - Nível 7 a 10: 6 missões (5 padrão + 1 personalizada)
+ * Retorna a quantidade fixa de missões diárias para todas as faixas de nível:
+ * - Sempre 5 missões (4 padrão + 1 personalizada na 5ª posição).
  */
-export function getDailyMissionsCountForLevel(level = 1): number {
-  const safeLevel = Math.max(1, Math.floor(level));
-  if (safeLevel <= 3) return 4;
-  if (safeLevel <= 6) return 5;
-  return 6;
+export function getDailyMissionsCountForLevel(_level = 1): number {
+  return DAILY_MISSIONS_COUNT;
 }
 
 function simpleSeedHash(input: string): number {
@@ -411,6 +408,16 @@ function buildDailyMissionsList(args: {
         isPersonalized: false,
       },
       {
+        id: `dm_${dateKey}_flawless`,
+        title: "Precisão Inicial",
+        description: "Conclua 1 partida perfeita (0 erros) hoje.",
+        target: 1,
+        current: 0,
+        rewardPoints: 25,
+        rewardXp: 25,
+        isPersonalized: false,
+      },
+      {
         id: `dm_${dateKey}_personal_${leastPlayed.gameId}`,
         title: `Desafio Pessoal: ${leastPlayed.gameName}`,
         description: `Você jogou pouco este desafio! Jogue 1 partida de ${leastPlayed.gameName} hoje.`,
@@ -480,6 +487,30 @@ function buildDailyMissionsList(args: {
     ];
   }
 
+  const dayNumber = Number(dateKey.split("-")[2] || "1") || 1;
+  const rotatingHighMission: DailyMission =
+    dayNumber % 2 === 0
+      ? {
+          id: `dm_${dateKey}_flawless`,
+          title: "Zero Erros",
+          description: "Conclua 1 partida perfeita (0 erros) hoje.",
+          target: 1,
+          current: 0,
+          rewardPoints: 40,
+          rewardXp: 40,
+          isPersonalized: false,
+        }
+      : {
+          id: `dm_${dateKey}_competitive`,
+          title: "Espírito Competitivo",
+          description: "Dispute 1 duelo na Arena X1 ou vença 1 partida no Torneio Semanal.",
+          target: 1,
+          current: 0,
+          rewardPoints: 45,
+          rewardXp: 45,
+          isPersonalized: false,
+        };
+
   return [
     {
       id: `dm_${dateKey}_plays`,
@@ -511,26 +542,7 @@ function buildDailyMissionsList(args: {
       rewardXp: 35,
       isPersonalized: false,
     },
-    {
-      id: `dm_${dateKey}_flawless`,
-      title: "Zero Erros",
-      description: "Conclua 1 partida perfeita (0 erros) hoje.",
-      target: 1,
-      current: 0,
-      rewardPoints: 40,
-      rewardXp: 40,
-      isPersonalized: false,
-    },
-    {
-      id: `dm_${dateKey}_competitive`,
-      title: "Espírito Competitivo",
-      description: "Dispute 1 duelo na Arena X1 ou vença 1 partida no Torneio Semanal.",
-      target: 1,
-      current: 0,
-      rewardPoints: 45,
-      rewardXp: 45,
-      isPersonalized: false,
-    },
+    rotatingHighMission,
     {
       id: `dm_${dateKey}_personal_${leastPlayed.gameId}`,
       title: `Desafio Pessoal: ${leastPlayed.gameName}`,

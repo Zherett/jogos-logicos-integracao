@@ -99,10 +99,10 @@ export function DailyRewardsModal({
   const playerLevel = Math.max(1, profile?.level ?? 1);
   const levelTierLabel =
     playerLevel <= 3
-      ? "Nível 1–3 (4 Missões)"
+      ? "Nível 1–3 (5 Missões)"
       : playerLevel <= 6
         ? "Nível 4–6 (5 Missões)"
-        : "Nível 7–10 (6 Missões)";
+        : "Nível 7–10 (5 Missões)";
 
   const missions = useMemo(
     () =>

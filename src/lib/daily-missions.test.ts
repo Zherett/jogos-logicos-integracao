@@ -10,25 +10,32 @@ import {
 import { ALL_GAME_IDS } from "./game-storage.ts";
 
 describe("Sistema de Missões Diárias (Faixas de Nível + Missão Personalizada)", () => {
-  it("retorna a quantidade correta de missões para cada faixa de nível (4, 5 e 6)", () => {
-    assert.equal(getDailyMissionsCountForLevel(1), 4);
-    assert.equal(getDailyMissionsCountForLevel(3), 4);
+  it("retorna exatamente 5 missões diárias para todas as faixas de nível, com a 5ª sendo personalizada", () => {
+    assert.equal(getDailyMissionsCountForLevel(1), 5);
+    assert.equal(getDailyMissionsCountForLevel(3), 5);
     assert.equal(getDailyMissionsCountForLevel(4), 5);
     assert.equal(getDailyMissionsCountForLevel(6), 5);
-    assert.equal(getDailyMissionsCountForLevel(7), 6);
-    assert.equal(getDailyMissionsCountForLevel(10), 6);
+    assert.equal(getDailyMissionsCountForLevel(7), 5);
+    assert.equal(getDailyMissionsCountForLevel(10), 5);
 
     const mNv2 = generateDailyMissions({ profile: { id: "p1", level: 2 }, dateKey: "2026-11-17" });
-    assert.equal(mNv2.length, 4);
-    assert.equal(mNv2[mNv2.length - 1].isPersonalized, true);
+    assert.equal(mNv2.length, 5);
+    assert.equal(mNv2[4].isPersonalized, true);
 
     const mNv5 = generateDailyMissions({ profile: { id: "p1", level: 5 }, dateKey: "2026-11-17" });
     assert.equal(mNv5.length, 5);
-    assert.equal(mNv5[mNv5.length - 1].isPersonalized, true);
+    assert.equal(mNv5[4].isPersonalized, true);
 
-    const mNv9 = generateDailyMissions({ profile: { id: "p1", level: 9 }, dateKey: "2026-11-17" });
-    assert.equal(mNv9.length, 6);
-    assert.equal(mNv9[mNv9.length - 1].isPersonalized, true);
+    // Nível 7–10 alterna a 4ª missão entre Zero Erros (dia par) e Espírito Competitivo (dia ímpar)
+    const mNv9Odd = generateDailyMissions({ profile: { id: "p1", level: 9 }, dateKey: "2026-11-17" });
+    assert.equal(mNv9Odd.length, 5);
+    assert.equal(mNv9Odd[3].id, "dm_2026-11-17_competitive");
+    assert.equal(mNv9Odd[4].isPersonalized, true);
+
+    const mNv9Even = generateDailyMissions({ profile: { id: "p1", level: 9 }, dateKey: "2026-11-18" });
+    assert.equal(mNv9Even.length, 5);
+    assert.equal(mNv9Even[3].id, "dm_2026-11-18_flawless");
+    assert.equal(mNv9Even[4].isPersonalized, true);
   });
 
   it("identifica corretamente o jogo com menor número de partidas jogadas para a última missão", () => {
