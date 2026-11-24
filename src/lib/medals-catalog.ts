@@ -596,7 +596,7 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
       rarity: "ouro",
       category: "secreta",
       iconName: "Sparkles",
-      secret: true,
+      isSecret: true,
       condition: { type: "x1_comeback_after_losses", threshold: 3 },
     },
     {
@@ -606,7 +606,7 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
       rarity: "platina",
       category: "secreta",
       iconName: "Crown",
-      secret: true,
+      isSecret: true,
       condition: { type: "x1_comeback_after_losses", threshold: 5 },
     },
   );
@@ -1503,7 +1503,7 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
       rarity: "ouro",
       category: "evento",
       iconName: "Heart",
-      secret: true,
+      isSecret: true,
       gameId: "spacequest",
       condition: { type: "manual_event" },
     },
@@ -1602,6 +1602,54 @@ export function getPlayerStreakDays(profile?: Partial<PlayerProfile> | null): nu
   // Fallback for accounts with matches played but no dates recorded yet:
   // Cannot exceed 1 day of streak until multiple distinct active days are recorded.
   return Math.min(profile.streakDays ?? 1, matches, 1);
+}
+
+/**
+ * Calcula a ofensiva ATIVA atual (dias consecutivos terminando em `referenceDateKey` ou no dia anterior),
+ * considerando partidas E check-ins registrados em `activeDates` / `lastActiveDate` / `lastDailyRewardClaimDate`.
+ * Diferente de `getPlayerStreakDays` (recorde histórico para medalhas), esta função regride para 0/1
+ * quando o jogador falta dias consecutivos.
+ */
+export function getCurrentActiveStreakDays(
+  profile?: Partial<PlayerProfile> | null,
+  referenceDateKey = getLocalDateKey(),
+): number {
+  if (!profile) return 0;
+  const dateSet = new Set<string>();
+  if (Array.isArray(profile.activeDates)) {
+    for (const d of profile.activeDates) {
+      if (typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d.trim())) {
+        dateSet.add(d.trim());
+      }
+    }
+  }
+  for (const extra of [profile.lastActiveDate, profile.lastDailyRewardClaimDate]) {
+    if (typeof extra === "string" && /^\d{4}-\d{2}-\d{2}$/.test(extra.trim())) {
+      dateSet.add(extra.trim());
+    }
+  }
+  if (dateSet.size === 0) return 0;
+
+  const shiftKey = (key: string, delta: number): string => {
+    const [y, m, d] = key.split("-").map(Number);
+    if (!y || !m || !d) return key;
+    const dt = new Date(Date.UTC(y, m - 1, d + delta));
+    return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
+  };
+
+  let cursor = dateSet.has(referenceDateKey)
+    ? referenceDateKey
+    : dateSet.has(shiftKey(referenceDateKey, -1))
+      ? shiftKey(referenceDateKey, -1)
+      : null;
+  if (!cursor) return 0;
+
+  let count = 0;
+  while (cursor && dateSet.has(cursor) && count < 3650) {
+    count += 1;
+    cursor = shiftKey(cursor, -1);
+  }
+  return count;
 }
 
 /** Returns epoch ms for Monday 00:00:00 UTC of an ISO week */
@@ -2715,7 +2763,7 @@ export function evaluatePlayerMedals(
         break;
 
       case "daily_post_cap_matches": {
-        const todayKey = getLocalDateKey();
+        const todayKey = getLocalDateKey(now);
         const postCapMatches = getDailyPostCapMatches(p, todayKey);
         const target = cond.threshold ?? 10;
         if (postCapMatches >= target) {
@@ -3201,7 +3249,7 @@ export function calculateMedalProgress(
       };
     }
     case "streak_days": {
-      const cur = getPlayerStreakDays(profile);
+      const cur = Math.max(getPlayerStreakDays(profile), Math.floor(profile.dailyCheckInCount ?? 0));
       const target = cond.threshold ?? 3;
       const pct = Math.min(100, Math.round((cur / target) * 100));
       return {

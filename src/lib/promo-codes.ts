@@ -4,13 +4,16 @@
  * transações atômicas de resgate e trava de acesso para contas de teste (Zheret & Lord).
  */
 import { awardCareerPoints, creditCoinMetrics } from "./career-points.ts";
-import { calculatePlayerLevel, nickSlug, type PlayerProfile } from "./player-profile.ts";
+import { calculatePlayerLevel, nickSlug } from "./player-profile.ts";
 import { recordScoreLedgerEntry } from "./score-history-ledger.ts";
+import { normalizeCardPackId } from "./chests-catalog.ts";
 import {
   callPlayFabClient,
   getAdminPlayFabTicket,
+  getAuthoritativeNow,
   isPlayFabConfigured,
   loadStoredSession,
+  type PlayerProfile,
 } from "./playfab.ts";
 
 export type PromoCodePattern =
@@ -125,7 +128,7 @@ function ensureRateLimitLoaded(): void {
   rateLimitLoaded = true;
   try {
     if (typeof window === "undefined") return;
-    const raw = localStorage.getItem(PROMO_RATE_LIMIT_LOCAL_KEY);
+    const raw = window.localStorage.getItem(PROMO_RATE_LIMIT_LOCAL_KEY);
     if (!raw) return;
     const parsed = JSON.parse(raw) as Record<string, RateLimitTracker>;
     if (parsed && typeof parsed === "object") {
@@ -147,7 +150,7 @@ function saveRateLimitStore(): void {
     for (const [k, v] of rateLimitMap.entries()) {
       obj[k] = v;
     }
-    localStorage.setItem(PROMO_RATE_LIMIT_LOCAL_KEY, JSON.stringify(obj));
+    window.localStorage.setItem(PROMO_RATE_LIMIT_LOCAL_KEY, JSON.stringify(obj));
   } catch {
     /* ignore */
   }
@@ -158,7 +161,7 @@ export function loadDeletedPromoCleanCodes(): Set<string> {
   deletedMemoryLoaded = true;
   try {
     if (typeof window !== "undefined") {
-      const raw = localStorage.getItem(PROMO_TOMBSTONES_LOCAL_KEY);
+      const raw = window.localStorage.getItem(PROMO_TOMBSTONES_LOCAL_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed)) {
@@ -181,7 +184,7 @@ function saveDeletedPromoCleanCodes(set: Set<string>): void {
   for (const c of set) inMemoryDeletedCleanCodes.add(c);
   try {
     if (typeof window !== "undefined") {
-      localStorage.setItem(PROMO_TOMBSTONES_LOCAL_KEY, JSON.stringify(Array.from(inMemoryDeletedCleanCodes)));
+      window.localStorage.setItem(PROMO_TOMBSTONES_LOCAL_KEY, JSON.stringify(Array.from(inMemoryDeletedCleanCodes)));
     }
   } catch {
     /* ignore */
@@ -253,7 +256,7 @@ export function loadLocalPromoCodes(): PromoCodeItem[] {
     return inMemoryPromoCodes;
   }
   try {
-    const raw = typeof window !== "undefined" ? localStorage.getItem(PROMO_CODES_LOCAL_KEY) : null;
+    const raw = typeof window !== "undefined" ? window.localStorage.getItem(PROMO_CODES_LOCAL_KEY) : null;
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
@@ -275,7 +278,7 @@ export function saveLocalPromoCodes(codes: PromoCodeItem[]): void {
   memoryLoaded = true;
   try {
     if (typeof window !== "undefined") {
-      localStorage.setItem(PROMO_CODES_LOCAL_KEY, JSON.stringify(codes));
+      window.localStorage.setItem(PROMO_CODES_LOCAL_KEY, JSON.stringify(codes));
     }
   } catch {
     /* ignore write error */
@@ -320,8 +323,14 @@ export function generatePromoCodesBatch(options: {
         allowMultiplePerStudent: allowMultiple,
         status: "active",
         rewards: {
-          xp: Math.max(0, options.rewards.xp ?? 0),
-          points: Math.max(0, options.rewards.points ?? 0),
+          xp: Math.max(0, Math.floor(Number(options.rewards.xp) || 0)),
+          points: Math.max(0, Math.floor(Number(options.rewards.points) || 0)),
+          ...(options.rewards.coins && options.rewards.coins > 0
+            ? { coins: Math.max(0, Math.floor(Number(options.rewards.coins) || 0)) }
+            : {}),
+          ...(options.rewards.cosmeticKind ? { cosmeticKind: options.rewards.cosmeticKind } : {}),
+          ...(options.rewards.cosmeticId ? { cosmeticId: options.rewards.cosmeticId } : {}),
+          ...(options.rewards.avatarPieceId ? { avatarPieceId: options.rewards.avatarPieceId } : {}),
           chestName: options.rewards.chestName,
           chestQuantity: options.rewards.chestQuantity,
           rewardItem: options.rewards.rewardItem
@@ -555,8 +564,28 @@ export function claimPromoCode(
     }
   }
 
-  // 1. Marca como resgatado de forma atômica
-  const nowIso = new Date().toISOString();
+  // Trava permanente cross-device no próprio perfil do aluno (impede re-resgate limpando localStorage)
+  if (
+    (Array.isArray(student.claimedPromoCodeIds) &&
+      (student.claimedPromoCodeIds.includes(target.cleanCode) ||
+        student.claimedPromoCodeIds.includes(target.id))) ||
+    (target.allowMultiplePerStudent === false &&
+      target.batchId &&
+      Array.isArray(student.claimedPromoBatchIds) &&
+      student.claimedPromoBatchIds.includes(target.batchId))
+  ) {
+    return {
+      success: false,
+      code: rawInput,
+      errorMessage:
+        target.allowMultiplePerStudent === false
+          ? `Você já resgatou um código desta mesma leva/lote (${target.batchName}). Cada aluno só pode resgatar 1 vez.`
+          : "Este código já foi resgatado na sua conta.",
+    };
+  }
+
+  // 1. Marca como resgatado de forma atômica (sem disparar push antecipado antes do savePlayerProfile)
+  const nowIso = getAuthoritativeNow().toISOString();
   target.status = "claimed";
   target.claimedByStudentId = student.id;
   target.claimedByNick = student.nick;
@@ -565,6 +594,18 @@ export function claimPromoCode(
   target.claimedAt = nowIso;
 
   saveLocalPromoCodes(list);
+
+  // Grava trava permanente no PlayerProfile para sincronizar com o PlayFab UserData
+  const prevClaimedCodes = Array.isArray(student.claimedPromoCodeIds) ? student.claimedPromoCodeIds : [];
+  if (!prevClaimedCodes.includes(target.cleanCode)) {
+    student.claimedPromoCodeIds = [...prevClaimedCodes, target.cleanCode];
+  }
+  if (target.batchId) {
+    const prevBatches = Array.isArray(student.claimedPromoBatchIds) ? student.claimedPromoBatchIds : [];
+    if (!prevBatches.includes(target.batchId)) {
+      student.claimedPromoBatchIds = [...prevBatches, target.batchId];
+    }
+  }
 
   // 2. Concede XP se houver
   const rewards = target.rewards;
@@ -576,6 +617,8 @@ export function claimPromoCode(
       matchesPlayed: student.matchesPlayed ?? 0,
       wins: student.wins ?? 0,
       distinctGames: student.distinctGamesPlayed ?? 0,
+      currentLevel: student.level,
+      stageProgress: student.levelStageProgress,
     });
     try {
       recordScoreLedgerEntry({
@@ -586,14 +629,14 @@ export function claimPromoCode(
         amount: rewards.xp,
         balanceAfter: student.xp,
         reason: `Resgate de Código Promocional (${target.code})`,
-        metadata: { codeId: target.id, code: target.code, batchName: target.batchName },
+        metadata: { eventId: target.id },
       });
     } catch {
       /* ignore */
     }
   }
 
-  // 3. Concede Pontos (Moedas) se houver
+  // 3. Concede Pontos de Carreira se houver
   if (rewards.points && rewards.points > 0) {
     awardCareerPoints(student, rewards.points, `Código Promocional: ${target.code}`);
     try {
@@ -605,7 +648,7 @@ export function claimPromoCode(
         amount: rewards.points,
         balanceAfter: student.careerPoints,
         reason: `Resgate de Código: +${rewards.points} Pontos (${target.code})`,
-        metadata: { codeId: target.id, code: target.code, batchName: target.batchName },
+        metadata: { eventId: target.id },
       });
     } catch {
       /* ignore */
@@ -625,7 +668,7 @@ export function claimPromoCode(
         amount: coinsQty,
         balanceAfter: student.coins,
         reason: `Resgate de Código: +${coinsQty} Moedas (${target.code})`,
-        metadata: { codeId: target.id, code: target.code, batchName: target.batchName },
+        metadata: { eventId: target.id },
       });
     } catch {
       /* ignore */
@@ -647,21 +690,37 @@ export function claimPromoCode(
     }
   }
 
-  // 4. Concede Item (Pacote de Cartas) se houver
+  // 4. Concede Item (Pacote de Cartas OU Baú) se houver
   if (rewards.rewardItem?.category === "card_pack" && rewards.rewardItem.itemId) {
     const qty = Math.max(1, Math.floor(rewards.rewardItem.quantity || 1));
+    const normalizedPackId = normalizeCardPackId(rewards.rewardItem.itemId);
     const curPacks = student.unopenedPacks ?? {};
     student.unopenedPacks = {
       ...curPacks,
-      [rewards.rewardItem.itemId]: (Number(curPacks[rewards.rewardItem.itemId]) || 0) + qty,
+      [normalizedPackId]: (Number(curPacks[normalizedPackId]) || 0) + qty,
+    };
+  } else if (rewards.rewardItem?.category === "chest" && rewards.rewardItem.itemId) {
+    const qty = Math.max(1, Math.floor(rewards.rewardItem.quantity || 1));
+    const curChests = student.unopenedChests ?? {};
+    student.unopenedChests = {
+      ...curChests,
+      [rewards.rewardItem.itemId]: (Number(curChests[rewards.rewardItem.itemId]) || 0) + qty,
+    };
+  } else if (rewards.chestName && (rewards.chestQuantity ?? 1) > 0) {
+    const matchedPreset = PROMO_CHEST_PRESETS.find(
+      (p) => p.label.toLowerCase() === rewards.chestName!.toLowerCase() || p.id === rewards.chestName,
+    );
+    const chestId = matchedPreset?.id ?? "weekly_common";
+    const qty = Math.max(1, Math.floor(rewards.chestQuantity || 1));
+    const curChests = student.unopenedChests ?? {};
+    student.unopenedChests = {
+      ...curChests,
+      [chestId]: (Number(curChests[chestId]) || 0) + qty,
     };
   }
 
   // Limpa as tentativas falhas após o sucesso
   resetStudentPromoFailedAttempts(student.id);
-
-  // Tenta sincronizar silenciosamente com o PlayFab em segundo plano se configurado
-  void syncPromoCodesToPlayFab();
 
   return {
     success: true,
@@ -669,6 +728,54 @@ export function claimPromoCode(
     rewards,
     updatedProfile: student,
   };
+}
+
+/**
+ * Captura um snapshot serializado do catálogo atual de códigos promocionais
+ * para eventual rollback atômico caso a sincronização com o servidor falhe.
+ */
+export function getPromoCodesSnapshot(): string | null {
+  try {
+    if (typeof window !== "undefined") {
+      const raw = window.localStorage.getItem(PROMO_CODES_LOCAL_KEY);
+      if (raw !== null) return raw;
+    }
+  } catch {
+    /* ignore */
+  }
+  return memoryLoaded ? JSON.stringify(inMemoryPromoCodes) : null;
+}
+
+/**
+ * Restaura um snapshot anterior do catálogo local de códigos promocionais em localStorage E memória
+ * (usado para rollback atômico caso o savePlayerProfile na nuvem falhe).
+ */
+export function restorePromoCodesSnapshot(rawSnapshot: string | null): void {
+  if (typeof window !== "undefined") {
+    try {
+      if (rawSnapshot !== null) {
+        window.localStorage.setItem(PROMO_CODES_LOCAL_KEY, rawSnapshot);
+      } else {
+        window.localStorage.removeItem(PROMO_CODES_LOCAL_KEY);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  try {
+    if (rawSnapshot) {
+      const parsed = JSON.parse(rawSnapshot);
+      if (Array.isArray(parsed)) {
+        inMemoryPromoCodes = parsed as PromoCodeItem[];
+        memoryLoaded = true;
+        return;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  inMemoryPromoCodes = [];
+  memoryLoaded = false;
 }
 
 /**

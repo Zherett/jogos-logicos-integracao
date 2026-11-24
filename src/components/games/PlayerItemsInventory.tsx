@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { Backpack, Lock, Sparkles, Gift, Palette, Ticket, Layers, PackageOpen } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
+import { Backpack, Lock, Sparkles, Gift, Palette, Layers, PackageOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
@@ -9,15 +9,16 @@ import {
   consumeAndOpenCardPacksBatch,
   DEFAULT_CARD_FOIL_CHANCE_PERCENT,
   mergeWithDefaultCardPacks,
-  openCardPack,
   type CardDefinition,
   type CardPackDefinition,
   type CardRarity,
 } from "@/lib/cards-catalog";
 import {
+  calculateDuplicateCosmeticCompensation,
   CHEST_RARITY_META,
   consumeAndOpenChestsBatch,
   mergeWithDefaultChests,
+  normalizeCardPackId,
   type ChestDefinition,
   type ChestOpenOutcome,
 } from "@/lib/chests-catalog";
@@ -30,6 +31,7 @@ import {
   syncActiveProfileChangeToPlayFab,
 } from "@/lib/playfab";
 import { isAdminOrTestAccount, syncLevelStageProgress } from "@/lib/player-profile";
+import { recordScoreLedgerEntry } from "@/lib/score-history-ledger";
 import { CollectibleCardView } from "./CollectibleCardView";
 import { CardPagination, paginateItems } from "./CardPagination";
 import { ChestOpeningModal } from "./ChestOpeningModal";
@@ -38,6 +40,7 @@ import { PackOpeningModal, type PackOpenOutcome } from "./PackOpeningModal";
 import { getAuraPresentation, PlayerAvatarBadge } from "./PlayerAvatarBadge";
 import {
   allocateStackedInventorySlots,
+  ensureLevel5InitialLetterUnlock,
   getUnlockedAuraIds,
   getUnlockedAvatarIds,
   grantCosmeticToProfile,
@@ -72,6 +75,9 @@ export function PlayerItemsInventory() {
   const [chestOutcome, setChestOutcome] = useState<ChestOpenOutcome | null>(null);
   const [chestError, setChestError] = useState<string | null>(null);
   const [isOpeningChest, setIsOpeningChest] = useState(false);
+  const [isSavingVisual, setIsSavingVisual] = useState(false);
+  const openingChestRef = useRef(false);
+  const savingVisualRef = useRef(false);
   const [batchPrompt, setBatchPrompt] = useState<
     | { kind: "chest"; item: ChestDefinition; quantity: number }
     | { kind: "pack"; item: CardPackDefinition; quantity: number }
@@ -79,15 +85,29 @@ export function PlayerItemsInventory() {
   >(null);
 
   const chests = useMemo(() => mergeWithDefaultChests(auth.adminConfig.chestsCatalog), [auth.adminConfig.chestsCatalog]);
-  const ownedChests = useMemo(() => {
-    const map = auth.profile?.unopenedChests ?? {};
-    return chests
-      .map((c) => ({ chest: c, qty: Math.max(0, Math.floor(Number(map[c.id]) || 0)) }))
-      .filter((item) => item.qty > 0);
-  }, [chests, auth.profile?.unopenedChests]);
+  const allAvatarsCatalog = useMemo(
+    () => mergeWithDefaultAvatars(auth.adminConfig.avatarsCatalog),
+    [auth.adminConfig.avatarsCatalog],
+  );
+  const allAurasCatalog = useMemo(
+    () => mergeWithDefaultAuras(auth.adminConfig.aurasCatalog),
+    [auth.adminConfig.aurasCatalog],
+  );
+
+  const normalizedUnopenedPacks = useMemo(() => {
+    const raw = auth.profile?.unopenedPacks ?? {};
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      const qty = Math.max(0, Math.floor(Number(v) || 0));
+      if (qty <= 0) continue;
+      const canon = normalizeCardPackId(k);
+      out[canon] = (out[canon] ?? 0) + qty;
+    }
+    return out;
+  }, [auth.profile?.unopenedPacks]);
 
   async function handleOpenChest(chest: ChestDefinition, requestedQty?: number) {
-    if (!auth.profile || !canViewCards || isOpeningChest) return;
+    if (!auth.profile || !canViewCards || isOpeningChest || openingChestRef.current) return;
     const liveProfile = getActiveAccount()?.profile ?? auth.profile;
     const available = Math.max(0, Math.floor(Number(liveProfile.unopenedChests?.[chest.id]) || 0));
     if (available <= 0) {
@@ -105,14 +125,22 @@ export function PlayerItemsInventory() {
     const safeRequested =
       typeof requestedQty === "number" && Number.isFinite(requestedQty) ? Math.floor(requestedQty) : 1;
     const qtyToOpen = Math.max(1, Math.min(available, safeRequested));
+    openingChestRef.current = true;
     setChestError(null);
     setIsOpeningChest(true);
     try {
       const res = consumeAndOpenChestsBatch(chest, qtyToOpen, liveProfile.unopenedChests ?? {});
-      if (!res.ok || !res.outcome) return;
+      if (!res.ok || !res.outcome) {
+        setChestError(res.error ?? "Não foi possível abrir este baú no momento.");
+        return;
+      }
 
       const nextPacks = { ...(liveProfile.unopenedPacks ?? {}) };
-      for (const pk of res.outcome.packs) {
+      const normalizedPacksOutcome = res.outcome.packs.map((pk) => ({
+        ...pk,
+        packId: normalizeCardPackId(pk.packId),
+      }));
+      for (const pk of normalizedPacksOutcome) {
         nextPacks[pk.packId] = (Number(nextPacks[pk.packId]) || 0) + pk.quantity;
       }
 
@@ -148,23 +176,80 @@ export function PlayerItemsInventory() {
           auth.adminConfig.coinRewardsConfig?.levelCoinStep ?? 10,
         );
       }
+      const lvl5Res = ensureLevel5InitialLetterUnlock(updatedProfile);
+      updatedProfile = lvl5Res.profile;
       creditCoinMetrics(updatedProfile, res.outcome.coins);
 
       const newlyGrantedCosmetics: Array<{ kind: "avatar" | "aura"; itemId: string }> = [];
+      const cosmeticGrants: NonNullable<ChestOpenOutcome["cosmeticGrants"]> = [];
+      let duplicateCompensationCoins = 0;
+
       for (const cosm of res.outcome.cosmetics ?? []) {
+        const def =
+          cosm.kind === "avatar"
+            ? allAvatarsCatalog.find((a) => a.id === cosm.itemId)
+            : allAurasCatalog.find((a) => a.id === cosm.itemId);
         const grant = grantCosmeticToProfile(updatedProfile, cosm.kind, cosm.itemId);
         updatedProfile = grant.profile;
         if (!grant.alreadyOwned) {
           newlyGrantedCosmetics.push(cosm);
+          cosmeticGrants.push({
+            kind: cosm.kind,
+            itemId: cosm.itemId,
+            name: def?.name ?? cosm.itemId,
+            alreadyOwned: false,
+            compensatedCoins: 0,
+          });
+        } else {
+          const comp = calculateDuplicateCosmeticCompensation(def?.priceCoins);
+          duplicateCompensationCoins += comp;
+          creditCoinMetrics(updatedProfile, comp);
+          cosmeticGrants.push({
+            kind: cosm.kind,
+            itemId: cosm.itemId,
+            name: def?.name ?? cosm.itemId,
+            alreadyOwned: true,
+            compensatedCoins: comp,
+          });
         }
       }
 
       const finalOutcome: ChestOpenOutcome = {
         ...res.outcome,
+        packs: normalizedPacksOutcome,
+        coins: res.outcome.coins + duplicateCompensationCoins,
         cosmetics: newlyGrantedCosmetics,
+        cosmeticGrants,
+        duplicateCompensationCoins,
       };
 
       await syncActiveProfileChangeToPlayFab(updatedProfile, { requireServerSync: true });
+      try {
+        if (finalOutcome.points > 0) {
+          recordScoreLedgerEntry({
+            playerId: liveProfile.id,
+            playerNick: liveProfile.nick,
+            type: "career_points",
+            source: "bau",
+            amount: finalOutcome.points,
+            balanceAfter: updatedProfile.pointsBalance,
+            reason: `Baú ${chest.name}${res.openedCount > 1 ? ` (x${res.openedCount})` : ""}`,
+          });
+        }
+        if (finalOutcome.coins > 0) {
+          recordScoreLedgerEntry({
+            playerId: liveProfile.id,
+            playerNick: liveProfile.nick,
+            type: "coins",
+            source: "bau",
+            amount: finalOutcome.coins,
+            balanceAfter: updatedProfile.coins,
+            reason: `Baú ${chest.name}${res.openedCount > 1 ? ` (x${res.openedCount})` : ""}${duplicateCompensationCoins > 0 ? " (inclui conversão de duplicado)" : ""}`,
+          });
+        }
+      } catch {
+        /* ignore */
+      }
       await auth.refresh();
       setOpeningChestCount(res.openedCount);
       setOpeningChest(chest);
@@ -176,6 +261,7 @@ export function PlayerItemsInventory() {
           : "Não foi possível abrir o baú. Tente novamente.",
       );
     } finally {
+      openingChestRef.current = false;
       setIsOpeningChest(false);
     }
   }
@@ -185,18 +271,23 @@ export function PlayerItemsInventory() {
     () => mergeWithDefaultCardPacks(auth.adminConfig.cardPacks),
     [auth.adminConfig.cardPacks],
   );
-  const packs = useMemo(
-    () => allPacksCatalog.filter((p) => p.enabled),
-    [allPacksCatalog],
-  );
-  const packSlots = useMemo(
-    () => allocateStackedInventorySlots(allPacksCatalog, auth.profile?.unopenedPacks, PACK_SLOTS_COUNT),
-    [allPacksCatalog, auth.profile?.unopenedPacks],
-  );
-  const chestSlots = useMemo(
-    () => allocateStackedInventorySlots(chests, auth.profile?.unopenedChests, CHEST_SLOTS_COUNT),
-    [chests, auth.profile?.unopenedChests],
-  );
+  const packSlots = useMemo(() => {
+    const ownedUnique = Object.keys(normalizedUnopenedPacks).length;
+    return allocateStackedInventorySlots(
+      allPacksCatalog,
+      normalizedUnopenedPacks,
+      Math.max(PACK_SLOTS_COUNT, ownedUnique),
+    );
+  }, [allPacksCatalog, normalizedUnopenedPacks]);
+  const chestSlots = useMemo(() => {
+    const rawChests = auth.profile?.unopenedChests ?? {};
+    const ownedUnique = Object.values(rawChests).filter((v) => Math.floor(Number(v) || 0) > 0).length;
+    return allocateStackedInventorySlots(
+      chests,
+      rawChests,
+      Math.max(CHEST_SLOTS_COUNT, ownedUnique),
+    );
+  }, [chests, auth.profile?.unopenedChests]);
   const totalUnopenedPacks = useMemo(
     () => packSlots.reduce((sum, s) => sum + s.quantity, 0),
     [packSlots],
@@ -251,12 +342,24 @@ export function PlayerItemsInventory() {
   }, [catalog, rarityFilter]);
 
   function handleOpenPack(pack: CardPackDefinition, requestedQty?: number) {
-    const available = Math.max(0, Math.floor(Number(auth.profile?.unopenedPacks?.[pack.id]) || 0));
+    const liveProfile = getActiveAccount()?.profile ?? auth.profile;
+    const rawMap = liveProfile?.unopenedPacks ?? {};
+    let available = 0;
+    for (const [k, v] of Object.entries(rawMap)) {
+      if (normalizeCardPackId(k) === pack.id) {
+        available += Math.max(0, Math.floor(Number(v) || 0));
+      }
+    }
+    if (available <= 0) {
+      setChestError("Você não possui unidades fechadas deste pacote no momento.");
+      void auth.refresh();
+      return;
+    }
     if (requestedQty === undefined && available >= 2) {
       setBatchPrompt({ kind: "pack", item: pack, quantity: available });
       return;
     }
-    setPackOpenQuantity(Math.max(1, Math.floor(requestedQty ?? 1)));
+    setPackOpenQuantity(Math.max(1, Math.min(available, Math.floor(requestedQty ?? 1))));
     setPackToOpen(pack);
   }
 
@@ -265,71 +368,62 @@ export function PlayerItemsInventory() {
     quantity = 1,
   ): Promise<PackOpenOutcome | null> {
     const liveProfile = getActiveAccount()?.profile ?? auth.profile;
-    const unopenedMap = liveProfile?.unopenedPacks ?? {};
+    const rawUnopenedMap = liveProfile?.unopenedPacks ?? {};
+    // Consolida chaves legadas (ex.: pack_epico -> pack_mestre) antes de consumir estoque
+    const unopenedMap: Record<string, number> = {};
+    for (const [k, v] of Object.entries(rawUnopenedMap)) {
+      const qty = Math.max(0, Math.floor(Number(v) || 0));
+      if (qty <= 0) continue;
+      const canon = normalizeCardPackId(k);
+      unopenedMap[canon] = (unopenedMap[canon] ?? 0) + qty;
+    }
     const liveCardsMap = liveProfile?.cards ?? ownedCardsMap;
     const hasStock = (Number(unopenedMap[pack.id]) || 0) > 0;
     const safeQuantity = Number.isFinite(quantity) ? Math.max(1, Math.floor(quantity)) : 1;
     const foilChance = auth.adminConfig.cardFoilChancePercent ?? DEFAULT_CARD_FOIL_CHANCE_PERCENT;
 
-    if (hasStock) {
-      const res = consumeAndOpenCardPacksBatch(
-        pack,
-        safeQuantity,
-        catalog,
-        liveCardsMap,
-        unopenedMap,
-        Math.random,
-        foilChance,
-      );
-      if (res.error) {
-        return { drawn: [], newlyDiscovered: [], error: res.error };
-      }
-      const saveRes = await auth.updatePlayerCards({
-        cards: res.updatedCardsMap,
-        unopenedPacks: res.updatedUnopenedPacks,
-        packsOpenedDelta: res.openedCount,
-        requireServerSync: true,
-      });
-      if (!saveRes.ok) {
-        return {
-          drawn: [],
-          newlyDiscovered: [],
-          error: saveRes.error ?? "Sem conexão com o servidor. Tente novamente.",
-        };
-      }
-      return {
-        drawn: res.drawnCards,
-        newlyDiscovered: res.newlyDiscoveredIds,
-      };
-    }
-
-    // Modo teste ADM (sem estoque de pacotes fechados) — estritamente bloqueado para alunos comuns
-    if (!isAdminTester) {
+    if (!hasStock) {
       return {
         drawn: [],
         newlyDiscovered: [],
         error: "Você não possui unidades fechadas deste pacote no momento.",
       };
     }
-    const res = openCardPack(pack, catalog, ownedCardsMap, Math.random, foilChance);
+
+    const res = consumeAndOpenCardPacksBatch(
+      pack,
+      safeQuantity,
+      catalog,
+      liveCardsMap,
+      unopenedMap,
+      Math.random,
+      foilChance,
+    );
     if (res.error) {
       return { drawn: [], newlyDiscovered: [], error: res.error };
     }
     const saveRes = await auth.updatePlayerCards({
       cards: res.updatedCardsMap,
-      unopenedPacks: unopenedMap,
+      unopenedPacks: res.updatedUnopenedPacks,
+      packsOpenedDelta: res.openedCount,
+      requireServerSync: true,
     });
     if (!saveRes.ok) {
       return {
         drawn: [],
         newlyDiscovered: [],
-        error: saveRes.error ?? "Erro ao salvar cartas.",
+        error: saveRes.error ?? "Sem conexão com o servidor. Tente novamente.",
       };
     }
     return {
       drawn: res.drawnCards,
       newlyDiscovered: res.newlyDiscoveredIds,
+      openedCount: res.openedCount,
     };
+  }
+
+  if (!canViewCards) {
+    return null;
   }
 
   return (
@@ -468,20 +562,44 @@ export function PlayerItemsInventory() {
                     <button
                       key={av.id}
                       type="button"
+                      disabled={isSavingVisual}
                       onClick={async () => {
-                        if (!auth.profile) return;
-                        const prevSecondary = auth.profile.equippedAvatar?.secondaryId;
-                        await syncActiveProfileChangeToPlayFab({
-                          ...auth.profile,
-                          equippedAvatar: {
-                            id: av.id,
-                            ...(prevSecondary && prevSecondary !== av.id
-                              ? { secondaryId: prevSecondary }
-                              : {}),
-                            color: auth.profile.equippedAvatar?.color,
-                          },
-                        });
-                        await auth.refresh();
+                        if (!auth.profile || savingVisualRef.current) return;
+                        savingVisualRef.current = true;
+                        setIsSavingVisual(true);
+                        setChestError(null);
+                        try {
+                          const liveProfile = getActiveAccount()?.profile ?? auth.profile;
+                          const ownedSet = new Set(getUnlockedAvatarIds(liveProfile));
+                          if (!ownedSet.has(av.id)) {
+                            setChestError("Este avatar não está desbloqueado na sua conta.");
+                            return;
+                          }
+                          const prevSecondary = liveProfile.equippedAvatar?.secondaryId;
+                          await syncActiveProfileChangeToPlayFab(
+                            {
+                              ...liveProfile,
+                              equippedAvatar: {
+                                id: av.id,
+                                ...(prevSecondary && prevSecondary !== av.id
+                                  ? { secondaryId: prevSecondary }
+                                  : {}),
+                                color: liveProfile.equippedAvatar?.color,
+                              },
+                            },
+                            { requireServerSync: true },
+                          );
+                          await auth.refresh();
+                        } catch (err) {
+                          setChestError(
+                            err instanceof Error && err.message
+                              ? err.message
+                              : "Não foi possível salvar o avatar no servidor. Tente novamente.",
+                          );
+                        } finally {
+                          savingVisualRef.current = false;
+                          setIsSavingVisual(false);
+                        }
                       }}
                       className={`flex flex-col items-center gap-1.5 rounded-2xl border-2 p-2.5 text-center transition-all cursor-pointer ${
                         equipped
@@ -521,13 +639,38 @@ export function PlayerItemsInventory() {
                       <button
                         key={aura.id}
                         type="button"
+                        disabled={isSavingVisual}
                         onClick={async () => {
-                          if (!auth.profile) return;
-                          await syncActiveProfileChangeToPlayFab({
-                            ...auth.profile,
-                            equippedAuraId: equipped ? "" : aura.id,
-                          });
-                          await auth.refresh();
+                          if (!auth.profile || savingVisualRef.current) return;
+                          savingVisualRef.current = true;
+                          setIsSavingVisual(true);
+                          setChestError(null);
+                          try {
+                            const liveProfile = getActiveAccount()?.profile ?? auth.profile;
+                            const ownedSet = new Set(getUnlockedAuraIds(liveProfile));
+                            const nextAuraId = equipped ? "" : aura.id;
+                            if (nextAuraId && !ownedSet.has(nextAuraId)) {
+                              setChestError("Esta aura não está desbloqueada na sua conta.");
+                              return;
+                            }
+                            await syncActiveProfileChangeToPlayFab(
+                              {
+                                ...liveProfile,
+                                equippedAuraId: nextAuraId,
+                              },
+                              { requireServerSync: true },
+                            );
+                            await auth.refresh();
+                          } catch (err) {
+                            setChestError(
+                              err instanceof Error && err.message
+                                ? err.message
+                                : "Não foi possível salvar a aura no servidor. Tente novamente.",
+                            );
+                          } finally {
+                            savingVisualRef.current = false;
+                            setIsSavingVisual(false);
+                          }
                         }}
                         className={`flex items-center justify-between gap-2 rounded-2xl border-2 p-3 text-left transition-all cursor-pointer ${
                           equipped ? "bg-primary/10" : "bg-card hover:bg-secondary/30"
@@ -564,7 +707,7 @@ export function PlayerItemsInventory() {
                 </div>
               </div>
               <span className="rounded-full bg-secondary px-3 py-1 font-mono text-[11px] font-extrabold text-foreground">
-                {occupiedPackSlotsCount} / {PACK_SLOTS_COUNT} slots
+                {occupiedPackSlotsCount} / {packSlots.length} slots
               </span>
             </div>
           </div>
@@ -641,7 +784,7 @@ export function PlayerItemsInventory() {
                 </div>
               </div>
               <span className="rounded-full bg-secondary px-3 py-1 font-mono text-[11px] font-extrabold text-foreground">
-                {occupiedChestSlotsCount} / {CHEST_SLOTS_COUNT} slots
+                {occupiedChestSlotsCount} / {chestSlots.length} slots
               </span>
             </div>
           </div>
@@ -691,10 +834,11 @@ export function PlayerItemsInventory() {
                     <Button
                       type="button"
                       size="sm"
+                      disabled={isOpeningChest}
                       onClick={() => void handleOpenChest(chest)}
                       className="w-full h-7 rounded-xl text-[11px] font-bold"
                     >
-                      Abrir
+                      {isOpeningChest ? "Abrindo..." : "Abrir"}
                     </Button>
                   </div>
                 );
@@ -728,30 +872,7 @@ export function PlayerItemsInventory() {
             </div>
           </div>
 
-          {/* Abertura rápida de pacotes exclusivamente para teste do ADM */}
-          {isAdminTester && catalog.length > 0 && packs.length > 0 && (
-            <div className="rounded-3xl border bg-card p-4 space-y-2.5">
-              <div className="flex items-center gap-1.5 text-xs font-extrabold text-foreground">
-                <PackageOpen className="h-4 w-4 text-primary" />
-                Abrir Pacotes (5 Cartas • Teste ADM)
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {packs.map((pack) => (
-                  <Button
-                    key={pack.id}
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => void handleOpenPack(pack)}
-                    className="rounded-xl text-xs font-bold"
-                  >
-                    <Sparkles className="h-3.5 w-3.5 mr-1 text-amber-500" />
-                    {pack.name}
-                  </Button>
-                ))}
-              </div>
-            </div>
-          )}
+          {/* Abertura de teste livre foi movida exclusivamente para o Painel ADM (simulação sem afetar conta) */}
 
           {/* Filtros por raridade */}
           <div className="flex flex-wrap gap-1.5">
@@ -956,10 +1077,11 @@ export function PlayerItemsInventory() {
                     <Button
                       type="button"
                       size="sm"
+                      disabled={isOpeningChest}
                       onClick={() => void handleOpenChest(chest)}
                       className="w-full h-7 rounded-xl text-[11px] font-bold"
                     >
-                      Abrir
+                      {isOpeningChest ? "Abrindo..." : "Abrir"}
                     </Button>
                   </div>
                 );
@@ -1103,7 +1225,7 @@ export function PlayerItemsInventory() {
         chest={openingChest}
         outcome={chestOutcome}
         openedCount={openingChestCount}
-        packsCatalog={packs}
+        packsCatalog={allPacksCatalog}
         onClose={() => {
           setOpeningChest(null);
           setChestOutcome(null);

@@ -596,7 +596,7 @@ describe("Simulação Ponta-a-Ponta do Dia de Lançamento (Moedas + Dia 1 + Roll
       lifetimeCoins: 200,
       peakCoins: 200,
       coinsSpentTotal: 0,
-      unlockedMedals: [{ medalId: "game_logica_matches_10", unlockedAt: "2026-11-20T10:00:00.000Z", count: 1 }],
+      unlockedMedals: [{ medalId: "first_match", unlockedAt: "2026-11-20T10:00:00.000Z", count: 1 }],
     });
 
     pf.registerUser({
@@ -773,6 +773,19 @@ describe("Simulação Ponta-a-Ponta do Dia de Lançamento (Moedas + Dia 1 + Roll
 
     const loginRes = await playfabSignIn("RelogioEsperto", "200114");
     assert.equal(loginRes.error, null);
+
+    // 0. Com rolloutFlag OFF, resgate direto por aluno comum é bloqueado por segurança
+    const blockedBeforeRollout = await claimCurrentPlayerDailyReward();
+    assert.equal(blockedBeforeRollout.ok, false);
+
+    // ADM libera a Central Diária para alunos
+    saveAdminConfig({
+      ...DEFAULT_ADMIN_CONFIG,
+      rolloutFlags: {
+        ...DEFAULT_ADMIN_CONFIG.rolloutFlags,
+        enableDailyRoutineForStudents: true,
+      },
+    });
 
     // 1. Coleta legítima do Dia 2 em 2026-11-24 (horário oficial do servidor)
     const claim1 = await claimCurrentPlayerDailyReward();

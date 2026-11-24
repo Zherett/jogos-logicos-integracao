@@ -43,7 +43,7 @@ function ErrorComponent({ error, reset }: ErrorComponentProps) {
         <p className="mt-2 text-sm text-muted-foreground">
           Ocorreu um erro inesperado. Você pode tentar recarregar ou voltar ao menu inicial.
         </p>
-        {error && import.meta.env.DEV && (
+        {Boolean(error) && import.meta.env.DEV && (
           <details className="mt-3 text-left">
             <summary className="cursor-pointer text-xs text-muted-foreground hover:underline">
               Detalhes técnicos do erro

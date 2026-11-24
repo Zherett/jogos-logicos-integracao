@@ -490,7 +490,11 @@ export function loadAdminConfig(): PlatformAdminConfig {
   }
 }
 
-export function saveAdminConfig(config: PlatformAdminConfig): PlatformAdminConfig {
+export function saveAdminConfig(
+  config: PlatformAdminConfig,
+  options?: { preserveUpdatedAt?: boolean },
+): PlatformAdminConfig {
+  const prevRaw = cachedAdminConfigRaw;
   const normalized: PlatformAdminConfig = {
     ...config,
     masterCode: normalizeCode(config.masterCode) || DEFAULT_MASTER_CODE,
@@ -520,11 +524,15 @@ export function saveAdminConfig(config: PlatformAdminConfig): PlatformAdminConfi
       : loadScheduledInboxRules(),
     cardsCatalog: Array.isArray(config.cardsCatalog) ? config.cardsCatalog : [],
     cardPacks: mergeWithDefaultCardPacks(config.cardPacks),
-    updatedAt: new Date().toISOString(),
+    updatedAt:
+      options?.preserveUpdatedAt && config.updatedAt
+        ? config.updatedAt
+        : new Date().toISOString(),
   };
   if (typeof window !== "undefined") {
     try {
       const serialized = JSON.stringify(normalized);
+      const changed = serialized !== prevRaw;
       window.localStorage.setItem(ADMIN_CONFIG_KEY, serialized);
       cachedAdminConfigRaw = serialized;
       cachedAdminConfigObj = normalized;
@@ -537,9 +545,11 @@ export function saveAdminConfig(config: PlatformAdminConfig): PlatformAdminConfi
       if (Array.isArray(config.scheduledInboxRules)) {
         saveScheduledInboxRules(config.scheduledInboxRules);
       }
-      window.dispatchEvent(
-        new CustomEvent("desafios:admin-config-updated", { detail: normalized }),
-      );
+      if (changed || !options?.preserveUpdatedAt) {
+        window.dispatchEvent(
+          new CustomEvent("desafios:admin-config-updated", { detail: normalized }),
+        );
+      }
     } catch {
       /* ignore */
     }

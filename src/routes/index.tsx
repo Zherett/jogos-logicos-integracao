@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Menu } from "@/components/games/Menu";
 import { getGameRegistration } from "@/lib/game-registry";
 import { CodeGate } from "@/components/games/CodeGate";
@@ -69,10 +69,15 @@ import {
   resolveWeeklyTournamentGame,
 } from "@/lib/weekly-tournament";
 import { awardCareerPoints, RECORD_STAGE_MAX_POINTS } from "@/lib/career-points";
+import {
+  getActiveAccount,
+  getAuthoritativeDateKey,
+  getAuthoritativeNow,
+  syncActiveProfileChangeToPlayFab,
+} from "@/lib/playfab";
 import integracaoPreto from "@/assets/integracao-preto.jpg";
 import semed from "@/assets/semed.png";
 import {
-  getLocalDateKey,
   isAdminOrTestAccount,
   isMatchVictory,
   isX1WindowOpen,
@@ -80,6 +85,7 @@ import {
   TOURNAMENT_DAILY_FREE_ENTRIES,
   TOURNAMENT_DAILY_ENTRIES_LIMIT,
   TOURNAMENT_DAILY_EXTRA_XP_CAP,
+  X1_MIN_LEVEL,
 } from "@/lib/player-profile";
 import { getActiveEventBonuses } from "@/lib/custom-events";
 import {
@@ -151,11 +157,14 @@ function Index() {
     setUnlocked(loadUnlocked());
   };
 
+  const finishingRankedRef = useRef(false);
+
   async function finishRankedEntry(exitToMenu = true) {
-    if (!activeRankedGameId) {
+    if (!activeRankedGameId || finishingRankedRef.current) {
       if (exitToMenu) setView("menu");
       return;
     }
+    finishingRankedRef.current = true;
     const gId = activeRankedGameId;
     const latestStats = loadStats();
     const last = loadLastMatch(gId);
@@ -163,48 +172,64 @@ function Index() {
     const level = last?.level ?? latestStats[gId]?.bestLevel ?? 1;
     setActiveRankedGameId(null);
 
-    if (auth.profile) {
-      const correct = last?.correct ?? 0;
-      const wrong = last?.wrong ?? 0;
-      const safeScore = Math.max(0, score);
-      const pStage = stageForPlayer(auth.profile.school, null, new Date(), auth.profile.ageStage, auth.profile.grade).id;
-      const stageRecRes = recordGameStageScore({
-        gameId: gId,
-        stage: pStage,
-        playerId: auth.profile.id,
-        nick: auth.profile.nick,
-        fullName: auth.profile.full_name,
-        school: auth.profile.school,
-        score: safeScore,
-        achievedAt: Date.now(),
-      });
-      if (stageRecRes.isNewRecord) {
-        awardCareerPoints(auth.profile, RECORD_STAGE_MAX_POINTS, "Novo Recorde da Escola/Etapa");
+    try {
+      if (auth.profile) {
+        const correct = last?.correct ?? 0;
+        const wrong = last?.wrong ?? 0;
+        const safeScore = Math.max(0, score);
+        const authoritativeNow = getAuthoritativeNow();
+        const pStage = stageForPlayer(
+          auth.profile.school,
+          null,
+          authoritativeNow,
+          auth.profile.ageStage,
+          auth.profile.grade,
+        ).id;
+        const stageRecRes = recordGameStageScore({
+          gameId: gId,
+          stage: pStage,
+          playerId: auth.profile.id,
+          nick: auth.profile.nick,
+          fullName: auth.profile.full_name,
+          school: auth.profile.school,
+          score: safeScore,
+          achievedAt: authoritativeNow.getTime(),
+        });
+        const attemptRes = await recordWeeklyTournamentAttempt({
+          profile: auth.profile,
+          score: safeScore,
+          correct,
+          wrong,
+        });
+        const wonRanked = isMatchVictory(safeScore, correct, wrong);
+        await auth.recordMatch({
+          gameId: gId,
+          mode: "torneio_semanal",
+          won: wonRanked,
+          score: safeScore,
+          level,
+          correct,
+          wrong,
+          tournamentPoints: attemptRes.newTournamentPoints,
+          tournamentRankId: attemptRes.currentRank.id,
+        });
+        // Persiste os +50 pontos de Novo Recorde da Etapa APÓS auth.recordMatch para nunca serem sobrescritos
+        if (stageRecRes.isNewRecord) {
+          const liveProfile = getActiveAccount()?.profile;
+          if (liveProfile) {
+            awardCareerPoints(liveProfile, RECORD_STAGE_MAX_POINTS, "Novo Recorde da Escola/Etapa");
+            await syncActiveProfileChangeToPlayFab(liveProfile).catch(() => null);
+          }
+        }
       }
-      const attemptRes = await recordWeeklyTournamentAttempt({
-        profile: auth.profile,
-        score: safeScore,
-        correct,
-        wrong,
-      });
-      const wonRanked = isMatchVictory(safeScore, correct, wrong);
-      await auth.recordMatch({
-        gameId: gId,
-        mode: "torneio_semanal",
-        won: wonRanked,
-        score: safeScore,
-        level,
-        correct,
-        wrong,
-        tournamentPoints: attemptRes.newTournamentPoints,
-        tournamentRankId: attemptRes.currentRank.id,
-      });
-    }
-    refreshLocal();
-    void auth.refresh();
-    if (exitToMenu) {
-      setView("menu");
-      setTournamentOpen(true);
+      refreshLocal();
+      void auth.refresh();
+      if (exitToMenu) {
+        setView("menu");
+        setTournamentOpen(true);
+      }
+    } finally {
+      finishingRankedRef.current = false;
     }
   }
 
@@ -240,12 +265,12 @@ function Index() {
       : null,
   );
 
-  // Garantia estrita de que a Masmorra só permaneça acessível enquanto isAdmin estiver ativo
+  // Garantia estrita de que a Masmorra só permaneça acessível enquanto ADM/conta de teste estiver ativo
   useEffect(() => {
-    if (view === "masmorra" && !auth.isAdmin) {
+    if (view === "masmorra" && !isAdminOrTestAccount(auth.profile, auth.isAdmin)) {
       setView("menu");
     }
-  }, [view, auth.isAdmin]);
+  }, [view, auth.profile, auth.isAdmin]);
 
   // Rastreia e atualiza a atividade atual do aluno para exibição em tempo real ao ADM
   useEffect(() => {
@@ -358,7 +383,16 @@ function Index() {
 
     const checkInvites = () => {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
-      if (view !== "menu" || isArenaClosed || activeX1Room) {
+      const canUseX1Now =
+        isAdminBypass ||
+        ((auth.profile?.level ?? 1) >= X1_MIN_LEVEL &&
+          (Boolean(auth.adminConfig.x1ForceOpen) ||
+            isX1WindowOpen(
+              getAuthoritativeNow(),
+              auth.adminConfig.x1OpenHour ?? 7,
+              auth.adminConfig.x1CloseHour ?? 19,
+            )));
+      if (view !== "menu" || isArenaClosed || activeX1Room || !canUseX1Now) {
         if (incomingInvite) setIncomingInvite(null);
         return;
       }
@@ -438,14 +472,15 @@ function Index() {
     !auth.loading &&
     (addingCode || (cfg.requireCodeGate && visibleUnlockedCount === 0));
 
+  const authoritativeNow = getAuthoritativeNow();
   const openHour = cfg.x1OpenHour ?? 7;
   const closeHour = cfg.x1CloseHour ?? 19;
   const x1OpenNow =
-    Boolean(cfg.x1ForceOpen) || isX1WindowOpen(new Date(), openHour, closeHour);
+    Boolean(cfg.x1ForceOpen) || isX1WindowOpen(authoritativeNow, openHour, closeHour);
   const x1HoursLabel = cfg.x1ForceOpen
     ? "Liberado pelo ADM"
     : `${String(openHour).padStart(2, "0")}:00 às ${String(closeHour).padStart(2, "0")}:00`;
-  const { weekIndex } = getWeekInfo();
+  const { weekIndex } = getWeekInfo(authoritativeNow);
   const weeklyGameId = resolveWeeklyTournamentGame(
     weekIndex,
     cfg.tournamentGameOverride,
@@ -453,7 +488,7 @@ function Index() {
   );
   const weeklyGameName = GAME_NAMES[weeklyGameId] ?? weeklyGameId;
 
-  const todayKey = getLocalDateKey();
+  const todayKey = getAuthoritativeDateKey(authoritativeNow);
   const isTodayRecord = auth.profile && auth.profile.dailyXpDate === todayKey;
   const dailyTournamentEntries = isTodayRecord
     ? Math.max(0, auth.profile?.dailyTournamentEntries ?? 0)
@@ -590,7 +625,7 @@ function Index() {
           1000,
           20,
           undefined,
-          undefined,
+          authoritativeNow,
           undefined,
           true,
         );
@@ -778,6 +813,21 @@ function Index() {
                   type="button"
                   onClick={async () => {
                     if (!auth.profile) return;
+                    const isX1Bypass = isAdminOrTestAccount(auth.profile, auth.isAdmin);
+                    const nowX1Open =
+                      Boolean(cfg.x1ForceOpen) ||
+                      isX1WindowOpen(getAuthoritativeNow(), openHour, closeHour);
+                    if (!isX1Bypass && (auth.profile.level < X1_MIN_LEVEL || !nowX1Open || cfg.x1Enabled === false || cfg.x1ArenaClosed)) {
+                      rejectX1Invite(incomingInvite.id, auth.profile.nick);
+                      setIncomingInvite(null);
+                      setRejectNotice(
+                        auth.profile.level < X1_MIN_LEVEL
+                          ? `A Arena X1 exige Nível ${X1_MIN_LEVEL}+.`
+                          : "A Arena X1 está fechada neste horário.",
+                      );
+                      window.setTimeout(() => setRejectNotice(null), 4000);
+                      return;
+                    }
                     const res = await joinX1RoomAsync({
                       code: incomingInvite.roomCode,
                       guest: {

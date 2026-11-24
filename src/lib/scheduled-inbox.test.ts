@@ -39,6 +39,7 @@ function createTestStudent(id = "aluno_1", nick = "Dedé"): PlayerProfile {
     careerPoints: 250,
     badges: [],
     unlockedMedals: [],
+    seasonId: 1,
   };
 }
 

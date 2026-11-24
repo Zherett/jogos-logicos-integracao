@@ -103,7 +103,7 @@ describe("Catálogo de Cosméticos e Regras da Loja", () => {
 
   it("compra pacote de cartas na loja adicionando ao unopenedPacks", () => {
     const pack = { ...DEFAULT_CARD_PACKS[0], priceCoins: 40 };
-    const res = purchaseStoreCardPack({ coins: 100 }, pack, 2);
+    const res = purchaseStoreCardPack({ coins: 100 } as CosmeticProfileSlice, pack, 2);
     assert.equal(res.ok, true);
     assert.equal(res.totalCost, 80);
     assert.equal(res.profile.coins, 20);
@@ -274,9 +274,9 @@ describe("Catálogo de Cosméticos e Regras da Loja", () => {
     assert.equal(resolvedLocked.secondaryAvatar, null);
   });
 
-  it("bloqueia URLs perigosas (javascript:, data:image/svg+xml, protocol-relative) em avatares customizados", () => {
+  it("bloqueia URLs perigosas (http:, javascript:, data:image/svg+xml, protocol-relative) em avatares customizados", () => {
     assert.equal(isSafeCosmeticImageUrl("https://cdn.exemplo.com/avatar.gif"), true);
-    assert.equal(isSafeCosmeticImageUrl("http://cdn.exemplo.com/avatar.png"), true);
+    assert.equal(isSafeCosmeticImageUrl("http://cdn.exemplo.com/avatar.png"), false);
     assert.equal(isSafeCosmeticImageUrl("/assets/avatar.webp"), true);
     assert.equal(
       isSafeCosmeticImageUrl("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"),

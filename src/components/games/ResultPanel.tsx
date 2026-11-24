@@ -14,6 +14,7 @@ import { type GameId } from "@/lib/game-storage";
 import { computeMatchDisplayXp } from "@/lib/player-profile";
 import { usePlayerAuth } from "@/lib/player-auth";
 import { getActiveEventBonuses } from "@/lib/custom-events";
+import { getAuthoritativeNow } from "@/lib/playfab";
 
 interface Props {
   score: number;
@@ -104,17 +105,18 @@ export function ResultPanel({
 
       {mode === "torneio_semanal" && (() => {
         const eventBonuses = getActiveEventBonuses(
-          "todos" as any,
+          (gameId ?? "todos") as any,
           1000,
           20,
           undefined,
-          undefined,
+          getAuthoritativeNow(),
           undefined,
           true,
         );
         const rankedMult = eventBonuses.rankedMultiplier ?? 1;
-        const basePts = Math.max(1, 10 - wrong);
-        const finalPts = Math.round(basePts * rankedMult);
+        const hasRealEffort = correct + wrong >= 1 || score > 0;
+        const basePts = hasRealEffort ? Math.max(1, 10 - wrong) : 0;
+        const finalPts = hasRealEffort ? Math.round(basePts * rankedMult) : 0;
         return (
           <div className="mt-4 rounded-2xl border-2 border-primary/40 bg-gradient-to-r from-primary/15 via-accent/10 to-primary/15 p-3.5 text-center shadow-xs">
             <div className="flex items-center justify-center gap-1.5 text-xs font-black uppercase tracking-wider text-primary">
@@ -124,8 +126,10 @@ export function ResultPanel({
               +{finalPts} {finalPts === 1 ? "Ponto" : "Pontos"} Ranqueados
             </div>
             <div className="text-xs text-muted-foreground mt-0.5">
-              10 pontos base - {wrong} {wrong === 1 ? "erro" : "erros"} (mínimo garantido de 1 pt)
-              {rankedMult > 1 && (
+              {hasRealEffort
+                ? `10 pontos base - ${wrong} ${wrong === 1 ? "erro" : "erros"} (mínimo garantido de 1 pt)`
+                : "Partida encerrada sem respostas (0 pts ranqueados)"}
+              {hasRealEffort && rankedMult > 1 && (
                 <span className="ml-1 text-amber-500 font-bold">
                   • ⚡ Evento {rankedMult}x Ativo!
                 </span>

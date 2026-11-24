@@ -22,6 +22,7 @@ import {
   markInboxMessageAsRead,
   markAllInboxMessagesAsReadForRecipient,
   claimInboxReward,
+  commitInboxClaimLocally,
   getMessageRewards,
   deleteInboxMessageForPlayer,
   formatInboxMessageText,
@@ -34,14 +35,17 @@ import {
   type InboxReward,
 } from "@/lib/inbox-messages";
 import { getAllAvailableMedals, RARITY_INFO } from "@/lib/medals-catalog";
+import { canAccessShopAndCustomization } from "@/lib/daily-rewards";
 import { usePlayerAuth } from "@/lib/player-auth";
 import {
   getActiveAccount,
   hasValidCloudSessionTicket,
+  isAdminUnlockedSession,
   pushInboxReadToPlayFab,
   pushInboxClaimToPlayFab,
   savePlayerProfile,
   syncInboxReadsFromPlayFab,
+  syncSinglePlayerFromPlayFab,
 } from "@/lib/playfab";
 import { GAME_NAMES, type GameId } from "@/lib/game-storage";
 import { findEventById, type SpecialEvent, type RecurringEvent } from "@/lib/custom-events";
@@ -65,7 +69,7 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
   const [isRevealing, setIsRevealing] = useState(false);
   const [claimingMsgId, setClaimingMsgId] = useState<string | null>(null);
   const [revealProgress, setRevealProgress] = useState(0);
-  const [revealedRewardModal, setRevealedRewardModal] = useState<InboxReward | null>(null);
+  const [revealedRewardsModal, setRevealedRewardsModal] = useState<InboxReward[] | null>(null);
   const [selectedEventModal, setSelectedEventModal] = useState<{
     event: (SpecialEvent | RecurringEvent) | null;
     fallbackTitle?: string;
@@ -140,7 +144,8 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
 
   const handleDeleteMessage = (msgId: string) => {
     if (!profile) return;
-    const res = deleteInboxMessageForPlayer(msgId, profile);
+    const liveProfile = getActiveAccount()?.profile ?? profile;
+    const res = deleteInboxMessageForPlayer(msgId, liveProfile);
     if (res.success) {
       if (selectedMessageId === msgId) {
         setSelectedMessageId(null);
@@ -151,8 +156,8 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
     }
   };
 
-  // Fluxo de Recompensa Secreta
-  const handleStartSecretReveal = (reward: InboxReward) => {
+  // Fluxo de Recompensa Secreta (exibe todas as recompensas da mensagem ao revelar)
+  const handleStartSecretReveal = (rewardsList: InboxReward[]) => {
     setIsRevealing(true);
     setRevealProgress(0);
 
@@ -162,7 +167,7 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
           clearInterval(interval);
           setTimeout(() => {
             setIsRevealing(false);
-            setRevealedRewardModal(reward);
+            setRevealedRewardsModal(rewardsList);
           }, 300);
           return 100;
         }
@@ -171,7 +176,7 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
     }, 120);
   };
 
-  // Confirmar Resgate (Atômico: só marca resgatada na nuvem após confirmar gravação no UserData)
+  // Confirmar Resgate (Atômico: só grava estado local e nuvem após confirmar UserData no PlayFab)
   const handleClaimReward = async (msgId: string) => {
     if (!profile || claimingMsgId) return;
     if (!hasValidCloudSessionTicket()) {
@@ -179,32 +184,25 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
       return;
     }
     setClaimingMsgId(msgId);
-    const liveProfile = getActiveAccount()?.profile ?? profile;
-    const profileSnapshot = JSON.parse(JSON.stringify(liveProfile)) as typeof liveProfile;
-    const prevClaimsRaw =
-      typeof window !== "undefined" ? window.localStorage.getItem("desafios-inbox-student-claims-v1") : null;
-
     try {
-      const res = claimInboxReward(msgId, profileSnapshot);
+      await syncSinglePlayerFromPlayFab(profile.nickNormalized || profile.id).catch(() => null);
+      const liveProfile = getActiveAccount()?.profile ?? profile;
+      const profileSnapshot = JSON.parse(JSON.stringify(liveProfile)) as typeof liveProfile;
+
+      const res = claimInboxReward(msgId, profileSnapshot, { deferLocalCommit: true });
       if (!res.success) {
         alert(res.error || "Erro ao resgatar recompensa.");
         return;
       }
       await savePlayerProfile(res.profile, { requireServerSync: true });
-      setRevealedRewardModal(null);
+      commitInboxClaimLocally(msgId, res.profile, res.claimedAt);
+      setRevealedRewardsModal(null);
       markInboxMessageAsRead(msgId, res.profile);
       pushInboxReadToPlayFab(msgId, res.profile).catch(console.warn);
       pushInboxClaimToPlayFab(msgId, res.profile).catch(console.warn);
       await auth.refresh();
       refreshMessages();
     } catch (err) {
-      if (typeof window !== "undefined") {
-        if (prevClaimsRaw !== null) {
-          window.localStorage.setItem("desafios-inbox-student-claims-v1", prevClaimsRaw);
-        } else {
-          window.localStorage.removeItem("desafios-inbox-student-claims-v1");
-        }
-      }
       alert(
         err instanceof Error && err.message
           ? err.message
@@ -642,7 +640,11 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                     const allClaimed = activeRewards.every((r) => r.claimed);
                     const hasSecret = activeRewards.some((r) => r.isSecret);
                     const firstClaimedAt = activeRewards.find((r) => r.claimedAt)?.claimedAt;
-                    const firstSecret = activeRewards.find((r) => r.isSecret) ?? activeRewards[0];
+                    const inventoryOpen = canAccessShopAndCustomization(
+                      profile,
+                      isAdminUnlockedSession(),
+                      auth.adminConfig,
+                    );
 
                     return (
                     <div className="rounded-3xl border-2 border-amber-500/40 bg-gradient-to-br from-amber-500/15 via-amber-500/5 to-transparent p-5 space-y-4 shadow-md">
@@ -722,7 +724,7 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                           ) : (
                             <Button
                               size="lg"
-                              onClick={() => handleStartSecretReveal(firstSecret)}
+                              onClick={() => handleStartSecretReveal(activeRewards)}
                               className="rounded-2xl font-display font-black bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-zinc-950 shadow-lg"
                             >
                               <Sparkles className="h-4 w-4 mr-2" /> Revelar Recompensa
@@ -734,7 +736,12 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                         <div className="space-y-2.5">
                           {activeRewards.map((rew, idx) => (
                             <div key={rew.id || idx} className="rounded-2xl border bg-background/90 p-3.5 flex items-center gap-3">
-                              {(rew.type === "points" || rew.type === "coins") && (
+                              {rew.type === "points" && (
+                                <div className="grid h-11 w-11 place-items-center rounded-2xl bg-primary/15 text-2xl shrink-0">
+                                  ⭐
+                                </div>
+                              )}
+                              {rew.type === "coins" && (
                                 <div className="grid h-11 w-11 place-items-center rounded-2xl bg-amber-500/20 text-2xl shrink-0">
                                   🪙
                                 </div>
@@ -793,7 +800,9 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                                     : rew.type === "coins"
                                       ? "Moedas serão adicionadas à sua carteira da Loja"
                                       : rew.type === "future_item"
-                                        ? "Será adicionado diretamente ao seu inventário/visual"
+                                        ? inventoryOpen
+                                          ? "Será adicionado diretamente ao seu inventário/visual"
+                                          : "Guardado com segurança no seu Inventário — ficará disponível assim que a Loja for liberada!"
                                         : (rew.itemData as any)?.tournamentMedal
                                           ? `+${(rew.itemData as any).tournamentMedal.bonusXpAwarded ?? 0} XP Extra e Medalha de Pódio Oficial`
                                           : "Adicionada à sua galeria de troféus e medalhas"}
@@ -804,11 +813,16 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
 
                           <Button
                             size="lg"
+                            disabled={Boolean(claimingMsgId)}
                             onClick={() => handleClaimReward(activeMessage.id)}
-                            className="w-full rounded-2xl font-display font-black bg-amber-500 text-zinc-950 hover:bg-amber-600 shadow-md"
+                            className="w-full rounded-2xl font-display font-black bg-amber-500 text-zinc-950 hover:bg-amber-600 shadow-md disabled:opacity-60"
                           >
                             <Gift className="h-4 w-4 mr-1.5" />{" "}
-                            {activeRewards.length > 1 ? "Resgatar Recompensas" : "Resgatar Recompensa"}
+                            {claimingMsgId === activeMessage.id
+                              ? "Resgatando..."
+                              : activeRewards.length > 1
+                                ? "Resgatar Recompensas"
+                                : "Resgatar Recompensa"}
                           </Button>
                         </div>
                       )}
@@ -857,58 +871,112 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
       </Dialog>
 
       {/* Modal Sobreposto de Comemoração ao Revelar Recompensa Secreta */}
-      {revealedRewardModal && (
-        <Dialog open={Boolean(revealedRewardModal)} onOpenChange={() => setRevealedRewardModal(null)}>
-          <DialogContent className="max-w-md rounded-3xl border-2 border-amber-500/50 bg-card p-6 text-center space-y-4 shadow-2xl animate-in zoom-in-95">
+      {revealedRewardsModal && revealedRewardsModal.length > 0 && (
+        <Dialog
+          open={Boolean(revealedRewardsModal)}
+          onOpenChange={() => setRevealedRewardsModal(null)}
+        >
+          <DialogContent className="max-w-md max-h-[88vh] overflow-y-auto rounded-3xl border-2 border-amber-500/50 bg-card p-6 text-center space-y-4 shadow-2xl animate-in zoom-in-95">
             <div className="mx-auto grid h-20 w-20 place-items-center rounded-3xl bg-amber-500/20 text-4xl shadow-inner border-2 border-amber-500/40 animate-bounce">
               🎉
             </div>
 
             <div className="space-y-1">
               <DialogTitle className="font-display text-2xl font-black text-foreground">
-                Recompensa Revelada!
+                {revealedRewardsModal.length > 1 ? "Recompensas Reveladas!" : "Recompensa Revelada!"}
               </DialogTitle>
               <p className="text-xs text-muted-foreground">
                 O segredo foi desbloqueado com sucesso! Veja o que você ganhou:
               </p>
             </div>
 
-            <div className="rounded-2xl border-2 border-amber-500/30 bg-amber-500/10 p-4 space-y-1">
-              {revealedRewardModal.type === "points" && (
-                <>
-                  <div className="font-display text-2xl font-black text-amber-600 dark:text-amber-400">
-                    🪙 +{revealedRewardModal.pointsAmount} Pontos
-                  </div>
-                  <div className="text-xs text-muted-foreground font-semibold">
-                    Adicionados à sua carteira e ao Hall da Fama
-                  </div>
-                </>
-              )}
-              {revealedRewardModal.type === "medal" && (() => {
-                const def = allCatalogMedals.find((m) => m.id === revealedRewardModal.medalId);
-                const rarity = def ? RARITY_INFO[def.rarity] : RARITY_INFO.ouro;
-                return (
-                  <>
-                    <div className="font-display text-xl font-black text-primary">
-                      🏅 {def ? def.title : revealedRewardModal.medalId}
-                    </div>
-                    <div className="text-xs font-bold text-amber-600 dark:text-amber-400 uppercase">
-                      Raridade: {rarity.label}
-                    </div>
-                    {def?.description && (
-                      <p className="text-xs text-muted-foreground mt-1">{def.description}</p>
-                    )}
-                  </>
-                );
-              })()}
+            <div className="space-y-2.5">
+              {revealedRewardsModal.map((rew, idx) => (
+                <div
+                  key={rew.id || idx}
+                  className="rounded-2xl border-2 border-amber-500/30 bg-amber-500/10 p-4 space-y-1"
+                >
+                  {rew.type === "points" && (
+                    <>
+                      <div className="font-display text-2xl font-black text-primary">
+                        ⭐ +{rew.pointsAmount} Pontos
+                      </div>
+                      <div className="text-xs text-muted-foreground font-semibold">
+                        Adicionados à sua carteira e ao Hall da Fama
+                      </div>
+                    </>
+                  )}
+                  {rew.type === "coins" && (
+                    <>
+                      <div className="font-display text-2xl font-black text-amber-600 dark:text-amber-400">
+                        🪙 +{rew.pointsAmount} Moedas
+                      </div>
+                      <div className="text-xs text-muted-foreground font-semibold">
+                        Adicionadas à sua carteira da Loja
+                      </div>
+                    </>
+                  )}
+                  {rew.type === "future_item" && (() => {
+                    const idata = rew.itemData as any;
+                    const label = idata?.itemName
+                      ? idata.itemCategory === "cosmetic"
+                        ? idata.itemName
+                        : `${idata.quantity ?? 1}x ${idata.itemName}`
+                      : "Item Especial";
+                    return (
+                      <>
+                        <div className="font-display text-xl font-black text-primary">
+                          📦 {label}
+                        </div>
+                        <div className="text-xs text-muted-foreground font-semibold">
+                          Adicionado diretamente ao seu Inventário / Visual
+                        </div>
+                      </>
+                    );
+                  })()}
+                  {rew.type === "medal" && (() => {
+                    const itemData = rew.itemData as any;
+                    const tourMedal = itemData?.tournamentMedal;
+                    if (tourMedal?.label) {
+                      return (
+                        <>
+                          <div className="font-display text-xl font-black text-primary">
+                            🏆 {tourMedal.label}
+                          </div>
+                          <div className="text-xs text-muted-foreground font-semibold">
+                            +{tourMedal.bonusXpAwarded ?? 0} XP Extra e Medalha de Pódio Oficial
+                          </div>
+                        </>
+                      );
+                    }
+                    const def = allCatalogMedals.find((m) => m.id === rew.medalId);
+                    const rarity = def ? RARITY_INFO[def.rarity] : RARITY_INFO.ouro;
+                    return (
+                      <>
+                        <div className="font-display text-xl font-black text-primary">
+                          🏅 {def ? def.title : rew.medalId}
+                        </div>
+                        <div className="text-xs font-bold text-amber-600 dark:text-amber-400 uppercase">
+                          Raridade: {rarity.label}
+                        </div>
+                        {def?.description && (
+                          <p className="text-xs text-muted-foreground mt-1">{def.description}</p>
+                        )}
+                      </>
+                    );
+                  })()}
+                </div>
+              ))}
             </div>
 
             <Button
               size="lg"
+              disabled={Boolean(claimingMsgId)}
               onClick={() => activeMessage && handleClaimReward(activeMessage.id)}
-              className="w-full h-12 rounded-2xl font-display font-black text-base bg-amber-500 hover:bg-amber-600 text-zinc-950 shadow-lg"
+              className="w-full h-12 rounded-2xl font-display font-black text-base bg-amber-500 hover:bg-amber-600 text-zinc-950 shadow-lg disabled:opacity-60"
             >
-              <Check className="h-5 w-5 mr-2" /> Confirmar e Receber Recompensa
+              <Check className="h-5 w-5 mr-2" />
+              {claimingMsgId ? "Resgatando..." : "Confirmar e Receber Recompensa"}
             </Button>
           </DialogContent>
         </Dialog>

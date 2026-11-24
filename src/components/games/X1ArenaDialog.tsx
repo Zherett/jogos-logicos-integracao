@@ -22,6 +22,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ALL_GAME_IDS, GAME_NAMES, type GameId } from "@/lib/game-storage";
 import { usePlayerAuth } from "@/lib/player-auth";
+import { getAuthoritativeDateKey, getAuthoritativeNow } from "@/lib/playfab";
 import {
   getX1MedalsProgress,
   type PlayerUnlockedMedal,
@@ -31,7 +32,6 @@ import { loadSpecialEvents, loadRecurringEvents } from "@/lib/custom-events";
 import {
   ageFrom,
   getAgeStageInfo,
-  getLocalDateKey,
   isAdminOrTestAccount,
   isX1WindowOpen,
   stageForPlayer,
@@ -255,10 +255,11 @@ export function X1ArenaDialog({
   const cfg = auth.adminConfig;
   const openHour = cfg.x1OpenHour ?? 7;
   const closeHour = cfg.x1CloseHour ?? 19;
-  const rawTimeOpen = isX1WindowOpen(new Date(), openHour, closeHour, cfg.x1ForceOpen ?? false);
+  const authoritativeNow = getAuthoritativeNow();
+  const rawTimeOpen = isX1WindowOpen(authoritativeNow, openHour, closeHour, cfg.x1ForceOpen ?? false);
   const isTimeOpen = isAdminBypass || rawTimeOpen;
   const meetsLevel = isAdminBypass || profile.level >= X1_MIN_LEVEL;
-  const todayKey = getLocalDateKey();
+  const todayKey = getAuthoritativeDateKey(authoritativeNow);
   const dailyX1Xp =
     profile.dailyXpDate === todayKey ? Math.max(0, profile.dailyX1Xp ?? 0) : 0;
 

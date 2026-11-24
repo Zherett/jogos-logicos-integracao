@@ -1031,11 +1031,13 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
   // e blindagem contra mutação de DOM por extensões/auto-tradutor (translate="no")
   return (
     <SpaceQuestSafeBoundary
-      score={Math.max(0, score)}
-      correct={correctCount}
-      wrong={wrongCount}
-      level={level}
-      gameOverReason={gameOverReason}
+      getFallbackStats={() => ({
+        score: Math.max(0, score),
+        correct: correctCount,
+        wrong: wrongCount,
+        level,
+        isRanked,
+      })}
       onReplay={handleReplay}
       onExit={onExit}
     >

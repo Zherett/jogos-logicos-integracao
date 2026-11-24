@@ -584,7 +584,7 @@ describe("Torneio Semanal Ranqueado (Nível 3+) e Regras da Arena X1 (Nível 5+,
     const mockStore: WeeklyTournamentStore = {
       seasonId: 1,
       weekKey: "2026-W45",
-      gameId: "calc-rapido",
+      gameId: "logica",
       records: {
         "campeao-etapa2": {
           playerId: "campeao-etapa2",

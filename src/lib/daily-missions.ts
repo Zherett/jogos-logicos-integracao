@@ -63,6 +63,8 @@ export function recordMatchIntoDailyMissions(
     dateKey?: string;
     playerLevel?: number;
     personalizedGameId?: GameId;
+    /** Evita farm AFK/0 pontos: quando informado como false, não contabiliza partida sem participação real. */
+    hasRealParticipation?: boolean;
   },
 ): DailyMissionProgressState {
   const dateKey = args.dateKey ?? getLocalDateKey();
@@ -96,14 +98,14 @@ export function recordMatchIntoDailyMissions(
           ...(args.personalizedGameId ? { personalizedGameId: args.personalizedGameId } : {}),
         };
 
+  if (args.hasRealParticipation === false) {
+    return base;
+  }
+
   base.plays += 1;
   if (args.won) base.wins += 1;
   if (!base.distinctGameIds.includes(args.gameId)) {
     base.distinctGameIds.push(args.gameId);
-  }
-  if (args.flawless || args.mode === "torneio_semanal") {
-    // No nível 4-6 a missão flawless aceita 0 erros OU 1 partida no Torneio;
-    // para precisão em todos os níveis, mantemos flawlessCount quando flawless === true
   }
   if (args.flawless) {
     base.flawlessCount += 1;
@@ -428,10 +430,17 @@ function buildDailyMissionsList(args: {
   const playerId = args.profile?.id || args.profile?.nick || "guest";
   const isAdmin = Boolean(args.profile?.isAdmin);
 
-  const lockedGameId =
+  const rawLockedGameId =
     todayProgress?.personalizedGameId && ALL_GAME_IDS.includes(todayProgress.personalizedGameId)
       ? todayProgress.personalizedGameId
       : null;
+  const enabledGamesMap = args.adminConfig?.enabledGames;
+  const lockedStillPlayable =
+    rawLockedGameId &&
+    (!enabledGamesMap ||
+      enabledGamesMap[rawLockedGameId] !== false ||
+      (todayProgress?.playsByGame?.[rawLockedGameId] ?? 0) > 0);
+  const lockedGameId = lockedStillPlayable ? rawLockedGameId : null;
   const leastPlayed = lockedGameId
     ? {
         gameId: lockedGameId,

@@ -175,7 +175,7 @@ export function checkVariableSlots(
   filled: Partial<Record<VarSlotRole, number | VarOpSymbol>>,
 ): boolean {
   for (const s of q.slots) {
-    if (filled[s] === undefined || filled[s] === null || filled[s] === "") return false;
+    if (filled[s] === undefined || filled[s] === null || (filled[s] as unknown) === "") return false;
   }
   const a = q.slots.includes("left") ? Number(filled.left) : q.rawA;
   const b = q.slots.includes("right") ? Number(filled.right) : q.rawB;

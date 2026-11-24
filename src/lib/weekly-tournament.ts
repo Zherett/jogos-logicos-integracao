@@ -11,6 +11,8 @@ import {
   deductPaidTournamentPoints,
   getAdminPlayFabTicket,
   getAllRegisteredPlayers,
+  getAuthoritativeDateKey,
+  getAuthoritativeNow,
   getPlayFabTitleId,
   isPlayFabConfigured,
   loadStoredSession,
@@ -504,27 +506,32 @@ export interface WeeklyTournamentStore {
   updatedAt: number;
 }
 
-/** Computes a deterministic Monday-to-Sunday week key (`YYYY-Www`, flipping Sunday 23:59 -> Monday 00:00). */
+/**
+ * Computes a deterministic ISO-8601 Monday-to-Sunday week key (`YYYY-Www`),
+ * flipping cleanly Sunday 23:59 -> Monday 00:00 without splitting across Dec 31 / Jan 1.
+ */
 export function getWeekInfo(now = new Date()): {
   weekKey: string;
   weekIndex: number;
   endsAtLabel: string;
 } {
-  const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const startOfYear = new Date(now.getFullYear(), 0, 1);
-  const startMondayOffset = (startOfYear.getDay() + 6) % 7; // Monday = 0 ... Sunday = 6
-  const diffDays = Math.round((todayMidnight.getTime() - startOfYear.getTime()) / 86_400_000);
-  const weekNum = Math.floor((diffDays + startMondayOffset) / 7) + 1;
-  const weekKey = `${now.getFullYear()}-W${String(weekNum).padStart(2, "0")}`;
+  // ISO-8601 week calculation anchored to Thursday of the current Monday-Sunday week
+  const d = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  const dayNum = d.getUTCDay() || 7; // Monday = 1 ... Sunday = 7
+  d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+  const isoYear = d.getUTCFullYear();
+  const yearStart = new Date(Date.UTC(isoYear, 0, 1));
+  const weekNum = Math.ceil(((d.getTime() - yearStart.getTime()) / 86_400_000 + 1) / 7);
+  const weekKey = `${isoYear}-W${String(weekNum).padStart(2, "0")}`;
 
   // Current week's Sunday 23:59
-  const daysUntilSunday = (7 - now.getDay()) % 7;
+  const daysUntilSunday = 7 - dayNum;
   const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + daysUntilSunday);
   const endsAtLabel = `${end.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })} às 23:59`;
 
   return {
     weekKey,
-    weekIndex: now.getFullYear() * 53 + weekNum,
+    weekIndex: isoYear * 53 + weekNum,
     endsAtLabel,
   };
 }
@@ -818,8 +825,12 @@ export async function finalizeRankedSeasonAndAwardMedalsViaInbox(
           : `Parabéns! Você alcançou o Top ${row.rank} na sua etapa (${row.stageLabel}) durante a Temporada ${seasonId} do Modo Ranqueado da SEMED Coari, consolidando-se entre os melhores competidores da rede municipal! Reivindique sua Medalha de Honra de Elite Oficial e seus pontos de prestígio abaixo.`;
 
       const rewId = `rew_rnk_s${seasonId}_${st}_r${row.rank}_${Date.now()}`;
+      // Envia exatamente 1 mensagem canônica por vencedor (matchPlayerIdentifier resolve tanto playerId quanto nick)
       createInboxMessage({
         recipientId: row.playerId,
+        recipientFilter: {
+          targetStudentIds: Array.from(new Set([row.playerId, ...(row.nick ? [row.nick] : [])])),
+        },
         sender: "adm",
         senderName: "Coordenação de Torneios SEMED",
         category: "recompensa_especial",
@@ -841,32 +852,6 @@ export async function finalizeRankedSeasonAndAwardMedalsViaInbox(
           },
         },
       });
-
-      if (row.nick && row.nick.toLowerCase() !== row.playerId.toLowerCase()) {
-        createInboxMessage({
-          recipientId: row.nick,
-          sender: "adm",
-          senderName: "Coordenação de Torneios SEMED",
-          category: "recompensa_especial",
-          title,
-          body,
-          reward: {
-            id: `${rewId}_nick`,
-            type: "medal",
-            medalId,
-            pointsAmount: proj.bonusXp,
-            isSecret: false,
-            claimed: false,
-            itemData: {
-              tournamentMedal: tourMedal,
-              seasonId,
-              stage: st,
-              rank: row.rank,
-              tier: proj.tier,
-            },
-          },
-        });
-      }
 
       try {
         const activeSession = loadStoredSession();
@@ -1223,8 +1208,8 @@ export function getTournamentStoreRecord(
   }
 
   const reg = loadRegistryReadOnly();
-  const memAcc = (cleanId && reg[cleanId]) || (cleanNick && reg[cleanNick]);
-  if (memAcc?.profile) {
+  const memAcc = (cleanId ? reg[cleanId] : undefined) || (cleanNick ? reg[cleanNick] : undefined);
+  if (memAcc && typeof memAcc === "object" && memAcc.profile) {
     if ((memAcc.profile.level ?? 1) < TOURNAMENT_MIN_LEVEL) {
       return null;
     }
@@ -1536,7 +1521,7 @@ export function getWeeklyTournamentSnapshot(
   profile?: PlayerProfile | null,
   stageFilter?: AgeStageId | "TODAS",
 ) {
-  const now = new Date();
+  const now = getAuthoritativeNow();
   const cfg = loadAdminConfig();
   const currentSeasonId = cfg.rankedSeasonId ?? 1;
   const store = loadTournamentStore(now);
@@ -1558,7 +1543,7 @@ export function getWeeklyTournamentSnapshot(
     playerStageInfo.id,
   );
 
-  const todayKey = getLocalDateKey(now);
+  const todayKey = getAuthoritativeDateKey();
   const isToday = profile?.dailyXpDate === todayKey;
   const entriesUsedToday = isToday ? Math.max(0, profile?.dailyTournamentEntries ?? 0) : 0;
   const entriesRemainingToday = Math.max(0, TOURNAMENT_DAILY_ENTRIES_LIMIT - entriesUsedToday);
@@ -1601,7 +1586,7 @@ export function getWeeklyTournamentSnapshot(
     1000,
     20,
     undefined,
-    undefined,
+    now,
     undefined,
     true,
   );
@@ -1677,16 +1662,22 @@ export async function recordWeeklyTournamentAttempt(args: {
     };
   }
 
-  const nowMs = Date.now();
-  const nowDate = new Date(nowMs);
-  const todayKey = getLocalDateKey(nowDate);
+  const nowDate = getAuthoritativeNow();
+  const nowMs = nowDate.getTime();
+  const todayKey = getAuthoritativeDateKey();
   const store = loadTournamentStore(nowDate);
-  const safeScore = Math.max(0, Math.floor(args.score));
-  const safeCorrect = Math.max(0, args.correct ?? 0);
-  const safeWrong = Math.max(0, args.wrong ?? 0);
-  const won = isMatchVictory(safeScore, safeCorrect, safeWrong);
+  const safeScore = Math.max(0, Math.floor(Number(args.score) || 0));
+  const safeCorrect = Math.max(0, Math.floor(Number(args.correct) || 0));
+  const safeWrong = Math.max(0, Math.floor(Number(args.wrong) || 0));
+  const hasRealParticipation = safeCorrect + safeWrong >= 1 || safeScore > 0;
 
-  const existing = store.records[args.profile.id];
+  // Chave canônica unificada com loadTournamentStore (evita duplicatas e zeragem de contadores diários)
+  const canonicalKey = args.profile.nickNormalized || args.profile.id;
+  const existing = store.records[canonicalKey] ?? store.records[args.profile.id];
+  if (canonicalKey !== args.profile.id && store.records[args.profile.id]) {
+    delete store.records[args.profile.id];
+  }
+
   const pStage = stageForPlayer(
     args.profile.school,
     args.profile.birthdate,
@@ -1695,32 +1686,44 @@ export async function recordWeeklyTournamentAttempt(args: {
   );
   const pAge = args.profile.birthdate ? ageFrom(args.profile.birthdate, nowDate) : pStage.minAge;
 
+  // Bloqueia farm AFK (0 acertos, 0 erros, 0 pontos) e respeita teto diário de 60 entradas
+  const isSameDay = existing?.dailyDateKey === todayKey;
+  const currentDailyMatches = isSameDay ? (existing?.dailyMatchesCount ?? 0) : 0;
+  const currentDailyFlawless = isSameDay ? (existing?.dailyWinsCount ?? 0) : 0;
+  const profileEntriesToday =
+    args.profile.dailyXpDate === todayKey ? Math.max(0, args.profile.dailyTournamentEntries ?? 0) : 0;
+  const effectiveEntriesToday = Math.max(currentDailyMatches, profileEntriesToday);
+  const overDailyLimit = effectiveEntriesToday >= TOURNAMENT_DAILY_ENTRIES_LIMIT;
+
   // Regra de pontuação ranqueada:
-  // Base 10 pontos, -1 ponto por erro cometido. Piso mínimo de 1 ponto ao concluir.
-  const baseEarned = Math.max(1, 10 - safeWrong);
+  // - Partida AFK (sem respostas e score 0) ou acima do teto diário: 0 pontos
+  // - Partida com participação real: Base 10 pontos, -1 por erro, piso mínimo de 1 ponto.
+  const baseEarned = !hasRealParticipation || overDailyLimit ? 0 : Math.max(1, 10 - safeWrong);
   const eventBonuses = getActiveEventBonuses(
     store.gameId,
     1000,
     20,
     undefined,
-    undefined,
+    nowDate,
     undefined,
     true,
   );
   const rankedMultiplier = Math.max(1, eventBonuses.rankedMultiplier ?? 1);
-  const matchPoints = Math.round(baseEarned * rankedMultiplier);
+  const matchPoints = baseEarned > 0 ? Math.round(baseEarned * rankedMultiplier) : 0;
   let pointsDelta = matchPoints;
 
-  // Acompanhamento do bônus diário de 10 partidas sem nenhum erro (10 perfeitas)
-  const isSameDay = existing?.dailyDateKey === todayKey;
-  const currentDailyMatches = isSameDay ? (existing?.dailyMatchesCount ?? 0) : 0;
-  const currentDailyFlawless = isSameDay ? (existing?.dailyWinsCount ?? 0) : 0;
-  const isFlawless = safeWrong === 0;
-  const nextDailyMatches = currentDailyMatches + 1;
+  // Acompanhamento do bônus diário de 10 partidas perfeitas (exige 0 erros E participação real com >= 3 acertos ou vitória)
+  const isFlawless =
+    hasRealParticipation &&
+    !overDailyLimit &&
+    safeWrong === 0 &&
+    (safeCorrect >= 3 || isMatchVictory(safeScore, safeCorrect, safeWrong));
+  const nextDailyMatches = hasRealParticipation ? currentDailyMatches + 1 : currentDailyMatches;
   const nextDailyWins = currentDailyFlawless + (isFlawless ? 1 : 0);
+  const alreadyGotBonusToday = isSameDay ? Boolean(existing?.dailyBonusAwarded) : false;
   let dailyBonusAwarded = false;
 
-  if (nextDailyMatches === 10 && nextDailyWins === 10 && !existing?.dailyBonusAwarded) {
+  if (nextDailyMatches === 10 && nextDailyWins === 10 && !alreadyGotBonusToday) {
     pointsDelta += 25;
     dailyBonusAwarded = true;
   }
@@ -1729,8 +1732,8 @@ export async function recordWeeklyTournamentAttempt(args: {
   const newTournamentPoints = Math.max(0, curPoints + pointsDelta);
   const rankInfo = getTournamentRank(newTournamentPoints);
 
-  store.records[args.profile.id] = {
-    playerId: args.profile.id,
+  store.records[canonicalKey] = {
+    playerId: canonicalKey,
     nick: args.profile.nick,
     fullName: args.profile.full_name,
     school: args.profile.school,
@@ -1739,12 +1742,12 @@ export async function recordWeeklyTournamentAttempt(args: {
     stage: pStage.id,
     level: args.profile.level,
     bestScore: Math.max(existing?.bestScore ?? 0, safeScore),
-    totalEntries: (existing?.totalEntries ?? 0) + 1,
+    totalEntries: (existing?.totalEntries ?? 0) + (hasRealParticipation ? 1 : 0),
     tournamentPoints: newTournamentPoints,
     dailyWinsCount: nextDailyWins,
     dailyMatchesCount: nextDailyMatches,
     dailyDateKey: todayKey,
-    dailyBonusAwarded: dailyBonusAwarded || (isSameDay ? (existing?.dailyBonusAwarded ?? false) : false),
+    dailyBonusAwarded: dailyBonusAwarded || alreadyGotBonusToday,
     highestRankId: rankInfo.currentRank.id,
     activeTop5Since: existing?.activeTop5Since ?? null,
     accumulatedTop5Ms: existing?.accumulatedTop5Ms ?? 0,

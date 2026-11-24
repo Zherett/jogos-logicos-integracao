@@ -494,18 +494,44 @@ export const DEFAULT_AURAS: readonly AuraDefinition[] = [
   },
 ];
 
+const MAX_DATA_IMAGE_URL_CHARS = 16_000;
+
 /**
- * Valida URL de imagem para avatares customizados contra protocolos inseguros (XSS).
- * Aceita apenas http(s), caminhos relativos (`/`) ou data URLs de imagem bitmap (png/jpeg/gif/webp).
+ * Sanitiza uma cor hexadecimal para exatamente 6 dígitos (`#RRGGBB`),
+ * impedindo CSS inválido (ex.: `#fff22`) ou injeção em variáveis/SVG.
+ */
+export function sanitizeHex6(value?: string | null, fallback = DEFAULT_AVATAR_COLOR): string {
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  if (/^#[0-9a-fA-F]{6}$/.test(trimmed)) return trimmed;
+  if (/^#[0-9a-fA-F]{3}$/.test(trimmed)) {
+    const r = trimmed[1];
+    const g = trimmed[2];
+    const b = trimmed[3];
+    return `#${r}${r}${g}${g}${b}${b}`;
+  }
+  return fallback;
+}
+
+/**
+ * Valida URL de imagem para avatares customizados contra protocolos inseguros (XSS),
+ * bloqueios de CSP (`http://`) e excesso de bytes no limite de 100 KB do PlayFab.
+ * Aceita apenas `https://`, caminhos relativos (`/`) ou `data:image/(png|jpeg|gif|webp);base64,...` até ~12 KB.
  */
 export function isSafeCosmeticImageUrl(url?: string | null): boolean {
   if (!url || typeof url !== "string") return false;
   const trimmed = url.trim();
   if (!trimmed) return false;
-  if (/^https?:\/\//i.test(trimmed)) return true;
-  if (trimmed.startsWith("/") && !trimmed.startsWith("//")) return true;
-  if (/^data:image\/(png|jpe?g|gif|webp);base64,[a-z0-9+/=]+$/i.test(trimmed)) return true;
-  return false;
+  if (trimmed.startsWith("/") && !trimmed.startsWith("//")) return !/\s/.test(trimmed);
+  if (/^data:image\/(png|jpe?g|gif|webp);base64,[a-z0-9+/=]+$/i.test(trimmed)) {
+    return trimmed.length <= MAX_DATA_IMAGE_URL_CHARS;
+  }
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === "https:" && Boolean(parsed.hostname);
+  } catch {
+    return false;
+  }
 }
 
 export function mergeWithDefaultAvatars(custom?: AvatarDefinition[] | null): AvatarDefinition[] {
@@ -537,9 +563,70 @@ export function mergeWithDefaultAuras(custom?: AuraDefinition[] | null): AuraDef
   for (const item of custom ?? []) {
     if (!item || !item.id) continue;
     const base = byId.get(item.id);
-    byId.set(item.id, base ? { ...base, ...item } : { ...item });
+    const merged: AuraDefinition = base ? { ...base, ...item } : { ...item };
+    merged.primaryColor = sanitizeHex6(merged.primaryColor, base?.primaryColor ?? "#3b82f6");
+    if (merged.secondaryColor) {
+      merged.secondaryColor = sanitizeHex6(merged.secondaryColor, base?.secondaryColor ?? "#ec4899");
+    }
+    byId.set(merged.id, merged);
   }
   return Array.from(byId.values());
+}
+
+/**
+ * Extrai apenas avatares customizados ou overrides que diferem do catálogo padrão,
+ * economizando ~20 KB na chave compartilhada de 100 KB no PlayFab.
+ */
+export function extractCustomAvatarsForStorage(allAvatars: AvatarDefinition[]): AvatarDefinition[] {
+  const defaultById = new Map(DEFAULT_AVATARS.map((d) => [d.id, d]));
+  const result: AvatarDefinition[] = [];
+  for (const av of allAvatars) {
+    if (!av?.id) continue;
+    const def = defaultById.get(av.id);
+    if (!def) {
+      result.push(av);
+      continue;
+    }
+    const changed =
+      av.priceCoins !== def.priceCoins ||
+      av.enabled !== def.enabled ||
+      Boolean(av.featured) !== Boolean(def.featured) ||
+      av.name !== def.name ||
+      av.description !== def.description ||
+      (av.imageUrl ?? "") !== (def.imageUrl ?? "");
+    if (changed) {
+      result.push(av);
+    }
+  }
+  return result;
+}
+
+/**
+ * Extrai apenas auras customizadas ou overrides que diferem do catálogo padrão.
+ */
+export function extractCustomAurasForStorage(allAuras: AuraDefinition[]): AuraDefinition[] {
+  const defaultById = new Map(DEFAULT_AURAS.map((d) => [d.id, d]));
+  const result: AuraDefinition[] = [];
+  for (const au of allAuras) {
+    if (!au?.id) continue;
+    const def = defaultById.get(au.id);
+    if (!def) {
+      result.push(au);
+      continue;
+    }
+    const changed =
+      au.priceCoins !== def.priceCoins ||
+      au.enabled !== def.enabled ||
+      Boolean(au.featured) !== Boolean(def.featured) ||
+      au.name !== def.name ||
+      au.description !== def.description ||
+      au.primaryColor !== def.primaryColor ||
+      (au.secondaryColor ?? "") !== (def.secondaryColor ?? "");
+    if (changed) {
+      result.push(au);
+    }
+  }
+  return result;
 }
 
 export interface CosmeticProfileSlice {
@@ -552,26 +639,39 @@ export interface CosmeticProfileSlice {
   level5InitialAvatarGrantedId?: string;
   level?: number;
   nick?: string;
+  full_name?: string;
   unlockedAuras?: string[];
   equippedAuraId?: string;
   unopenedPacks?: Record<string, number>;
 }
 
-/** Extrai a primeira letra A-Z (sem acentos, em maiúsculo) do apelido do jogador. */
-export function getInitialLetterFromNick(nick?: string | null): string | null {
-  if (!nick || typeof nick !== "string") return null;
-  const normalized = nick
-    .trim()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toUpperCase();
-  const match = /[A-Z]/.exec(normalized);
-  return match ? match[0] : null;
+const VALID_LEVEL5_FREE_LETTER_REGEX = /^avatar_letter_simple_[a-z]$/;
+
+export function isValidLevel5InitialLetterAvatarId(id?: string | null): boolean {
+  return typeof id === "string" && VALID_LEVEL5_FREE_LETTER_REGEX.test(id);
 }
 
-/** Retorna o ID do avatar de letra simples gratuito correspondente à inicial do nick. */
-export function getInitialLetterAvatarIdForNick(nick?: string | null): string | null {
-  const letter = getInitialLetterFromNick(nick);
+/** Extrai a primeira letra A-Z (sem acentos, em maiúsculo) do apelido (ou nome de fallback). */
+export function getInitialLetterFromNick(nick?: string | null, fallbackFullName?: string | null): string | null {
+  for (const candidate of [nick, fallbackFullName]) {
+    if (!candidate || typeof candidate !== "string") continue;
+    const normalized = candidate
+      .trim()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toUpperCase();
+    const match = /[A-Z]/.exec(normalized);
+    if (match) return match[0];
+  }
+  return null;
+}
+
+/** Retorna o ID do avatar de letra simples gratuito correspondente à inicial do nick (ou nome). */
+export function getInitialLetterAvatarIdForNick(
+  nick?: string | null,
+  fallbackFullName?: string | null,
+): string | null {
+  const letter = getInitialLetterFromNick(nick, fallbackFullName);
   if (!letter) return null;
   return buildLetterAvatarId(letter, "simple");
 }
@@ -594,8 +694,11 @@ export function ensureLevel5InitialLetterUnlock<T extends CosmeticProfileSlice>(
     return { profile, grantedAvatarId: null };
   }
 
+  const validExistingGrant = isValidLevel5InitialLetterAvatarId(profile.level5InitialAvatarGrantedId)
+    ? profile.level5InitialAvatarGrantedId
+    : null;
   const targetId =
-    profile.level5InitialAvatarGrantedId || getInitialLetterAvatarIdForNick(profile.nick);
+    validExistingGrant || getInitialLetterAvatarIdForNick(profile.nick, profile.full_name);
   if (!targetId) {
     return { profile, grantedAvatarId: null };
   }
@@ -626,8 +729,11 @@ export function getUnlockedAvatarIds(profile?: CosmeticProfileSlice | null): str
   }
   const lvl = Math.floor(Number(profile?.level) || 1);
   if (lvl >= LEVEL5_FREE_LETTER_MIN_LEVEL) {
+    const validExistingGrant = isValidLevel5InitialLetterAvatarId(profile?.level5InitialAvatarGrantedId)
+      ? profile?.level5InitialAvatarGrantedId
+      : null;
     const freeLetterId =
-      profile?.level5InitialAvatarGrantedId || getInitialLetterAvatarIdForNick(profile?.nick);
+      validExistingGrant || getInitialLetterAvatarIdForNick(profile?.nick, profile?.full_name);
     if (freeLetterId) {
       set.add(freeLetterId);
     }
@@ -667,11 +773,7 @@ export function resolveEquippedAvatar(
     secondaryAvatar = catalog.find((a) => a.id === desiredSecondaryId) ?? null;
   }
 
-  const desiredColor = profile?.equippedAvatar?.color;
-  const validColor =
-    desiredColor && /^#[0-9a-fA-F]{3,8}$/.test(desiredColor)
-      ? desiredColor
-      : DEFAULT_AVATAR_COLOR;
+  const validColor = sanitizeHex6(profile?.equippedAvatar?.color, DEFAULT_AVATAR_COLOR);
 
   return { avatar, secondaryAvatar, color: validColor };
 }
@@ -724,21 +826,31 @@ export function purchaseStoreCosmetic<T extends CosmeticProfileSlice>(
   profile: T,
   kind: CosmeticKind,
   item: { id: string; name: string; priceCoins: number; enabled?: boolean },
-): { ok: boolean; error?: string; profile: T } {
+): { ok: boolean; error?: string; profile: T; pricePaid: number } {
   if (item.enabled === false) {
-    return { ok: false, error: "Este item não está disponível na loja no momento.", profile };
+    return { ok: false, error: "Este item não está disponível na loja no momento.", profile, pricePaid: 0 };
   }
   const unlocked = kind === "avatar" ? getUnlockedAvatarIds(profile) : getUnlockedAuraIds(profile);
   if (unlocked.includes(item.id)) {
-    return { ok: false, error: "Você já possui este item cosmético.", profile };
+    return { ok: false, error: "Você já possui este item cosmético.", profile, pricePaid: 0 };
   }
-  const price = Math.max(0, Math.floor(Number(item.priceCoins) || 0));
-  const currentCoins = Math.max(0, Math.floor(Number(profile.coins) || 0));
+  const rawPrice = Number(item.priceCoins);
+  if (!Number.isFinite(rawPrice) || Math.floor(rawPrice) <= 0) {
+    return {
+      ok: false,
+      error: "Este item não possui preço válido configurado na loja.",
+      profile,
+      pricePaid: 0,
+    };
+  }
+  const price = Math.floor(rawPrice);
+  const currentCoins = Number.isFinite(Number(profile.coins)) ? Math.max(0, Math.floor(Number(profile.coins))) : 0;
   if (currentCoins < price) {
     return {
       ok: false,
       error: `Moedas insuficientes (precisa de ${price}, você tem ${currentCoins}).`,
       profile,
+      pricePaid: 0,
     };
   }
   const granted = grantCosmeticToProfile(profile, kind, item.id);
@@ -747,13 +859,16 @@ export function purchaseStoreCosmetic<T extends CosmeticProfileSlice>(
   const nextPurchased = prevPurchased.includes(purchasedKey)
     ? prevPurchased
     : [...prevPurchased, purchasedKey];
-  const prevSpent = Math.max(0, Math.floor(Number(profile.coinsSpentTotal) || 0));
+  const prevSpent = Number.isFinite(Number(profile.coinsSpentTotal))
+    ? Math.max(0, Math.floor(Number(profile.coinsSpentTotal)))
+    : 0;
   const safeLifetime = Math.max(
-    Math.floor(Number(profile.lifetimeCoins) || 0),
+    Number.isFinite(Number(profile.lifetimeCoins)) ? Math.max(0, Math.floor(Number(profile.lifetimeCoins))) : 0,
     currentCoins + prevSpent,
   );
   return {
     ok: true,
+    pricePaid: price,
     profile: {
       ...granted.profile,
       coins: currentCoins - price,
@@ -769,13 +884,25 @@ export function purchaseStoreCardPack<T extends CosmeticProfileSlice>(
   pack: CardPackDefinition,
   quantity = 1,
 ): { ok: boolean; error?: string; profile: T; totalCost: number } {
-  const safeQty = Math.max(1, Math.floor(quantity));
-  if (pack.enabled === false) {
+  if (!Number.isFinite(quantity) || !Number.isInteger(quantity) || quantity < 1) {
+    return { ok: false, error: "Quantidade inválida para compra de pacote.", profile, totalCost: 0 };
+  }
+  if (pack.enabled === false || pack.showInStore === false) {
     return { ok: false, error: "Este pacote não está disponível na loja.", profile, totalCost: 0 };
   }
-  const unitPrice = Math.max(1, Math.floor(Number(pack.priceCoins) || 0));
+  const rawPrice = Number(pack.priceCoins);
+  if (!Number.isFinite(rawPrice) || Math.floor(rawPrice) <= 0) {
+    return {
+      ok: false,
+      error: "Este pacote está sem preço em moedas configurado na loja.",
+      profile,
+      totalCost: 0,
+    };
+  }
+  const safeQty = quantity;
+  const unitPrice = Math.floor(rawPrice);
   const totalCost = unitPrice * safeQty;
-  const currentCoins = Math.max(0, Math.floor(Number(profile.coins) || 0));
+  const currentCoins = Number.isFinite(Number(profile.coins)) ? Math.max(0, Math.floor(Number(profile.coins))) : 0;
   if (currentCoins < totalCost) {
     return {
       ok: false,
@@ -785,10 +912,12 @@ export function purchaseStoreCardPack<T extends CosmeticProfileSlice>(
     };
   }
   const nextPacks = { ...(profile.unopenedPacks ?? {}) };
-  nextPacks[pack.id] = (Number(nextPacks[pack.id]) || 0) + safeQty;
-  const prevSpent = Math.max(0, Math.floor(Number(profile.coinsSpentTotal) || 0));
+  nextPacks[pack.id] = (Math.max(0, Math.floor(Number(nextPacks[pack.id]) || 0))) + safeQty;
+  const prevSpent = Number.isFinite(Number(profile.coinsSpentTotal))
+    ? Math.max(0, Math.floor(Number(profile.coinsSpentTotal)))
+    : 0;
   const safeLifetime = Math.max(
-    Math.floor(Number(profile.lifetimeCoins) || 0),
+    Number.isFinite(Number(profile.lifetimeCoins)) ? Math.max(0, Math.floor(Number(profile.lifetimeCoins))) : 0,
     currentCoins + prevSpent,
   );
   return {

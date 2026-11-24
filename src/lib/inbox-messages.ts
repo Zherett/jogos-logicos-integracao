@@ -8,6 +8,7 @@
 
 import type { PlayerProfile } from "./playfab.ts";
 import { awardCareerPoints, creditCoinMetrics } from "./career-points.ts";
+import { normalizeCardPackId } from "./chests-catalog.ts";
 import { getAllAvailableMedals, type PlayerUnlockedMedal } from "./medals-catalog.ts";
 import {
   stageForPlayer,
@@ -64,7 +65,6 @@ export interface SystemInboxMessage {
   mentionedEventId?: string; // ID do evento referenciado na tag [event]
   mentionedEventTitle?: string; // Nome do evento para cache e fallback
   linkEventDetails?: boolean;
-  includeNewPlayers?: boolean; // Se true (padrão), o nome do evento é clicável e abre modal com detalhes
   mentionedGames?: Record<string, string>; // Tags indexadas de jogos: { game: "velha", game1: "memoria", game2: "quebra-cabeca" }
   mentionedEvents?: Record<string, {
     eventId: string;
@@ -1283,11 +1283,29 @@ export function getInboxMessagesForRecipient(recipientId: string): SystemInboxMe
  */
 export function claimInboxReward(
   messageId: string,
-  profile: PlayerProfile
-): { success: boolean; error?: string; reward?: InboxReward; profile: PlayerProfile } {
-  if (!profile) {
-    return { success: false, error: "Perfil do aluno inválido.", profile };
+  inputProfile: PlayerProfile,
+  options?: { deferLocalCommit?: boolean },
+): { success: boolean; error?: string; reward?: InboxReward; profile: PlayerProfile; claimedAt?: string } {
+  if (!inputProfile) {
+    return { success: false, error: "Perfil do aluno inválido.", profile: inputProfile };
   }
+  const deferLocalCommit = Boolean(options?.deferLocalCommit);
+  // Quando deferLocalCommit=true, opera em clone seguro para que falha no servidor não corrompa estado local
+  const profile: PlayerProfile = deferLocalCommit
+    ? {
+        ...inputProfile,
+        unopenedChests: inputProfile.unopenedChests ? { ...inputProfile.unopenedChests } : undefined,
+        unopenedPacks: inputProfile.unopenedPacks ? { ...inputProfile.unopenedPacks } : undefined,
+        unlockedAvatars: Array.isArray(inputProfile.unlockedAvatars) ? [...inputProfile.unlockedAvatars] : undefined,
+        unlockedAuras: Array.isArray(inputProfile.unlockedAuras) ? [...inputProfile.unlockedAuras] : undefined,
+        unlockedMedals: Array.isArray(inputProfile.unlockedMedals)
+          ? inputProfile.unlockedMedals.map((m) => ({ ...m }))
+          : undefined,
+        claimedInboxRewardIds: Array.isArray(inputProfile.claimedInboxRewardIds)
+          ? [...inputProfile.claimedInboxRewardIds]
+          : undefined,
+      }
+    : inputProfile;
 
   const pId = profile.id.toLowerCase().trim();
   const pNick = (profile.nick || "").toLowerCase().trim();
@@ -1341,7 +1359,7 @@ export function claimInboxReward(
           amount: reward.pointsAmount!,
           balanceAfter: profile.careerPoints,
           reason: `Recompensa Postal: ${reward.pointsAmount} Pontos`,
-          metadata: { messageId, rewardId: reward.id },
+          metadata: { messageId },
         });
       } catch {
         /* ignore */
@@ -1358,6 +1376,8 @@ export function claimInboxReward(
         matchesPlayed: profile.matchesPlayed ?? 0,
         wins: profile.wins ?? 0,
         distinctGames: profile.distinctGamesPlayed ?? 0,
+        currentLevel: profile.level,
+        stageProgress: profile.levelStageProgress,
       });
       try {
         recordScoreLedgerEntry({
@@ -1368,7 +1388,7 @@ export function claimInboxReward(
           amount: xpBonus,
           balanceAfter: profile.xp,
           reason: `Recompensa Postal: +${xpBonus} XP (${msg.title})`,
-          metadata: { messageId, rewardId: reward.id },
+          metadata: { messageId },
         });
       } catch {
         /* ignore */
@@ -1388,7 +1408,7 @@ export function claimInboxReward(
           amount: coinsBonus,
           balanceAfter: profile.coins,
           reason: `Recompensa Postal: +${coinsBonus} Moedas (${msg.title})`,
-          metadata: { messageId, rewardId: reward.id },
+          metadata: { messageId },
         });
       } catch {
         /* ignore */
@@ -1421,8 +1441,9 @@ export function claimInboxReward(
           prevChests[itemId] = (Number(prevChests[itemId]) || 0) + qty;
           profile.unopenedChests = prevChests;
         } else if (cat === "card_pack") {
+          const normalizedPackId = normalizeCardPackId(itemId);
           const prevPacks = { ...(profile.unopenedPacks ?? {}) };
-          prevPacks[itemId] = (Number(prevPacks[itemId]) || 0) + qty;
+          prevPacks[normalizedPackId] = (Number(prevPacks[normalizedPackId]) || 0) + qty;
           profile.unopenedPacks = prevPacks;
         } else if (cat === "cosmetic") {
           const cKind = String(reward.itemData.cosmeticKind || "avatar");
@@ -1452,7 +1473,6 @@ export function claimInboxReward(
               medalId: medalDef.id,
               unlockedAt: nowIso,
               count: 1,
-              rarity: medalDef.rarity,
             };
             profile.unlockedMedals.push(newUnlocked);
           } else {
@@ -1475,6 +1495,8 @@ export function claimInboxReward(
             matchesPlayed: profile.matchesPlayed ?? 0,
             wins: profile.wins ?? 0,
             distinctGames: profile.distinctGamesPlayed ?? 0,
+            currentLevel: profile.level,
+            stageProgress: profile.levelStageProgress,
           });
           try {
             recordScoreLedgerEntry({
@@ -1484,8 +1506,8 @@ export function claimInboxReward(
               source: "torneio_semanal",
               amount: bonusXp,
               balanceAfter: profile.xp,
-              reason: `Bônus de XP do Torneio Ranqueado (${tm.title})`,
-              metadata: { messageId, rewardId: reward.id },
+              reason: `Bônus de XP do Torneio Ranqueado (${tm.label || tm.tier})`,
+              metadata: { messageId },
             });
           } catch {
             /* ignore */
@@ -1502,7 +1524,7 @@ export function claimInboxReward(
             source: "correio",
             amount: 1,
             reason: `Medalha Resgatada da Caixa Postal (${reward.medalId})`,
-            metadata: { messageId, medalId: reward.medalId, rewardId: reward.id },
+            metadata: { messageId, medalId: reward.medalId },
           });
         }
       } catch {
@@ -1519,16 +1541,41 @@ export function claimInboxReward(
     profile.claimedInboxRewardIds.push(messageId);
   }
 
-  // 4. Salva registro de resgate individual em todas as chaves de identidade do aluno
+  if (!deferLocalCommit) {
+    commitInboxClaimLocally(messageId, profile, nowIso);
+  }
+
+  return {
+    success: true,
+    reward: { ...rewardsList[0], claimed: true, claimedAt: nowIso },
+    profile,
+    claimedAt: nowIso,
+  };
+}
+
+/**
+ * Efetiva o marcador local de resgate de recompensa do Correio (localStorage + cache em memória).
+ * Deve ser chamado após a confirmação do servidor quando `claimInboxReward` usa `deferLocalCommit: true`.
+ */
+export function commitInboxClaimLocally(
+  messageId: string,
+  profile: PlayerProfile,
+  claimedAtIso = new Date().toISOString(),
+): void {
+  const pId = profile.id.toLowerCase().trim();
+  const pNick = (profile.nick || "").toLowerCase().trim();
+  const pNickNorm = (profile.nickNormalized || "").toLowerCase().trim();
+  const pPlayfabId = (profile.playfabId || "").toLowerCase().trim();
+
+  const claims = loadStudentMap(STUDENT_CLAIMS_KEY, memoryStudentClaims);
   for (const k of [pId, pNick, pNickNorm, pPlayfabId]) {
     if (k) {
       if (!claims[k]) claims[k] = {};
-      claims[k][messageId] = nowIso;
+      claims[k][messageId] = claimedAtIso;
     }
   }
   saveStudentMap(STUDENT_CLAIMS_KEY, claims, (d) => (memoryStudentClaims = d));
 
-  // Resgatar a recompensa garante que a mensagem também seja marcada como lida
   markInboxMessageAsRead(messageId, profile);
   broadcastInboxEvent({
     type: "rewards_claimed",
@@ -1537,24 +1584,20 @@ export function claimInboxReward(
     studentNick: profile.nick,
   });
 
-  // Se a mensagem for direta (não ALL), atualiza o objeto global da mensagem
-  if (msg.recipientId !== "ALL") {
+  const all = loadAllInboxMessages();
+  const msg = all.find((m) => m.id === messageId);
+  if (msg && msg.recipientId !== "ALL") {
+    const rewardsList = getMessageRewards(msg);
     for (const r of rewardsList) {
       r.claimed = true;
-      r.claimedAt = nowIso;
+      r.claimedAt = claimedAtIso;
     }
     if (msg.reward) {
       msg.reward.claimed = true;
-      msg.reward.claimedAt = nowIso;
+      msg.reward.claimedAt = claimedAtIso;
     }
     saveAllInboxMessages(all);
   }
-
-  return {
-    success: true,
-    reward: { ...rewardsList[0], claimed: true, claimedAt: nowIso },
-    profile,
-  };
 }
 
 /**
@@ -1563,9 +1606,12 @@ export function claimInboxReward(
  */
 export function deleteInboxMessageForPlayer(
   messageId: string,
-  player: PlayerProfile | { id: string }
+  player: PlayerProfile | { id: string; nick?: string; nickNormalized?: string; playfabId?: string; claimedInboxRewardIds?: string[] }
 ): { success: boolean; error?: string } {
   const pId = player.id.toLowerCase().trim();
+  const pNick = (player.nick || "").toLowerCase().trim();
+  const pNickNorm = (player.nickNormalized || "").toLowerCase().trim();
+  const pPlayfabId = (player.playfabId || "").toLowerCase().trim();
   const all = loadAllInboxMessages();
   const msg = all.find((m) => m.id === messageId);
 
@@ -1573,12 +1619,24 @@ export function deleteInboxMessageForPlayer(
     return { success: true };
   }
 
-  // Se a mensagem tiver recompensa, verificar se o aluno já resgatou
+  // Se a mensagem tiver recompensa, verificar se o aluno já resgatou (local OU cross-device via claimedInboxRewardIds)
   const msgRewards = getMessageRewards(msg);
   if (msgRewards.length > 0) {
     const claims = loadStudentMap(STUDENT_CLAIMS_KEY, memoryStudentClaims);
+    const claimedLocal = Boolean(
+      claims[pId]?.[messageId] ||
+        (pNick && claims[pNick]?.[messageId]) ||
+        (pNickNorm && claims[pNickNorm]?.[messageId]) ||
+        (pPlayfabId && claims[pPlayfabId]?.[messageId]),
+    );
+    const claimedProfile = Boolean(
+      Array.isArray(player.claimedInboxRewardIds) &&
+        player.claimedInboxRewardIds.includes(messageId),
+    );
     const hasClaimed = Boolean(
-      claims[pId]?.[messageId] || (msg.recipientId !== "ALL" && msgRewards.every((r) => r.claimed))
+      claimedLocal ||
+        claimedProfile ||
+        (msg.recipientId !== "ALL" && msgRewards.every((r) => r.claimed)),
     );
     if (!hasClaimed) {
       return {

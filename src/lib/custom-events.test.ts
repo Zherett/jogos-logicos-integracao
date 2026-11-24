@@ -424,7 +424,7 @@ describe("Eventos Personalizados Criados pelo Administrador", () => {
 
     // 1. Partida Ranqueada (isRankedMatch = true) -> Multiplicadores aplicados!
     const rankedBonuses = getActiveEventBonuses(
-      "campo_minado",
+      "minado",
       1000,
       20,
       [rankedEvent],
@@ -438,7 +438,7 @@ describe("Eventos Personalizados Criados pelo Administrador", () => {
 
     // 2. Partida Normal do mesmo jogo (isRankedMatch = false) -> Bônus NÃO aplicados!
     const normalBonuses = getActiveEventBonuses(
-      "campo_minado",
+      "minado",
       1000,
       20,
       [rankedEvent],
@@ -471,7 +471,7 @@ describe("Eventos Personalizados Criados pelo Administrador", () => {
 
     // Partida Normal: recebe 3x XP, teto diário 1700, 1.5x moedas, MAS rankedMultiplier fica 1
     const normalBonuses = getActiveEventBonuses(
-      "torre_hanoi",
+      "logica",
       1000,
       20,
       [weekendEvent],
@@ -486,7 +486,7 @@ describe("Eventos Personalizados Criados pelo Administrador", () => {
 
     // Partida Ranqueada: recebe 3x XP, teto 1700 E o rankedMultiplier 1.5x
     const rankedBonuses = getActiveEventBonuses(
-      "torre_hanoi",
+      "logica",
       1000,
       20,
       [weekendEvent],

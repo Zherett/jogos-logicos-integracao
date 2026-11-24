@@ -180,7 +180,11 @@ export function ItemRewardPicker({
                     ...value,
                     itemId: opt.id,
                     itemName: opt.name,
-                    cosmeticKind: "cosmeticKind" in opt ? opt.cosmeticKind : undefined,
+                    cosmeticKind:
+                      "cosmeticKind" in opt &&
+                      (opt.cosmeticKind === "avatar" || opt.cosmeticKind === "aura")
+                        ? opt.cosmeticKind
+                        : undefined,
                   })
                 }
                 className={`flex w-full items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-left text-xs transition-all cursor-pointer ${

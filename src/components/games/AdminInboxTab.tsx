@@ -55,6 +55,7 @@ import {
   getMessageRewards,
   splitInboxBodySegments,
   getMediaRowSlotWidth,
+  isSafeMediaUrl,
   parseInboxBoldSegments,
   type SystemInboxMessage,
   type AdminBroadcastDraft,
@@ -320,7 +321,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
             return (
               <div key={index} className="my-3 flex flex-wrap items-center justify-center gap-3 w-full">
                 {segment.items.map((item, mIdx) => {
-                  if (item.url) {
+                  if (item.url && isSafeMediaUrl(item.url)) {
                     return (
                       <div
                         key={mIdx}
@@ -986,7 +987,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
     } else if (effectiveMode === "students") {
       const namesPreview = selectedStudents
         .slice(0, 4)
-        .map((s) => s.fullName || s.nick)
+        .map((s) => s.full_name || s.nick)
         .join(", ");
       const extra = recipientCount > 4 ? ` e mais ${recipientCount - 4}` : "";
       recipientSummary =
@@ -1304,15 +1305,24 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
     setSchedMentionGames(rule.mentionedGames || (rule.mentionedGameId ? { game: rule.mentionedGameId } : {}));
     setSchedMentionEventId(rule.mentionedEventId || "");
     setSchedMentionEvents(
-      rule.mentionedEvents ||
-        (rule.mentionedEventId
+      rule.mentionedEvents
+        ? Object.fromEntries(
+            Object.entries(rule.mentionedEvents).map(([k, v]) => [
+              k,
+              {
+                eventId: v.eventId,
+                linkEventDetails: v.linkEventDetails !== false,
+              },
+            ]),
+          )
+        : rule.mentionedEventId
           ? {
               event: {
                 eventId: rule.mentionedEventId,
                 linkEventDetails: rule.linkEventDetails !== false,
               },
             }
-          : {})
+          : {},
     );
     setSchedLinkEventDetails(rule.linkEventDetails !== false);
 
@@ -3741,7 +3751,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                                 type="button"
                                 variant="default"
                                 size="sm"
-                                onClick={() => setPreviewMessage(currentCycleMsg)}
+                                onClick={() => setPreviewMessage(currentCycleMsg ?? null)}
                                 className="h-7 rounded-xl text-[11px] font-bold gap-1 cursor-pointer bg-primary hover:bg-primary/90 text-primary-foreground shadow-xs shrink-0"
                                 title="Visualizar a mensagem disparada no ciclo atual"
                               >
@@ -3752,7 +3762,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                                 variant="outline"
                                 size="sm"
                                 onClick={() => {
-                                  setReadersModalMsg(currentCycleMsg);
+                                  setReadersModalMsg(currentCycleMsg ?? null);
                                   setReadersTab("read");
                                 }}
                                 className="h-7 rounded-xl text-[11px] font-bold gap-1 cursor-pointer shrink-0"

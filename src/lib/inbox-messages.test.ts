@@ -53,6 +53,7 @@ function createTestStudent(overrides: Partial<PlayerProfile> = {}): PlayerProfil
     careerPoints: 250,
     badges: [],
     unlockedMedals: [],
+    seasonId: 1,
     ...overrides,
   };
 }
@@ -519,13 +520,15 @@ describe("Sistema Completo de Caixa de Entrada e Correio (inbox-messages)", () =
       const msg = createInboxMessage({
         recipientId: "aluno_purge_2",
         sender: "adm",
-        category: "recompensa",
+        category: "recompensa_especial",
         title: "Recompensa Pendente",
         body: "Resgate seus pontos!",
         reward: {
+          id: "rew_purge_2",
           type: "points",
           pointsAmount: 50,
           isSecret: false,
+          claimed: false,
         },
       });
 
@@ -566,13 +569,15 @@ describe("Sistema Completo de Caixa de Entrada e Correio (inbox-messages)", () =
       const msg = createInboxMessage({
         recipientId: "aluno_purge_4",
         sender: "adm",
-        category: "recompensa",
+        category: "recompensa_especial",
         title: "Mensagem com Prêmio Resgatado",
         body: "Seus 100 pontos",
         reward: {
+          id: "rew_purge_4",
           type: "points",
           pointsAmount: 100,
           isSecret: false,
+          claimed: false,
         },
       });
 
@@ -984,7 +989,7 @@ describe("Sistema Completo de Caixa de Entrada e Correio (inbox-messages)", () =
   });
 
   it("permite enviar e resgatar mensagem com múltiplas recompensas (pontos + medalhas)", () => {
-    const student = createTestStudent({ id: "aluno_multi_rew", careerPoints: 50, totalCareerPoints: 50 });
+    const student = createTestStudent({ id: "aluno_multi_rew", careerPoints: 50 });
     const msg = sendAdminBroadcastMessage({
       mode: "students",
       targetStudentIds: [student.id],

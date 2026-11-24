@@ -1762,7 +1762,7 @@ export async function removePlayerFromPresence(
     const p = store.players[k];
     if (
       p.playerId === playerId ||
-      (playerNick && p.nick.toLowerCase() === playerNick.toLowerCase()) ||
+      (playerNick && p.nick?.toLowerCase() === playerNick.toLowerCase()) ||
       p.nickNormalized === slug
     ) {
       delete store.players[k];

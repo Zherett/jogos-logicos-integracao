@@ -91,6 +91,8 @@ export function recordMatchIntoWeeklyMissions(
     tournamentRankIdAfter?: string;
     now?: Date;
     weekKey?: string;
+    /** Evita farm AFK/0 pontos: quando informado como false, não contabiliza partida sem participação real. */
+    hasRealParticipation?: boolean;
   },
 ): WeeklyMissionProgressState {
   const weekKey = args.weekKey ?? getWeekInfo(args.now ?? new Date()).weekKey;
@@ -118,6 +120,10 @@ export function recordMatchIntoWeeklyMissions(
           claimedIds: Array.isArray(prev.claimedIds) ? [...prev.claimedIds] : [],
         }
       : createEmptyWeeklyMissionProgress(weekKey, rankBefore, args.playerLevel);
+
+  if (args.hasRealParticipation === false) {
+    return base;
+  }
 
   base.matches += 1;
   if (!base.distinctGameIds.includes(args.gameId)) {
@@ -350,9 +356,24 @@ export function generateWeeklyMissions(args: {
       : null;
   const claimedSet = new Set<string>(progress?.claimedIds ?? []);
 
+  const effectiveLevel = Math.max(
+    1,
+    Math.floor(progress?.lockedLevel ?? args.profile?.level ?? 1),
+  );
+  const maxEligibleGames = Math.max(
+    1,
+    getEligibleGamesForWeeklyMissions({
+      level: effectiveLevel,
+      isAdmin: Boolean(args.profile?.isAdmin),
+      adminConfig: args.adminConfig,
+    }).length,
+  );
+
   return buildWeeklyMissionsList({ ...args, weekKey }).map((m) => {
     const ov = overrides[m.type];
-    const target = ov?.target && ov.target > 0 ? Math.floor(ov.target) : m.target;
+    const rawTarget = ov?.target && ov.target > 0 ? Math.floor(ov.target) : m.target;
+    const target =
+      m.type === "weekly_distinct_games" ? Math.min(rawTarget, maxEligibleGames) : rawTarget;
     const rewardPoints = ov?.points !== undefined ? Math.max(0, Math.floor(ov.points)) : m.rewardPoints;
     const rewardXp = ov?.xp !== undefined ? Math.max(0, Math.floor(ov.xp)) : m.rewardXp;
     const rewardCoins = ov?.coins !== undefined ? Math.max(0, Math.floor(ov.coins)) : weeklyCoins;

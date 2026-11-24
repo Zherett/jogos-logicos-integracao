@@ -137,7 +137,7 @@ export function EventDetailModal({
                 {event.pointsMultiplier && event.pointsMultiplier > 1 ? (
                   <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 p-2.5">
                     <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase block">
-                      Moedas & Conquistas
+                      Pontos &amp; Conquistas
                     </span>
                     <span className="font-display text-sm font-black text-foreground">
                       {event.pointsMultiplier}x Pontos de Carreira
@@ -207,7 +207,7 @@ export function EventDetailModal({
             {linkedMedal && (
               <div className="rounded-2xl border border-amber-500/40 bg-gradient-to-r from-amber-500/15 via-amber-500/5 to-transparent p-3 flex items-center gap-3">
                 <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-amber-500/20">
-                  <MedalIcon icon={linkedMedal.icon} rarity={linkedMedal.rarity} className="h-6 w-6" />
+                  <MedalIcon name={linkedMedal.iconName} className="h-6 w-6" />
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-1.5">

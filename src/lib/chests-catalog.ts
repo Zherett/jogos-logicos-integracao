@@ -153,7 +153,7 @@ export const DEFAULT_CHESTS: ChestDefinition[] = [
       points: { min: 60, max: 120 },
       xp: { min: 80, max: 140 },
       coins: { min: 40, max: 90 },
-      cardPacks: [{ packId: "pack_avancado", quantity: 1, chancePercent: 75 }],
+      cardPacks: [{ packId: "pack_mestre", quantity: 1, chancePercent: 75 }],
     },
     createdAt: "2026-11-21T00:00:00.000Z",
     updatedAt: "2026-11-21T00:00:00.000Z",
@@ -169,12 +169,38 @@ export const DEFAULT_CHESTS: ChestDefinition[] = [
       points: { min: 150, max: 250 },
       xp: { min: 150, max: 300 },
       coins: { min: 100, max: 200 },
-      cardPacks: [{ packId: "pack_lendario", quantity: 1, chancePercent: 100 }],
+      cardPacks: [{ packId: "pack_supremo", quantity: 1, chancePercent: 100 }],
     },
     createdAt: "2026-11-21T00:00:00.000Z",
     updatedAt: "2026-11-21T00:00:00.000Z",
   },
 ];
+
+/** Mapeamento retrocompatível de IDs legados de pacotes para IDs válidos do catálogo. */
+export const LEGACY_PACK_ID_ALIASES: Record<string, string> = {
+  pack_avancado: "pack_mestre",
+  pack_epico: "pack_mestre",
+  pack_lendario: "pack_supremo",
+};
+
+export function normalizeCardPackId(packId: string): string {
+  const clean = (packId ?? "").trim();
+  return LEGACY_PACK_ID_ALIASES[clean] ?? clean;
+}
+
+/** Valor mínimo de compensação em moedas quando um baú sorteia um cosmético que o jogador já possui. */
+export const DUPLICATE_COSMETIC_MIN_COINS = 25;
+
+export function calculateDuplicateCosmeticCompensation(priceCoins?: number | null): number {
+  const safePrice = Number.isFinite(Number(priceCoins)) ? Math.max(0, Math.floor(Number(priceCoins))) : 0;
+  return Math.max(DUPLICATE_COSMETIC_MIN_COINS, Math.round(safePrice * 0.5));
+}
+
+function sanitizeChestHex6(value: string | undefined, fallback: string): string {
+  if (typeof value !== "string") return fallback;
+  const trimmed = value.trim();
+  return /^#[0-9a-fA-F]{6}$/.test(trimmed) ? trimmed : fallback;
+}
 
 export function mergeWithDefaultChests(custom?: ChestDefinition[] | null): ChestDefinition[] {
   const byId = new Map<string, ChestDefinition>();
@@ -183,7 +209,23 @@ export function mergeWithDefaultChests(custom?: ChestDefinition[] | null): Chest
   }
   for (const item of custom ?? []) {
     if (!item?.id) continue;
-    byId.set(item.id, item);
+    const base = byId.get(item.id);
+    const normalizedPacks = (item.rewards?.cardPacks ?? []).map((p) => ({
+      ...p,
+      packId: normalizeCardPackId(p.packId),
+    }));
+    const sanitized: ChestDefinition = {
+      ...(base ?? ({} as ChestDefinition)),
+      ...item,
+      ...(item.primaryColor ? { primaryColor: sanitizeChestHex6(item.primaryColor, base?.primaryColor ?? "#f59e0b") } : {}),
+      ...(item.metalColor ? { metalColor: sanitizeChestHex6(item.metalColor, base?.metalColor ?? "#fbbf24") } : {}),
+      rewards: {
+        ...(base?.rewards ?? {}),
+        ...(item.rewards ?? {}),
+        ...(item.rewards?.cardPacks ? { cardPacks: normalizedPacks } : {}),
+      },
+    };
+    byId.set(item.id, sanitized);
   }
   return Array.from(byId.values());
 }
@@ -196,6 +238,15 @@ export interface ChestOpenOutcome {
   coins: number;
   packs: Array<{ packId: string; quantity: number }>;
   cosmetics: Array<{ kind: "avatar" | "aura"; itemId: string }>;
+  /** Detalhes resolvidos para exibição no modal (novos cosméticos + compensações por duplicata). */
+  cosmeticGrants?: Array<{
+    kind: "avatar" | "aura";
+    itemId: string;
+    name: string;
+    alreadyOwned: boolean;
+    compensatedCoins: number;
+  }>;
+  duplicateCompensationCoins?: number;
 }
 
 function rollRange(range: { min: number; max: number } | undefined, rng: () => number): number {
@@ -218,10 +269,10 @@ export function openChest(
   const cosmetics: Array<{ kind: "avatar" | "aura"; itemId: string }> = [];
 
   for (const drop of chest.rewards.cardPacks ?? []) {
-    if (!drop?.packId || drop.quantity <= 0) continue;
-    const chance = Math.min(100, Math.max(0, drop.chancePercent));
+    if (!drop?.packId || !Number.isFinite(drop.quantity) || drop.quantity <= 0) continue;
+    const chance = Math.min(100, Math.max(0, Number(drop.chancePercent) || 0));
     if (chance >= 100 || rng() * 100 < chance) {
-      packs.push({ packId: drop.packId, quantity: Math.floor(drop.quantity) });
+      packs.push({ packId: normalizeCardPackId(drop.packId), quantity: Math.floor(drop.quantity) });
     }
   }
 
@@ -288,7 +339,15 @@ export function consumeAndOpenChestsBatch(
   updatedUnopenedChests: Record<string, number>;
 } {
   const available = Math.max(0, Math.floor(Number(currentUnopenedChests[chest.id]) || 0));
-  const requested = Math.max(1, Math.floor(Number(quantity) || 1));
+  if (!Number.isFinite(quantity) || Math.floor(quantity) < 1) {
+    return {
+      ok: false,
+      error: "Quantidade de baús inválida.",
+      openedCount: 0,
+      updatedUnopenedChests: { ...currentUnopenedChests },
+    };
+  }
+  const requested = Math.floor(quantity);
   const toOpen = Math.min(available, requested);
   if (toOpen <= 0) {
     return {

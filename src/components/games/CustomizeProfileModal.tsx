@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Lock, Palette, RefreshCw, Sparkles, UserCheck, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -16,7 +16,7 @@ import {
   resolveEquippedAvatar,
 } from "@/lib/cosmetics-catalog";
 import { usePlayerAuth } from "@/lib/player-auth";
-import { syncActiveProfileChangeToPlayFab } from "@/lib/playfab";
+import { getActiveAccount, syncActiveProfileChangeToPlayFab } from "@/lib/playfab";
 import { getAuraPresentation, PlayerAvatarBadge } from "./PlayerAvatarBadge";
 
 interface CustomizeProfileModalProps {
@@ -65,6 +65,8 @@ export function CustomizeProfileModal({ open, onOpenChange }: CustomizeProfileMo
   const [selectedColor, setSelectedColor] = useState(currentAvatar.color);
   const [selectedAuraId, setSelectedAuraId] = useState<string>(currentAura?.id ?? "");
   const [saving, setSaving] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const saveLockRef = useRef(false);
 
   useEffect(() => {
     if (open) {
@@ -73,6 +75,7 @@ export function CustomizeProfileModal({ open, onOpenChange }: CustomizeProfileMo
       setSelectedSecondaryAvatarId(currentAvatar.secondaryAvatar?.id ?? "");
       setSelectedColor(currentAvatar.color || DEFAULT_AVATAR_COLOR);
       setSelectedAuraId(currentAura?.id ?? "");
+      setErrorMsg(null);
     }
   }, [
     open,
@@ -108,28 +111,52 @@ export function CustomizeProfileModal({ open, onOpenChange }: CustomizeProfileMo
   }
 
   async function handleSave() {
-    if (!profile) return;
+    if (!profile || saving || saveLockRef.current) return;
+    saveLockRef.current = true;
     setSaving(true);
+    setErrorMsg(null);
     try {
+      const liveProfile = getActiveAccount()?.profile ?? profile;
+      const liveUnlockedAvatars = new Set(getUnlockedAvatarIds(liveProfile));
+      const liveUnlockedAuras = new Set(getUnlockedAuraIds(liveProfile));
+      const liveDualUnlocked = canUseDualAvatar(liveProfile);
+
+      const safePrimaryId =
+        selectedAvatarId && liveUnlockedAvatars.has(selectedAvatarId)
+          ? selectedAvatarId
+          : DEFAULT_AVATAR_ID;
       const validSecondary =
-        dualUnlocked &&
+        liveDualUnlocked &&
         selectedSecondaryAvatarId &&
-        selectedSecondaryAvatarId !== (selectedAvatarId || DEFAULT_AVATAR_ID)
+        selectedSecondaryAvatarId !== safePrimaryId &&
+        liveUnlockedAvatars.has(selectedSecondaryAvatarId)
           ? selectedSecondaryAvatarId
           : undefined;
+      const safeAuraId =
+        selectedAuraId && liveUnlockedAuras.has(selectedAuraId) ? selectedAuraId : "";
 
-      await syncActiveProfileChangeToPlayFab({
-        ...profile,
-        equippedAvatar: {
-          id: selectedAvatarId || DEFAULT_AVATAR_ID,
-          ...(validSecondary ? { secondaryId: validSecondary } : {}),
-          color: selectedColor || DEFAULT_AVATAR_COLOR,
+      await syncActiveProfileChangeToPlayFab(
+        {
+          ...liveProfile,
+          equippedAvatar: {
+            id: safePrimaryId,
+            ...(validSecondary ? { secondaryId: validSecondary } : {}),
+            color: selectedColor || DEFAULT_AVATAR_COLOR,
+          },
+          equippedAuraId: safeAuraId,
         },
-        equippedAuraId: selectedAuraId || "",
-      });
+        { requireServerSync: true },
+      );
       await auth.refresh();
       onOpenChange(false);
+    } catch (err) {
+      setErrorMsg(
+        err instanceof Error && err.message
+          ? err.message
+          : "Não foi possível salvar sua personalização no servidor. Tente novamente.",
+      );
     } finally {
+      saveLockRef.current = false;
       setSaving(false);
     }
   }
@@ -145,6 +172,27 @@ export function CustomizeProfileModal({ open, onOpenChange }: CustomizeProfileMo
         </DialogHeader>
 
         <div className="space-y-4">
+          {auth.cloudSessionExpired && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs font-semibold text-amber-700 dark:text-amber-300">
+              <span>🔑 Sessão na nuvem expirada (24h). Renove o login para salvar seu visual.</span>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => auth.openReloginDialog()}
+                className="h-7 rounded-xl border-amber-500/50 bg-background/80 text-xs font-extrabold"
+              >
+                Renovar Login
+              </Button>
+            </div>
+          )}
+
+          {errorMsg && (
+            <div className="rounded-2xl border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs font-bold text-rose-700 dark:text-rose-300">
+              ⚠️ {errorMsg}
+            </div>
+          )}
+
           {/* Prévia ao vivo com Aura na borda */}
           <div
             className={`flex items-center gap-3.5 rounded-3xl border-2 bg-card p-3.5 transition-all ${previewCardAura.className}`}

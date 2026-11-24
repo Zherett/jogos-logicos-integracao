@@ -211,6 +211,7 @@ export function AdminEventsTab({
   const [evNewMedalThreshold, setEvNewMedalThreshold] = useState<number>(5);
   const [evNewMedalMinScore, setEvNewMedalMinScore] = useState<number>(30);
   const [evNewMedalIsStackable, setEvNewMedalIsStackable] = useState<boolean>(true);
+  const [recNewMedalIsStackable, setRecNewMedalIsStackable] = useState<boolean>(true);
   const [evSelectedExistingMedalId, setEvSelectedExistingMedalId] = useState("");
 
   // Eventos Sub-Abas: "criacao" e "recorrentes"
@@ -317,7 +318,12 @@ export function AdminEventsTab({
     setEvObjective(ev.objectiveDescription || "");
     setEvRewardObjective(ev.rewardObjective);
     setEvRewards(ev.rewards ?? []);
-    setEvLinkedMedalId(ev.linkedMedalId || "");
+    const linkedIds = getEventLinkedMedalIds(ev);
+    const hydratedMedals = linkedIds
+      .map((id) => (draft.customMedals ?? []).find((m) => m.id === id))
+      .filter((m): m is MedalDefinition => Boolean(m));
+    setEvAttachedMedals(hydratedMedals);
+    setEvLinkedMedalId(ev.linkedMedalId || linkedIds[0] || "");
     setIsCreatingEvent(true);
   }
 
@@ -527,7 +533,12 @@ export function AdminEventsTab({
     setRecObjective(ev.objectiveDescription || "");
     setRecRewardObjective(ev.rewardObjective);
     setRecRewards(ev.rewards ?? []);
-    setRecLinkedMedal(ev.linkedMedalId || "");
+    const linkedIds = getEventLinkedMedalIds(ev);
+    const hydratedMedals = linkedIds
+      .map((id) => (draft.customMedals ?? []).find((m) => m.id === id))
+      .filter((m): m is MedalDefinition => Boolean(m));
+    setRecAttachedMedals(hydratedMedals);
+    setRecLinkedMedal(ev.linkedMedalId || linkedIds[0] || "");
     setIsCreatingRecurring(true);
   }
 
@@ -2249,7 +2260,7 @@ export function AdminEventsTab({
 
                                   <div className="flex items-center justify-between rounded-xl border bg-card p-2.5">
                                     <div>
-                                      <Label className="text-xs font-bold flex items-center gap-1.5 cursor-pointer" htmlFor="ev-medal-stackable">
+                                      <Label className="text-xs font-bold flex items-center gap-1.5 cursor-pointer" htmlFor="rec-medal-stackable">
                                         <Sparkles className="h-3.5 w-3.5 text-amber-500" />
                                         Medalha Empilhável / Cumulativa
                                       </Label>
@@ -2258,10 +2269,10 @@ export function AdminEventsTab({
                                       </p>
                                     </div>
                                     <input
-                                      id="ev-medal-stackable"
+                                      id="rec-medal-stackable"
                                       type="checkbox"
-                                      checked={evNewMedalIsStackable}
-                                      onChange={(e) => setEvNewMedalIsStackable(e.target.checked)}
+                                      checked={recNewMedalIsStackable}
+                                      onChange={(e) => setRecNewMedalIsStackable(e.target.checked)}
                                       className="h-4 w-4 rounded accent-primary cursor-pointer"
                                     />
                                   </div>
@@ -2294,7 +2305,7 @@ export function AdminEventsTab({
                                             gameId: req.gameId,
                                           },
                                           isCustom: true,
-                                          isStackable: evNewMedalIsStackable,
+                                          isStackable: recNewMedalIsStackable,
                                           createdByAdmin: true,
                                           eventName: recTitle.trim() || "Evento Recorrente",
                                           eventRequirement: req,

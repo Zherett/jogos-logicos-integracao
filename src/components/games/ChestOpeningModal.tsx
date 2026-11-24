@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Coins, FastForward, Gift, HelpCircle, Package, Sparkles, Zap } from "lucide-react";
+import { Coins, FastForward, Gift, HelpCircle, Package, Sparkles, Star, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { CardPackDefinition } from "@/lib/cards-catalog";
@@ -28,6 +28,7 @@ interface ChestOpeningModalProps {
   openedCount?: number;
   packsCatalog?: CardPackDefinition[];
   isSimulation?: boolean;
+  inventoryLockedNote?: boolean;
   onClose: () => void;
 }
 
@@ -41,6 +42,7 @@ export function ChestOpeningModal({
   openedCount = 1,
   packsCatalog = [],
   isSimulation = false,
+  inventoryLockedNote = false,
   onClose,
 }: ChestOpeningModalProps) {
   const [stage, setStage] = useState<OpeningStage>("unlocking");
@@ -84,7 +86,16 @@ export function ChestOpeningModal({
     }));
   }, [outcome, packsCatalog]);
 
-  const hasCosmetics = Boolean(outcome?.cosmetics?.length);
+  const cosmeticGrants = outcome?.cosmeticGrants ?? [];
+  const newlyGrantedCosmeticNames = cosmeticGrants
+    .filter((g) => !g.alreadyOwned)
+    .map((g) => g.name);
+  const duplicateCosmeticGrants = cosmeticGrants.filter((g) => g.alreadyOwned);
+  const duplicateCompCoins = Math.max(0, Math.floor(Number(outcome?.duplicateCompensationCoins) || 0));
+  const hasCosmetics =
+    Boolean(outcome?.cosmetics?.length) ||
+    newlyGrantedCosmeticNames.length > 0 ||
+    duplicateCosmeticGrants.length > 0;
   const hasExtras = distinctPacks.length > 0 || hasCosmetics;
 
   const rewardQueue = useMemo<RewardStepKind[]>(() => {
@@ -96,6 +107,8 @@ export function ChestOpeningModal({
     if (hasCosmetics) q.push("cosmetics");
     return q;
   }, [outcome, distinctPacks, hasCosmetics]);
+  const rewardQueueRef = useRef<RewardStepKind[]>(rewardQueue);
+  rewardQueueRef.current = rewardQueue;
 
   const allSettled = useMemo(
     () => rewardQueue.every((k) => Boolean(settledSteps[k])),
@@ -200,11 +213,12 @@ export function ChestOpeningModal({
 
     const runStep = (idx: number) => {
       if (cancelled) return;
-      if (idx >= rewardQueue.length) {
+      const queue = rewardQueueRef.current;
+      if (idx >= queue.length) {
         setActiveStep(null);
         return;
       }
-      const kind = rewardQueue[idx];
+      const kind = queue[idx];
       const isPackStep = kind.startsWith("pack:");
       setFlyTransform({ dx: 0, dy: 0, scaleX: 1, scaleY: 1 });
       setActiveStep(kind);
@@ -241,7 +255,7 @@ export function ChestOpeningModal({
       cancelled = true;
       clearTimers();
     };
-  }, [stage, outcome, rewardQueue]);
+  }, [stage, outcome]);
 
   // Calcula o deslocamento exato do card em destaque até o seu slot de destino no layout
   useLayoutEffect(() => {
@@ -309,14 +323,23 @@ export function ChestOpeningModal({
     .map((pk) => `${pk.quantity}x ${pk.packDef?.name ?? pk.packId}`)
     .join(" • ");
 
-  const extrasLabel = [
-    settledPacksText,
-    settledSteps.cosmetics && outcome.cosmetics?.length
-      ? `${outcome.cosmetics.length} cosmético(s) desbloqueado(s)`
-      : "",
-  ]
-    .filter(Boolean)
-    .join(" • ");
+  const cosmeticSummaryText = (() => {
+    if (!settledSteps.cosmetics) return "";
+    const parts: string[] = [];
+    if (newlyGrantedCosmeticNames.length > 0) {
+      parts.push(`Desbloqueado: ${newlyGrantedCosmeticNames.join(", ")}`);
+    } else if (outcome.cosmetics?.length) {
+      parts.push(`${outcome.cosmetics.length} cosmético(s) desbloqueado(s)`);
+    }
+    if (duplicateCosmeticGrants.length > 0 && duplicateCompCoins > 0) {
+      parts.push(
+        `${duplicateCosmeticGrants.map((g) => g.name).join(", ")} já possuído → +${duplicateCompCoins} moedas`,
+      );
+    }
+    return parts.join(" • ");
+  })();
+
+  const extrasLabel = [settledPacksText, cosmeticSummaryText].filter(Boolean).join(" • ");
 
   const anyExtraSettled = Boolean(extrasLabel);
   const activePackIdx =
@@ -423,7 +446,7 @@ export function ChestOpeningModal({
                     : "opacity-15 scale-95 border-dashed"
                 }`}
               >
-                <Coins className="mx-auto mb-1 h-4 w-4 text-primary" />
+                <Star className="mx-auto mb-1 h-4 w-4 text-primary" />
                 <div className="text-[10px] font-bold text-muted-foreground">Pontos</div>
                 <div className="font-display text-lg font-black text-primary">
                   {settledSteps.points ? `+${outcome.points}` : "?"}
@@ -471,14 +494,21 @@ export function ChestOpeningModal({
                 ref={(el) => {
                   slotRefs.current.packs = el;
                 }}
-                className={`rounded-2xl border border-primary/30 bg-primary/10 p-3 text-xs font-bold text-primary flex items-center justify-center gap-2 transition-all duration-300 ${
+                className={`rounded-2xl border border-primary/30 bg-primary/10 p-3 text-xs font-bold text-primary flex flex-col items-center justify-center gap-1 transition-all duration-300 ${
                   anyExtraSettled
                     ? "opacity-100 scale-100"
                     : "opacity-15 scale-95 border-dashed"
                 }`}
               >
-                <Package className="h-4 w-4 shrink-0" />
-                <span>{anyExtraSettled ? extrasLabel : "Item bônus..."}</span>
+                <div className="flex items-center justify-center gap-2">
+                  <Package className="h-4 w-4 shrink-0" />
+                  <span>{anyExtraSettled ? extrasLabel : "Item bônus..."}</span>
+                </div>
+                {anyExtraSettled && inventoryLockedNote && !isSimulation && (
+                  <span className="text-[10px] font-semibold text-muted-foreground">
+                    Guardado com segurança no seu Inventário — ficará acessível assim que a Loja for liberada!
+                  </span>
+                )}
               </div>
             )}
 
@@ -551,7 +581,7 @@ export function ChestOpeningModal({
                   >
                     {activeStep === "points" && (
                       <>
-                        <Coins className="h-7 w-7 text-primary" />
+                        <Star className="h-7 w-7 text-primary" />
                         <span className="text-xs font-extrabold uppercase tracking-wider text-muted-foreground">
                           Pontos
                         </span>
@@ -610,7 +640,11 @@ export function ChestOpeningModal({
                         >
                           {stepPhase === "mystery"
                             ? "?"
-                            : `${outcome.cosmetics?.length ?? 0} cosmético(s) desbloqueado(s)`}
+                            : newlyGrantedCosmeticNames.length > 0
+                              ? newlyGrantedCosmeticNames.join(", ")
+                              : duplicateCompCoins > 0
+                                ? `Cosmético repetido → +${duplicateCompCoins} moedas`
+                                : `${outcome.cosmetics?.length ?? 0} cosmético(s) desbloqueado(s)`}
                         </span>
                       </>
                     )}

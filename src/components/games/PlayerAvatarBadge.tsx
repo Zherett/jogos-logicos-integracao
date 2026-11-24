@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import {
   Bomb,
   Bot,
@@ -22,6 +22,7 @@ import {
   DEFAULT_AVATAR_COLOR,
   DEFAULT_AVATARS,
   isSafeCosmeticImageUrl,
+  sanitizeHex6,
   type AuraDefinition,
   type AvatarDefinition,
   type AvatarIconKey,
@@ -33,8 +34,8 @@ export function getAuraPresentation(aura?: AuraDefinition | null): {
   style: CSSProperties;
 } {
   if (!aura) return { className: "", style: {} };
-  const c1 = aura.primaryColor || "#3b82f6";
-  const c2 = aura.secondaryColor || c1;
+  const c1 = sanitizeHex6(aura.primaryColor, "#3b82f6");
+  const c2 = sanitizeHex6(aura.secondaryColor, c1);
 
   if (aura.kind === "bicolor") {
     return {
@@ -199,16 +200,26 @@ function renderLetterAvatar(
   );
 }
 
-function renderAvatarContent(
-  av: AvatarDefinition,
-  iconClass: string,
-  letterClass: string,
-) {
-  if (av.imageUrl && isSafeCosmeticImageUrl(av.imageUrl)) {
+function AvatarContent({
+  av,
+  iconClass,
+  letterClass,
+}: {
+  av: AvatarDefinition;
+  iconClass: string;
+  letterClass: string;
+}) {
+  const [imgFailed, setImgFailed] = useState(false);
+  useEffect(() => {
+    setImgFailed(false);
+  }, [av.imageUrl]);
+
+  if (av.imageUrl && isSafeCosmeticImageUrl(av.imageUrl) && !imgFailed) {
     return (
       <img
         src={av.imageUrl.trim()}
         alt={av.name}
+        onError={() => setImgFailed(true)}
         className="h-full w-full object-cover"
       />
     );
@@ -251,23 +262,29 @@ export function PlayerAvatarBadge({
   className = "",
 }: PlayerAvatarBadgeProps) {
   const activeAvatar = avatar ?? DEFAULT_AVATARS[0];
+  const safeColor = sanitizeHex6(color, DEFAULT_AVATAR_COLOR);
+  const safeAuraPrimary = aura ? sanitizeHex6(aura.primaryColor, "#3b82f6") : null;
   const hasDual = Boolean(secondaryAvatar && secondaryAvatar.id !== activeAvatar.id);
   const dims = SIZE_CLASSES[size];
   const auraPres = getAuraPresentation(aura);
+  const primaryHasSafeImg = Boolean(activeAvatar.imageUrl && isSafeCosmeticImageUrl(activeAvatar.imageUrl));
+  const secondaryHasSafeImg = Boolean(
+    secondaryAvatar?.imageUrl && isSafeCosmeticImageUrl(secondaryAvatar.imageUrl),
+  );
 
   if (!hasDual || !secondaryAvatar) {
     return (
       <div
         className={`relative grid shrink-0 place-items-center overflow-hidden border-2 shadow-sm transition-all ${dims.box} ${auraPres.className} ${className}`}
         style={{
-          backgroundColor: activeAvatar.imageUrl ? undefined : `${color}22`,
-          borderColor: aura ? aura.primaryColor : `${color}88`,
-          color,
+          backgroundColor: primaryHasSafeImg ? undefined : `${safeColor}22`,
+          borderColor: safeAuraPrimary ?? `${safeColor}88`,
+          color: safeColor,
           ...auraPres.style,
         }}
         title={activeAvatar.name}
       >
-        {renderAvatarContent(activeAvatar, dims.icon, dims.letter)}
+        <AvatarContent av={activeAvatar} iconClass={dims.icon} letterClass={dims.letter} />
       </div>
     );
   }
@@ -276,9 +293,9 @@ export function PlayerAvatarBadge({
     <div
       className={`relative shrink-0 overflow-hidden border-2 shadow-sm transition-all perspective-1000 ${dims.box} ${auraPres.className} ${className}`}
       style={{
-        backgroundColor: `${color}18`,
-        borderColor: aura ? aura.primaryColor : `${color}88`,
-        color,
+        backgroundColor: `${safeColor}18`,
+        borderColor: safeAuraPrimary ?? `${safeColor}88`,
+        color: safeColor,
         ...auraPres.style,
       }}
       title={`${activeAvatar.name} ⇄ ${secondaryAvatar.name}`}
@@ -288,20 +305,20 @@ export function PlayerAvatarBadge({
         <div
           className="absolute inset-0 grid place-items-center backface-hidden animate-avatar-dual-face-a"
           style={{
-            backgroundColor: activeAvatar.imageUrl ? undefined : `${color}22`,
+            backgroundColor: primaryHasSafeImg ? undefined : `${safeColor}22`,
           }}
         >
-          {renderAvatarContent(activeAvatar, dims.icon, dims.letter)}
+          <AvatarContent av={activeAvatar} iconClass={dims.icon} letterClass={dims.letter} />
         </div>
 
         {/* Face B (Avatar Secundário) */}
         <div
           className="absolute inset-0 grid place-items-center backface-hidden animate-avatar-dual-face-b"
           style={{
-            backgroundColor: secondaryAvatar.imageUrl ? undefined : `${color}22`,
+            backgroundColor: secondaryHasSafeImg ? undefined : `${safeColor}22`,
           }}
         >
-          {renderAvatarContent(secondaryAvatar, dims.icon, dims.letter)}
+          <AvatarContent av={secondaryAvatar} iconClass={dims.icon} letterClass={dims.letter} />
         </div>
       </div>
 

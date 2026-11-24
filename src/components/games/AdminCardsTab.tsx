@@ -47,6 +47,7 @@ import { DUNGEON_CARD_SKILL_LIST } from "@/lib/dungeon-config";
 import { resolveCardDungeonBonus } from "@/lib/dungeon-engine";
 import type { PlatformAdminConfig } from "@/lib/game-codes";
 import { usePlayerAuth } from "@/lib/player-auth";
+import { getLastAdminCloudSyncError } from "@/lib/playfab";
 import { CollectibleCardView } from "./CollectibleCardView";
 import { CardPagination, paginateItems } from "./CardPagination";
 import { PackIconSvg, PackOpeningModal, type PackOpenOutcome } from "./PackOpeningModal";
@@ -87,8 +88,12 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
   const [packName, setPackName] = useState("");
   const [packDesc, setPackDesc] = useState("");
   const [packCardsCount, setPackCardsCount] = useState<number>(5);
-  const [packPrice, setPackPrice] = useState<number>(250);
+  const [packPriceCoins, setPackPriceCoins] = useState<number>(40);
+  const [packShowInStore, setPackShowInStore] = useState<boolean>(true);
+  const [packFeaturedInStore, setPackFeaturedInStore] = useState<boolean>(false);
   const [packEnabled, setPackEnabled] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [cloudFeedback, setCloudFeedback] = useState<string | null>(null);
   const [packProbs, setPackProbs] = useState<PackProbabilities>({
     comum: 40,
     incomum: 30,
@@ -131,6 +136,23 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
     void onSaveConfig(nextCfg);
   }, [cards, draft, onSaveConfig, setDraft]);
 
+  async function persistConfig(nextCfg: PlatformAdminConfig, successMsg?: string) {
+    setSaving(true);
+    setCloudFeedback(null);
+    try {
+      setDraft(nextCfg);
+      await onSaveConfig(nextCfg);
+      const cloudErr = getLastAdminCloudSyncError();
+      if (cloudErr) {
+        setCloudFeedback(`⚠️ Salvo apenas localmente — erro ao publicar no PlayFab: ${cloudErr}`);
+      } else if (successMsg) {
+        setCloudFeedback(successMsg);
+      }
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function handleGenerateMissingFoils() {
     const { updatedCatalog, addedCount } = generateMissingFoilDuplicates(cards);
     if (addedCount <= 0) return;
@@ -139,8 +161,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
       cardsCatalog: updatedCatalog,
       foilDuplicatesSeededV2: true,
     };
-    setDraft(nextCfg);
-    await onSaveConfig(nextCfg);
+    await persistConfig(nextCfg, `✨ ${addedCount} carta(s) Foil geradas e sincronizadas!`);
   }
 
   function resetCardForm() {
@@ -213,16 +234,23 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
     }
 
     const nextCfg: PlatformAdminConfig = { ...draft, cardsCatalog: nextCards };
-    setDraft(nextCfg);
-    await onSaveConfig(nextCfg);
+    await persistConfig(
+      nextCfg,
+      editingCardId ? "✅ Carta atualizada na nuvem!" : "✅ Carta criada e publicada na nuvem!",
+    );
     resetCardForm();
   }
 
   async function handleDeleteCard(cardId: string) {
+    const card = cards.find((c) => c.id === cardId);
+    if (!window.confirm(`Deseja excluir a carta "${card?.name ?? cardId}"?`)) return;
     const nextCards = cards.filter((c) => c.id !== cardId);
-    const nextCfg: PlatformAdminConfig = { ...draft, cardsCatalog: nextCards };
-    setDraft(nextCfg);
-    await onSaveConfig(nextCfg);
+    // Remove referências órfãs desta carta nos pools de pacotes
+    const nextPacks = packs.map((p) =>
+      Array.isArray(p.cardIds) ? { ...p, cardIds: p.cardIds.filter((id) => id !== cardId) } : p,
+    );
+    const nextCfg: PlatformAdminConfig = { ...draft, cardsCatalog: nextCards, cardPacks: nextPacks };
+    await persistConfig(nextCfg, "🗑️ Carta removida do catálogo e dos pacotes.");
     if (editingCardId === cardId) resetCardForm();
   }
 
@@ -231,7 +259,9 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
     setPackName("");
     setPackDesc("");
     setPackCardsCount(5);
-    setPackPrice(300);
+    setPackPriceCoins(40);
+    setPackShowInStore(true);
+    setPackFeaturedInStore(false);
     setPackEnabled(true);
     setPackProbs({ comum: 40, incomum: 30, rara: 20, epica: 8, lendaria: 2 });
     setPackUseAllCards(true);
@@ -248,7 +278,9 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
     setPackName(pack.name);
     setPackDesc(pack.description);
     setPackCardsCount(pack.cardsPerPack || 5);
-    setPackPrice(pack.pricePoints ?? 0);
+    setPackPriceCoins(Math.max(1, Math.floor(Number(pack.priceCoins) || 40)));
+    setPackShowInStore(pack.showInStore !== false);
+    setPackFeaturedInStore(Boolean(pack.featuredInStore));
     setPackEnabled(pack.enabled);
     setPackProbs({ ...pack.probabilities });
     const hasCustomPool = Array.isArray(pack.cardIds) && pack.cardIds.length > 0;
@@ -283,6 +315,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
     const existing = editingPackId ? packs.find((p) => p.id === editingPackId) : null;
 
     const newPack: CardPackDefinition = {
+      ...(existing ?? {}),
       id: existing?.id ?? `pack_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       name: packName.trim(),
       description: packDesc.trim(),
@@ -290,7 +323,10 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
       cardsPerPack: Math.max(1, Math.min(20, Math.floor(packCardsCount || 5))),
       probabilities: { ...packProbs },
       cardIds: packUseAllCards ? null : [...packSelectedCardIds],
-      pricePoints: Math.max(0, Math.floor(packPrice || 0)),
+      pricePoints: existing?.pricePoints ?? 0,
+      priceCoins: Math.max(1, Math.floor(packPriceCoins || 40)),
+      showInStore: packShowInStore,
+      featuredInStore: packFeaturedInStore,
       icon: packIcon,
       colorTheme: packColorTheme,
       isFoil: packIsFoil,
@@ -304,17 +340,21 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
       : [...packs, newPack];
 
     const nextCfg: PlatformAdminConfig = { ...draft, cardPacks: nextPacks };
-    setDraft(nextCfg);
-    await onSaveConfig(nextCfg);
+    await persistConfig(
+      nextCfg,
+      existing ? "✅ Pacote atualizado na nuvem!" : "✅ Pacote criado e publicado na nuvem!",
+    );
     setIsPackFormOpen(false);
     setEditingPackId(null);
   }
 
   async function handleDeleteSpecialPack(packId: string) {
+    const pack = packs.find((p) => p.id === packId);
+    if (!pack || pack.isDefault) return;
+    if (!window.confirm(`Deseja excluir o pacote especial "${pack.name}"?`)) return;
     const nextPacks = packs.filter((p) => p.id !== packId || p.isDefault);
     const nextCfg: PlatformAdminConfig = { ...draft, cardPacks: nextPacks };
-    setDraft(nextCfg);
-    await onSaveConfig(nextCfg);
+    await persistConfig(nextCfg, "🗑️ Pacote especial removido.");
   }
 
   function handleTestOpenPack(pack: CardPackDefinition) {
@@ -323,40 +363,58 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
   }
 
   async function confirmTestOpenPack(pack: CardPackDefinition): Promise<PackOpenOutcome | null> {
-    const currentCards = auth.profile?.cards ?? {};
+    // Simulação pura de teste ADM: NÃO altera o inventário nem salva cartas na conta real
     const foilChance = draft.cardFoilChancePercent ?? DEFAULT_CARD_FOIL_CHANCE_PERCENT;
-    const res = openCardPack(pack, cards, currentCards, Math.random, foilChance);
+    const res = openCardPack(pack, cards, {}, Math.random, foilChance);
     if (res.error) {
       setPackError(res.error);
       setPackToTestOpen(null);
       return null;
     }
-    await auth.updatePlayerCards({
-      cards: res.updatedCardsMap,
-      unopenedPacks: auth.profile?.unopenedPacks,
-    });
     return {
       drawn: res.drawnCards,
       newlyDiscovered: res.newlyDiscoveredIds,
+      openedCount: 1,
     };
   }
 
   const probsTotal = sumPackProbabilities(packProbs);
+  const isShopReleased = Boolean(draft.rolloutFlags?.enableShopForStudents);
 
   return (
     <div className="space-y-4">
-      {/* Banner de Modo Restrito ADM */}
-      <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3 text-xs flex flex-wrap items-center justify-between gap-2">
+      {/* Banner Dinâmico de Status */}
+      <div
+        className={`rounded-2xl border p-3 text-xs flex flex-wrap items-center justify-between gap-2 ${
+          isShopReleased
+            ? "border-emerald-500/40 bg-emerald-500/10"
+            : "border-amber-500/40 bg-amber-500/10"
+        }`}
+      >
         <div className="flex items-center gap-2 font-bold text-foreground">
-          <Lock className="h-4 w-4 text-amber-500 shrink-0" />
+          <Lock className={`h-4 w-4 shrink-0 ${isShopReleased ? "text-emerald-500" : "text-amber-500"}`} />
           <span>
-            Sistema de Cartas em modo privado: visível apenas para ADM e perfis de teste do ADM.
+            {isShopReleased
+              ? "Sistema de Cartas & Pacotes ativo para todos os alunos na Loja e Inventário."
+              : "Sistema de Cartas em modo privado: visível apenas para ADM e perfis de teste do ADM."}
           </span>
         </div>
         <span className="font-mono text-[11px] font-bold text-muted-foreground">
           {cards.length} carta(s) • {packs.length} pacote(s)
         </span>
       </div>
+
+      {cloudFeedback && (
+        <div
+          className={`rounded-2xl border px-3 py-2 text-xs font-bold ${
+            cloudFeedback.startsWith("⚠️")
+              ? "border-rose-500/40 bg-rose-500/10 text-rose-700 dark:text-rose-300"
+              : "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+          }`}
+        >
+          {cloudFeedback}
+        </div>
+      )}
 
       {/* Sub-navegação Cartas vs Pacotes */}
       <div className="grid grid-cols-2 gap-2 rounded-2xl bg-secondary p-1">
@@ -604,8 +662,10 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
                 </p>
               )}
 
-              <Button type="submit" className="rounded-xl font-bold">
-                {editingCardId ? (
+              <Button type="submit" disabled={saving} className="rounded-xl font-bold">
+                {saving ? (
+                  <>Salvando...</>
+                ) : editingCardId ? (
                   <>
                     <Save className="h-4 w-4 mr-1.5" /> Salvar Alterações
                   </>
@@ -813,14 +873,34 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label>Preço (Pontos)</Label>
+                  <Label>Preço na Loja (Moedas)</Label>
                   <Input
                     type="number"
-                    min={0}
-                    value={packPrice}
-                    onChange={(e) => setPackPrice(Number(e.target.value))}
+                    min={1}
+                    value={packPriceCoins}
+                    onChange={(e) => setPackPriceCoins(Math.max(1, Math.floor(Number(e.target.value) || 1)))}
                     className="rounded-xl"
                   />
+                </div>
+                <div className="sm:col-span-2 flex flex-wrap gap-4 pt-1">
+                  <label className="inline-flex items-center gap-2 text-xs font-bold cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={packShowInStore}
+                      onChange={(e) => setPackShowInStore(e.target.checked)}
+                      className="h-4 w-4 accent-primary cursor-pointer"
+                    />
+                    Exibir para venda na Loja
+                  </label>
+                  <label className="inline-flex items-center gap-2 text-xs font-bold cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={packFeaturedInStore}
+                      onChange={(e) => setPackFeaturedInStore(e.target.checked)}
+                      className="h-4 w-4 accent-amber-500 cursor-pointer"
+                    />
+                    Destacar na Vitrine da Loja
+                  </label>
                 </div>
               </div>
 
@@ -1006,8 +1086,8 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
                   <Switch checked={packEnabled} onCheckedChange={setPackEnabled} />
                   <span>Pacote Ativo</span>
                 </div>
-                <Button type="submit" className="rounded-xl font-bold">
-                  <Save className="h-4 w-4 mr-1.5" /> Salvar Pacote
+                <Button type="submit" disabled={saving} className="rounded-xl font-bold">
+                  <Save className="h-4 w-4 mr-1.5" /> {saving ? "Salvando..." : "Salvar Pacote"}
                 </Button>
               </div>
 

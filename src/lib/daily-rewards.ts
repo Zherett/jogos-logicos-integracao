@@ -2,14 +2,20 @@ import type { PlayerProfile } from "./playfab.ts";
 import { isSpecialAdminAccount } from "./playfab.ts";
 import type { AdminConfig } from "./game-codes.ts";
 import {
+  calculateDuplicateCosmeticCompensation,
   mergeWithDefaultChests,
   openChest,
   type ChestDefinition,
   type ChestOpenOutcome,
 } from "./chests-catalog.ts";
 import { awardCareerPoints, awardCoins, MEDAL_COINS_REWARDS } from "./career-points.ts";
-import { grantCosmeticToProfile } from "./cosmetics-catalog.ts";
+import {
+  grantCosmeticToProfile,
+  mergeWithDefaultAuras,
+  mergeWithDefaultAvatars,
+} from "./cosmetics-catalog.ts";
 import { getLocalDateKey } from "./player-profile.ts";
+import { getCurrentActiveStreakDays } from "./medals-catalog.ts";
 
 /** Incremento de pontos por dia seguido na ofensiva (a partir do 2º dia consecutivo) */
 export const DAILY_STREAK_BONUS_STEP = 5;
@@ -154,6 +160,8 @@ export function resolveDay7ChestDefinition(
   const desiredId = (routineConfig?.day7ChestId || DEFAULT_DAY7_CHEST_ID).trim();
   const found =
     allChests.find((c) => c.id === desiredId && c.enabled !== false) ??
+    allChests.find((c) => c.id === DEFAULT_DAY7_CHEST_ID && c.enabled !== false) ??
+    allChests.find((c) => c.enabled !== false) ??
     allChests.find((c) => c.id === DEFAULT_DAY7_CHEST_ID) ??
     allChests[0];
   return found;
@@ -280,6 +288,7 @@ export interface ClaimDailyRewardResult {
   xpAwarded: number;
   streakBonusXp: number;
   coinsAwarded: number;
+  medalCoinsAwarded?: number;
   streakBonusCoins: number;
   chestDefinition?: ChestDefinition;
   chestOutcome?: ChestOpenOutcome;
@@ -294,6 +303,7 @@ export function claimDailyRewardForProfile(
   adminConfig?: Partial<AdminConfig> | null,
   options?: {
     todayKey?: string;
+    now?: Date;
     rng?: () => number;
   },
 ): ClaimDailyRewardResult {
@@ -332,7 +342,24 @@ export function claimDailyRewardForProfile(
   const schedule = resolveDailyRewardsSchedule(routine, adminConfig?.chestsCatalog);
   const claimedDay = state.currentDay;
   const tier = schedule.find((t) => t.day === claimedDay) ?? schedule[0];
-  const streak = Math.max(1, profile.streakDays ?? 1);
+
+  // Atualiza marcadores de check-in (e marca lastDailyLoginPointsDate para evitar duplo pagamento)
+  profile.dailyCheckInCount = state.totalCheckIns + 1;
+  profile.lastDailyRewardClaimDate = todayKey;
+  profile.lastDailyLoginPointsDate = todayKey;
+
+  const hadPriorActiveDates = Array.isArray(profile.activeDates) && profile.activeDates.length > 0;
+  const activeSet = new Set<string>(Array.isArray(profile.activeDates) ? profile.activeDates : []);
+  activeSet.add(todayKey);
+  profile.activeDates = Array.from(activeSet).sort();
+
+  // Calcula ofensiva ativa real (incluindo check-in de hoje), regredindo corretamente quando houve falta
+  // (contas legadas sem activeDates anterior preservam streakDays já registrado)
+  const computedActiveStreak = getCurrentActiveStreakDays(profile, todayKey);
+  const streak = hadPriorActiveDates
+    ? Math.max(1, computedActiveStreak)
+    : Math.max(1, computedActiveStreak, Math.floor(Number(profile.streakDays ?? 0)));
+  profile.streakDays = streak;
 
   const streakBonusPoints = getStreakBonusPoints(streak, routine);
   const streakBonusXp = getStreakBonusXp(streak, routine);
@@ -342,15 +369,7 @@ export function claimDailyRewardForProfile(
   const totalPoints = Math.max(0, tier.points) + streakBonusPoints;
   const totalXp = Math.max(0, tier.xp) + streakBonusXp;
   const totalCoins = Math.max(0, tier.coins ?? 0) + dailyLoginCoins + streakBonusCoins;
-
-  // Atualiza marcadores de check-in (e marca lastDailyLoginPointsDate para evitar duplo pagamento)
-  profile.dailyCheckInCount = state.totalCheckIns + 1;
-  profile.lastDailyRewardClaimDate = todayKey;
-  profile.lastDailyLoginPointsDate = todayKey;
-
-  const activeSet = new Set<string>(Array.isArray(profile.activeDates) ? profile.activeDates : []);
-  activeSet.add(todayKey);
-  profile.activeDates = Array.from(activeSet).sort();
+  let medalCoinsAwarded = 0;
 
   if (totalPoints > 0) {
     awardCareerPoints(profile, totalPoints, `Recompensa Diária (Dia ${claimedDay})`);
@@ -363,49 +382,56 @@ export function claimDailyRewardForProfile(
     awardCoins(profile, totalCoins, `Recompensa Diária (Dia ${claimedDay})`, "recompensa_diaria");
   }
 
-  // Concede/empilha a medalha de marco correspondente nos Dias 3, 5 e 7
+  // Concede/empilha a medalha de marco correspondente nos Dias 3, 5 e 7 (idempotente no mesmo dia)
   if (tier.milestoneMedalId) {
     const unlocked = Array.isArray(profile.unlockedMedals) ? [...profile.unlockedMedals] : [];
-    const nowIso = new Date().toISOString();
+    const nowIso = (options?.now ?? new Date()).toISOString();
     const existingIdx = unlocked.findIndex((m) => m?.medalId === tier.milestoneMedalId);
-    if (existingIdx >= 0) {
-      const prevCount = Math.max(1, Number(unlocked[existingIdx].count ?? 1));
-      unlocked[existingIdx] = {
-        ...unlocked[existingIdx],
-        count: prevCount + 1,
-        unlockedAt: nowIso,
-      };
-    } else {
-      unlocked.push({
-        medalId: tier.milestoneMedalId,
-        unlockedAt: nowIso,
-        count: 1,
-      });
-    }
-    profile.unlockedMedals = unlocked;
+    const existingDateKey =
+      existingIdx >= 0 ? isoToOfficialDateKey(unlocked[existingIdx]?.unlockedAt) : null;
+    const alreadyGrantedToday = existingDateKey === todayKey;
 
-    const milestoneRarity =
-      tier.day === 7 ? "ouro" : tier.day === 5 ? "prata" : "bronze";
-    const medalCoins = Math.max(
-      0,
-      Math.floor(
-        Number(
-          adminConfig?.coinRewardsConfig?.medalCoinsByRarity?.[milestoneRarity] ??
-            MEDAL_COINS_REWARDS[milestoneRarity] ??
-            5,
+    if (!alreadyGrantedToday) {
+      if (existingIdx >= 0) {
+        const prevCount = Math.max(1, Number(unlocked[existingIdx].count ?? 1));
+        unlocked[existingIdx] = {
+          ...unlocked[existingIdx],
+          count: prevCount + 1,
+          unlockedAt: nowIso,
+        };
+      } else {
+        unlocked.push({
+          medalId: tier.milestoneMedalId,
+          unlockedAt: nowIso,
+          count: 1,
+        });
+      }
+      profile.unlockedMedals = unlocked;
+
+      const milestoneRarity =
+        tier.day === 7 ? "ouro" : tier.day === 5 ? "prata" : "bronze";
+      const medalCoins = Math.max(
+        0,
+        Math.floor(
+          Number(
+            adminConfig?.coinRewardsConfig?.medalCoinsByRarity?.[milestoneRarity] ??
+              MEDAL_COINS_REWARDS[milestoneRarity] ??
+              5,
+          ),
         ),
-      ),
-    );
-    if (medalCoins > 0) {
-      awardCoins(profile, medalCoins, `Marco Diário (Dia ${tier.day})`, "medalha");
+      );
+      if (medalCoins > 0) {
+        awardCoins(profile, medalCoins, `Marco Diário (Dia ${tier.day})`, "medalha");
+        medalCoinsAwarded += medalCoins;
+      }
+      profile.coinRewardedMedalIds = {
+        ...(profile.coinRewardedMedalIds ?? {}),
+        [tier.milestoneMedalId]: Math.max(
+          1,
+          (profile.coinRewardedMedalIds?.[tier.milestoneMedalId] ?? 0) + 1,
+        ),
+      };
     }
-    profile.coinRewardedMedalIds = {
-      ...(profile.coinRewardedMedalIds ?? {}),
-      [tier.milestoneMedalId]: Math.max(
-        1,
-        (profile.coinRewardedMedalIds?.[tier.milestoneMedalId] ?? 0) + 1,
-      ),
-    };
   }
 
   let chestDefinition: ChestDefinition | undefined;
@@ -435,18 +461,52 @@ export function claimDailyRewardForProfile(
         profile.unopenedPacks = packsMap;
       }
       if (chestOutcome.cosmetics.length > 0) {
+        const allAvatars = mergeWithDefaultAvatars(adminConfig?.avatarsCatalog);
+        const allAuras = mergeWithDefaultAuras(adminConfig?.aurasCatalog);
         const newlyGrantedCosmetics: ChestOpenOutcome["cosmetics"] = [];
+        const cosmeticGrants: NonNullable<ChestOpenOutcome["cosmeticGrants"]> = [];
+        let duplicateCompensationCoins = 0;
+
         for (const c of chestOutcome.cosmetics) {
+          const def =
+            c.kind === "avatar"
+              ? allAvatars.find((a) => a.id === c.itemId)
+              : allAuras.find((a) => a.id === c.itemId);
           const grant = grantCosmeticToProfile(profile, c.kind, c.itemId);
           profile.unlockedAvatars = grant.profile.unlockedAvatars;
           profile.unlockedAuras = grant.profile.unlockedAuras;
           if (!grant.alreadyOwned) {
             newlyGrantedCosmetics.push(c);
+            cosmeticGrants.push({
+              kind: c.kind,
+              itemId: c.itemId,
+              name: def?.name ?? c.itemId,
+              alreadyOwned: false,
+              compensatedCoins: 0,
+            });
+          } else {
+            const comp = calculateDuplicateCosmeticCompensation(def?.priceCoins);
+            duplicateCompensationCoins += comp;
+            awardCoins(
+              profile,
+              comp,
+              `Compensação cosmético repetido (${def?.name ?? c.itemId})`,
+              "bau",
+            );
+            cosmeticGrants.push({
+              kind: c.kind,
+              itemId: c.itemId,
+              name: def?.name ?? c.itemId,
+              alreadyOwned: true,
+              compensatedCoins: comp,
+            });
           }
         }
         chestOutcome = {
           ...chestOutcome,
           cosmetics: newlyGrantedCosmetics,
+          cosmeticGrants,
+          duplicateCompensationCoins,
         };
       }
     }
@@ -460,6 +520,7 @@ export function claimDailyRewardForProfile(
     xpAwarded: totalXp,
     streakBonusXp,
     coinsAwarded: totalCoins,
+    ...(medalCoinsAwarded > 0 ? { medalCoinsAwarded } : {}),
     streakBonusCoins,
     chestDefinition,
     chestOutcome,
@@ -504,14 +565,18 @@ export function canViewCoinsWallet(
   return Boolean(profile && adminConfig?.rolloutFlags?.enableCoinsWalletForStudents);
 }
 
-/** Exibição do Avatar padrão no perfil/topo no lugar do selo de Nível (sem exigir customização) */
+/** Exibição do Avatar padrão no perfil/topo no lugar do selo de Nível (também ativa automaticamente se a Loja estiver liberada) */
 export function canUseDefaultAvatar(
   profile?: Partial<PlayerProfile> | null,
   isAdmin = false,
   adminConfig?: Partial<AdminConfig> | null,
 ): boolean {
   if (canAccessDailyRewardsPreview(profile, isAdmin)) return true;
-  return Boolean(profile && adminConfig?.rolloutFlags?.enableDefaultAvatarForStudents);
+  return Boolean(
+    profile &&
+      (adminConfig?.rolloutFlags?.enableDefaultAvatarForStudents ||
+        adminConfig?.rolloutFlags?.enableShopForStudents),
+  );
 }
 
 /** Loja de Moedas, Customização de Avatar/Aura e Aba Inventário */
@@ -533,16 +598,23 @@ export function shiftDateKey(dateKey: string, deltaDays: number): string {
   return getLocalDateKey(dt);
 }
 
-function isoToLocalDateKey(iso?: string | null): string | null {
+const OFFICIAL_SEMED_UTC_OFFSET_MS = -4 * 60 * 60 * 1000;
+
+function isoToOfficialDateKey(iso?: string | null): string | null {
   if (!iso || typeof iso !== "string") return null;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
-  const ms = Date.parse(iso);
+  const trimmed = iso.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  const ms = Date.parse(trimmed);
   if (!Number.isFinite(ms)) return null;
-  return getLocalDateKey(new Date(ms));
+  const shifted = new Date(ms + OFFICIAL_SEMED_UTC_OFFSET_MS);
+  const y = shifted.getUTCFullYear();
+  const m = String(shifted.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(shifted.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
 }
 
 /**
- * Retorna a data (`YYYY-MM-DD`) da atividade/login mais recente do aluno entre todas
+ * Retorna a data (`YYYY-MM-DD`, fuso oficial UTC-4 Coari/AM) da atividade/login mais recente do aluno entre todas
  * as fontes reais de login/jogo do perfil.
  * Obs.: ignora intencionalmente `accountUpdatedAt`, pois auditorias do ADM atualizam `acc.updatedAt`
  * de todas as contas e isso falsificaria logins recentes para alunos inativos.
@@ -555,7 +627,7 @@ export function getLatestActivityDateKey(
   const candidates: string[] = [];
   if (Array.isArray(profile.activeDates)) {
     for (const d of profile.activeDates) {
-      const norm = isoToLocalDateKey(d);
+      const norm = isoToOfficialDateKey(d);
       if (norm) candidates.push(norm);
     }
   }
@@ -566,7 +638,7 @@ export function getLatestActivityDateKey(
     profile.lastKnownActivityAt,
     profile.activeSessionUpdatedAt,
   ]) {
-    const norm = isoToLocalDateKey(raw);
+    const norm = isoToOfficialDateKey(raw);
     if (norm) candidates.push(norm);
   }
   if (candidates.length === 0) return null;
@@ -685,7 +757,15 @@ export function evaluateRetroactiveDay1CheckIn(
   const dailyLoginCoins = Math.max(0, Math.floor(routine?.dailyLoginCoins ?? 0));
 
   // Evita duplicar os +25 pts se o aluno já recebeu login diário automático na data do Dia 1
-  const alreadyGotDay1LoginPts = profile.lastDailyLoginPointsDate === day1DateKey;
+  // (inclusive quando logou novamente hoje e sobrescreveu lastDailyLoginPointsDate, mantendo day1DateKey em activeDates)
+  const alreadyGotDay1LoginPts =
+    profile.lastDailyLoginPointsDate === day1DateKey ||
+    Boolean(
+      profile.lastDailyLoginPointsDate &&
+        profile.lastDailyLoginPointsDate >= day1DateKey &&
+        Array.isArray(profile.activeDates) &&
+        profile.activeDates.includes(day1DateKey),
+    );
   const pointsToAward = grantMissingRewards && !alreadyGotDay1LoginPts ? Math.max(0, tier1.points) : 0;
   const xpToAward = grantMissingRewards ? Math.max(0, tier1.xp) : 0;
   const coinsToAward = grantMissingRewards ? Math.max(0, (tier1.coins ?? 0) + dailyLoginCoins) : 0;

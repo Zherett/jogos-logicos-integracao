@@ -42,6 +42,7 @@ import { CollectibleCardView } from "./CollectibleCardView";
 export interface PackOpenOutcome {
   drawn: CardDefinition[];
   newlyDiscovered: string[];
+  openedCount?: number;
   error?: string;
 }
 
@@ -209,7 +210,9 @@ export function PackOpeningModal({
   onRequestRelogin,
   titlePrefix = "Pacote",
 }: PackOpeningModalProps) {
-  const effectiveQty = Math.max(1, Math.floor(Number(openQuantity) || 1));
+  const requestedQty = Math.max(1, Math.floor(Number(openQuantity) || 1));
+  const [actualOpenedQty, setActualOpenedQty] = useState(requestedQty);
+  const effectiveQty = actualOpenedQty;
   const isBatchMode = effectiveQty > 1;
   const [stage, setStage] = useState<Stage>("sealed");
   const [summaryPhase, setSummaryPhase] = useState<SummaryPhase>("gathering");
@@ -249,6 +252,7 @@ export function PackOpeningModal({
     clearAllTimers();
     openingLockRef.current = false;
     activePackIdRef.current = pack?.id ?? null;
+    setActualOpenedQty(requestedQty);
     setStage("sealed");
     setSummaryPhase("gathering");
     setIsOpening(false);
@@ -263,7 +267,7 @@ export function PackOpeningModal({
     setBatchTotalCycles(1);
     setSummaryIndex(0);
     setStackAnim(null);
-  }, [pack, effectiveQty]);
+  }, [pack, requestedQty]);
 
   useEffect(() => {
     return () => {
@@ -279,7 +283,7 @@ export function PackOpeningModal({
     setOpenError(null);
 
     try {
-      const outcome = await onConfirmOpen(pack, effectiveQty);
+      const outcome = await onConfirmOpen(pack, requestedQty);
       if (activePackIdRef.current !== requestedPackId) return;
 
       if (!outcome || outcome.error || outcome.drawn.length === 0) {
@@ -289,6 +293,8 @@ export function PackOpeningModal({
         return;
       }
 
+      const resolvedQty = Math.max(1, Math.floor(Number(outcome.openedCount) || requestedQty));
+      setActualOpenedQty(resolvedQty);
       setNewlyDiscovered(outcome.newlyDiscovered);
       setCurrentIndex(0);
       setIsFlipped(false);
@@ -296,12 +302,12 @@ export function PackOpeningModal({
       setSummaryIndex(0);
       setStackAnim(null);
 
-      if (isBatchMode) {
+      if (resolvedQty > 1) {
         const grouped = groupDrawnCardsForBatchSummary(outcome.drawn, outcome.newlyDiscovered);
         setOrderedCards(outcome.drawn);
         setSummaryEntries(grouped);
 
-        const cycles = Math.min(effectiveQty, 7);
+        const cycles = Math.min(resolvedQty, 7);
         setBatchTotalCycles(cycles);
         setBatchStep(1);
         setStage("batch-stacking");
@@ -332,12 +338,17 @@ export function PackOpeningModal({
 
       const ordered = orderPackRevealCards(outcome.drawn);
       setOrderedCards(ordered);
+      const seenNew = new Set<string>();
       setSummaryEntries(
-        ordered.map((card) => ({
-          card,
-          count: 1,
-          isNew: outcome.newlyDiscovered.includes(card.id),
-        })),
+        ordered.map((card) => {
+          const isFirstNew = outcome.newlyDiscovered.includes(card.id) && !seenNew.has(card.id);
+          if (isFirstNew) seenNew.add(card.id);
+          return {
+            card,
+            count: 1,
+            isNew: isFirstNew,
+          };
+        }),
       );
       setStage("tearing");
 
@@ -348,6 +359,13 @@ export function PackOpeningModal({
       scheduleTimer(() => {
         setStage("stack");
       }, 2350);
+    } catch (err) {
+      if (activePackIdRef.current !== requestedPackId) return;
+      setOpenError(
+        err instanceof Error && err.message
+          ? err.message
+          : "Não foi possível abrir o pacote agora. Tente novamente.",
+      );
     } finally {
       openingLockRef.current = false;
       setIsOpening(false);
@@ -773,7 +791,10 @@ export function PackOpeningModal({
                     >
                       <CollectibleCardView
                         card={currentCard}
-                        isNew={newlyDiscovered.includes(currentCard.id)}
+                        isNew={
+                          newlyDiscovered.includes(currentCard.id) &&
+                          orderedCards.findIndex((c) => c.id === currentCard.id) === currentIndex
+                        }
                       />
                     </div>
                   </div>

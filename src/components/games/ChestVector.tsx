@@ -3,6 +3,7 @@ import {
   DEFAULT_CHEST_PRIMARY_COLOR,
   type ChestShape,
 } from "@/lib/chests-catalog";
+import { sanitizeHex6 } from "@/lib/cosmetics-catalog";
 
 interface ChestVectorProps {
   primaryColor?: string;
@@ -43,8 +44,8 @@ export function ChestVector({
   size = "md",
   className = "",
 }: ChestVectorProps) {
-  const mainColor = primaryColor || DEFAULT_CHEST_PRIMARY_COLOR;
-  const trimColor = metalColor || DEFAULT_CHEST_METAL_COLOR;
+  const mainColor = sanitizeHex6(primaryColor, DEFAULT_CHEST_PRIMARY_COLOR);
+  const trimColor = sanitizeHex6(metalColor, DEFAULT_CHEST_METAL_COLOR);
 
   const baseSizeClass = {
     sm: "h-12 w-16",

@@ -5,7 +5,7 @@ import { loadAllInboxMessages, getMessageRewards } from "./inbox-messages.ts";
 import { recordScoreLedgerEntry, type ScoreTransactionSource } from "./score-history-ledger.ts";
 
 /** Pontos concedidos por raridade de medalha */
-export const MEDAL_POINTS_REWARDS: Record<MedalRarity, number> = {
+export const MEDAL_POINTS_REWARDS: Record<MedalRarity | "secreta", number> = {
   bronze: 20,
   prata: 30,
   ouro: 50,
@@ -34,17 +34,31 @@ export function getLevelUpCoinsReward(level: number, step = 10): number {
 
 /**
  * Atualiza saldo atual, total histórico conseguido (lifetimeCoins) e recorde máximo sem gastar (peakCoins).
+ * Preserva sempre o invariante `lifetimeCoins >= coins + coinsSpentTotal` para evitar perda de moedas em contas legadas.
  */
 export function creditCoinMetrics(
-  profile: { coins?: number; lifetimeCoins?: number; peakCoins?: number },
+  profile: { coins?: number; lifetimeCoins?: number; peakCoins?: number; coinsSpentTotal?: number },
   amount: number,
 ): number {
-  const added = Math.max(0, Math.round(Number(amount) || 0));
-  if (added <= 0) return profile.coins ?? 0;
-  const nextBalance = Math.max(0, (profile.coins ?? 0) + added);
+  const numAmount = Number(amount);
+  const currentCoins = Number.isFinite(Number(profile.coins)) ? Math.max(0, Math.floor(Number(profile.coins))) : 0;
+  if (!Number.isFinite(numAmount)) return currentCoins;
+  const added = Math.max(0, Math.round(numAmount));
+  if (added <= 0) return currentCoins;
+  const spent = Number.isFinite(Number(profile.coinsSpentTotal))
+    ? Math.max(0, Math.floor(Number(profile.coinsSpentTotal)))
+    : 0;
+  const baseLifetime = Math.max(
+    Number.isFinite(Number(profile.lifetimeCoins)) ? Math.max(0, Math.floor(Number(profile.lifetimeCoins))) : 0,
+    currentCoins + spent,
+  );
+  const nextBalance = currentCoins + added;
   profile.coins = nextBalance;
-  profile.lifetimeCoins = Math.max(profile.lifetimeCoins ?? 0, 0) + added;
-  profile.peakCoins = Math.max(profile.peakCoins ?? 0, nextBalance);
+  profile.lifetimeCoins = baseLifetime + added;
+  profile.peakCoins = Math.max(
+    Number.isFinite(Number(profile.peakCoins)) ? Math.max(0, Math.floor(Number(profile.peakCoins))) : 0,
+    nextBalance,
+  );
   return nextBalance;
 }
 
@@ -55,7 +69,9 @@ export function awardCoins(
   explicitSource?: ScoreTransactionSource,
 ): { profile: PlayerProfile; coinsAwarded: number } {
   if (!profile) return { profile, coinsAwarded: 0 };
-  const coinsAwarded = Math.max(0, Math.round(Number(amount) || 0));
+  const numAmount = Number(amount);
+  if (!Number.isFinite(numAmount)) return { profile, coinsAwarded: 0 };
+  const coinsAwarded = Math.max(0, Math.round(numAmount));
   if (coinsAwarded <= 0) return { profile, coinsAwarded: 0 };
   creditCoinMetrics(profile, coinsAwarded);
   try {
@@ -131,14 +147,17 @@ export function awardCareerPoints(
   multiplier = 1,
 ): { profile: PlayerProfile; pointsAwarded: number } {
   if (!profile) return { profile, pointsAwarded: 0 };
+  if (!Number.isFinite(basePoints) || !Number.isFinite(multiplier)) {
+    return { profile, pointsAwarded: 0 };
+  }
   const safeMult = Math.max(1, multiplier);
   const pointsAwarded = Math.round(basePoints * safeMult);
-  if (pointsAwarded <= 0) {
+  if (!Number.isFinite(pointsAwarded) || pointsAwarded <= 0) {
     return { profile, pointsAwarded: 0 };
   }
 
-  const currentBalance = profile.pointsBalance ?? 0;
-  const currentCareer = profile.careerPoints ?? 0;
+  const currentBalance = Number.isFinite(profile.pointsBalance) ? Math.max(0, Math.floor(profile.pointsBalance!)) : 0;
+  const currentCareer = Number.isFinite(profile.careerPoints) ? Math.max(0, Math.floor(profile.careerPoints!)) : 0;
 
   profile.pointsBalance = Math.max(0, currentBalance + pointsAwarded);
   profile.careerPoints = Math.max(0, currentCareer + pointsAwarded);
@@ -185,20 +204,24 @@ export function revokeCareerPoints(
   pointsToRevoke: number,
   reason?: string,
 ): { profile: PlayerProfile; pointsRevoked: number } {
-  if (!profile || pointsToRevoke <= 0) return { profile, pointsRevoked: 0 };
-  const currentBalance = profile.pointsBalance ?? 0;
-  const currentCareer = profile.careerPoints ?? 0;
+  if (!profile || !Number.isFinite(pointsToRevoke) || pointsToRevoke <= 0) {
+    return { profile, pointsRevoked: 0 };
+  }
+  const safeRevoke = Math.floor(pointsToRevoke);
+  if (safeRevoke <= 0) return { profile, pointsRevoked: 0 };
+  const currentBalance = Number.isFinite(profile.pointsBalance) ? Math.max(0, Math.floor(profile.pointsBalance!)) : 0;
+  const currentCareer = Number.isFinite(profile.careerPoints) ? Math.max(0, Math.floor(profile.careerPoints!)) : 0;
 
-  profile.pointsBalance = Math.max(0, currentBalance - pointsToRevoke);
-  profile.careerPoints = Math.max(0, currentCareer - pointsToRevoke);
+  profile.pointsBalance = Math.max(0, currentBalance - safeRevoke);
+  profile.careerPoints = Math.max(0, currentCareer - safeRevoke);
 
   try {
     recordScoreLedgerEntry({
       playerId: profile.id || profile.nick,
       playerNick: profile.nick || "Jogador",
       type: "career_points",
-      source: "correcao_administrativa",
-      amount: -pointsToRevoke,
+      source: "reconciliacao",
+      amount: -safeRevoke,
       balanceAfter: profile.careerPoints,
       reason: reason || "Estorno Administrativo: Medalha Atribuída Indevidamente",
     });
@@ -206,7 +229,7 @@ export function revokeCareerPoints(
     /* ignore */
   }
 
-  return { profile, pointsRevoked: pointsToRevoke };
+  return { profile, pointsRevoked: safeRevoke };
 }
 
 /**
@@ -218,13 +241,18 @@ export function spendCareerPoints(
   profile: PlayerProfile,
   cost: number,
 ): { success: boolean; newBalance: number } {
-  const currentBalance = profile.pointsBalance ?? 0;
-  if (cost <= 0) return { success: true, newBalance: currentBalance };
-  if (currentBalance < cost) {
+  const currentBalance = Number.isFinite(profile?.pointsBalance) ? Math.max(0, Math.floor(profile.pointsBalance!)) : 0;
+  if (!profile || !Number.isFinite(cost)) {
+    return { success: false, newBalance: currentBalance };
+  }
+  const safeCost = Math.floor(cost);
+  if (safeCost <= 0) return { success: true, newBalance: currentBalance };
+  if (currentBalance < safeCost) {
     return { success: false, newBalance: currentBalance };
   }
 
-  profile.pointsBalance = currentBalance - cost;
+  profile.pointsBalance = currentBalance - safeCost;
+  profile.pointsSpentTotal = (Number.isFinite(profile.pointsSpentTotal) ? Math.max(0, Math.floor(profile.pointsSpentTotal!)) : 0) + safeCost;
   return { success: true, newBalance: profile.pointsBalance };
 }
 
@@ -240,8 +268,8 @@ export function convertPointsToCoins(
   rate = 1,
 ): { success: boolean; coinsAwarded: number; remainingBalance: number; error?: string } {
   if (!profile) return { success: false, coinsAwarded: 0, remainingBalance: 0, error: "Perfil inexistente" };
-  const currentBalance = profile.pointsBalance ?? 0;
-  if (pointsToConvert <= 0) {
+  const currentBalance = Number.isFinite(profile.pointsBalance) ? Math.max(0, Math.floor(profile.pointsBalance!)) : 0;
+  if (!Number.isFinite(pointsToConvert) || !Number.isFinite(rate) || pointsToConvert <= 0 || !Number.isInteger(pointsToConvert)) {
     return { success: false, coinsAwarded: 0, remainingBalance: currentBalance, error: "Quantidade inválida" };
   }
   if (currentBalance < pointsToConvert) {
@@ -250,7 +278,7 @@ export function convertPointsToCoins(
 
   const safeRate = Math.max(0.1, rate);
   const coinsAwarded = Math.floor(pointsToConvert / safeRate);
-  if (coinsAwarded <= 0) {
+  if (!Number.isFinite(coinsAwarded) || coinsAwarded <= 0) {
     return {
       success: false,
       coinsAwarded: 0,
@@ -260,6 +288,7 @@ export function convertPointsToCoins(
   }
 
   profile.pointsBalance = currentBalance - pointsToConvert;
+  profile.pointsSpentTotal = (Number.isFinite(profile.pointsSpentTotal) ? Math.max(0, Math.floor(profile.pointsSpentTotal!)) : 0) + pointsToConvert;
   creditCoinMetrics(profile, coinsAwarded);
 
   return { success: true, coinsAwarded, remainingBalance: profile.pointsBalance };
@@ -274,18 +303,23 @@ export function autoConvertAllPointsToCoins(
   rate = 1,
 ): { coinsAwarded: number; newCoinsBalance: number } {
   if (!profile) return { coinsAwarded: 0, newCoinsBalance: 0 };
-  const currentBalance = profile.pointsBalance ?? 0;
-  if (currentBalance <= 0) {
-    return { coinsAwarded: 0, newCoinsBalance: profile.coins ?? 0 };
+  const currentBalance = Number.isFinite(profile.pointsBalance) ? Math.max(0, Math.floor(profile.pointsBalance!)) : 0;
+  const currentCoins = Number.isFinite(profile.coins) ? Math.max(0, Math.floor(profile.coins!)) : 0;
+  if (currentBalance <= 0 || !Number.isFinite(rate)) {
+    return { coinsAwarded: 0, newCoinsBalance: currentCoins };
   }
 
   const safeRate = Math.max(0.1, rate);
   const coinsAwarded = Math.floor(currentBalance / safeRate);
+  if (!Number.isFinite(coinsAwarded) || coinsAwarded <= 0) {
+    return { coinsAwarded: 0, newCoinsBalance: currentCoins };
+  }
 
   profile.pointsBalance = 0;
-  creditCoinMetrics(profile, coinsAwarded);
+  profile.pointsSpentTotal = (Number.isFinite(profile.pointsSpentTotal) ? Math.max(0, Math.floor(profile.pointsSpentTotal!)) : 0) + currentBalance;
+  const newCoinsBalance = creditCoinMetrics(profile, coinsAwarded);
 
-  return { coinsAwarded, newCoinsBalance: profile.coins };
+  return { coinsAwarded, newCoinsBalance };
 }
 
 /**
@@ -517,7 +551,7 @@ export function sanitizeInflatedCareerPoints(
       if (mId.endsWith("_lvl_master")) {
         const gameId = mId.replace("game_", "").replace("_lvl_master", "");
         const stat = statsList.find((s) => s?.game_id === gameId);
-        if (!stat || (stat.best_level ?? 1) < 5) return false;
+        if (!stat || (stat.best_level ?? 1) < 3) return false;
       }
       if (mId.endsWith("_flawless")) {
         const gameId = mId.replace("game_", "").replace("_flawless", "");
@@ -589,18 +623,43 @@ export function sanitizeInflatedCareerPoints(
     }
   }
 
+  // Pontos legítimos de Rotina Diária/Semanal, Baús e Códigos Promocionais
+  const checkInDays = Math.max(0, Math.floor(Number(profile.dailyCheckInCount) || 0));
+  const dailyMissionsCount = Math.max(
+    Math.floor(Number(profile.dailyMissionsCompleted) || 0),
+    Array.isArray(profile.dailyMissionProgress?.claimedIds) ? profile.dailyMissionProgress!.claimedIds.length : 0,
+  );
+  const weeklyMissionsCount = Math.max(
+    Math.floor(Number(profile.weeklyMissionsCompleted) || 0),
+    Array.isArray(profile.weeklyMissionProgress?.claimedIds) ? profile.weeklyMissionProgress!.claimedIds.length : 0,
+  );
+  const chestsCount = Math.max(0, Math.floor(Number(profile.chestsOpenedTotal) || 0));
+  const promoClaimsCount = Array.isArray(profile.claimedPromoCodeIds) ? profile.claimedPromoCodeIds.length : 0;
+  const routineAndChestPoints =
+    checkInDays * 180 + // trilha 7d + bônus máximo de ofensiva (+100/dia)
+    dailyMissionsCount * 60 +
+    weeklyMissionsCount * 160 +
+    chestsCount * 260 +
+    promoClaimsCount * 250;
+
   const legitimatePoints =
     baseRetro +
     tierPoints +
     loginAndFirstGamePoints +
     flawlessAndRecordPoints +
     rankedWinPoints +
-    claimedInboxPoints;
+    claimedInboxPoints +
+    routineAndChestPoints;
 
   // Teto proporcional inviolável de salvaguarda física baseado na atividade real do estudante
   const maxPhysicalCeiling = Math.max(
     150,
-    totalMatches * 60 + (curLevel - 1) * 60 + verifiedLoginDays * 35 + claimedInboxPoints + 120
+    totalMatches * 60 +
+      (curLevel - 1) * 60 +
+      verifiedLoginDays * 35 +
+      claimedInboxPoints +
+      routineAndChestPoints +
+      120,
   );
 
   const finalLegitimatePoints = Math.min(legitimatePoints, maxPhysicalCeiling);

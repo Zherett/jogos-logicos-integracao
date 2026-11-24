@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ImageOff, Lock, Sparkles } from "lucide-react";
 import {
   CARD_RARITY_META,
@@ -28,6 +28,9 @@ export function CollectibleCardView({
   onClick,
 }: CollectibleCardViewProps) {
   const [imgError, setImgError] = useState(false);
+  useEffect(() => {
+    setImgError(false);
+  }, [card.imageUrl]);
   const meta = CARD_RARITY_META[card.rarity] ?? CARD_RARITY_META.comum;
   const bgClass = resolveCardBgClass(card.rarity, card.colorVariant);
   const hasValidUrl = isValidCardMediaUrl(card.imageUrl) && !imgError;

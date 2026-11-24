@@ -56,15 +56,17 @@ export interface ScheduledInboxRule {
 
   // Recompensa
   reward?: {
-    type: "points" | "medal" | "future_item";
+    type: "points" | "coins" | "medal" | "future_item";
     pointsAmount?: number;
     medalId?: string;
+    itemData?: Record<string, unknown>;
     isSecret: boolean;
   };
   rewards?: Array<{
-    type: "points" | "medal" | "future_item";
+    type: "points" | "coins" | "medal" | "future_item";
     pointsAmount?: number;
     medalId?: string;
+    itemData?: Record<string, unknown>;
     isSecret: boolean;
   }>;
 

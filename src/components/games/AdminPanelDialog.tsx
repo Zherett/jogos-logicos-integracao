@@ -5406,7 +5406,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                   setDraft={setDraft}
                   onSaveConfig={async (nextCfg) => {
                     await auth.updateAdminConfig(nextCfg);
-                    onConfigSaved?.(nextCfg);
+                    onConfigSaved?.();
                     flashSaved("Catálogo de Cartas e Pacotes salvo!");
                   }}
                 />

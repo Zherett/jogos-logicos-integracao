@@ -1,7 +1,7 @@
 import { GAME_NAMES, type GameId } from "./game-storage.ts";
 import type { AllGameRecords } from "./game-records.ts";
 import { getAllAvailableMedals, type MedalDefinition } from "./medals-catalog.ts";
-import type { MedalPioneerRecord } from "./medal-pioneers.ts";
+import type { MedalPioneer } from "./medal-pioneers.ts";
 import { isPioneerExcludedAccount, stageFromBirthdate } from "./player-profile.ts";
 import type { PlayerProfile } from "./playfab.ts";
 
@@ -84,7 +84,7 @@ function stageLabelFromId(stageId: string): string {
 export interface GenerateNewspaperInput {
   players: PlayerProfile[];
   records?: AllGameRecords;
-  pioneers?: Record<string, MedalPioneerRecord>;
+  pioneers?: Record<string, MedalPioneer>;
   medals?: MedalDefinition[];
   now?: Date;
 }
@@ -148,7 +148,11 @@ export function generateNewspaperArticles(input: GenerateNewspaperInput): NewsAr
     const isFresh =
       latestRareUnlock.unlockedAtMs > 0 && nowMs - latestRareUnlock.unlockedAtMs <= RECENT_WINDOW_MS;
     const { player, medal } = latestRareUnlock;
-    const isSecret = medal.rarity === "secreta" || medal.id === "m_rpg_carmesim" || medal.id === "m_rpg_ametista";
+    const isSecret =
+      (medal.rarity as string) === "secreta" ||
+      medal.isSecret === true ||
+      medal.id === "m_rpg_carmesim" ||
+      medal.id === "m_rpg_ametista";
     breakingArticles.push({
       id: `rare_medal_${medal.id}_${player.nickNormalized}`,
       kind: isFresh ? "plantao" : "destaque",
@@ -336,11 +340,11 @@ export function generateNewspaperArticles(input: GenerateNewspaperInput): NewsAr
   }
 
   if (input.pioneers) {
-    const pioneerList = Object.values(input.pioneers).filter((p) => p && p.holderNick);
+    const pioneerList = Object.values(input.pioneers).filter((p) => p && p.studentNick);
     if (pioneerList.length > 0) {
       const picked = pioneerList[seed % pioneerList.length];
       const holder = eligible.find(
-        (p) => p.id === picked.holderId || p.nickNormalized === picked.holderId,
+        (p) => p.id === picked.studentId || p.nickNormalized === picked.studentId,
       );
       const medalDef = medalById.get(picked.medalId);
       if (holder && medalDef) {

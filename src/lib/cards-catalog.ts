@@ -804,7 +804,17 @@ export function consumeAndOpenCardPacksBatch(
   foilChancePercent = DEFAULT_CARD_FOIL_CHANCE_PERCENT,
 ): ConsumePackBatchResult {
   const available = Math.max(0, Math.floor(Number(currentUnopenedPacks[pack.id]) || 0));
-  const requested = Math.max(1, Math.floor(Number(quantity) || 1));
+  if (!Number.isFinite(quantity) || Math.floor(quantity) < 1) {
+    return {
+      openedCount: 0,
+      drawnCards: [],
+      updatedCardsMap: { ...currentCardsMap },
+      updatedUnopenedPacks: { ...currentUnopenedPacks },
+      newlyDiscoveredIds: [],
+      error: "Quantidade de pacotes inválida.",
+    };
+  }
+  const requested = Math.floor(quantity);
   const toOpen = Math.min(available, requested);
   if (toOpen <= 0) {
     return {

@@ -86,6 +86,10 @@ export function MinefieldGame({ onExit, onStatsChange, isRanked }: Props) {
 
   useEffect(() => {
     if (finished) {
+      // Impede contabilizar partidas abandonadas sem nenhuma carta respondida (anti-farm)
+      if (correct === 0 && wrong === 0 && score === 0) {
+        return;
+      }
       updateBest("minado", score, currentLevel);
       const m: LastMatch = {
         score,
@@ -478,7 +482,18 @@ export function MinefieldGame({ onExit, onStatsChange, isRanked }: Props) {
           )}
 
           <div className="mt-3 flex justify-center">
-            <Button variant="outline" className="rounded-2xl" onClick={() => setFinished(true)}>
+            <Button
+              variant="outline"
+              className="rounded-2xl"
+              onClick={() => {
+                if (correct === 0 && wrong === 0) {
+                  clearTimer();
+                  onExit();
+                } else {
+                  setFinished(true);
+                }
+              }}
+            >
               <Flag className="mr-2 h-4 w-4" /> Encerrar partida
             </Button>
           </div>

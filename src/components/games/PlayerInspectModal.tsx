@@ -41,6 +41,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  adjustStudentProfileByAdmin,
   getPlayerPublicProfile,
   moveStudentToTrash,
   restoreStudentFromTrash,
@@ -268,27 +269,40 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
     if (!profile || !adjAmount || !adjReason.trim()) return;
     setAdjSaving(true);
     try {
-      const pId = profile.id || profile.nickNormalized || profile.nick;
+      const targetId = profile.nickNormalized || profile.id || profile.nick;
+      const adjRes = await adjustStudentProfileByAdmin(targetId, (p) => {
+        if (adjType === "xp") {
+          p.xp = Math.max(0, (p.xp ?? 0) + adjAmount);
+          p.seasonXp = Math.max(0, (p.seasonXp ?? 0) + adjAmount);
+        } else {
+          p.careerPoints = Math.max(0, (p.careerPoints ?? 0) + adjAmount);
+          p.pointsBalance = Math.max(0, (p.pointsBalance ?? 0) + adjAmount);
+        }
+        return p;
+      });
+      if (!adjRes.profile) {
+        alert(adjRes.error ?? "Não foi possível aplicar o ajuste neste aluno.");
+        return;
+      }
+      const pId = adjRes.profile.id || adjRes.profile.nickNormalized || adjRes.profile.nick;
       recordScoreLedgerEntry({
         playerId: pId,
-        playerNick: profile.nick,
+        playerNick: adjRes.profile.nick,
         type: adjType,
         source: "ajuste_adm",
         amount: adjAmount,
+        balanceAfter: adjType === "xp" ? adjRes.profile.xp : adjRes.profile.pointsBalance,
         reason: `Ajuste ADM: ${adjReason.trim()}`,
         metadata: { adminUser: auth.profile?.nick || "ADM" },
       });
-      if (adjType === "xp") {
-        profile.xp = Math.max(0, (profile.xp ?? 0) + adjAmount);
-        profile.seasonXp = Math.max(0, (profile.seasonXp ?? 0) + adjAmount);
-      } else {
-        profile.careerPoints = Math.max(0, (profile.careerPoints ?? 0) + adjAmount);
-        profile.pointsBalance = Math.max(0, (profile.pointsBalance ?? 0) + adjAmount);
-      }
+      setProfile(adjRes.profile);
       setLedgerVersion((v) => v + 1);
       setIsAdjustmentOpen(false);
       setAdjReason("");
       onStudentUpdated?.();
+      if (!adjRes.ok && adjRes.error) {
+        alert(`⚠️ ${adjRes.error}`);
+      }
     } finally {
       setAdjSaving(false);
     }
@@ -511,7 +525,7 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                     🏅 {profile.unlockedMedals?.length ?? 0} Medalhas
                   </span>
                   <span className="inline-flex items-center rounded-full bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 text-[10px] font-extrabold text-amber-600 dark:text-amber-400">
-                    🪙 {profile.careerPoints ?? profile.pointsBalance ?? 0} Pontos
+                    ⭐ {profile.careerPoints ?? profile.pointsBalance ?? 0} Pontos
                   </span>
                   <span className="font-extrabold text-primary">
                     {profile.xp} XP
@@ -694,7 +708,7 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                         className="h-8 w-full rounded-lg border bg-background px-2 text-xs font-semibold"
                       >
                         <option value="xp">⚡ Experiência (XP)</option>
-                        <option value="career_points">🪙 Pontos de Carreira</option>
+                        <option value="career_points">⭐ Pontos de Carreira</option>
                       </select>
                     </div>
                     <div>

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Award, Check, Coins, Gift, Lock, Package, Sparkles, Trophy, X } from "lucide-react";
+import { Award, Check, Coins, Gift, Lock, Package, Sparkles, Star, Trophy, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { RankedMilestoneReward } from "@/lib/game-codes";
 import { mergeWithDefaultCardPacks, type CardPackDefinition } from "@/lib/cards-catalog";
@@ -20,6 +20,8 @@ interface RankedPathTrackProps {
   claimedMilestones?: string[];
   rewardsMap?: Partial<Record<string, RankedMilestoneReward>>;
   cardPacks?: CardPackDefinition[];
+  allowShopRewards?: boolean;
+  allowCoinsRewards?: boolean;
   onClaimReward?: (rankId: TournamentRankId, reward: RankedMilestoneReward) => Promise<void> | void;
   onSaveAdminReward?: (
     rankId: TournamentRankId,
@@ -64,6 +66,8 @@ export function RankedPathTrack({
   claimedMilestones = [],
   rewardsMap = {},
   cardPacks,
+  allowShopRewards = true,
+  allowCoinsRewards = true,
   onClaimReward,
   onSaveAdminReward,
 }: RankedPathTrackProps) {
@@ -76,7 +80,7 @@ export function RankedPathTrack({
     () => mergeWithDefaultCardPacks(cardPacks).filter((p) => p.enabled),
     [cardPacks],
   );
-  const [editType, setEditType] = useState<"none" | "card_pack" | "points">("none");
+  const [editType, setEditType] = useState<"none" | "card_pack" | "points" | "coins">("none");
   const [editPackId, setEditPackId] = useState<string>(availablePacks[0]?.id ?? "pack_basico");
   const [editQty, setEditQty] = useState<number>(1);
 
@@ -105,12 +109,26 @@ export function RankedPathTrack({
 
   function renderRewardSummary(reward?: RankedMilestoneReward) {
     if (!reward) return null;
+    const bonusCoinsText =
+      reward.coinsBonus && reward.coinsBonus > 0 && allowCoinsRewards
+        ? ` + 🪙 ${reward.coinsBonus} Moedas`
+        : "";
     if (reward.type === "card_pack") {
       const pack = availablePacks.find((p) => p.id === reward.packId);
       const packName = pack?.name ?? reward.label ?? "Pacote de Cartas";
-      return `${reward.quantity}x ${packName}`;
+      return `${reward.quantity}x ${packName}${bonusCoinsText}`;
     }
-    return `+${reward.quantity} Pontos`;
+    if (reward.type === "coins") {
+      return `🪙 +${reward.quantity} Moedas`;
+    }
+    return `+${reward.quantity} Pontos${bonusCoinsText}`;
+  }
+
+  function isRewardGatedByRollout(reward?: RankedMilestoneReward): boolean {
+    if (mode !== "player" || !reward) return false;
+    if (reward.type === "card_pack" && !allowShopRewards) return true;
+    if (reward.type === "coins" && !allowCoinsRewards) return true;
+    return false;
   }
 
   function renderNode(rankId: TournamentRankId, isMasterNode = false) {
@@ -120,9 +138,10 @@ export function RankedPathTrack({
     const isUnlocked = mode === "admin" ? true : unlockedIds.has(rank.id);
     const masteryMedal = RANKED_MASTERY_MEDAL_BY_RANK[rank.id];
     const reward = rewardsMap?.[rank.id];
+    const isRewardGated = isRewardGatedByRollout(reward);
     const milestoneKey = getRankedMilestoneKey(seasonId, rank.id);
     const isClaimed = claimedSet.has(milestoneKey);
-    const canClaim = mode === "player" && isUnlocked && Boolean(reward) && !isClaimed;
+    const canClaim = mode === "player" && isUnlocked && Boolean(reward) && !isClaimed && !isRewardGated;
     const isSelected = selectedRankId === rank.id;
 
     return (
@@ -308,8 +327,10 @@ export function RankedPathTrack({
                   <div className="flex items-center gap-2 text-xs">
                     {selectedReward.type === "card_pack" ? (
                       <Package className="h-4 w-4 text-primary shrink-0" />
-                    ) : (
+                    ) : selectedReward.type === "coins" ? (
                       <Coins className="h-4 w-4 text-amber-500 shrink-0" />
+                    ) : (
+                      <Star className="h-4 w-4 text-primary shrink-0" />
                     )}
                     <div>
                       <div className="text-[10px] uppercase font-bold text-muted-foreground">
@@ -323,7 +344,11 @@ export function RankedPathTrack({
 
                   {selectedClaimed ? (
                     <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 px-3 py-1 text-xs font-extrabold text-emerald-600 dark:text-emerald-400">
-                      <Check className="h-3.5 w-3.5" /> Resgatado no Inventário
+                      <Check className="h-3.5 w-3.5" /> Resgatado
+                    </span>
+                  ) : isRewardGatedByRollout(selectedReward) ? (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 border border-amber-500/30 px-3 py-1 text-[11px] font-bold text-amber-700 dark:text-amber-300">
+                      <Lock className="h-3 w-3" /> Em breve
                     </span>
                   ) : selectedUnlocked ? (
                     <Button
@@ -369,12 +394,15 @@ export function RankedPathTrack({
                   </label>
                   <select
                     value={editType}
-                    onChange={(e) => setEditType(e.target.value as "none" | "card_pack" | "points")}
+                    onChange={(e) =>
+                      setEditType(e.target.value as "none" | "card_pack" | "points" | "coins")
+                    }
                     className="h-9 w-full rounded-xl border bg-background px-2.5 text-xs font-bold"
                   >
                     <option value="none">Sem recompensa</option>
                     <option value="card_pack">Pacote de Cartas / Baú</option>
                     <option value="points">Pontos</option>
+                    <option value="coins">Moedas da Loja</option>
                   </select>
                 </div>
 
@@ -405,9 +433,9 @@ export function RankedPathTrack({
                     <input
                       type="number"
                       min={1}
-                      max={editType === "points" ? 500 : 20}
+                      max={editType === "card_pack" ? 20 : 500}
                       value={editQty}
-                      onChange={(e) => setEditQty(Math.max(1, Number(e.target.value) || 1))}
+                      onChange={(e) => setEditQty(Math.max(1, Math.floor(Number(e.target.value) || 1)))}
                       className="h-9 w-full rounded-xl border bg-background px-2.5 text-xs font-bold"
                     />
                   </div>
@@ -432,6 +460,11 @@ export function RankedPathTrack({
                           packId: editPackId,
                           quantity: Math.max(1, Math.floor(editQty)),
                           label: pack?.name,
+                        });
+                      } else if (editType === "coins") {
+                        await onSaveAdminReward(selectedRank.id, {
+                          type: "coins",
+                          quantity: Math.max(1, Math.floor(editQty)),
                         });
                       } else {
                         await onSaveAdminReward(selectedRank.id, {

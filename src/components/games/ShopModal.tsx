@@ -1,9 +1,13 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { BadgeDollarSign, Check, Coins, Package, Palette, Search, Sparkles, Star, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { mergeWithDefaultCardPacks, type CardPackDefinition } from "@/lib/cards-catalog";
+import {
+  mergeWithDefaultCardPacks,
+  resolvePackCardPool,
+  type CardPackDefinition,
+} from "@/lib/cards-catalog";
 import {
   AVATAR_LETTER_VARIANTS,
   getAvatarCategory,
@@ -41,6 +45,17 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
   const [letterSearch, setLetterSearch] = useState("");
   const [feedback, setFeedback] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const actionLockRef = useRef(false);
+
+  useEffect(() => {
+    if (open) {
+      setFeedback(null);
+    }
+  }, [open]);
+
+  useEffect(() => {
+    setFeedback(null);
+  }, [activePill]);
 
   const packs = useMemo(
     () =>
@@ -101,14 +116,23 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
 
   const coinsBalance = Math.max(0, Math.floor(Number(profile?.coins) || 0));
   const isShopReleasedForStudents = Boolean(auth.adminConfig.rolloutFlags?.enableShopForStudents);
-  const hasCardCatalog = (auth.adminConfig.cardsCatalog ?? []).length > 0;
+  const cardsCatalog = auth.adminConfig.cardsCatalog ?? [];
+  const hasCardCatalog = cardsCatalog.length > 0;
+  const packHasCardsMap = useMemo(() => {
+    const map = new Map<string, boolean>();
+    for (const p of packs) {
+      map.set(p.id, resolvePackCardPool(p, cardsCatalog).length > 0);
+    }
+    return map;
+  }, [packs, cardsCatalog]);
 
   async function handleBuyPack(pack: CardPackDefinition) {
-    if (!profile || busyId) return;
-    if (!hasCardCatalog) {
-      setFeedback("⚠️ Catálogo de cartas em preparação — pacotes temporariamente indisponíveis.");
+    if (!profile || busyId || actionLockRef.current) return;
+    if (!hasCardCatalog || !packHasCardsMap.get(pack.id)) {
+      setFeedback("⚠️ Este pacote ainda não possui cartas cadastradas no catálogo.");
       return;
     }
+    actionLockRef.current = true;
     setBusyId(pack.id);
     setFeedback(null);
     try {
@@ -142,12 +166,14 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
           : "⚠️ Não foi possível concluir a compra no servidor. Tente novamente.",
       );
     } finally {
+      actionLockRef.current = false;
       setBusyId(null);
     }
   }
 
   async function handleBuyAvatar(avatar: AvatarDefinition) {
-    if (!profile || busyId) return;
+    if (!profile || busyId || actionLockRef.current) return;
+    actionLockRef.current = true;
     setBusyId(avatar.id);
     setFeedback(null);
     try {
@@ -164,7 +190,7 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
           playerNick: liveProfile.nick,
           type: "coins",
           source: "compra_loja",
-          amount: -avatar.priceCoins,
+          amount: -res.pricePaid,
           balanceAfter: res.profile.coins,
           reason: `Compra na Loja (Avatar): ${avatar.name}`,
         });
@@ -180,12 +206,14 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
           : "⚠️ Não foi possível concluir a compra no servidor. Tente novamente.",
       );
     } finally {
+      actionLockRef.current = false;
       setBusyId(null);
     }
   }
 
   async function handleBuyAura(aura: AuraDefinition) {
-    if (!profile || busyId) return;
+    if (!profile || busyId || actionLockRef.current) return;
+    actionLockRef.current = true;
     setBusyId(aura.id);
     setFeedback(null);
     try {
@@ -202,7 +230,7 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
           playerNick: liveProfile.nick,
           type: "coins",
           source: "compra_loja",
-          amount: -aura.priceCoins,
+          amount: -res.pricePaid,
           balanceAfter: res.profile.coins,
           reason: `Compra na Loja (Aura): ${aura.name}`,
         });
@@ -218,43 +246,78 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
           : "⚠️ Não foi possível concluir a compra no servidor. Tente novamente.",
       );
     } finally {
+      actionLockRef.current = false;
       setBusyId(null);
     }
   }
 
   async function handleEquipAvatar(avatarId: string) {
-    if (!profile || busyId) return;
+    if (!profile || busyId || actionLockRef.current) return;
+    actionLockRef.current = true;
     setBusyId(`equip:${avatarId}`);
+    setFeedback(null);
     try {
       const liveProfile = getActiveAccount()?.profile ?? profile;
+      const liveOwned = new Set(getUnlockedAvatarIds(liveProfile));
+      if (!liveOwned.has(avatarId)) {
+        setFeedback("⚠️ Este avatar ainda não está desbloqueado na sua conta.");
+        return;
+      }
       const prevSecondary = liveProfile.equippedAvatar?.secondaryId;
-      await syncActiveProfileChangeToPlayFab({
-        ...liveProfile,
-        equippedAvatar: {
-          id: avatarId,
-          ...(prevSecondary && prevSecondary !== avatarId ? { secondaryId: prevSecondary } : {}),
-          color: liveProfile.equippedAvatar?.color,
+      await syncActiveProfileChangeToPlayFab(
+        {
+          ...liveProfile,
+          equippedAvatar: {
+            id: avatarId,
+            ...(prevSecondary && prevSecondary !== avatarId ? { secondaryId: prevSecondary } : {}),
+            color: liveProfile.equippedAvatar?.color,
+          },
         },
-      });
+        { requireServerSync: true },
+      );
       await auth.refresh();
       setFeedback("✨ Avatar equipado no seu perfil!");
+    } catch (err) {
+      setFeedback(
+        err instanceof Error && err.message
+          ? `⚠️ ${err.message}`
+          : "⚠️ Não foi possível salvar o avatar no servidor. Tente novamente.",
+      );
     } finally {
+      actionLockRef.current = false;
       setBusyId(null);
     }
   }
 
   async function handleEquipAura(auraId: string) {
-    if (!profile || busyId) return;
+    if (!profile || busyId || actionLockRef.current) return;
+    actionLockRef.current = true;
     setBusyId(`equip:${auraId}`);
+    setFeedback(null);
     try {
       const liveProfile = getActiveAccount()?.profile ?? profile;
-      await syncActiveProfileChangeToPlayFab({
-        ...liveProfile,
-        equippedAuraId: auraId,
-      });
+      const liveOwned = new Set(getUnlockedAuraIds(liveProfile));
+      if (!liveOwned.has(auraId)) {
+        setFeedback("⚠️ Esta aura ainda não está desbloqueada na sua conta.");
+        return;
+      }
+      await syncActiveProfileChangeToPlayFab(
+        {
+          ...liveProfile,
+          equippedAuraId: auraId,
+        },
+        { requireServerSync: true },
+      );
       await auth.refresh();
       setFeedback("✨ Aura equipada no seu perfil!");
+    } catch (err) {
+      setFeedback(
+        err instanceof Error && err.message
+          ? `⚠️ ${err.message}`
+          : "⚠️ Não foi possível salvar a aura no servidor. Tente novamente.",
+      );
     } finally {
+      actionLockRef.current = false;
       setBusyId(null);
     }
   }
@@ -373,6 +436,7 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
                     {featuredAvatars.map((av) => {
                       const owned = unlockedAvatarSet.has(av.id);
                       const equipped = profile?.equippedAvatar?.id === av.id;
+                      const equippedSecondary = profile?.equippedAvatar?.secondaryId === av.id;
                       return (
                         <div
                           key={av.id}
@@ -395,7 +459,11 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
                               className="w-full rounded-xl text-xs font-bold"
                             >
                               <Check className="mr-1 h-3.5 w-3.5" />
-                              {equipped ? "Equipado" : "Adquirido • Equipar"}
+                              {equipped
+                                ? "Equipado (1º)"
+                                : equippedSecondary
+                                  ? "No 2º slot • Tornar 1º"
+                                  : "Adquirido • Equipar"}
                             </Button>
                           ) : (
                             <Button
@@ -472,6 +540,7 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                     {featuredPacks.map((pack) => {
                       const price = Math.max(1, Math.floor(Number(pack.priceCoins) || 40));
+                      const packReady = hasCardCatalog && Boolean(packHasCardsMap.get(pack.id));
                       return (
                         <div
                           key={pack.id}
@@ -484,12 +553,12 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
                           <Button
                             type="button"
                             size="sm"
-                            disabled={busyId !== null || !hasCardCatalog || coinsBalance < price}
+                            disabled={busyId !== null || !packReady || coinsBalance < price}
                             onClick={() => void handleBuyPack(pack)}
                             className="shrink-0 rounded-xl text-xs font-bold"
-                            title={!hasCardCatalog ? "Catálogo de cartas em preparação" : undefined}
+                            title={!packReady ? "Pacote sem cartas disponíveis no catálogo" : undefined}
                           >
-                            {hasCardCatalog ? `🪙 ${price}` : "Em breve"}
+                            {packReady ? `🪙 ${price}` : "Em breve"}
                           </Button>
                         </div>
                       );
@@ -510,6 +579,7 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {packs.map((pack) => {
                   const price = Math.max(1, Math.floor(Number(pack.priceCoins) || 40));
+                  const packReady = hasCardCatalog && Boolean(packHasCardsMap.get(pack.id));
                   return (
                     <div
                       key={pack.id}
@@ -529,11 +599,11 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
                       <Button
                         type="button"
                         size="sm"
-                        disabled={busyId !== null || !hasCardCatalog || coinsBalance < price}
+                        disabled={busyId !== null || !packReady || coinsBalance < price}
                         onClick={() => void handleBuyPack(pack)}
                         className="w-full rounded-xl text-xs font-bold"
                       >
-                        {hasCardCatalog ? `Comprar por 🪙 ${price} moedas` : "Indisponível (sem cartas no catálogo)"}
+                        {packReady ? `Comprar por 🪙 ${price} moedas` : "Indisponível (sem cartas no pacote)"}
                       </Button>
                     </div>
                   );
@@ -658,7 +728,11 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
                     if (visibleAvatars.length === 0) {
                       return (
                         <div className="rounded-2xl border border-dashed border-border/70 bg-secondary/15 p-6 text-center text-xs text-muted-foreground">
-                          Nenhuma letra encontrada para "{letterSearch}".
+                          {avatarSubcategory === "icon"
+                            ? "Nenhum avatar de ícone disponível na loja no momento."
+                            : letterSearch.trim()
+                              ? `Nenhuma letra encontrada para "${letterSearch}".`
+                              : "Nenhuma letra disponível para este filtro."}
                         </div>
                       );
                     }
@@ -667,6 +741,7 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
                         {visibleAvatars.map((av) => {
                           const owned = unlockedAvatarSet.has(av.id);
                           const equipped = profile?.equippedAvatar?.id === av.id;
+                          const equippedSecondary = profile?.equippedAvatar?.secondaryId === av.id;
                           return (
                             <div
                               key={av.id}
@@ -688,7 +763,11 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
                                   onClick={() => void handleEquipAvatar(av.id)}
                                   className="w-full rounded-xl text-xs font-bold"
                                 >
-                                  {equipped ? "Equipado" : "Adquirido • Equipar"}
+                                  {equipped
+                                    ? "Equipado (1º)"
+                                    : equippedSecondary
+                                      ? "No 2º slot • Tornar 1º"
+                                      : "Adquirido • Equipar"}
                                 </Button>
                               ) : (
                                 <Button

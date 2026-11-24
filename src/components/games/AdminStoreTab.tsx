@@ -22,6 +22,9 @@ import { mergeWithDefaultCardPacks, type CardPackDefinition } from "@/lib/cards-
 import { creditCoinMetrics, MEDAL_COINS_REWARDS } from "@/lib/career-points";
 import {
   AVATAR_LETTER_VARIANTS,
+  DEFAULT_AVATAR_ID,
+  extractCustomAurasForStorage,
+  extractCustomAvatarsForStorage,
   getAvatarCategory,
   isSafeCosmeticImageUrl,
   mergeWithDefaultAuras,
@@ -34,6 +37,7 @@ import {
 import type { PlatformAdminConfig } from "@/lib/game-codes";
 import { usePlayerAuth } from "@/lib/player-auth";
 import {
+  getActiveAccount,
   getLastAdminCloudSyncError,
   runRetroactiveCoinsAudit,
   syncActiveProfileChangeToPlayFab,
@@ -107,6 +111,7 @@ export function AdminStoreTab({
     platina: coinCfg.medalCoinsByRarity?.platina ?? MEDAL_COINS_REWARDS.platina,
     diamante: coinCfg.medalCoinsByRarity?.diamante ?? MEDAL_COINS_REWARDS.diamante,
     heroi: coinCfg.medalCoinsByRarity?.heroi ?? MEDAL_COINS_REWARDS.heroi,
+    secreta: coinCfg.medalCoinsByRarity?.secreta ?? MEDAL_COINS_REWARDS.secreta,
   };
 
   async function saveNext(next: PlatformAdminConfig, msg: string) {
@@ -132,7 +137,7 @@ export function AdminStoreTab({
     if (!cleanName || !cleanUrl) return;
     if (!isSafeCosmeticImageUrl(cleanUrl)) {
       onShowFeedback?.(
-        "⚠️ URL de imagem inválida ou insegura. Use apenas links https://, http://, caminhos / ou imagens PNG/JPG/GIF/WEBP.",
+        "⚠️ URL de imagem inválida ou insegura. Use apenas links https://, caminhos / ou imagens PNG/JPG/GIF/WEBP (até 16 KB).",
       );
       return;
     }
@@ -148,7 +153,10 @@ export function AdminStoreTab({
       createdAt: new Date().toISOString(),
     };
     const nextList = [...avatars, item];
-    await saveNext({ ...draft, avatarsCatalog: nextList }, `🖼️ Avatar "${cleanName}" criado na Loja!`);
+    await saveNext(
+      { ...draft, avatarsCatalog: extractCustomAvatarsForStorage(nextList) },
+      `🖼️ Avatar "${cleanName}" criado na Loja!`,
+    );
     setNewAvatarName("");
     setNewAvatarDesc("");
     setNewAvatarUrl("");
@@ -157,17 +165,28 @@ export function AdminStoreTab({
 
   async function handleUpdateAvatar(id: string, patch: Partial<AvatarDefinition>) {
     const nextList = avatars.map((a) => (a.id === id ? { ...a, ...patch } : a));
-    await saveNext({ ...draft, avatarsCatalog: nextList }, "✅ Avatar atualizado na Loja!");
+    await saveNext(
+      { ...draft, avatarsCatalog: extractCustomAvatarsForStorage(nextList) },
+      "✅ Avatar atualizado na Loja!",
+    );
   }
 
   async function handleDeleteAvatar(id: string) {
+    const target = avatars.find((a) => a.id === id);
+    if (!window.confirm(`Deseja excluir o avatar customizado "${target?.name ?? id}"?`)) return;
     const nextList = avatars.filter((a) => a.id !== id);
-    await saveNext({ ...draft, avatarsCatalog: nextList }, "🗑️ Avatar customizado removido.");
+    await saveNext(
+      { ...draft, avatarsCatalog: extractCustomAvatarsForStorage(nextList) },
+      "🗑️ Avatar customizado removido.",
+    );
   }
 
   async function handleUpdateAura(id: string, patch: Partial<AuraDefinition>) {
     const nextList = auras.map((a) => (a.id === id ? { ...a, ...patch } : a));
-    await saveNext({ ...draft, aurasCatalog: nextList }, "✅ Aura atualizada na Loja!");
+    await saveNext(
+      { ...draft, aurasCatalog: extractCustomAurasForStorage(nextList) },
+      "✅ Aura atualizada na Loja!",
+    );
   }
 
   async function handleUpdatePack(id: string, patch: Partial<CardPackDefinition>) {
@@ -177,11 +196,18 @@ export function AdminStoreTab({
 
   async function handleGrantSelfTestCoins() {
     if (!auth.profile) return;
-    const nextProf = { ...auth.profile };
-    creditCoinMetrics(nextProf, 200);
-    await syncActiveProfileChangeToPlayFab(nextProf);
-    await auth.refresh();
-    onShowFeedback?.("🪙 +200 moedas adicionadas ao seu perfil (Teste ADM)!");
+    try {
+      const liveProfile = getActiveAccount()?.profile ?? auth.profile;
+      const nextProf = { ...liveProfile };
+      creditCoinMetrics(nextProf, 200);
+      await syncActiveProfileChangeToPlayFab(nextProf, { requireServerSync: true });
+      await auth.refresh();
+      onShowFeedback?.("🪙 +200 moedas adicionadas ao seu perfil (Teste ADM)!");
+    } catch (err) {
+      onShowFeedback?.(
+        `⚠️ ${err instanceof Error && err.message ? err.message : "Erro ao conceder moedas de teste."}`,
+      );
+    }
   }
 
   const isShopReleased = Boolean(draft.rolloutFlags?.enableShopForStudents);
@@ -323,8 +349,8 @@ export function AdminStoreTab({
 
           <div className="space-y-2">
             <Label className="text-[11px] font-bold">Moedas por Raridade de Medalha</Label>
-            <div className="grid grid-cols-2 sm:grid-cols-6 gap-2">
-              {(["bronze", "prata", "ouro", "platina", "diamante", "heroi"] as const).map((r) => (
+            <div className="grid grid-cols-2 sm:grid-cols-7 gap-2">
+              {(["bronze", "prata", "ouro", "platina", "diamante", "heroi", "secreta"] as const).map((r) => (
                 <div key={r} className="space-y-1">
                   <span className="text-[10px] font-bold uppercase text-muted-foreground">{r}</span>
                   <Input
@@ -338,7 +364,7 @@ export function AdminStoreTab({
                           ...coinCfg,
                           medalCoinsByRarity: {
                             ...medalCoins,
-                            [r]: Math.max(0, Number(e.target.value) || 0),
+                            [r]: Math.max(0, Math.floor(Number(e.target.value) || 0)),
                           },
                         },
                       })
@@ -378,10 +404,14 @@ export function AdminStoreTab({
                 onClick={async () => {
                   setRetroAuditLoading(true);
                   try {
-                    const res = await runRetroactiveCoinsAudit({ dryRun: true });
+                    const res = await runRetroactiveCoinsAudit({ dryRun: true, configOverride: draft });
                     setRetroAuditPreview(res);
                     onShowFeedback?.(
                       `🔍 Simulação concluída: ${res.eligibleStudentsCount} aluno(s) receberiam ${res.totalCoinsToAward} moedas no total.`,
+                    );
+                  } catch (err) {
+                    onShowFeedback?.(
+                      `⚠️ Erro ao simular retroatribuição: ${err instanceof Error ? err.message : "falha inesperada"}`,
                     );
                   } finally {
                     setRetroAuditLoading(false);
@@ -406,13 +436,17 @@ export function AdminStoreTab({
                   }
                   setRetroAuditLoading(true);
                   try {
-                    const res = await runRetroactiveCoinsAudit({ dryRun: false });
+                    const res = await runRetroactiveCoinsAudit({ dryRun: false, configOverride: draft });
                     setRetroAuditPreview(res);
-                    auth.refresh();
+                    await auth.refresh();
                     onShowFeedback?.(
                       res.cloudSyncError || (res.cloudFailedCount ?? 0) > 0
-                        ? `⚠️ Retroatribuição aplicada localmente (${res.eligibleStudentsCount} aluno(s), +${res.totalCoinsToAward} moedas), mas ${res.cloudFailedCount ?? 0} registro(s) falharam ao enviar à nuvem (${res.cloudPushedCount} sincronizados): ${res.cloudSyncError ?? "erro de rede"}`
+                        ? `⚠️ Retroatribuição concluída parcialmente (${res.cloudPushedCount} sincronizados, ${res.cloudFailedCount ?? 0} falharam — você pode clicar novamente para reenviar os falhos): ${res.cloudSyncError ?? "erro de rede"}`
                         : `🪙 Retroatribuição aplicada! ${res.eligibleStudentsCount} aluno(s) receberam ${res.totalCoinsToAward} moedas (${res.cloudPushedCount} enviados à nuvem).`,
+                    );
+                  } catch (err) {
+                    onShowFeedback?.(
+                      `⚠️ Erro ao aplicar retroatribuição: ${err instanceof Error ? err.message : "falha inesperada"}`,
                     );
                   } finally {
                     setRetroAuditLoading(false);
@@ -630,13 +664,14 @@ export function AdminStoreTab({
                   </div>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
-                  {!(av.isDefault && av.priceCoins === 0) && (
+                  {av.id !== DEFAULT_AVATAR_ID && (
                     <Input
+                      key={`${av.id}_${av.priceCoins}`}
                       type="number"
                       min={0}
                       defaultValue={av.priceCoins}
                       onBlur={(e) => {
-                        const v = Math.max(0, Number(e.target.value) || 0);
+                        const v = Math.max(0, Math.floor(Number(e.target.value) || 0));
                         if (v !== av.priceCoins) void handleUpdateAvatar(av.id, { priceCoins: v });
                       }}
                       className="h-7 w-16 rounded-lg text-[11px] text-center"
@@ -700,11 +735,12 @@ export function AdminStoreTab({
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                   <Input
+                    key={`${aura.id}_${aura.priceCoins}`}
                     type="number"
                     min={0}
                     defaultValue={aura.priceCoins}
                     onBlur={(e) => {
-                      const v = Math.max(0, Number(e.target.value) || 0);
+                      const v = Math.max(0, Math.floor(Number(e.target.value) || 0));
                       if (v !== aura.priceCoins) void handleUpdateAura(aura.id, { priceCoins: v });
                     }}
                     className="h-7 w-16 rounded-lg text-[11px] text-center bg-background"
@@ -755,11 +791,12 @@ export function AdminStoreTab({
               </div>
               <div className="flex items-center gap-1 shrink-0">
                 <Input
+                  key={`${pack.id}_${pack.priceCoins ?? 40}`}
                   type="number"
                   min={1}
                   defaultValue={pack.priceCoins ?? 40}
                   onBlur={(e) => {
-                    const v = Math.max(1, Number(e.target.value) || 1);
+                    const v = Math.max(1, Math.floor(Number(e.target.value) || 1));
                     if (v !== pack.priceCoins) void handleUpdatePack(pack.id, { priceCoins: v });
                   }}
                   className="h-7 w-16 rounded-lg text-[11px] text-center"

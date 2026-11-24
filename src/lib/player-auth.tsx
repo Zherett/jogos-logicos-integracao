@@ -228,15 +228,33 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
     };
     window.addEventListener("focus", onFocus);
     document.addEventListener("visibilitychange", onFocus);
+    const onAdminCfgEvent = (ev: Event) => {
+      const detail = (ev as CustomEvent<PlatformAdminConfig>)?.detail;
+      if (detail) {
+        setAdminConfig(detail);
+      } else {
+        setAdminConfig(loadAdminConfig());
+      }
+    };
+    window.addEventListener("desafios:admin-config-updated", onAdminCfgEvent);
+    let lastCloudPollAt = Date.now();
     const id = window.setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      const nowMs = Date.now();
+      // Propaga mudanças de rolloutFlags e configuração ADM para alunos ativos em TODAS as rotas a cada 30s
+      if (isPlayFabConfigured() && nowMs - lastCloudPollAt >= 30_000) {
+        lastCloudPollAt = nowMs;
+        void syncAdminConfigFromPlayFab().then((cfg) => setAdminConfig(cfg));
+      }
       const cfg = loadAdminConfig();
-      if (cfg.scheduledResetAt && Date.now() >= new Date(cfg.scheduledResetAt).getTime()) {
+      if (cfg.scheduledResetAt && nowMs >= new Date(cfg.scheduledResetAt).getTime()) {
         void loadState();
       }
     }, 15_000);
     return () => {
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onFocus);
+      window.removeEventListener("desafios:admin-config-updated", onAdminCfgEvent);
       window.clearInterval(id);
     };
   }, [loadState]);
@@ -451,7 +469,8 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
   const triggerReset = useCallback(
     async (options: { clearXp: boolean; newSeasonName?: string; reason?: string }) => {
       const nextCfg = executeRankingReset(options);
-      setAdminConfig(nextCfg);
+      const syncedCfg = await pushAdminConfigToPlayFab(nextCfg);
+      setAdminConfig(syncedCfg);
       const active = getActiveAccount();
       if (active) {
         setProfile({ ...active.profile });
@@ -464,7 +483,8 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
   const triggerActivitySeasonReset = useCallback(
     async (options: { isBetaEnd?: boolean; newSeasonName?: string; reason?: string }) => {
       const nextCfg = executeActivitySeasonReset(options);
-      setAdminConfig(nextCfg);
+      const syncedCfg = await pushAdminConfigToPlayFab(nextCfg);
+      setAdminConfig(syncedCfg);
       const active = getActiveAccount();
       if (active) {
         setProfile({ ...active.profile });
@@ -477,7 +497,8 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
   const triggerRankedSeasonReset = useCallback(
     async (options?: { newSeasonName?: string; reason?: string }) => {
       const nextCfg = executeRankedSeasonReset(options);
-      setAdminConfig(nextCfg);
+      const syncedCfg = await pushAdminConfigToPlayFab(nextCfg);
+      setAdminConfig(syncedCfg);
       const active = getActiveAccount();
       if (active) {
         setProfile({ ...active.profile });
@@ -490,8 +511,8 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
   const unlockAdminWithPin = useCallback((pin: string) => {
     const clean = pin.trim().toUpperCase();
     const expected = getAdminPin().toUpperCase();
-    const master = loadAdminConfig().masterCode.toUpperCase();
-    if (clean.length >= 4 && (clean === expected || clean === master)) {
+    // Desacoplado do masterCode (código de professores para liberar jogos NÃO destrava o Painel ADM!)
+    if (clean.length >= 4 && clean === expected) {
       setAdminUnlockedSession(true);
       setAdminPinUnlocked(true);
       return true;

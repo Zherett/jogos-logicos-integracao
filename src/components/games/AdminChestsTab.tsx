@@ -9,6 +9,7 @@ import {
   Pencil,
   Plus,
   Sparkles,
+  Star,
   Trash2,
   Zap,
 } from "lucide-react";
@@ -34,7 +35,11 @@ import {
   type ChestShape,
 } from "@/lib/chests-catalog";
 import { usePlayerAuth } from "@/lib/player-auth";
-import { syncActiveProfileChangeToPlayFab } from "@/lib/playfab";
+import {
+  getActiveAccount,
+  getLastAdminCloudSyncError,
+  syncActiveProfileChangeToPlayFab,
+} from "@/lib/playfab";
 
 interface AdminChestsTabProps {
   chestsCatalog?: ChestDefinition[];
@@ -146,9 +151,15 @@ export function AdminChestsTab({
         isDefault: existing?.isDefault,
         enabled: existing?.enabled ?? true,
         rewards: {
-          ...(ptsMax > 0 ? { points: { min: Math.min(ptsMin, ptsMax), max: Math.max(ptsMin, ptsMax) } } : {}),
-          ...(xpMax > 0 ? { xp: { min: Math.min(xpMin, xpMax), max: Math.max(xpMin, xpMax) } } : {}),
-          ...(coinsMax > 0 ? { coins: { min: Math.min(coinsMin, coinsMax), max: Math.max(coinsMin, coinsMax) } } : {}),
+          ...(Math.max(ptsMin, ptsMax) > 0
+            ? { points: { min: Math.min(ptsMin, ptsMax), max: Math.max(ptsMin, ptsMax) } }
+            : {}),
+          ...(Math.max(xpMin, xpMax) > 0
+            ? { xp: { min: Math.min(xpMin, xpMax), max: Math.max(xpMin, xpMax) } }
+            : {}),
+          ...(Math.max(coinsMin, coinsMax) > 0
+            ? { coins: { min: Math.min(coinsMin, coinsMax), max: Math.max(coinsMin, coinsMax) } }
+            : {}),
           ...(packDrops.length > 0
             ? {
                 cardPacks: packDrops
@@ -160,6 +171,9 @@ export function AdminChestsTab({
                   })),
               }
             : {}),
+          ...(existing?.rewards.cosmetics?.length
+            ? { cosmetics: existing.rewards.cosmetics }
+            : {}),
         },
         createdAt: existing?.createdAt ?? nowIso,
         updatedAt: nowIso,
@@ -170,10 +184,13 @@ export function AdminChestsTab({
         : [...chests, nextChest];
 
       await onSaveChests(nextList);
+      const cloudErr = getLastAdminCloudSyncError();
       onShowFeedback?.(
-        editingId
-          ? `🎁 Baú "${cleanName}" atualizado na nuvem!`
-          : `🎁 Baú "${cleanName}" criado com sucesso!`,
+        cloudErr
+          ? `⚠️ Salvo apenas localmente — erro ao publicar no PlayFab: ${cloudErr}`
+          : editingId
+            ? `🎁 Baú "${cleanName}" atualizado na nuvem!`
+            : `🎁 Baú "${cleanName}" criado com sucesso!`,
       );
       resetForm();
     } finally {
@@ -186,41 +203,77 @@ export function AdminChestsTab({
       c.id === chest.id ? { ...c, enabled: !c.enabled, updatedAt: new Date().toISOString() } : c,
     );
     await onSaveChests(nextList);
+    const cloudErr = getLastAdminCloudSyncError();
     onShowFeedback?.(
-      !chest.enabled ? `✅ Baú "${chest.name}" ativado!` : `⏸️ Baú "${chest.name}" ocultado.`,
+      cloudErr
+        ? `⚠️ Salvo apenas localmente — erro no PlayFab: ${cloudErr}`
+        : !chest.enabled
+          ? `✅ Baú "${chest.name}" ativado!`
+          : `⏸️ Baú "${chest.name}" ocultado.`,
     );
   }
 
   async function handleDelete(chest: ChestDefinition) {
     if (chest.isDefault) return;
+    if (!window.confirm(`Deseja excluir o baú "${chest.name}"?`)) return;
     const nextList = chests.filter((c) => c.id !== chest.id);
     await onSaveChests(nextList);
-    onShowFeedback?.(`🗑️ Baú "${chest.name}" removido.`);
+    const cloudErr = getLastAdminCloudSyncError();
+    onShowFeedback?.(
+      cloudErr
+        ? `⚠️ Removido apenas localmente — erro no PlayFab: ${cloudErr}`
+        : `🗑️ Baú "${chest.name}" removido.`,
+    );
     if (editingId === chest.id) resetForm();
   }
 
   async function handleSendTestChestToSelf(chest: ChestDefinition) {
     if (!auth.profile) return;
-    const prev = { ...(auth.profile.unopenedChests ?? {}) };
-    prev[chest.id] = (Number(prev[chest.id]) || 0) + 1;
-    await syncActiveProfileChangeToPlayFab({
-      ...auth.profile,
-      unopenedChests: prev,
-    });
-    await auth.refresh();
-    onShowFeedback?.(`🎁 1x "${chest.name}" enviado para sua Mochila (Teste ADM)!`);
+    try {
+      const liveProfile = getActiveAccount()?.profile ?? auth.profile;
+      const prev = { ...(liveProfile.unopenedChests ?? {}) };
+      prev[chest.id] = (Number(prev[chest.id]) || 0) + 1;
+      await syncActiveProfileChangeToPlayFab(
+        {
+          ...liveProfile,
+          unopenedChests: prev,
+        },
+        { requireServerSync: true },
+      );
+      await auth.refresh();
+      onShowFeedback?.(`🎁 1x "${chest.name}" enviado para sua Mochila (Teste ADM)!`);
+    } catch (err) {
+      onShowFeedback?.(
+        `⚠️ ${err instanceof Error && err.message ? err.message : "Erro ao enviar baú de teste."}`,
+      );
+    }
   }
 
   const rarityMeta = CHEST_RARITY_META[rarity];
+  const isShopReleased = Boolean(auth.adminConfig.rolloutFlags?.enableShopForStudents);
 
   return (
     <div className="space-y-4">
-      {/* Aviso de Modo Prévia ADM */}
-      <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3.5 text-xs flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-amber-800 dark:text-amber-300 font-bold">
-          <Sparkles className="h-4 w-4 text-amber-500 shrink-0" />
+      {/* Aviso Dinâmico de Status */}
+      <div
+        className={`rounded-2xl border p-3.5 text-xs flex flex-wrap items-center justify-between gap-2 ${
+          isShopReleased
+            ? "border-emerald-500/40 bg-emerald-500/10"
+            : "border-amber-500/40 bg-amber-500/10"
+        }`}
+      >
+        <div
+          className={`flex items-center gap-2 font-bold ${
+            isShopReleased
+              ? "text-emerald-800 dark:text-emerald-300"
+              : "text-amber-800 dark:text-amber-300"
+          }`}
+        >
+          <Sparkles className={`h-4 w-4 shrink-0 ${isShopReleased ? "text-emerald-500" : "text-amber-500"}`} />
           <span>
-            Sistema de Baús em Prévia ADM — Apenas administradores visualizam e testam por enquanto (oculto para alunos).
+            {isShopReleased
+              ? "Sistema de Baús Ativo para os Alunos — alterações salvas aqui ficam ativas para toda a rede."
+              : "Sistema de Baús em Prévia ADM — Apenas administradores visualizam e testam por enquanto (oculto para alunos)."}
           </span>
         </div>
       </div>
@@ -281,7 +334,7 @@ export function AdminChestsTab({
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 rounded-2xl border bg-secondary/30 p-3">
           <div className="space-y-1">
             <Label className="text-[11px] font-bold flex items-center gap-1">
-              <Coins className="h-3.5 w-3.5 text-amber-500" /> Pontos (Mín / Máx)
+              <Star className="h-3.5 w-3.5 text-primary" /> Pontos (Mín / Máx)
             </Label>
             <div className="flex gap-1.5">
               <Input
@@ -394,9 +447,12 @@ export function AdminChestsTab({
                   type="number"
                   min={1}
                   max={100}
-                  value={packChance}
+                  value={packChance === 0 ? "" : packChance}
                   disabled={!packId}
-                  onChange={(e) => setPackChance(Math.min(100, Math.max(1, Number(e.target.value) || 100)))}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    setPackChance(raw === "" ? 0 : Math.min(100, Math.max(0, Number(raw) || 0)));
+                  }}
                   className="h-8 rounded-lg text-xs"
                 />
                 <Button
@@ -557,10 +613,8 @@ export function AdminChestsTab({
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-96 overflow-y-auto pr-1">
           {chests.map((c) => {
             const meta = CHEST_RARITY_META[c.rarity] ?? CHEST_RARITY_META.comum;
-            const dropPack = c.rewards.cardPacks?.[0];
-            const packName = dropPack
-              ? packs.find((p) => p.id === dropPack.packId)?.name ?? dropPack.packId
-              : null;
+            const dropPacks = c.rewards.cardPacks ?? [];
+            const cosmeticDropsCount = c.rewards.cosmetics?.length ?? 0;
 
             return (
               <div
@@ -595,7 +649,7 @@ export function AdminChestsTab({
                 <div className="flex flex-wrap gap-1.5 text-[10px] font-bold">
                   {c.rewards.points && (
                     <span className="rounded-lg bg-background/70 border px-2 py-0.5">
-                      🎯 {c.rewards.points.min}-{c.rewards.points.max} pts
+                      ⭐ {c.rewards.points.min}-{c.rewards.points.max} pts
                     </span>
                   )}
                   {c.rewards.xp && (
@@ -608,9 +662,17 @@ export function AdminChestsTab({
                       🪙 {c.rewards.coins.min}-{c.rewards.coins.max} moedas
                     </span>
                   )}
-                  {dropPack && (
+                  {dropPacks.map((dp, dpIdx) => {
+                    const pName = packs.find((p) => p.id === dp.packId)?.name ?? dp.packId;
+                    return (
+                      <span key={`${dp.packId}_${dpIdx}`} className="rounded-lg bg-background/70 border px-2 py-0.5">
+                        📦 {dp.quantity}x {pName} ({dp.chancePercent}%)
+                      </span>
+                    );
+                  })}
+                  {cosmeticDropsCount > 0 && (
                     <span className="rounded-lg bg-background/70 border px-2 py-0.5">
-                      📦 {dropPack.quantity}x {packName} ({dropPack.chancePercent}%)
+                      ✨ {cosmeticDropsCount} cosmético(s)
                     </span>
                   )}
                 </div>

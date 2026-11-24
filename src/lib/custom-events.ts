@@ -75,20 +75,7 @@ export function loadSpecialEvents(): SpecialEvent[] {
     const raw = localStorage.getItem(SPECIAL_EVENTS_KEY);
     if (!raw) return [];
     const list = JSON.parse(raw) as SpecialEvent[];
-    let migrated = false;
-    for (const ev of list) {
-      if (
-        ev.scope === "modo_ranqueado" &&
-        (ev.title.includes("Fim de Semana") || (ev.xpMultiplier && ev.xpMultiplier > 1))
-      ) {
-        ev.scope = "todos";
-        migrated = true;
-      }
-    }
-    if (migrated) {
-      localStorage.setItem(SPECIAL_EVENTS_KEY, JSON.stringify(list));
-    }
-    return list;
+    return Array.isArray(list) ? list : [];
   } catch {
     return [];
   }
@@ -184,15 +171,21 @@ export interface CumulativeActiveBonuses {
  * Example: base 1.0x + 0.5x (Ev 1) + 1.0x (Ev 2) = 2.5x total XP multiplier.
  * Daily cap: base 1000 + 500 (Ev 1) + 200 (Ev 2) = 1700 total XP daily cap.
  */
+export const MAX_STACKED_EVENT_MULTIPLIER = 3;
+export const MAX_STACKED_EVENT_DAILY_XP_CAP = 3000;
+export const MAX_STACKED_EVENT_MATCH_XP_CAP = 80;
+
 export function getActiveEventBonuses(
   gameId: GameId = "todos" as GameId,
   baseDailyCap = 1000,
   baseMatchCap = 20,
-  activeEvents = getActiveSpecialEvents(),
+  activeEvents?: SpecialEvent[],
   now = new Date(),
-  recurringEvents = getActiveRecurringEvents(undefined, now),
+  recurringEvents?: RecurringEvent[],
   isRankedMatch = false,
 ): ActiveEventBonuses {
+  const resolvedSpecial = activeEvents ?? getActiveSpecialEvents(undefined, now);
+  const resolvedRecurring = recurringEvents ?? getActiveRecurringEvents(undefined, now);
   let extraMultiplier = 0;
   let extraMatch = 0;
   let extraDaily = 0;
@@ -201,8 +194,8 @@ export function getActiveEventBonuses(
   const activeEventNames: string[] = [];
 
   const allActive = [
-    ...activeEvents.filter((e) => isEventActive(e, now)),
-    ...recurringEvents.filter((e) => isRecurringEventActive(e, now)),
+    ...resolvedSpecial.filter((e) => isEventActive(e, now)),
+    ...resolvedRecurring.filter((e) => isRecurringEventActive(e, now)),
   ];
 
   for (const ev of allActive) {
@@ -254,18 +247,24 @@ export function getActiveEventBonuses(
     }
   }
 
-  const multiplier = Number((1 + extraMultiplier).toFixed(2));
-  const matchXpCap = baseMatchCap + extraMatch;
-  const dailyXpCap = baseDailyCap + extraDaily;
-  const rankedMultiplier = Number((1 + extraRankedMultiplier).toFixed(2));
-  const pointsMultiplier = Number((1 + extraPointsMultiplier).toFixed(2));
+  const multiplier = Math.min(MAX_STACKED_EVENT_MULTIPLIER, Number((1 + extraMultiplier).toFixed(2)));
+  const matchXpCap = Math.min(MAX_STACKED_EVENT_MATCH_XP_CAP, baseMatchCap + extraMatch);
+  const dailyXpCap = Math.min(MAX_STACKED_EVENT_DAILY_XP_CAP, baseDailyCap + extraDaily);
+  const rankedMultiplier = Math.min(
+    MAX_STACKED_EVENT_MULTIPLIER,
+    Number((1 + extraRankedMultiplier).toFixed(2)),
+  );
+  const pointsMultiplier = Math.min(
+    MAX_STACKED_EVENT_MULTIPLIER,
+    Number((1 + extraPointsMultiplier).toFixed(2)),
+  );
 
   return {
     multiplier,
     matchXpCap,
     dailyXpCap,
-    extraDailyXp: extraDaily,
-    extraMatchXp: extraMatch,
+    extraDailyXp: Math.max(0, dailyXpCap - baseDailyCap),
+    extraMatchXp: Math.max(0, matchXpCap - baseMatchCap),
     rankedMultiplier,
     pointsMultiplier,
     activeEventNames,
@@ -276,18 +275,33 @@ export function getActiveEventBonuses(
  * Retorna os bônus acumulados de todos os eventos ativos para exibição em blocos no topo do menu.
  */
 export function calculateCumulativeActiveBonuses(
-  activeEvents = getActiveSpecialEvents(),
-  recurringEvents = getActiveRecurringEvents(),
+  activeEvents?: SpecialEvent[],
+  recurringEvents?: RecurringEvent[],
   now = new Date(),
 ): CumulativeActiveBonuses {
-  const bonuses = getActiveEventBonuses("todos" as GameId, 1000, 20, activeEvents, now);
-  const activeList = getAllActiveEvents(activeEvents, recurringEvents, now);
+  const resolvedSpecial = activeEvents ?? getActiveSpecialEvents(undefined, now);
+  const resolvedRecurring = recurringEvents ?? getActiveRecurringEvents(undefined, now);
+  const bonuses = getActiveEventBonuses(
+    "todos" as GameId,
+    1000,
+    20,
+    resolvedSpecial,
+    now,
+    resolvedRecurring,
+    true,
+  );
+  const activeList = getAllActiveEvents(resolvedSpecial, resolvedRecurring, now);
 
   const hasActiveBonuses =
-    bonuses.multiplier > 1 || bonuses.dailyXpCap > 1000 || bonuses.matchXpCap > 20;
+    bonuses.multiplier > 1 ||
+    bonuses.dailyXpCap > 1000 ||
+    bonuses.matchXpCap > 20 ||
+    bonuses.rankedMultiplier > 1 ||
+    bonuses.pointsMultiplier > 1;
 
   return {
     totalMultiplier: bonuses.multiplier,
+    totalRankedMultiplier: bonuses.rankedMultiplier,
     totalDailyCap: bonuses.dailyXpCap,
     totalMatchCap: bonuses.matchXpCap,
     totalExtraDaily: bonuses.extraDailyXp,
@@ -491,33 +505,6 @@ export interface RecurringEvent {
   createdAt: string;
 }
 
-export type EventObjectiveType =
-  | "matches"
-  | "game_matches"
-  | "ranked_matches"
-  | "distinct_games"
-  | "wins"
-  | "flawless_matches"
-  | "xp";
-
-export interface EventObjectiveConfig {
-  type: EventObjectiveType;
-  target: number;
-  gameId?: GameId;
-  distinctTarget?: number;
-}
-
-export interface EventRewardConfig {
-  id: string;
-  type: "coins" | "xp" | "item";
-  amount?: number;
-  itemCategory?: "chest" | "card_pack" | "cosmetic";
-  itemId?: string;
-  itemName?: string;
-  cosmeticKind?: "avatar" | "aura";
-  quantity?: number;
-}
-
 export const DAYS_OF_WEEK = [
   { value: 0, label: "Domingo", short: "Dom" },
   { value: 1, label: "Segunda-feira", short: "Seg" },
@@ -572,20 +559,7 @@ export function loadRecurringEvents(): RecurringEvent[] {
       return [...DEFAULT_RECURRING_EVENTS];
     }
     const list = JSON.parse(raw) as RecurringEvent[];
-    let migrated = false;
-    for (const ev of list) {
-      if (
-        ev.scope === "modo_ranqueado" &&
-        (ev.title.includes("Fim de Semana") || (ev.xpMultiplier && ev.xpMultiplier > 1))
-      ) {
-        ev.scope = "todos";
-        migrated = true;
-      }
-    }
-    if (migrated) {
-      localStorage.setItem(RECURRING_EVENTS_KEY, JSON.stringify(list));
-    }
-    return list;
+    return Array.isArray(list) ? list : [];
   } catch {
     return [];
   }

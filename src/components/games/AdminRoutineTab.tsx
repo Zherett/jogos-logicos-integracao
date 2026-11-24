@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { DAYS_OF_WEEK } from "@/lib/custom-events";
 import { mergeWithDefaultChests } from "@/lib/chests-catalog";
 import {
   DAILY_REWARDS_SCHEDULE,
@@ -16,6 +15,7 @@ import {
 import { DEFAULT_DAILY_MISSION_COINS } from "@/lib/daily-missions";
 import { DEFAULT_WEEKLY_MISSION_COINS } from "@/lib/weekly-missions";
 import type { PlatformAdminConfig } from "@/lib/game-codes";
+import { usePlayerAuth } from "@/lib/player-auth";
 import {
   getLastAdminCloudSyncError,
   runRetroactiveDay1CheckInAudit,
@@ -53,6 +53,7 @@ export function AdminRoutineTab({
   onSaveConfig,
   onShowFeedback,
 }: AdminRoutineTabProps) {
+  const auth = usePlayerAuth();
   const [subTab, setSubTab] = useState<"semana" | "diarias" | "missoes_d" | "missoes_s">("semana");
   const [saving, setSaving] = useState(false);
   const [retroDay1Loading, setRetroDay1Loading] = useState(false);
@@ -210,35 +211,16 @@ export function AdminRoutineTab({
 
       {subTab === "semana" && (
         <div className="rounded-2xl border bg-card p-4 space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label className="text-xs font-bold">Dia de Início da Semana (00:00)</Label>
-              <select
-                value={routine.weekStartDay ?? 1}
-                onChange={(e) => updateRoutine({ weekStartDay: Number(e.target.value) })}
-                className="h-9 w-full rounded-xl border bg-background px-3 text-xs font-bold"
-              >
-                {DAYS_OF_WEEK.map((d) => (
-                  <option key={d.value} value={d.value}>
-                    {d.label}
-                  </option>
-                ))}
-              </select>
+          <div className="rounded-xl border border-border/70 bg-secondary/25 px-3 py-2.5 text-xs flex flex-wrap items-center justify-between gap-2">
+            <div className="space-y-0.5">
+              <div className="font-bold text-foreground">Ciclo Oficial da Semana (ISO-8601 • UTC-4 Coari/AM)</div>
+              <p className="text-[11px] text-muted-foreground">
+                A semana das Missões Semanais e do Torneio Ranqueado roda de <b>Segunda-feira (00:00)</b> até <b>Domingo (23:59)</b> no fuso oficial da plataforma.
+              </p>
             </div>
-            <div className="space-y-1">
-              <Label className="text-xs font-bold">Dia de Término da Semana (23:59)</Label>
-              <select
-                value={routine.weekEndDay ?? 0}
-                onChange={(e) => updateRoutine({ weekEndDay: Number(e.target.value) })}
-                className="h-9 w-full rounded-xl border bg-background px-3 text-xs font-bold"
-              >
-                {DAYS_OF_WEEK.map((d) => (
-                  <option key={d.value} value={d.value}>
-                    {d.label}
-                  </option>
-                ))}
-              </select>
-            </div>
+            <span className="rounded-full border border-primary/30 bg-primary/10 px-2.5 py-0.5 font-mono text-[10px] font-black text-primary">
+              Seg → Dom
+            </span>
           </div>
 
           <div className="border-t pt-3 space-y-3">
@@ -362,10 +344,15 @@ export function AdminRoutineTab({
                     const res = await runRetroactiveDay1CheckInAudit({
                       dryRun: true,
                       grantMissingRewards: retroDay1GrantRewards,
+                      configOverride: draft,
                     });
                     setRetroDay1Preview(res);
                     onShowFeedback?.(
                       `🔍 Simulação Dia 1: ${res.eligibleStudentsCount} de ${res.scannedCount} aluno(s) elegíveis (ativos nos últimos 3 dias).`,
+                    );
+                  } catch (err) {
+                    onShowFeedback?.(
+                      `⚠️ Erro ao simular retrocoleta do Dia 1: ${err instanceof Error ? err.message : "falha inesperada"}`,
                     );
                   } finally {
                     setRetroDay1Loading(false);
@@ -394,12 +381,18 @@ export function AdminRoutineTab({
                     const res = await runRetroactiveDay1CheckInAudit({
                       dryRun: false,
                       grantMissingRewards: retroDay1GrantRewards,
+                      configOverride: draft,
                     });
                     setRetroDay1Preview(res);
+                    await auth.refresh();
                     onShowFeedback?.(
                       res.cloudSyncError || (res.cloudFailedCount ?? 0) > 0
-                        ? `⚠️ Retrocoleta Dia 1 aplicada localmente (${res.eligibleStudentsCount} aluno(s)), mas ${res.cloudFailedCount ?? 0} registro(s) falharam ao enviar à nuvem (${res.cloudPushedCount} sincronizados): ${res.cloudSyncError ?? "erro de rede"}`
+                        ? `⚠️ Retrocoleta Dia 1 concluída parcialmente (${res.cloudPushedCount} sincronizados, ${res.cloudFailedCount ?? 0} falharam — clique novamente para reenviar os falhos): ${res.cloudSyncError ?? "erro de rede"}`
                         : `✅ Retrocoleta Dia 1 aplicada! ${res.eligibleStudentsCount} aluno(s) atualizados (${res.cloudPushedCount} enviados à nuvem).`,
+                    );
+                  } catch (err) {
+                    onShowFeedback?.(
+                      `⚠️ Erro ao aplicar retrocoleta do Dia 1: ${err instanceof Error ? err.message : "falha inesperada"}`,
                     );
                   } finally {
                     setRetroDay1Loading(false);
@@ -490,7 +483,7 @@ export function AdminRoutineTab({
                   {
                     key: "enableShopForStudents",
                     label: "Loja, Inventário & Personalização",
-                    desc: "Libera Loja de Moedas, Pacotes/Cartas, Baús, Álbum e Personalizar Perfil.",
+                    desc: "Libera Loja de Moedas, Pacotes/Cartas, Baús, Álbum e Personalizar Perfil (ativa automaticamente o Avatar no perfil).",
                   },
                 ] as const
               ).map((item) => {

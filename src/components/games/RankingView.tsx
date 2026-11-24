@@ -5,7 +5,6 @@ import {
   Calendar,
   CalendarClock,
   ChevronDown,
-  Coins,
   Crown,
   Flame,
   Gamepad2,
@@ -16,6 +15,7 @@ import {
   School,
   Shield,
   Sparkles,
+  Star,
   Swords,
   Trophy,
   X,
@@ -472,7 +472,7 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
                 : "text-muted-foreground hover:text-foreground"
             }`}
           >
-            <Coins className="h-4 w-4 shrink-0" /> Pontos
+            <Star className="h-4 w-4 shrink-0" /> Pontos
           </button>
           <button
             type="button"
@@ -1131,7 +1131,7 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
                         <div className="flex items-center justify-end gap-1.5">
                           <span className="font-display text-base sm:text-lg font-extrabold text-primary whitespace-nowrap">
                             {tab === "pontos"
-                              ? `🪙 ${row.value} pts`
+                              ? `⭐ ${row.value} pts`
                               : tab === "medalhas"
                                 ? `🏅 ${row.value} ${row.value === 1 ? "medalha" : "medalhas"}`
                                 : tab === "jogos"

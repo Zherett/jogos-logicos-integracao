@@ -58,6 +58,7 @@ export type ScoreTransactionSource =
   | "codigo_promocional"
   | "conversao_moedas"
   | "ajuste_adm"
+  | "reconciliacao"
   | "sanitizacao";
 
 export interface ScoreLedgerEntry {
@@ -215,7 +216,7 @@ export function reconstructStudentLedgerFromProfile(profile: PlayerProfile): Sco
   const cleanId = nickSlug(profile.id || profile.nickNormalized || profile.nick || "desconhecido");
   const playerNick = profile.nick || "Jogador";
   const results: ScoreLedgerEntry[] = [];
-  const baseTimestamp = profile.created_at || new Date().toISOString();
+  const baseTimestamp = profile.createdAt || new Date().toISOString();
 
   const allMedals = getAllAvailableMedals();
   const medalMap = new Map(allMedals.map((m) => [m.id, m]));
@@ -319,7 +320,7 @@ export function reconstructStudentLedgerFromProfile(profile: PlayerProfile): Sco
           amount: estimatedXp,
           reason: `Partidas em ${gName} (${stat.plays} partidas, ${stat.wins} vitórias)`,
           metadata: { gameId: stat.game_id, score: stat.best_score },
-          timestamp: stat.last_played || baseTimestamp,
+          timestamp: stat.last_played_at || baseTimestamp,
         });
         currentXpSum += estimatedXp;
       }
@@ -537,6 +538,7 @@ export function calculateStudentScoreBreakdown(
     codigo_promocional: { xp: 0, points: 0, count: 0 },
     conversao_moedas: { xp: 0, points: 0, count: 0 },
     ajuste_adm: { xp: 0, points: 0, count: 0 },
+    reconciliacao: { xp: 0, points: 0, count: 0 },
     sanitizacao: { xp: 0, points: 0, count: 0 },
   };
 
@@ -597,6 +599,7 @@ export const TRANSACTION_SOURCE_LABELS: Record<ScoreTransactionSource, { label: 
   codigo_promocional: { label: "Código Promocional", icon: "KeyRound", badgeColor: "bg-fuchsia-500/10 text-fuchsia-600 border-fuchsia-500/30" },
   conversao_moedas: { label: "Conversão em Moedas", icon: "Coins", badgeColor: "bg-amber-500/10 text-amber-600 border-amber-500/30" },
   ajuste_adm: { label: "Ajuste pelo ADM", icon: "Shield", badgeColor: "bg-slate-500/10 text-slate-600 border-slate-500/30" },
+  reconciliacao: { label: "Reconciliação", icon: "CheckCircle", badgeColor: "bg-teal-500/10 text-teal-600 border-teal-500/30" },
   sanitizacao: { label: "Correção de Sistema", icon: "CheckCircle", badgeColor: "bg-teal-500/10 text-teal-600 border-teal-500/30" },
 };
 

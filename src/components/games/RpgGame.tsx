@@ -42,11 +42,12 @@ import { usePlayerAuth } from "@/lib/player-auth";
 interface Props {
   onExit: () => void;
   onStatsChange?: () => void;
+  isRanked?: boolean;
 }
 
 const MAX_PLAYER_LIVES = 3;
 
-export function RpgGame({ onExit, onStatsChange }: Props) {
+export function RpgGame({ onExit, onStatsChange, isRanked = false }: Props) {
   const auth = usePlayerAuth();
   const [phase, setPhase] = useState<"countdown" | "playing" | "victory" | "gameover">("countdown");
   const [stage, setStage] = useState(1);
@@ -92,6 +93,7 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
   const scoreRef = useRef(0);
   const correctRef = useRef(0);
   const wrongRef = useRef(0);
+  const finishedRef = useRef(false);
 
   stunnedUntilRef.current = stunnedUntil;
   unlockedMedalRef.current = unlockedSpecialMedal;
@@ -146,23 +148,32 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
   }, []);
 
   const finishMatch = useCallback(
-    (finalPhase: "victory" | "gameover", finalScore: number, reachedStage: number) => {
+    (
+      finalPhase: "victory" | "gameover",
+      finalScore: number,
+      reachedStage: number,
+      finalCorrect = correctRef.current,
+      finalWrong = wrongRef.current,
+    ) => {
+      if (finishedRef.current) return;
+      finishedRef.current = true;
       const safeScore = Math.max(0, finalScore);
       updateBest("rpg", safeScore, reachedStage);
       saveLastMatch("rpg", {
         score: safeScore,
         level: reachedStage,
-        correct: correctRef.current,
-        wrong: wrongRef.current,
-        mode: "padrao",
+        correct: finalCorrect,
+        wrong: finalWrong,
+        mode: isRanked ? "torneio_semanal" : "padrao",
       });
       onStatsChange?.();
       setPhase(finalPhase);
     },
-    [onStatsChange],
+    [onStatsChange, isRanked],
   );
 
   const startBattle = () => {
+    finishedRef.current = false;
     specialSpawnedRef.current = false;
     const firstBoss = getRobotBoss(1, false);
     setBoss(firstBoss);
@@ -260,7 +271,9 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
 
       if (!outcome.isCorrect) {
         playRpgPlayerHit();
-        setWrongCount((w) => w + 1);
+        const nextWrong = wrongRef.current + 1;
+        wrongRef.current = nextWrong;
+        setWrongCount(nextWrong);
         setStreak(0);
         setScore((s) => Math.max(0, s + outcome.scoreDelta));
         setPlayerHitFlash(true);
@@ -277,7 +290,13 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
           setPlayerLives(nextLives);
           if (nextLives <= 0) {
             applyVisualShare(0);
-            finishMatch("gameover", Math.max(0, score + outcome.scoreDelta), stage);
+            finishMatch(
+              "gameover",
+              Math.max(0, score + outcome.scoreDelta),
+              stage,
+              correctRef.current,
+              nextWrong,
+            );
             return;
           }
           setClashBanner("⚠️ ERRO CRÍTICO! O raio inimigo atingiu seu robô (-1 escudo)!");
@@ -312,7 +331,9 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
       const nextStreak = streak + 1;
       setStreak(nextStreak);
       setBestStreak((b) => Math.max(b, nextStreak));
-      setCorrectCount((c) => c + 1);
+      const nextCorrect = correctRef.current + 1;
+      correctRef.current = nextCorrect;
+      setCorrectCount(nextCorrect);
 
       const comboBonus = Math.min(15, Math.floor(nextStreak / 3) * 5);
       const nextScore = Math.max(0, score + outcome.scoreDelta + comboBonus);
@@ -340,7 +361,7 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
           // Derrotou todos os 5 robôs da partida!
           setEnemyHp(0);
           applyVisualShare(100);
-          finishMatch("victory", stageClearScore, stage);
+          finishMatch("victory", stageClearScore, stage, nextCorrect, wrongRef.current);
           return;
         }
 
@@ -740,8 +761,7 @@ export function RpgGame({ onExit, onStatsChange }: Props) {
           <div className="relative w-full max-w-md rounded-3xl border-2 border-purple-400/80 bg-gradient-to-b from-slate-900 via-purple-950/40 to-slate-950 p-6 sm:p-7 text-center shadow-2xl animate-pop-in">
             <div className="mx-auto flex h-24 w-24 items-center justify-center rounded-3xl border-2 border-purple-400 bg-purple-500/20 text-purple-300 shadow-xl shadow-purple-500/30">
               <MedalIcon
-                iconName={unlockedSpecialMedal.iconName}
-                rarity={unlockedSpecialMedal.rarity}
+                name={unlockedSpecialMedal.iconName}
                 className="h-12 w-12 text-purple-300"
               />
             </div>

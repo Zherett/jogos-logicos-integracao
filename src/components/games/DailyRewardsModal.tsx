@@ -11,9 +11,9 @@ import {
   CheckCircle2,
   Lock,
   Sparkles,
+  Star,
   Gift,
   ShieldAlert,
-  Coins,
   Zap,
   Medal,
   Target,
@@ -25,6 +25,7 @@ import {
   claimCurrentPlayerWeeklyMission,
   getAuthoritativeDateKey,
   getAuthoritativeNow,
+  isAdminUnlockedSession,
   syncPlayFabServerClock,
   type GameStatRow,
   type PlayerProfile,
@@ -33,6 +34,7 @@ import type { AdminConfig } from "@/lib/game-codes.ts";
 import { mergeWithDefaultCardPacks } from "@/lib/cards-catalog.ts";
 import type { ChestDefinition, ChestOpenOutcome } from "@/lib/chests-catalog.ts";
 import {
+  canAccessShopAndCustomization,
   DAILY_STREAK_BONUS_CAP,
   DAILY_STREAK_BONUS_STEP,
   getDailyRewardClaimState,
@@ -79,13 +81,25 @@ export function DailyRewardsModal({
   const [clockTick, setClockTick] = useState(0);
 
   useEffect(() => {
-    if (open) {
-      setActiveTab("recompensas");
-      setFeedbackMsg(null);
-      void syncPlayFabServerClock().then((ms) => {
-        if (ms !== null) setClockTick((v) => v + 1);
-      });
-    }
+    if (!open) return;
+    setActiveTab("recompensas");
+    setFeedbackMsg(null);
+    let lastObservedDate = getAuthoritativeDateKey();
+    void syncPlayFabServerClock().then((ms) => {
+      if (ms !== null) {
+        lastObservedDate = getAuthoritativeDateKey();
+        setClockTick((v) => v + 1);
+      }
+    });
+    // Atualiza automaticamente na virada de meia-noite oficial (UTC-4) com o modal aberto
+    const timer = window.setInterval(() => {
+      const currentDate = getAuthoritativeDateKey();
+      if (currentDate !== lastObservedDate) {
+        lastObservedDate = currentDate;
+        setClockTick((v) => v + 1);
+      }
+    }, 30_000);
+    return () => window.clearInterval(timer);
   }, [open]);
 
   const routineConfig = adminConfig?.weeklyRoutineConfig;
@@ -97,6 +111,8 @@ export function DailyRewardsModal({
 
   const streakStepPts = Math.max(0, Math.floor(routineConfig?.streakPointsStep ?? DAILY_STREAK_BONUS_STEP));
   const streakCapPts = Math.max(0, Math.floor(routineConfig?.streakPointsCap ?? DAILY_STREAK_BONUS_CAP));
+  const streakStepXp = Math.max(0, Math.floor(routineConfig?.streakXpStep ?? 0));
+  const streakStepCoins = Math.max(0, Math.floor(routineConfig?.streakCoinsStep ?? 0));
   const streakBonusPoints = getStreakBonusPoints(streak, routineConfig);
   const streakBonusXp = getStreakBonusXp(streak, routineConfig);
   const streakBonusCoins = getStreakBonusCoins(streak, routineConfig);
@@ -108,10 +124,16 @@ export function DailyRewardsModal({
   );
 
   const playerLevel = Math.max(1, profile?.level ?? 1);
+  const dailyLockedLevel =
+    profile?.dailyMissionProgress?.dateKey === todayKey &&
+    typeof profile.dailyMissionProgress.lockedLevel === "number" &&
+    profile.dailyMissionProgress.lockedLevel >= 1
+      ? profile.dailyMissionProgress.lockedLevel
+      : playerLevel;
   const levelTierLabel =
-    playerLevel <= 3
+    dailyLockedLevel <= 3
       ? "Nível 1–3 (5 Missões)"
-      : playerLevel <= 6
+      : dailyLockedLevel <= 6
         ? "Nível 4–6 (5 Missões)"
         : "Nível 7–10 (5 Missões)";
 
@@ -135,10 +157,16 @@ export function DailyRewardsModal({
   );
 
   const weekInfo = useMemo(() => getWeekInfo(authoritativeNow), [authoritativeNow]);
+  const weeklyLockedLevel =
+    profile?.weeklyMissionProgress?.weekKey === weekInfo.weekKey &&
+    typeof profile.weeklyMissionProgress.lockedLevel === "number" &&
+    profile.weeklyMissionProgress.lockedLevel >= 1
+      ? profile.weeklyMissionProgress.lockedLevel
+      : playerLevel;
   const weeklyLevelTierLabel =
-    playerLevel <= 3
+    weeklyLockedLevel <= 3
       ? "Nível 1–3 (4 Missões)"
-      : playerLevel <= 6
+      : weeklyLockedLevel <= 6
         ? "Nível 4–6 (4 Missões)"
         : "Nível 7–10 (4 Missões)";
 
@@ -181,7 +209,8 @@ export function DailyRewardsModal({
       const parts: string[] = [];
       if (res.pointsAwarded > 0) parts.push(`+${res.pointsAwarded} pts`);
       if (res.xpAwarded > 0) parts.push(`+${res.xpAwarded} XP`);
-      if (res.coinsAwarded > 0) parts.push(`+${res.coinsAwarded} moedas`);
+      const totalAwardedCoins = (res.coinsAwarded ?? 0) + (res.medalCoinsAwarded ?? 0);
+      if (totalAwardedCoins > 0) parts.push(`+${totalAwardedCoins} moedas`);
       setFeedbackMsg({ text: `✅ Dia ${res.claimedDay} resgatado! ${parts.join(" • ")}`, tone: "success" });
       onProfileUpdated?.();
       if (res.chestDefinition && res.chestOutcome) {
@@ -384,11 +413,18 @@ export function DailyRewardsModal({
                     Ofensiva: <b className="text-orange-500 font-mono">{streak}</b>{" "}
                     {streak === 1 ? "dia seguido" : "dias seguidos"}
                   </span>
-                  {streakBonusPoints > 0 && (
+                  {(streakBonusPoints > 0 || streakBonusXp > 0 || streakBonusCoins > 0) && (
                     <>
                       <span>•</span>
                       <span className="inline-flex items-center gap-1 rounded-full bg-orange-500/15 border border-orange-500/30 px-2 py-0.5 font-mono text-[11px] font-black text-orange-600 dark:text-orange-400">
-                        🔥 Bônus de Ofensiva Hoje: +{streakBonusPoints} pts
+                        🔥 Bônus Ofensiva:{" "}
+                        {[
+                          streakBonusPoints > 0 ? `+${streakBonusPoints} pts` : "",
+                          streakBonusXp > 0 ? `+${streakBonusXp} XP` : "",
+                          streakBonusCoins > 0 ? `+${streakBonusCoins} moedas` : "",
+                        ]
+                          .filter(Boolean)
+                          .join(" • ")}
                       </span>
                     </>
                   )}
@@ -410,7 +446,9 @@ export function DailyRewardsModal({
                   </p>
                   <p className="text-[11px] text-muted-foreground mt-0.5">
                     Seu progresso na trilha de 7 dias <b>nunca regride</b> se você faltar um dia. Além disso, cada dia consecutivo seguido soma{" "}
-                    <b>+{streakStepPts} pts</b> extras de ofensiva (até o teto de <b>+{streakCapPts} pts</b> por dia)!
+                    <b>+{streakStepPts} pts</b>
+                    {streakStepXp > 0 ? <> / <b>+{streakStepXp} XP</b></> : null}
+                    {streakStepCoins > 0 ? <> / <b>+{streakStepCoins} moedas</b></> : null} extras de ofensiva (até o teto de <b>+{streakCapPts} pts</b> por dia)!
                   </p>
                 </div>
 
@@ -470,7 +508,7 @@ export function DailyRewardsModal({
                             {/* Tags de Recompensas do Dia */}
                             <div className="flex flex-wrap items-center gap-1.5 mt-1">
                               <span className="inline-flex items-center gap-1 rounded-lg bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 font-mono text-[11px] font-black text-amber-600 dark:text-amber-400">
-                                <Coins className="h-3 w-3" /> +{tier.points} pts
+                                <Star className="h-3 w-3" /> +{tier.points} pts
                               </span>
                               {tierTotalCoins > 0 && (
                                 <span className="inline-flex items-center gap-1 rounded-lg bg-yellow-500/15 border border-yellow-500/30 px-2 py-0.5 font-mono text-[11px] font-black text-yellow-600 dark:text-yellow-400">
@@ -588,7 +626,7 @@ export function DailyRewardsModal({
 
                           <div className="flex flex-wrap items-center gap-1.5 shrink-0 pl-8 sm:pl-0">
                             <span className="inline-flex items-center gap-1 rounded-lg bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 font-mono text-[11px] font-black text-amber-600 dark:text-amber-400">
-                              <Coins className="h-3 w-3" /> +{mission.rewardPoints} pts
+                              <Star className="h-3 w-3" /> +{mission.rewardPoints} pts
                             </span>
                             <span className="inline-flex items-center gap-1 rounded-lg bg-yellow-500/15 border border-yellow-500/30 px-2 py-0.5 font-mono text-[11px] font-black text-yellow-600 dark:text-yellow-400">
                               🪙 +{mission.rewardCoins ?? DEFAULT_DAILY_MISSION_COINS}
@@ -703,7 +741,7 @@ export function DailyRewardsModal({
 
                           <div className="flex flex-wrap items-center gap-1.5 shrink-0 pl-8 sm:pl-0">
                             <span className="inline-flex items-center gap-1 rounded-lg bg-amber-500/15 border border-amber-500/30 px-2 py-0.5 font-mono text-[11px] font-black text-amber-600 dark:text-amber-400">
-                              <Coins className="h-3 w-3" /> +{mission.rewardPoints} pts
+                              <Star className="h-3 w-3" /> +{mission.rewardPoints} pts
                             </span>
                             <span className="inline-flex items-center gap-1 rounded-lg bg-yellow-500/15 border border-yellow-500/30 px-2 py-0.5 font-mono text-[11px] font-black text-yellow-600 dark:text-yellow-400">
                               🪙 +{mission.rewardCoins ?? DEFAULT_WEEKLY_MISSION_COINS}
@@ -773,6 +811,7 @@ export function DailyRewardsModal({
           chest={openedChest.chest}
           outcome={openedChest.outcome}
           packsCatalog={packsCatalog}
+          inventoryLockedNote={!canAccessShopAndCustomization(profile, isAdminUnlockedSession(), adminConfig)}
           onClose={() => setOpenedChest(null)}
         />
       )}

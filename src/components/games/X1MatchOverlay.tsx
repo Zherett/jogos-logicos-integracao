@@ -74,7 +74,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
     initialRoom.durationSec <= 0 ? 0 : initialRoom.durationSec,
   );
   const [nowTick, setNowTick] = useState(() => Date.now());
-  const [question, setQuestion] = useState<ClashQuestion>(() =>
+  const [question, setQuestion] = useState<Pick<ClashQuestion, "text" | "answer">>(() =>
     generateDeterministicRobotClashQuestion(initialRoom.seed, me.correct + me.wrong),
   );
   const [stunned, setStunned] = useState(false);
@@ -132,8 +132,47 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
   };
 
   const handleConfirmForfeit = () => {
-    forfeitX1Match(room.code, myId);
+    const totalAnswers =
+      (room.host.correct + room.host.wrong) +
+      ((room.guest?.correct ?? 0) + (room.guest?.wrong ?? 0));
+    const startedMs = room.startedAt ?? room.createdAt ?? 0;
+    const elapsedMs = startedMs > 0 ? Math.max(0, Date.now() - startedMs) : 0;
+    const isEarlyZeroEffortAbort =
+      room.status === "countdown" ||
+      (room.status === "playing" && totalAnswers === 0 && elapsedMs < 15_000);
+
     setConfirmForfeitOpen(false);
+    if (isEarlyZeroEffortAbort) {
+      // Abandono antes de iniciar ou nos primeiros 15s sem respostas: anula sala sem conceder vitória/W.O.
+      rewardSavedRef.current = true;
+      closeX1Room(room.code);
+      onExitX1();
+      return;
+    }
+
+    forfeitX1Match(room.code, myId);
+    if (!rewardSavedRef.current && auth.profile) {
+      rewardSavedRef.current = true;
+      saveLastMatch(room.gameId, {
+        score: me.score,
+        level: 1,
+        correct: me.correct,
+        wrong: me.wrong,
+        won: false,
+        mode: "x1_online",
+      });
+      void auth.recordMatch({
+        gameId: room.gameId,
+        mode: "x1_online",
+        won: false,
+        isDraw: false,
+        score: me.score,
+        level: 1,
+        correct: me.correct,
+        wrong: me.wrong,
+        opponentSchool: opponent?.school ?? "",
+      });
+    }
     onExitX1();
   };
 
@@ -345,7 +384,8 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
 
     const wonX1 = room.winnerId === myId;
     const isDraw = room.winnerId === "draw";
-    const finalScore = Math.max(me.score, wonX1 ? me.score + 40 : me.score);
+    const hadRealParticipation = me.correct > 0 || me.score > 0;
+    const finalScore = Math.max(me.score, wonX1 && hadRealParticipation ? me.score + 40 : me.score);
 
     saveLastMatch(room.gameId, {
       score: finalScore,

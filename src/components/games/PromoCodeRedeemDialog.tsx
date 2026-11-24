@@ -15,6 +15,7 @@ import {
   RotateCcw,
   Zap,
   Coins,
+  Star,
   Package,
   Camera,
   Loader2,
@@ -24,6 +25,8 @@ import {
   claimPromoCode,
   normalizePromoCodeInput,
   fetchPromoCodesFromPlayFab,
+  getPromoCodesSnapshot,
+  restorePromoCodesSnapshot,
   syncPromoCodesToPlayFab,
   type PromoCodeRewardPayload,
 } from "@/lib/promo-codes";
@@ -115,8 +118,7 @@ export function PromoCodeRedeemDialog({ open, onOpenChange, onRewardClaimed }: P
     setLoading(true);
     setErrorMsg(null);
 
-    const prevCodesRaw =
-      typeof window !== "undefined" ? window.localStorage.getItem("desafios_promo_codes_v1") : null;
+    const prevCodesRaw = getPromoCodesSnapshot();
 
     try {
       // Re-sincroniza com a nuvem imediatamente antes de consumir (trava anti-duplicidade cross-browser)
@@ -134,20 +136,17 @@ export function PromoCodeRedeemDialog({ open, onOpenChange, onRewardClaimed }: P
       // Persiste XP, nível, moedas e itens no PlayFab com confirmação obrigatória do servidor ANTES de consumir o código na nuvem
       if (res.updatedProfile) {
         await savePlayerProfile(res.updatedProfile, { requireServerSync: true });
-        await syncPromoCodesToPlayFab();
+        const syncedPromo = await syncPromoCodesToPlayFab();
+        if (!syncedPromo) {
+          console.warn("[PromoCode] Recompensa salva no perfil, mas falhou ao replicar status do código no PlayFab.");
+        }
         await auth.refresh();
       }
       onRewardClaimed?.();
       setStep("success");
     } catch (err) {
-      // Rollback local se a gravação no servidor falhar (evita queimar o código sem entregar o prêmio)
-      if (typeof window !== "undefined") {
-        if (prevCodesRaw !== null) {
-          window.localStorage.setItem("desafios_promo_codes_v1", prevCodesRaw);
-        } else {
-          window.localStorage.removeItem("desafios_promo_codes_v1");
-        }
-      }
+      // Rollback atômico (localStorage + cache em memória) se a gravação no servidor falhar
+      restorePromoCodesSnapshot(prevCodesRaw);
       setErrorMsg(
         err instanceof Error && err.message
           ? err.message
@@ -183,6 +182,21 @@ export function PromoCodeRedeemDialog({ open, onOpenChange, onRewardClaimed }: P
         </DialogHeader>
 
         <div className="py-2 space-y-4">
+          {auth.cloudSessionExpired && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-xs font-semibold text-amber-700 dark:text-amber-300">
+              <span>🔑 Sessão na nuvem expirada (24h). Renove o login para resgatar códigos.</span>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => auth.openReloginDialog()}
+                className="h-7 rounded-lg border-amber-500/50 bg-background/80 text-xs font-extrabold"
+              >
+                Renovar Login
+              </Button>
+            </div>
+          )}
+
           {/* MENSAGEM DE ERRO OU RATE LIMIT */}
           {errorMsg && (
             <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive flex items-start gap-2 animate-shake">
@@ -266,10 +280,34 @@ export function PromoCodeRedeemDialog({ open, onOpenChange, onRewardClaimed }: P
 
                   {identifiedReward.points > 0 && (
                     <div className="rounded-xl border bg-background/90 p-2.5 flex items-center gap-2">
-                      <Coins className="h-5 w-5 text-yellow-500" />
+                      <Star className="h-5 w-5 text-primary" />
+                      <div>
+                        <div className="text-[10px] text-muted-foreground font-bold uppercase">Pontos</div>
+                        <div className="font-display text-sm font-black text-primary">+{identifiedReward.points} pts</div>
+                      </div>
+                    </div>
+                  )}
+
+                  {(identifiedReward.coins ?? 0) > 0 && (
+                    <div className="rounded-xl border bg-background/90 p-2.5 flex items-center gap-2">
+                      <Coins className="h-5 w-5 text-amber-500" />
                       <div>
                         <div className="text-[10px] text-muted-foreground font-bold uppercase">Moedas</div>
-                        <div className="font-display text-sm font-black text-yellow-500">+{identifiedReward.points} pts</div>
+                        <div className="font-display text-sm font-black text-amber-500">+{identifiedReward.coins} moedas</div>
+                      </div>
+                    </div>
+                  )}
+
+                  {(identifiedReward.cosmeticId || identifiedReward.avatarPieceId) && (
+                    <div className="col-span-2 rounded-xl border bg-background/90 p-2.5 flex items-center gap-2">
+                      <Sparkles className="h-5 w-5 text-fuchsia-500" />
+                      <div>
+                        <div className="text-[10px] text-muted-foreground font-bold uppercase">
+                          Cosmético ({identifiedReward.cosmeticKind === "aura" ? "Aura" : "Avatar"})
+                        </div>
+                        <div className="font-display text-xs font-black text-foreground">
+                          Desbloqueio exclusivo no seu perfil
+                        </div>
                       </div>
                     </div>
                   )}

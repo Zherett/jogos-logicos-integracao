@@ -8,7 +8,7 @@ import {
   Medal,
   Zap,
   Calendar,
-  Coins,
+  Star,
   ArrowRight,
   HelpCircle,
   Award,
@@ -19,8 +19,14 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import type { GameId } from "@/lib/game-storage";
 import type { RankedMilestoneReward } from "@/lib/game-codes";
+import { canAccessShopAndCustomization, canViewCoinsWallet } from "@/lib/daily-rewards";
 import { usePlayerAuth } from "@/lib/player-auth";
-import { getActiveAccount, syncActiveProfileChangeToPlayFab } from "@/lib/playfab";
+import {
+  getActiveAccount,
+  isAdminUnlockedSession,
+  syncActiveProfileChangeToPlayFab,
+  syncSinglePlayerFromPlayFab,
+} from "@/lib/playfab";
 import {
   claimRankedMilestoneReward,
   countUnlockedRankedMedals,
@@ -54,7 +60,7 @@ export function WeeklyTournamentDialog({
   const [, setTick] = useState(0);
   const [activeTab, setActiveTab] = useState<"geral" | "trilha">("geral");
   const [rulesOpen, setRulesOpen] = useState(false);
-  const [claimFeedback, setClaimFeedback] = useState<string | null>(null);
+  const [claimFeedback, setClaimFeedback] = useState<{ tone: "success" | "error"; text: string } | null>(null);
   const [claimingMilestone, setClaimingMilestone] = useState(false);
   const [confirmPaidOpen, setConfirmPaidOpen] = useState(false);
   const [spendingEntry, setSpendingEntry] = useState(false);
@@ -145,34 +151,67 @@ export function WeeklyTournamentDialog({
   const rankInfo = getTournamentRank(currentPoints);
   const rankedMedalsSummary = countUnlockedRankedMedals(profile);
   const rankedSeasonId = auth.adminConfig.rankedSeasonId ?? 1;
+  const allowShopRewards = canAccessShopAndCustomization(
+    profile,
+    isAdminUnlockedSession(),
+    auth.adminConfig,
+  );
+  const allowCoinsRewards = canViewCoinsWallet(
+    profile,
+    isAdminUnlockedSession(),
+    auth.adminConfig,
+  );
 
   async function handleClaimMilestone(rankId: TournamentRankId, reward: RankedMilestoneReward) {
     if (!profile || claimingMilestone) return;
+    if (reward.type === "card_pack" && !allowShopRewards) {
+      setClaimFeedback({
+        tone: "error",
+        text: "Pacotes de cartas da Trilha serão liberados assim que a Loja abrir para os alunos!",
+      });
+      return;
+    }
+    if (reward.type === "coins" && !allowCoinsRewards) {
+      setClaimFeedback({
+        tone: "error",
+        text: "Recompensas em Moedas serão liberadas assim que a Carteira de Moedas abrir para os alunos!",
+      });
+      return;
+    }
     setClaimingMilestone(true);
     setClaimFeedback(null);
     try {
+      await syncSinglePlayerFromPlayFab(profile.nickNormalized || profile.id).catch(() => null);
       const liveProfile = getActiveAccount()?.profile ?? profile;
       const res = claimRankedMilestoneReward({
         profile: liveProfile,
         rankId,
         seasonId: rankedSeasonId,
         reward,
-        currentPoints,
+        currentPoints: Math.max(currentPoints, liveProfile.bestTournamentPoints ?? 0),
       });
       if (!res.ok || !res.updatedProfile) {
-        setClaimFeedback(res.error ?? "Não foi possível resgatar a recompensa.");
+        setClaimFeedback({
+          tone: "error",
+          text: res.error ?? "Não foi possível resgatar a recompensa.",
+        });
         return;
       }
       await syncActiveProfileChangeToPlayFab(res.updatedProfile, { requireServerSync: true });
       await auth.refresh();
-      setClaimFeedback("Recompensa resgatada e adicionada ao seu inventário!");
+      setClaimFeedback({
+        tone: "success",
+        text: "Recompensa resgatada e adicionada à sua conta!",
+      });
       setTick((t) => t + 1);
     } catch (err) {
-      setClaimFeedback(
-        err instanceof Error && err.message
-          ? err.message
-          : "Sem conexão ou sessão expirada. Faça login novamente para resgatar.",
-      );
+      setClaimFeedback({
+        tone: "error",
+        text:
+          err instanceof Error && err.message
+            ? err.message
+            : "Sem conexão ou sessão expirada. Faça login novamente para resgatar.",
+      });
     } finally {
       setClaimingMilestone(false);
     }
@@ -399,7 +438,7 @@ export function WeeklyTournamentDialog({
                 >
                   {snap.canAffordPaid ? (
                     <>
-                      <Coins className="mr-2 h-5 w-5" /> Jogar Entrada Paga
+                      <Star className="mr-2 h-5 w-5" /> Jogar Entrada Paga
                     </>
                   ) : (
                     <>
@@ -484,8 +523,14 @@ export function WeeklyTournamentDialog({
         ) : (
           <div className="space-y-3">
             {claimFeedback && (
-              <div className="rounded-2xl border border-emerald-500/40 bg-emerald-500/15 px-3 py-2 text-center text-xs font-bold text-emerald-700 dark:text-emerald-300">
-                {claimFeedback}
+              <div
+                className={`rounded-2xl border px-3 py-2 text-center text-xs font-bold ${
+                  claimFeedback.tone === "error"
+                    ? "border-rose-500/40 bg-rose-500/15 text-rose-700 dark:text-rose-300"
+                    : "border-emerald-500/40 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                }`}
+              >
+                {claimFeedback.text}
               </div>
             )}
             <RankedPathTrack
@@ -495,6 +540,8 @@ export function WeeklyTournamentDialog({
               claimedMilestones={profile.claimedRankedMilestones ?? []}
               rewardsMap={auth.adminConfig.rankedMilestoneRewards ?? {}}
               cardPacks={auth.adminConfig.cardPacks}
+              allowShopRewards={allowShopRewards}
+              allowCoinsRewards={allowCoinsRewards}
               onClaimReward={handleClaimMilestone}
             />
           </div>
@@ -548,7 +595,7 @@ export function WeeklyTournamentDialog({
         <DialogContent className="rounded-3xl sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 font-display text-xl font-extrabold text-foreground">
-              <Coins className="h-5 w-5 text-amber-500" /> Confirmar Entrada Ranqueada
+              <Star className="h-5 w-5 text-amber-500" /> Confirmar Entrada Ranqueada
             </DialogTitle>
             <DialogDescription className="text-sm text-muted-foreground pt-1">
               As suas entradas gratuitas acabaram. Você deseja gastar <b>{snap.paidCost} pontos</b> para entrar na partida?
@@ -600,6 +647,7 @@ export function WeeklyTournamentDialog({
                     setSpendingEntry(false);
                     return;
                   }
+                  await auth.refresh();
                   setConfirmPaidOpen(false);
                   onOpenChange(false);
                   onStartRankedEntry(snap.gameId);

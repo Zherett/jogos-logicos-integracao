@@ -917,7 +917,7 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
                         title="Pontuação acumulada em partidas, medalhas e desafios."
                         className="inline-flex items-center rounded-full bg-amber-500/15 border border-amber-500/30 px-2.5 py-0.5 text-[10.5px] sm:text-[11px] font-extrabold text-amber-600 dark:text-amber-400"
                       >
-                        🪙 {profile.careerPoints ?? profile.pointsBalance ?? 0} Pontos
+                        ⭐ {profile.careerPoints ?? profile.pointsBalance ?? 0} Pontos
                       </span>
 
                       {showCoinsWallet &&
