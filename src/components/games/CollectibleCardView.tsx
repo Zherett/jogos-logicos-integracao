@@ -88,7 +88,7 @@ export function CollectibleCardView({
       {/* 2. Moldura da Imagem / GIF ao Centro */}
       <div
         className={`relative z-20 mx-auto w-full overflow-hidden rounded-xl border border-slate-300/80 dark:border-black/40 shadow-sm aspect-[4/3] ${
-          hasValidUrl && !locked ? "bg-slate-950/20" : "bg-white dark:bg-slate-950/75"
+          hasValidUrl && !locked ? "bg-slate-900" : "bg-white dark:bg-slate-950/75"
         }`}
       >
         {locked ? (
@@ -105,7 +105,7 @@ export function CollectibleCardView({
                 aria-hidden="true"
                 loading="lazy"
                 decoding="async"
-                className="pointer-events-none absolute inset-0 h-full w-full scale-125 object-cover blur-xl saturate-150 brightness-90"
+                className="pointer-events-none absolute -inset-3 h-[calc(100%+1.5rem)] w-[calc(100%+1.5rem)] object-cover blur-xl saturate-150 brightness-90"
               />
             )}
             <img

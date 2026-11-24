@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
   Check,
@@ -29,7 +29,6 @@ import {
   playCardMagicReveal,
   playCardsFlipAll,
   playCardsGather,
-  playCardsSpread,
   playCardToss,
   playPackBodyWhoosh,
   playPackTear,
@@ -52,7 +51,7 @@ interface PackOpeningModalProps {
 }
 
 type Stage = "sealed" | "tearing" | "stack" | "summary";
-type SummaryPhase = "gathering" | "flipping" | "spread";
+type SummaryPhase = "gathering" | "flipping" | "browsing";
 
 export function PackIconSvg({
   icon,
@@ -214,15 +213,14 @@ export function PackOpeningModal({
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
   const [isExiting, setIsExiting] = useState(false);
-  const [summaryOffsets, setSummaryOffsets] = useState<
-    Array<{ dx: number; dy: number; scale: number; rot: number }>
-  >([]);
-  const [inspectIndex, setInspectIndex] = useState<number | null>(null);
+  const [summaryIndex, setSummaryIndex] = useState(0);
+  const [stackAnim, setStackAnim] = useState<{
+    kind: "to-back" | "to-front";
+    cardIndex: number;
+  } | null>(null);
   const timersRef = useRef<number[]>([]);
   const openingLockRef = useRef(false);
   const activePackIdRef = useRef<string | null>(null);
-  const summaryContainerRef = useRef<HTMLDivElement | null>(null);
-  const slotRefs = useRef<Array<HTMLDivElement | null>>([]);
 
   function clearAllTimers() {
     for (const id of timersRef.current) {
@@ -249,31 +247,9 @@ export function PackOpeningModal({
     setCurrentIndex(0);
     setIsFlipped(false);
     setIsExiting(false);
-    setSummaryOffsets([]);
-    setInspectIndex(null);
+    setSummaryIndex(0);
+    setStackAnim(null);
   }, [pack]);
-
-  useLayoutEffect(() => {
-    if (stage !== "summary" || !summaryContainerRef.current || orderedCards.length === 0) return;
-    const containerRect = summaryContainerRef.current.getBoundingClientRect();
-    const centerX = containerRect.left + containerRect.width / 2;
-    const centerY = containerRect.top + containerRect.height / 2;
-
-    const nextOffsets = orderedCards.map((_, idx) => {
-      const el = slotRefs.current[idx];
-      if (!el) return { dx: 0, dy: 0, scale: 1.5, rot: 0 };
-      const rect = el.getBoundingClientRect();
-      const slotCenterX = rect.left + rect.width / 2;
-      const slotCenterY = rect.top + rect.height / 2;
-      const dx = centerX - slotCenterX;
-      const dy = centerY - slotCenterY;
-      const scale = rect.width > 0 ? Math.min(1.85, Math.max(1.25, 220 / rect.width)) : 1.55;
-      const rot = (idx - (orderedCards.length - 1) / 2) * 2.5;
-      return { dx, dy, scale, rot };
-    });
-
-    setSummaryOffsets(nextOffsets);
-  }, [stage, orderedCards]);
 
   useEffect(() => {
     return () => {
@@ -357,6 +333,8 @@ export function PackOpeningModal({
         setCurrentIndex((prev) => prev + 1);
       } else {
         setIsExiting(false);
+        setSummaryIndex(0);
+        setStackAnim(null);
         setSummaryPhase("gathering");
         setStage("summary");
         playCardsGather();
@@ -367,11 +345,32 @@ export function PackOpeningModal({
         }, 480);
 
         scheduleTimer(() => {
-          setSummaryPhase("spread");
-          playCardsSpread(orderedCards.length);
-        }, 1050);
+          setSummaryPhase("browsing");
+        }, 1100);
       }
     }, 360);
+  }
+
+  function handleSummaryNext() {
+    if (summaryPhase !== "browsing" || stackAnim || orderedCards.length <= 1) return;
+    const outgoingIdx = summaryIndex;
+    setStackAnim({ kind: "to-back", cardIndex: outgoingIdx });
+    playCardToss();
+    scheduleTimer(() => {
+      setSummaryIndex((prev) => (prev + 1) % orderedCards.length);
+      setStackAnim(null);
+    }, 460);
+  }
+
+  function handleSummaryPrev() {
+    if (summaryPhase !== "browsing" || stackAnim || orderedCards.length <= 1) return;
+    const incomingIdx = (summaryIndex - 1 + orderedCards.length) % orderedCards.length;
+    setStackAnim({ kind: "to-front", cardIndex: incomingIdx });
+    playCardToss();
+    scheduleTimer(() => {
+      setSummaryIndex(incomingIdx);
+      setStackAnim(null);
+    }, 460);
   }
 
   const colorMeta = CARD_PACK_COLOR_META[pack?.colorTheme ?? "teal"] ?? CARD_PACK_COLOR_META.teal;
@@ -390,11 +389,7 @@ export function PackOpeningModal({
       currentCard.rarity === "lendaria" ||
       currentCard.isFoil);
 
-  const inspectedCard =
-    inspectIndex !== null && orderedCards[inspectIndex] ? orderedCards[inspectIndex] : null;
-
   return (
-    <>
     <Dialog
       open={Boolean(pack)}
       onOpenChange={(open) => {
@@ -404,11 +399,7 @@ export function PackOpeningModal({
         }
       }}
     >
-      <DialogContent
-        className={`${
-          stage === "summary" ? "max-w-5xl" : "max-w-md"
-        } max-h-[90vh] overflow-y-auto rounded-3xl transition-all`}
-      >
+      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto rounded-3xl">
         <DialogHeader>
           <DialogTitle className="font-display text-lg sm:text-xl font-extrabold flex flex-wrap items-center gap-2">
             <PackageOpen className="h-5 w-5 text-primary" />
@@ -448,7 +439,7 @@ export function PackOpeningModal({
               </div>
             </div>
 
-            <div className="flex w-full flex-col items-center gap-2 pt-3">
+            <div className="flex h-24 w-full flex-col items-center justify-start gap-2 pt-3">
               {openError && (
                 <div className="flex w-full flex-col items-center gap-2 rounded-xl bg-destructive/15 px-3 py-2 text-center text-xs font-semibold text-destructive">
                   <p>{openError}</p>
@@ -486,44 +477,50 @@ export function PackOpeningModal({
 
         {/* ETAPA 2: ANIMAÇÃO DE RASGO E SAÍDA DAS CARTAS */}
         {stage === "tearing" && (
-          <div className="relative flex h-[34rem] flex-col items-center justify-center overflow-hidden py-2">
-            {/* Pilha de cartas de costas no tamanho real (w-60 h-[21rem]) escondida atrás do pacote */}
-            <div className="animate-pack-cards-emerge relative z-10 h-[21rem] w-60">
-              <CardBackFace minimal />
-            </div>
+          <div className="relative flex h-[34rem] flex-col items-center justify-between overflow-hidden py-2">
+            <div className="relative flex flex-1 w-full items-center justify-center">
+              {/* Pilha de cartas de costas no tamanho real (w-60 h-[21rem]) escondida atrás do pacote */}
+              <div className="animate-pack-cards-emerge relative z-10 h-[21rem] w-60">
+                <CardBackFace minimal />
+              </div>
 
-            {/* Embalagem 100% sólida do pacote rasgando na frente */}
-            <div className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center overflow-hidden">
-              <div className="relative w-[17rem]">
-                {/* Tira superior sólida destacada */}
-                <div className="animate-pack-top-rip">
-                  <SerratedEdge position="top" bgClass={colorMeta.topBgClass} />
-                  <div className={`relative h-9 w-full overflow-hidden ${colorMeta.topBgClass}`}>
-                    {isFoilPack && <FoilOverlay />}
-                  </div>
-                </div>
-
-                {/* Linha de rasgo luminosa */}
-                <div className="relative h-1 w-full">
-                  <div className="animate-pack-tear-line h-1 rounded-full bg-white shadow-[0_0_12px_2px_#5eead4]" />
-                </div>
-
-                {/* Corpo sólido do pacote descendo e saindo da tela */}
-                <div className="animate-pack-body-drop">
-                  <div
-                    className={`relative flex h-[22.5rem] w-full items-center justify-center overflow-hidden ${colorMeta.gradientClass}`}
-                  >
-                    {isFoilPack && <FoilOverlay />}
-                    <div
-                      className={`relative z-20 grid h-24 w-24 place-items-center rounded-3xl border-2 shadow-inner ${colorMeta.iconBoxClass}`}
-                    >
-                      <PackIconSvg icon={packIcon} className={`h-12 w-12 ${colorMeta.iconClass}`} />
+              {/* Embalagem 100% sólida do pacote rasgando exatamente na mesma posição do pacote fechado */}
+              <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
+                <div className="relative w-[17rem]">
+                  {/* Tira superior sólida destacada (h-9 = 2.25rem) */}
+                  <div className="animate-pack-top-rip relative z-20">
+                    <SerratedEdge position="top" bgClass={colorMeta.topBgClass} />
+                    <div className={`relative h-9 w-full overflow-hidden ${colorMeta.topBgClass}`}>
+                      {isFoilPack && <FoilOverlay />}
                     </div>
                   </div>
-                  <SerratedEdge position="bottom" bgClass={colorMeta.bottomBgClass} />
+
+                  {/* Linha de rasgo luminosa posicionada sobre a emenda (sem vão branco prévio) */}
+                  <div className="pointer-events-none absolute top-[calc(0.625rem+2.25rem-1px)] left-0 right-0 z-30 h-0.5">
+                    <div className="animate-pack-tear-line h-full w-full rounded-full bg-white shadow-[0_0_12px_2px_#5eead4]" />
+                    <div className="animate-pack-tear-tip absolute top-1/2 -translate-x-1/2 -translate-y-1/2 h-2.5 w-2.5 rounded-full bg-white shadow-[0_0_14px_4px_#5eead4]" />
+                  </div>
+
+                  {/* Corpo sólido do pacote descendo e saindo da tela (h-[22.25rem], soma exata = 24.5rem) */}
+                  <div className="animate-pack-body-drop relative z-10">
+                    <div
+                      className={`relative flex h-[22.25rem] w-full items-center justify-center overflow-hidden ${colorMeta.gradientClass}`}
+                    >
+                      {isFoilPack && <FoilOverlay />}
+                      <div
+                        className={`relative z-20 grid h-24 w-24 -translate-y-[1.125rem] place-items-center rounded-3xl border-2 shadow-inner ${colorMeta.iconBoxClass}`}
+                      >
+                        <PackIconSvg icon={packIcon} className={`h-12 w-12 ${colorMeta.iconClass}`} />
+                      </div>
+                    </div>
+                    <SerratedEdge position="bottom" bgClass={colorMeta.bottomBgClass} />
+                  </div>
                 </div>
               </div>
             </div>
+
+            {/* Espaçador idêntico ao rodapé da etapa 1 para evitar qualquer salto vertical */}
+            <div className="h-24 w-full shrink-0" aria-hidden="true" />
           </div>
         )}
 
@@ -578,16 +575,16 @@ export function PackOpeningModal({
                 }`}
               >
                 <div
-                  className={`preserve-3d relative min-h-[21rem] w-full will-change-transform transition-transform duration-600 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                  className={`preserve-3d relative min-h-[21rem] w-full transition-transform duration-600 ease-[cubic-bezier(0.22,1,0.36,1)] ${
                     isFlipped ? "rotate-y-180" : "hover:-translate-y-1"
                   }`}
                 >
                   {/* Verso (de costas) */}
                   <div
-                    className={`backface-hidden absolute inset-0 rounded-2xl ${
-                      isFlipped ? "pointer-events-none" : ""
+                    className={`backface-hidden absolute inset-0 rounded-2xl transition-opacity duration-150 ${
+                      isFlipped ? "pointer-events-none opacity-0 delay-150" : "opacity-100"
                     }`}
-                    style={{ transform: "rotateY(0deg) translateZ(2px)" }}
+                    style={{ transform: "rotateY(0deg)" }}
                   >
                     <CardBackFace />
                   </div>
@@ -597,7 +594,7 @@ export function PackOpeningModal({
                     className={`backface-hidden relative w-full rounded-2xl ${
                       isFlipped ? "" : "pointer-events-none"
                     }`}
-                    style={{ transform: "rotateY(180deg) translateZ(2px)" }}
+                    style={{ transform: "rotateY(180deg)" }}
                   >
                     {/* Aura mágica visual ao revelar Épica/Lendária ou Foil */}
                     {isFlipped && !isExiting && (isEpicOrHigher || isFoilCard) && (
@@ -682,69 +679,84 @@ export function PackOpeningModal({
           </div>
         )}
 
-        {/* ETAPA 4: RESUMO FINAL (JUNTAR DE COSTAS -> VIRAR JUNTAS -> ESPALHAR SUAVEMENTE) */}
-        {stage === "summary" && (
-          <div className="space-y-4 py-2">
+        {/* ETAPA 4: RESUMO FINAL EM PILHA EMPILHADA (EMPILHAR DE COSTAS -> VIRAR JUNTAS -> FOLHEAR PILHA) */}
+        {stage === "summary" && orderedCards.length > 0 && (
+          <div className="flex h-[34rem] flex-col items-center justify-between py-2 overflow-hidden">
+            {/* Cabeçalho de posição na pilha */}
+            <div className="flex w-full items-center justify-between px-2 text-xs font-bold text-muted-foreground">
+              <span>Resumo do Pacote</span>
+              <span className="rounded-full bg-secondary px-2.5 py-0.5 font-mono text-[11px] font-extrabold text-foreground">
+                {summaryIndex + 1} / {orderedCards.length}
+              </span>
+            </div>
+
+            {/* Pilha central em tamanho total */}
             <div
-              ref={summaryContainerRef}
-              className={`relative min-h-[22rem] flex items-center justify-center ${
+              className={`relative flex flex-1 w-full items-center justify-center ${
                 summaryPhase === "gathering" ? "animate-summary-gather" : ""
               }`}
             >
-              <div className="flex w-full flex-wrap items-stretch justify-center gap-4">
+              <div className="perspective-1000 relative flex w-60 items-center justify-center">
                 {orderedCards.map((card, idx) => {
-                  const off = summaryOffsets[idx];
-                  const isStacked = summaryPhase !== "spread";
-                  const transform =
-                    isStacked && off
-                      ? `translate(${off.dx}px, ${off.dy}px) rotate(${off.rot}deg) scale(${off.scale})`
-                      : "translate(0px, 0px) rotate(0deg) scale(1)";
+                  const total = orderedCards.length;
+                  const depth = (idx - summaryIndex + total) % total;
+                  const isTop = depth === 0;
+                  const isAnimatingToBack =
+                    stackAnim?.kind === "to-back" && stackAnim.cardIndex === idx;
+                  const isAnimatingToFront =
+                    stackAnim?.kind === "to-front" && stackAnim.cardIndex === idx;
+
+                  // Posicionamento estático da pilha (carta do topo em 0, demais levemente deslocadas para trás)
+                  const stackY = Math.min(depth, 4) * 5;
+                  const stackScale = 1 - Math.min(depth, 4) * 0.03;
+                  const stackRotate = depth === 0 ? 0 : (depth % 2 === 1 ? 1.2 : -1.2);
+                  const zIndex = isAnimatingToBack || isAnimatingToFront ? undefined : total - depth;
 
                   return (
                     <div
-                      key={`summary_${card.id}_${idx}`}
-                      ref={(el) => {
-                        slotRefs.current[idx] = el;
-                      }}
-                      className="perspective-1000 relative w-44 sm:w-48"
+                      key={`summary_stack_${card.id}_${idx}`}
+                      className={`${isTop ? "relative" : "absolute inset-x-0 top-0"} transition-all duration-300 ${
+                        isAnimatingToBack
+                          ? "animate-stack-send-to-back"
+                          : isAnimatingToFront
+                            ? "animate-stack-bring-to-front"
+                            : ""
+                      }`}
                       style={{
-                        zIndex: isStacked ? idx + 1 : 1,
-                        transform,
-                        transition:
-                          summaryPhase === "spread"
-                            ? "transform 700ms cubic-bezier(0.22, 1, 0.36, 1)"
-                            : "none",
-                        transitionDelay: summaryPhase === "spread" ? `${idx * 90}ms` : "0ms",
+                        zIndex,
+                        transform:
+                          isAnimatingToBack || isAnimatingToFront
+                            ? undefined
+                            : `translateY(${stackY}px) scale(${stackScale}) rotate(${stackRotate}deg)`,
                       }}
                     >
                       <div
-                        className={`preserve-3d relative w-full will-change-transform transition-transform duration-600 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                        className={`preserve-3d relative min-h-[21rem] w-full transition-transform duration-600 ease-[cubic-bezier(0.22,1,0.36,1)] ${
                           summaryPhase !== "gathering" ? "rotate-y-180" : ""
                         }`}
                       >
                         {/* Verso da carta */}
                         <div
-                          className={`backface-hidden absolute inset-0 rounded-2xl ${
-                            summaryPhase !== "gathering" ? "pointer-events-none" : ""
+                          className={`backface-hidden absolute inset-0 rounded-2xl transition-opacity duration-150 ${
+                            summaryPhase !== "gathering"
+                              ? "pointer-events-none opacity-0 delay-150"
+                              : "opacity-100"
                           }`}
-                          style={{ transform: "rotateY(0deg) translateZ(2px)" }}
+                          style={{ transform: "rotateY(0deg)" }}
                         >
                           <CardBackFace minimal />
                         </div>
 
                         {/* Frente da carta */}
                         <div
-                          className={`backface-hidden w-full rounded-2xl ${
+                          className={`backface-hidden relative w-full rounded-2xl ${
                             summaryPhase !== "gathering" ? "" : "pointer-events-none"
                           }`}
-                          style={{ transform: "rotateY(180deg) translateZ(2px)" }}
+                          style={{ transform: "rotateY(180deg)" }}
                         >
                           <CollectibleCardView
                             card={card}
                             isNew={newlyDiscovered.includes(card.id)}
-                            onClick={
-                              summaryPhase === "spread" ? () => setInspectIndex(idx) : undefined
-                            }
                           />
                         </div>
                       </div>
@@ -754,15 +766,48 @@ export function PackOpeningModal({
               </div>
             </div>
 
+            {/* Controles de navegação circular na pilha + Concluir */}
             <div
-              className={`flex flex-wrap items-center justify-between gap-2 transition-opacity duration-500 ${
-                summaryPhase === "spread" ? "opacity-100" : "opacity-0 pointer-events-none"
+              className={`flex w-full flex-col items-center gap-2 pt-2 transition-opacity duration-300 ${
+                summaryPhase === "browsing" ? "opacity-100" : "opacity-0 pointer-events-none"
               }`}
             >
-              <span className="text-xs font-semibold text-muted-foreground">
-                Clique em qualquer carta para vê-la em tamanho real.
-              </span>
-              <Button type="button" onClick={onClose} className="rounded-xl font-bold">
+              <div className="flex w-full items-center justify-between gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={Boolean(stackAnim) || orderedCards.length <= 1}
+                  onClick={handleSummaryPrev}
+                  className="rounded-xl font-bold"
+                >
+                  <ChevronLeft className="h-4 w-4 mr-1" /> Anterior
+                </Button>
+
+                <div className="flex items-center gap-1.5">
+                  {orderedCards.map((c, idx) => (
+                    <span
+                      key={`dot_${c.id}_${idx}`}
+                      className={`h-2 rounded-full transition-all ${
+                        idx === summaryIndex ? "w-5 bg-primary" : "w-2 bg-muted-foreground/30"
+                      }`}
+                    />
+                  ))}
+                </div>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={Boolean(stackAnim) || orderedCards.length <= 1}
+                  onClick={handleSummaryNext}
+                  className="rounded-xl font-bold"
+                >
+                  Próxima <ChevronRight className="h-4 w-4 ml-1" />
+                </Button>
+              </div>
+
+              <Button type="button" onClick={onClose} className="w-full rounded-xl font-bold">
                 <Check className="h-4 w-4 mr-1.5" /> Concluir
               </Button>
             </div>
@@ -770,56 +815,5 @@ export function PackOpeningModal({
         )}
       </DialogContent>
     </Dialog>
-
-    {/* Lightbox de inspeção em tamanho real de uma carta do resumo */}
-    <Dialog open={Boolean(inspectedCard)} onOpenChange={(open) => !open && setInspectIndex(null)}>
-      <DialogContent className="max-w-sm rounded-3xl p-5">
-        <DialogHeader>
-          <DialogTitle className="font-display text-base font-extrabold flex items-center justify-between gap-2">
-            <span>Carta do Pacote</span>
-            {inspectIndex !== null && (
-              <span className="rounded-full bg-secondary px-2.5 py-0.5 font-mono text-xs font-bold text-muted-foreground">
-                {inspectIndex + 1} / {orderedCards.length}
-              </span>
-            )}
-          </DialogTitle>
-        </DialogHeader>
-
-        {inspectedCard && (
-          <div className="mx-auto w-full max-w-[19rem] py-1">
-            <CollectibleCardView
-              card={inspectedCard}
-              isNew={newlyDiscovered.includes(inspectedCard.id)}
-            />
-          </div>
-        )}
-
-        {orderedCards.length > 1 && inspectIndex !== null && (
-          <div className="flex items-center justify-between gap-2 pt-1">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="rounded-xl font-bold"
-              onClick={() =>
-                setInspectIndex((inspectIndex - 1 + orderedCards.length) % orderedCards.length)
-              }
-            >
-              <ChevronLeft className="h-4 w-4 mr-1" /> Anterior
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="rounded-xl font-bold"
-              onClick={() => setInspectIndex((inspectIndex + 1) % orderedCards.length)}
-            >
-              Próxima <ChevronRight className="h-4 w-4 ml-1" />
-            </Button>
-          </div>
-        )}
-      </DialogContent>
-    </Dialog>
-    </>
   );
 }
