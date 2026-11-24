@@ -26,7 +26,11 @@ import {
 } from "@/lib/cosmetics-catalog";
 import type { PlatformAdminConfig } from "@/lib/game-codes";
 import { usePlayerAuth } from "@/lib/player-auth";
-import { syncActiveProfileChangeToPlayFab } from "@/lib/playfab";
+import {
+  runRetroactiveCoinsAudit,
+  syncActiveProfileChangeToPlayFab,
+  type RetroactiveCoinsAuditResult,
+} from "@/lib/playfab";
 import { getAuraPresentation, PlayerAvatarBadge } from "./PlayerAvatarBadge";
 
 interface AdminStoreTabProps {
@@ -50,6 +54,8 @@ export function AdminStoreTab({
   const [newAvatarPrice, setNewAvatarPrice] = useState(250);
   const [newAvatarFeatured, setNewAvatarFeatured] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [retroAuditLoading, setRetroAuditLoading] = useState(false);
+  const [retroAuditPreview, setRetroAuditPreview] = useState<RetroactiveCoinsAuditResult | null>(null);
 
   const avatars = useMemo(
     () => mergeWithDefaultAvatars(draft.avatarsCatalog),
@@ -289,6 +295,113 @@ export function AdminStoreTab({
           >
             <Save className="h-4 w-4" /> Salvar Regras de Moedas
           </Button>
+
+          {/* Retroatribuição de Moedas por Medalhas (Idempotente) */}
+          <div className="border-t pt-4 space-y-3">
+            <div className="space-y-0.5">
+              <div className="font-display text-sm font-black text-foreground flex items-center gap-1.5">
+                <Coins className="h-4 w-4 text-amber-500" /> Retroatribuição de Moedas por Medalhas
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Calcula e credita moedas retroativamente com base <b>exclusivamente nas medalhas já conquistadas</b> por cada aluno, usando a tabela por raridade acima. É idempotente: nunca paga duas vezes pela mesma medalha.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={retroAuditLoading}
+                onClick={async () => {
+                  setRetroAuditLoading(true);
+                  try {
+                    const res = await runRetroactiveCoinsAudit({ dryRun: true });
+                    setRetroAuditPreview(res);
+                    onShowFeedback?.(
+                      `🔍 Simulação concluída: ${res.eligibleStudentsCount} aluno(s) receberiam ${res.totalCoinsToAward} moedas no total.`,
+                    );
+                  } finally {
+                    setRetroAuditLoading(false);
+                  }
+                }}
+                className="rounded-xl text-xs font-bold gap-1.5"
+              >
+                <Eye className="h-3.5 w-3.5" />
+                {retroAuditLoading ? "Calculando..." : "Simular Retroatribuição (Prévia)"}
+              </Button>
+
+              <Button
+                type="button"
+                disabled={retroAuditLoading}
+                onClick={async () => {
+                  if (
+                    !window.confirm(
+                      "Deseja aplicar a retroatribuição de moedas baseada nas medalhas para todos os alunos elegíveis e sincronizar na nuvem?",
+                    )
+                  ) {
+                    return;
+                  }
+                  setRetroAuditLoading(true);
+                  try {
+                    const res = await runRetroactiveCoinsAudit({ dryRun: false });
+                    setRetroAuditPreview(res);
+                    auth.refresh();
+                    onShowFeedback?.(
+                      `🪙 Retroatribuição aplicada! ${res.eligibleStudentsCount} aluno(s) receberam ${res.totalCoinsToAward} moedas.`,
+                    );
+                  } finally {
+                    setRetroAuditLoading(false);
+                  }
+                }}
+                className="rounded-xl text-xs font-bold gap-1.5 bg-amber-500 hover:bg-amber-600 text-zinc-950"
+              >
+                <Coins className="h-3.5 w-3.5" />
+                {retroAuditLoading ? "Aplicando..." : "Aplicar Retroatribuição na Nuvem"}
+              </Button>
+            </div>
+
+            {retroAuditPreview && (
+              <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-3 space-y-2 text-xs">
+                <div className="flex flex-wrap items-center justify-between gap-2 font-bold">
+                  <span>
+                    {retroAuditPreview.dryRun ? "📋 Prévia (não aplicada)" : "✅ Resultado Aplicado"}
+                  </span>
+                  <span className="font-mono text-amber-600 dark:text-amber-400">
+                    {retroAuditPreview.eligibleStudentsCount} / {retroAuditPreview.scannedCount} alunos • +{retroAuditPreview.totalCoinsToAward} moedas
+                  </span>
+                </div>
+                {retroAuditPreview.students.length === 0 ? (
+                  <p className="text-[11px] text-muted-foreground">
+                    Nenhum aluno com moedas de medalha pendentes de retroatribuição.
+                  </p>
+                ) : (
+                  <div className="max-h-44 overflow-y-auto divide-y divide-border/50 rounded-xl border bg-background/80">
+                    {retroAuditPreview.students.slice(0, 30).map((st) => (
+                      <div
+                        key={st.playerId}
+                        className="flex items-center justify-between gap-2 px-2.5 py-1.5 text-[11px]"
+                      >
+                        <div className="min-w-0">
+                          <span className="font-bold text-foreground">{st.nick}</span>
+                          <span className="text-muted-foreground ml-1.5">
+                            ({st.medalsCount} {st.medalsCount === 1 ? "medalha" : "medalhas"})
+                          </span>
+                        </div>
+                        <span className="font-mono font-black text-amber-600 dark:text-amber-400 shrink-0">
+                          {st.coinsBefore} → {st.coinsAfter} (+{st.coinsToAward})
+                        </span>
+                      </div>
+                    ))}
+                    {retroAuditPreview.students.length > 30 && (
+                      <div className="px-2.5 py-1.5 text-[10px] text-muted-foreground text-center">
+                        ... e mais {retroAuditPreview.students.length - 30} aluno(s).
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       )}
 

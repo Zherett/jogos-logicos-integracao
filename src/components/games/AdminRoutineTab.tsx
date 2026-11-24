@@ -1,15 +1,19 @@
 import { useState } from "react";
-import { Calendar, CheckCircle2, Flame, RotateCcw, Save, Trophy } from "lucide-react";
+import { Calendar, CheckCircle2, Flame, Gift, RotateCcw, Save, Trophy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DAYS_OF_WEEK } from "@/lib/custom-events";
+import { mergeWithDefaultChests } from "@/lib/chests-catalog";
 import {
   DAILY_REWARDS_SCHEDULE,
   DAILY_STREAK_BONUS_CAP,
   DAILY_STREAK_BONUS_STEP,
+  DEFAULT_DAY7_CHEST_ID,
   resolveDailyRewardsSchedule,
 } from "@/lib/daily-rewards";
+import { DEFAULT_DAILY_MISSION_COINS } from "@/lib/daily-missions";
+import { DEFAULT_WEEKLY_MISSION_COINS } from "@/lib/weekly-missions";
 import type { PlatformAdminConfig } from "@/lib/game-codes";
 
 interface AdminRoutineTabProps {
@@ -47,9 +51,13 @@ export function AdminRoutineTab({
   const [saving, setSaving] = useState(false);
 
   const routine = draft.weeklyRoutineConfig ?? {};
-  const tiers = resolveDailyRewardsSchedule(routine);
+  const availableChests = mergeWithDefaultChests(draft.chestsCatalog).filter((c) => c.enabled !== false);
+  const selectedDay7ChestId = routine.day7ChestId || DEFAULT_DAY7_CHEST_ID;
+  const tiers = resolveDailyRewardsSchedule(routine, draft.chestsCatalog);
   const dailyOverrides = routine.dailyMissionOverrides ?? {};
   const weeklyOverrides = routine.weeklyMissionOverrides ?? {};
+  const globalDailyMissionCoins = draft.coinRewardsConfig?.dailyMissionCoins ?? DEFAULT_DAILY_MISSION_COINS;
+  const globalWeeklyMissionCoins = draft.coinRewardsConfig?.weeklyMissionCoins ?? DEFAULT_WEEKLY_MISSION_COINS;
 
   function updateRoutine(patch: NonNullable<PlatformAdminConfig["weeklyRoutineConfig"]>) {
     setDraft({
@@ -100,6 +108,7 @@ export function AdminRoutineTab({
         streakXpStep: 0,
         streakCoinsStep: 0,
         streakCoinsCap: 0,
+        day7ChestId: DEFAULT_DAY7_CHEST_ID,
         dailyTiers: DAILY_REWARDS_SCHEDULE.map((t) => ({
           day: t.day,
           title: t.title,
@@ -279,6 +288,26 @@ export function AdminRoutineTab({
               </div>
             </div>
           </div>
+
+          <div className="border-t pt-3 space-y-2">
+            <div className="font-display text-xs font-black uppercase tracking-wider text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
+              <Gift className="h-3.5 w-3.5" /> Baú Especial do 7º Dia da Semana
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              Escolha qual baú do catálogo (padrão ou criado na aba Baús) será entregue ao aluno ao completar o 7º dia do ciclo.
+            </p>
+            <select
+              value={selectedDay7ChestId}
+              onChange={(e) => updateRoutine({ day7ChestId: e.target.value })}
+              className="h-9 w-full sm:max-w-md rounded-xl border border-emerald-500/40 bg-background px-3 text-xs font-bold"
+            >
+              {availableChests.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name} ({c.rarity.toUpperCase()})
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       )}
 
@@ -399,20 +428,28 @@ export function AdminRoutineTab({
                 </div>
                 <div className="sm:col-span-2 space-y-1">
                   <Label className="text-[10px] font-bold text-amber-600 dark:text-amber-400">
-                    Moedas
+                    Moedas (Padrão {globalDailyMissionCoins})
                   </Label>
                   <Input
                     type="number"
                     min={0}
-                    value={ov.coins ?? 0}
-                    onChange={(e) =>
+                    placeholder={String(globalDailyMissionCoins)}
+                    value={ov.coins ?? ""}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      const nextOv = { ...ov };
+                      if (raw === "") {
+                        delete nextOv.coins;
+                      } else {
+                        nextOv.coins = Math.max(0, Number(raw) || 0);
+                      }
                       updateRoutine({
                         dailyMissionOverrides: {
                           ...dailyOverrides,
-                          [tpl.key]: { ...ov, coins: Math.max(0, Number(e.target.value) || 0) },
+                          [tpl.key]: nextOv,
                         },
-                      })
-                    }
+                      });
+                    }}
                     className="h-8 rounded-lg text-xs"
                   />
                 </div>
@@ -487,20 +524,28 @@ export function AdminRoutineTab({
                 </div>
                 <div className="sm:col-span-2 space-y-1">
                   <Label className="text-[10px] font-bold text-amber-600 dark:text-amber-400">
-                    Moedas
+                    Moedas (Padrão {globalWeeklyMissionCoins})
                   </Label>
                   <Input
                     type="number"
                     min={0}
-                    value={ov.coins ?? 0}
-                    onChange={(e) =>
+                    placeholder={String(globalWeeklyMissionCoins)}
+                    value={ov.coins ?? ""}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      const nextOv = { ...ov };
+                      if (raw === "") {
+                        delete nextOv.coins;
+                      } else {
+                        nextOv.coins = Math.max(0, Number(raw) || 0);
+                      }
                       updateRoutine({
                         weeklyMissionOverrides: {
                           ...weeklyOverrides,
-                          [tpl.key]: { ...ov, coins: Math.max(0, Number(e.target.value) || 0) },
+                          [tpl.key]: nextOv,
                         },
-                      })
-                    }
+                      });
+                    }}
                     className="h-8 rounded-lg text-xs"
                   />
                 </div>

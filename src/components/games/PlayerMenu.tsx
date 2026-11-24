@@ -31,7 +31,15 @@ import {
   Coins,
   Palette,
 } from "lucide-react";
-import { canAccessDailyRewardsPreview, getCurrentCycleDay } from "@/lib/daily-rewards";
+import {
+  canAccessDailyRoutine,
+  canAccessShopAndCustomization,
+  canUseDefaultAvatar,
+  canViewCoinsWallet,
+  getDailyRewardClaimState,
+} from "@/lib/daily-rewards";
+import { generateDailyMissions } from "@/lib/daily-missions";
+import { generateWeeklyMissions } from "@/lib/weekly-missions";
 import { canAccessPromoCodeRedeem } from "@/lib/promo-codes";
 import { loadSpecialEvents, loadRecurringEvents } from "@/lib/custom-events";
 import { resolveEquippedAura, resolveEquippedAvatar } from "@/lib/cosmetics-catalog";
@@ -228,13 +236,29 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
     : 0;
   const dailyPercent = Math.min(100, Math.round((dailyXp / Math.max(1, dailyCap)) * 100));
   const isDailyCapped = dailyXp >= dailyCap;
-  const showDailyRewards = canAccessDailyRewardsPreview(profile, auth.isAdmin);
-  const isTodayCheckInClaimed = profile?.lastDailyLoginPointsDate === todayKey;
-  const totalCheckInsCount = Math.max(
-    Array.isArray(profile?.activeDates) ? profile.activeDates.length : 0,
-    isTodayCheckInClaimed ? 1 : 0,
-  );
-  const currentCycleDay = getCurrentCycleDay(totalCheckInsCount, isTodayCheckInClaimed);
+  const showDailyRoutine = canAccessDailyRoutine(profile, auth.isAdmin, auth.adminConfig);
+  const showCoinsWallet = canViewCoinsWallet(profile, auth.isAdmin, auth.adminConfig);
+  const showDefaultAvatar = canUseDefaultAvatar(profile, auth.isAdmin, auth.adminConfig);
+  const showShopAndCosmetics = canAccessShopAndCustomization(profile, auth.isAdmin, auth.adminConfig);
+  const dailyClaimState = getDailyRewardClaimState(profile, todayKey);
+  const currentCycleDay = dailyClaimState.currentDay;
+  const pendingRoutineRewardsCount = useMemo(() => {
+    if (!showDailyRoutine || !profile) return 0;
+    let count = dailyClaimState.isTodayClaimed ? 0 : 1;
+    const dMissions = generateDailyMissions({
+      profile,
+      stats: auth.stats,
+      adminConfig: auth.adminConfig,
+      dateKey: todayKey,
+    });
+    count += dMissions.filter((m) => m.current >= m.target && !m.claimed).length;
+    const wMissions = generateWeeklyMissions({
+      profile,
+      adminConfig: auth.adminConfig,
+    });
+    count += wMissions.filter((m) => m.current >= m.target && !m.claimed).length;
+    return count;
+  }, [showDailyRoutine, profile, dailyClaimState.isTodayClaimed, auth.stats, auth.adminConfig, todayKey]);
 
   // Retrieve player's official weekly tournament ranking position in their stage
   useEffect(() => {
@@ -485,8 +509,8 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
             <Trophy className="h-5 w-5 text-amber-500" />
           </Link>
 
-          {/* Loja de Moedas (Oculto para Alunos, visível apenas para ADM / Testes) */}
-          {showDailyRewards && profile && (
+          {/* Loja de Moedas (Restrita ao ADM / Testes até liberação futura) */}
+          {showShopAndCosmetics && profile && (
             <button
               type="button"
               onClick={() => setShopOpen(true)}
@@ -498,14 +522,14 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
             </button>
           )}
 
-          {/* Recompensa Diária Progressiva (Oculto para Alunos, visível apenas para ADM / Testes) */}
-          {showDailyRewards && (
+          {/* Central Diária: Recompensa Progressiva + Missões Diárias e Semanais */}
+          {showDailyRoutine && (
             <button
               type="button"
               onClick={() => setDailyRewardsOpen(true)}
-              className="grid h-11 w-11 place-items-center rounded-2xl border border-amber-500/40 bg-gradient-to-r from-amber-500/10 to-amber-500/5 text-foreground shadow-sm transition-all hover:bg-amber-500/20 active:scale-95 cursor-pointer"
+              className="relative grid h-11 w-11 place-items-center rounded-2xl border border-amber-500/40 bg-gradient-to-r from-amber-500/10 to-amber-500/5 text-foreground shadow-sm transition-all hover:bg-amber-500/20 active:scale-95 cursor-pointer"
               aria-label="Abrir Recompensas Diárias"
-              title={`Trilha de Recompensas Diárias (Dia ${currentCycleDay} do Ciclo - Prévia ADM)`}
+              title={`Central Diária e Missões (Dia ${currentCycleDay} do Ciclo)`}
             >
               <span className="flex items-center justify-center gap-0.5">
                 <span className="font-mono text-[11px] font-black text-amber-600 dark:text-amber-400 leading-none">
@@ -513,6 +537,11 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
                 </span>
                 <Calendar className="h-4 w-4 text-amber-500" />
               </span>
+              {pendingRoutineRewardsCount > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 grid h-5 min-w-5 px-1 place-items-center rounded-full bg-amber-500 text-[10px] font-black text-zinc-950 shadow-md animate-pulse">
+                  {pendingRoutineRewardsCount}
+                </span>
+              )}
             </button>
           )}
 
@@ -565,11 +594,11 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
         )}
         {(() => {
           const topEquippedAv =
-            profile && showDailyRewards
+            profile && showDefaultAvatar
               ? resolveEquippedAvatar(profile, auth.adminConfig.avatarsCatalog)
               : null;
           const topEquippedAura =
-            profile && showDailyRewards
+            profile && showShopAndCosmetics
               ? resolveEquippedAura(profile, auth.adminConfig.aurasCatalog)
               : null;
           const topAuraPres = getAuraPresentation(topEquippedAura);
@@ -647,7 +676,7 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
           />
         </Suspense>
       )}
-      {dailyRewardsOpen && (
+      {dailyRewardsOpen && showDailyRoutine && (
         <Suspense fallback={null}>
           <DailyRewardsModal
             open={dailyRewardsOpen}
@@ -655,15 +684,16 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
             profile={profile}
             stats={auth.stats}
             adminConfig={auth.adminConfig}
+            onProfileUpdated={() => auth.refresh()}
           />
         </Suspense>
       )}
-      {shopOpen && showDailyRewards && (
+      {shopOpen && showShopAndCosmetics && (
         <Suspense fallback={null}>
           <ShopModal open={shopOpen} onOpenChange={setShopOpen} />
         </Suspense>
       )}
-      {customizeOpen && showDailyRewards && (
+      {customizeOpen && showShopAndCosmetics && (
         <Suspense fallback={null}>
           <CustomizeProfileModal open={customizeOpen} onOpenChange={setCustomizeOpen} />
         </Suspense>
@@ -685,7 +715,7 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
                 role="tablist"
                 aria-label="Seções do perfil"
                 className={`grid items-center rounded-full border border-border/70 bg-card/70 p-1.5 shadow-2xs backdrop-blur-sm ${
-                  showDailyRewards ? "grid-cols-3" : "grid-cols-2"
+                  showShopAndCosmetics ? "grid-cols-3" : "grid-cols-2"
                 }`}
               >
                 <button
@@ -718,7 +748,7 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
                   <span>Medalhas</span>
                 </button>
 
-                {showDailyRewards && (
+                {showShopAndCosmetics && (
                   <button
                     type="button"
                     role="tab"
@@ -737,10 +767,10 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
               </div>
 
               {profileTab === "perfil" && (() => {
-                const equippedAv = showDailyRewards
+                const equippedAv = showDefaultAvatar
                   ? resolveEquippedAvatar(profile, auth.adminConfig.avatarsCatalog)
                   : null;
-                const equippedAura = showDailyRewards
+                const equippedAura = showShopAndCosmetics
                   ? resolveEquippedAura(profile, auth.adminConfig.aurasCatalog)
                   : null;
                 const cardAuraPres = getAuraPresentation(equippedAura);
@@ -751,9 +781,9 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
                 className={`w-full rounded-3xl border-2 bg-card p-4 sm:p-5 shadow-sm space-y-3.5 transition-all ${cardAuraPres.className}`}
                 style={cardAuraPres.style}
               >
-                    {/* Topo: Avatar (Prévia ADM) ou Selo do Nível à esquerda e Dados Pessoais à direita */}
+                    {/* Topo: Avatar Padrão (sem customização até Loja abrir) ou Selo do Nível à esquerda */}
                     <div className="flex flex-row items-center gap-3.5 sm:gap-4">
-                      {showDailyRewards && equippedAv ? (
+                      {showDefaultAvatar && equippedAv ? (
                         <div className="flex flex-col items-center gap-1.5 shrink-0">
                           <PlayerAvatarBadge
                             avatar={equippedAv.avatar}
@@ -761,14 +791,16 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
                             aura={equippedAura}
                             size="lg"
                           />
-                          <button
-                            type="button"
-                            onClick={() => setCustomizeOpen(true)}
-                            className="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 hover:bg-primary/20 px-2 py-0.5 text-[9.5px] font-extrabold text-primary transition-all cursor-pointer"
-                            title="Personalizar Avatar e Aura do Perfil"
-                          >
-                            <Palette className="h-2.5 w-2.5" /> Personalizar
-                          </button>
+                          {showShopAndCosmetics && (
+                            <button
+                              type="button"
+                              onClick={() => setCustomizeOpen(true)}
+                              className="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 hover:bg-primary/20 px-2 py-0.5 text-[9.5px] font-extrabold text-primary transition-all cursor-pointer"
+                              title="Personalizar Avatar e Aura do Perfil"
+                            >
+                              <Palette className="h-2.5 w-2.5" /> Personalizar
+                            </button>
+                          )}
                         </div>
                       ) : (
                         <div className="relative grid h-18 w-18 sm:h-20 sm:w-20 shrink-0 place-items-center rounded-2xl bg-gradient-to-br from-primary via-primary/95 to-primary/80 text-primary-foreground shadow-md border-2 border-primary/50">
@@ -867,14 +899,17 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
                         🪙 {profile.careerPoints ?? profile.pointsBalance ?? 0} Pontos
                       </span>
 
-                      {showDailyRewards && (
-                        <>
-                          <span
-                            title="Nível atual e patente na temporada."
-                            className="inline-flex items-center gap-1 rounded-full bg-primary/15 border border-primary/30 px-2.5 py-0.5 text-[10.5px] sm:text-[11px] font-extrabold text-primary"
-                          >
-                            ⭐ Nível {progress.level} • {progress.title.split(" ")[0]}
-                          </span>
+                      {showDefaultAvatar && (
+                        <span
+                          title="Nível atual e patente na temporada."
+                          className="inline-flex items-center gap-1 rounded-full bg-primary/15 border border-primary/30 px-2.5 py-0.5 text-[10.5px] sm:text-[11px] font-extrabold text-primary"
+                        >
+                          ⭐ Nível {progress.level} • {progress.title.split(" ")[0]}
+                        </span>
+                      )}
+
+                      {showCoinsWallet &&
+                        (showShopAndCosmetics ? (
                           <button
                             type="button"
                             onClick={() => setShopOpen(true)}
@@ -883,8 +918,14 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
                           >
                             <Coins className="h-3 w-3" /> {profile.coins ?? 0} Moedas
                           </button>
-                        </>
-                      )}
+                        ) : (
+                          <span
+                            title="Seu saldo acumulado de Moedas (a Loja será liberada em breve!)"
+                            className="inline-flex items-center gap-1 rounded-full bg-yellow-500/15 border border-yellow-500/40 px-2.5 py-0.5 text-[10.5px] sm:text-[11px] font-extrabold text-yellow-600 dark:text-yellow-400"
+                          >
+                            <Coins className="h-3 w-3" /> {profile.coins ?? 0} Moedas
+                          </span>
+                        ))}
 
                       <span
                         title="Sua colocação oficial na temporada atual do Torneio Semanal da sua Etapa."
@@ -1370,7 +1411,7 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
               )}
 
               {/* ABA 3: INVENTÁRIO (Oculta para alunos comuns, visível apenas para ADM / Testes no próprio perfil) */}
-              {profileTab === "inventario" && showDailyRewards && (
+              {profileTab === "inventario" && showShopAndCosmetics && (
                 <Suspense
                   fallback={
                     <div className="py-10 text-center text-xs font-semibold text-muted-foreground">

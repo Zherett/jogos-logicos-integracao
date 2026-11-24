@@ -9,6 +9,12 @@ import {
   getStreakBonusPoints,
   getDayStatus,
   canAccessDailyRewardsPreview,
+  canAccessDailyRoutine,
+  canAccessShopAndCustomization,
+  canUseDefaultAvatar,
+  canViewCoinsWallet,
+  claimDailyRewardForProfile,
+  resolveDailyRewardsSchedule,
 } from "./daily-rewards.ts";
 import { evaluatePlayerMedals, getAllAvailableMedals } from "./medals-catalog.ts";
 
@@ -152,5 +158,70 @@ describe("Sistema de Recompensa Diária Progressiva (Check-in Acumulativo + Ofen
     };
     const eval3 = evaluatePlayerMedals({ profile: profEpic as any, stats: [] });
     assert.equal(eval3.some((m: any) => m.id === "secret_streak_day7_x7"), true);
+  });
+
+  it("resgata recompensa diária de forma idempotente e abre o Baú Semanal configurável no Dia 7", () => {
+    const prof: any = {
+      id: "p_claim",
+      nick: "TesteDia7",
+      xp: 0,
+      seasonXp: 0,
+      careerPoints: 0,
+      pointsBalance: 0,
+      coins: 0,
+      lifetimeCoins: 0,
+      peakCoins: 0,
+      streakDays: 3,
+      dailyCheckInCount: 6, // próximo check-in é o Dia 7
+      activeDates: [],
+    };
+    const cfg: any = {
+      weeklyRoutineConfig: {
+        day7ChestId: "quantum_logic",
+        streakPointsStep: 10,
+        streakPointsCap: 100,
+        dailyLoginCoins: 5,
+      },
+    };
+
+    const sched = resolveDailyRewardsSchedule(cfg.weeklyRoutineConfig);
+    assert.equal(sched[6].chestReward?.chestId, "quantum_logic");
+    assert.equal(sched[6].chestReward?.label, "Baú de Lógica Quântica");
+
+    const res1 = claimDailyRewardForProfile(prof, cfg, { todayKey: "2026-11-23", rng: () => 0.5 });
+    assert.equal(res1.ok, true);
+    assert.equal(res1.claimedDay, 7);
+    assert.equal(res1.streakBonusPoints, 20); // (3 - 1) * 10
+    assert.equal(res1.coinsAwarded, 5);
+    assert.equal(res1.chestDefinition?.id, "quantum_logic");
+    assert.ok(res1.chestOutcome && res1.chestOutcome.coins > 0);
+    assert.equal(prof.dailyCheckInCount, 7);
+    assert.equal(prof.chestsOpenedTotal, 1);
+
+    // Tentativa duplicada no mesmo dia é bloqueada
+    const res2 = claimDailyRewardForProfile(prof, cfg, { todayKey: "2026-11-23", rng: () => 0.5 });
+    assert.equal(res2.ok, false);
+    assert.equal(res2.alreadyClaimed, true);
+  });
+
+  it("mantém flags desacopladas bloqueadas para alunos comuns por padrão e permite liberar sem abrir a Loja", () => {
+    const student: any = { id: "s1", nick: "aluno_comum", nickNormalized: "aluno_comum", isAdmin: false };
+    assert.equal(canAccessDailyRoutine(student, false, {}), false);
+    assert.equal(canViewCoinsWallet(student, false, {}), false);
+    assert.equal(canUseDefaultAvatar(student, false, {}), false);
+    assert.equal(canAccessShopAndCustomization(student, false, {}), false);
+
+    const rolloutCfg: any = {
+      rolloutFlags: {
+        enableDailyRoutineForStudents: true,
+        enableCoinsWalletForStudents: true,
+        enableDefaultAvatarForStudents: true,
+        enableShopForStudents: false,
+      },
+    };
+    assert.equal(canAccessDailyRoutine(student, false, rolloutCfg), true);
+    assert.equal(canViewCoinsWallet(student, false, rolloutCfg), true);
+    assert.equal(canUseDefaultAvatar(student, false, rolloutCfg), true);
+    assert.equal(canAccessShopAndCustomization(student, false, rolloutCfg), false);
   });
 });

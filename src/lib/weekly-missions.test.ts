@@ -1,8 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  claimWeeklyMissionForProfile,
   generateWeeklyMissions,
   getEligibleGamesForWeeklyMissions,
+  recordMatchIntoWeeklyMissions,
   WEEKLY_MISSIONS_COUNT,
 } from "./weekly-missions.ts";
 
@@ -116,5 +118,49 @@ describe("Sistema de Missões Semanais (4 Missões + Faixas de Nível + Ciclo Se
     const rMestre = mestreNv8.find((m) => m.type === "weekly_ranked_matches");
     assert.ok(rMestre);
     assert.equal(rMestre.target, 10);
+  });
+
+  it("rastreia progresso real das missões semanais e permite resgate idempotente", () => {
+    const weekKey = "2026-W47";
+    let wProg = recordMatchIntoWeeklyMissions(undefined, {
+      gameId: "logica",
+      earnedXp: 350,
+      mode: "padrao",
+      weekKey,
+    });
+    wProg = recordMatchIntoWeeklyMissions(wProg, {
+      gameId: "formas",
+      earnedXp: 300,
+      mode: "padrao",
+      weekKey,
+    });
+
+    const prof: any = {
+      id: "aluno_wm",
+      nick: "AlunoWM",
+      level: 2,
+      xp: 0,
+      seasonXp: 0,
+      careerPoints: 0,
+      pointsBalance: 0,
+      coins: 0,
+      weeklyMissionProgress: wProg,
+    };
+
+    const missions = generateWeeklyMissions({ profile: prof, weekKey, weekIndex: 10 });
+    const xpMission = missions.find((m) => m.type === "weekly_xp")!;
+    assert.equal(xpMission.current, 600);
+    assert.equal(xpMission.target, 600);
+    assert.equal(xpMission.claimed, false);
+
+    const claim1 = claimWeeklyMissionForProfile(prof, xpMission.id, { weekKey, weekIndex: 10 });
+    assert.equal(claim1.ok, true);
+    assert.equal(claim1.coinsAwarded, 10);
+    assert.equal(prof.coins, 10);
+    assert.equal(prof.weeklyMissionsCompleted, 1);
+
+    const claim2 = claimWeeklyMissionForProfile(prof, xpMission.id, { weekKey, weekIndex: 10 });
+    assert.equal(claim2.ok, false);
+    assert.equal(claim2.alreadyClaimed, true);
   });
 });

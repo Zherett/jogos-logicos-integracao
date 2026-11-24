@@ -1,9 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  claimDailyMissionForProfile,
   generateDailyMissions,
   getDailyMissionsCountForLevel,
   pickLeastPlayedGameForPlayer,
+  recordMatchIntoDailyMissions,
 } from "./daily-missions.ts";
 import { ALL_GAME_IDS } from "./game-storage.ts";
 
@@ -91,5 +93,53 @@ describe("Sistema de Missões Diárias (Faixas de Nível + Missão Personalizada
 
     assert.equal(picked.gameId, "logica");
     assert.equal(picked.plays, 2);
+  });
+
+  it("rastreia progresso real das missões diárias e resgata de forma idempotente atualizando semanal", () => {
+    const dateKey = "2026-11-23";
+    let prog = recordMatchIntoDailyMissions(undefined, {
+      gameId: "logica",
+      won: true,
+      flawless: true,
+      mode: "padrao",
+      dateKey,
+    });
+    prog = recordMatchIntoDailyMissions(prog, {
+      gameId: "formas",
+      won: false,
+      flawless: false,
+      mode: "padrao",
+      dateKey,
+    });
+
+    const prof: any = {
+      id: "aluno_dm",
+      nick: "AlunoDM",
+      level: 2,
+      xp: 0,
+      seasonXp: 0,
+      careerPoints: 0,
+      pointsBalance: 0,
+      coins: 0,
+      dailyMissionProgress: prog,
+    };
+
+    const missions = generateDailyMissions({ profile: prof, dateKey });
+    const playsMission = missions.find((m) => m.id === `dm_${dateKey}_plays`)!;
+    assert.equal(playsMission.current, 2);
+    assert.equal(playsMission.target, 2);
+    assert.equal(playsMission.claimed, false);
+
+    const claim1 = claimDailyMissionForProfile(prof, playsMission.id, { dateKey });
+    assert.equal(claim1.ok, true);
+    assert.equal(claim1.coinsAwarded, 5);
+    assert.equal(prof.coins, 5);
+    assert.equal(prof.dailyMissionsCompleted, 1);
+    assert.equal(prof.weeklyMissionProgress.dailyMissionsCompleted, 1);
+
+    // Tentativa duplicada bloqueada
+    const claim2 = claimDailyMissionForProfile(prof, playsMission.id, { dateKey });
+    assert.equal(claim2.ok, false);
+    assert.equal(claim2.alreadyClaimed, true);
   });
 });

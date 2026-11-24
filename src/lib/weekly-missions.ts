@@ -2,6 +2,7 @@ import { ALL_GAME_IDS, type GameId } from "./game-storage.ts";
 import type { AdminConfig } from "./game-codes.ts";
 import type { PlayerProfile } from "./playfab.ts";
 import { getTournamentRank, getWeekInfo, TOURNAMENT_RANKS } from "./weekly-tournament.ts";
+import { awardCareerPoints, awardCoins } from "./career-points.ts";
 
 export type WeeklyMissionType =
   | "weekly_matches"
@@ -12,6 +13,18 @@ export type WeeklyMissionType =
   | "weekly_daily_missions";
 
 export const DEFAULT_WEEKLY_MISSION_COINS = 10;
+
+export interface WeeklyMissionProgressState {
+  weekKey: string;
+  matches: number;
+  distinctGameIds: string[];
+  xpEarned: number;
+  dailyMissionsCompleted: number;
+  rankedMatches: number;
+  startRankIndex?: number;
+  maxRankIndex?: number;
+  claimedIds: string[];
+}
 
 export interface WeeklyMission {
   id: string;
@@ -24,17 +37,146 @@ export interface WeeklyMission {
   rewardXp: number;
   rewardCoins?: number;
   minLevelRequired: number;
+  claimed?: boolean;
 }
 
 export const WEEKLY_MISSIONS_COUNT = 4;
 
+export function createEmptyWeeklyMissionProgress(
+  weekKey = getWeekInfo().weekKey,
+  initialRankIndex?: number,
+): WeeklyMissionProgressState {
+  return {
+    weekKey,
+    matches: 0,
+    distinctGameIds: [],
+    xpEarned: 0,
+    dailyMissionsCompleted: 0,
+    rankedMatches: 0,
+    ...(typeof initialRankIndex === "number"
+      ? { startRankIndex: initialRankIndex, maxRankIndex: initialRankIndex }
+      : {}),
+    claimedIds: [],
+  };
+}
+
+function resolveRankIndex(tournamentPoints?: number, tournamentRankId?: string): number {
+  const pointsRank = getTournamentRank(tournamentPoints ?? 0).currentRank;
+  const pointsIdx = TOURNAMENT_RANKS.findIndex((r) => r.id === pointsRank.id);
+  const idIdx = tournamentRankId
+    ? TOURNAMENT_RANKS.findIndex((r) => r.id === tournamentRankId)
+    : -1;
+  return Math.max(0, pointsIdx, idIdx);
+}
+
+/**
+ * Atualiza o progresso das missões semanais após uma partida concluída.
+ */
+export function recordMatchIntoWeeklyMissions(
+  prev: WeeklyMissionProgressState | undefined | null,
+  args: {
+    gameId: GameId;
+    earnedXp: number;
+    mode?: string;
+    tournamentPointsBefore?: number;
+    tournamentRankIdBefore?: string;
+    tournamentPointsAfter?: number;
+    tournamentRankIdAfter?: string;
+    now?: Date;
+    weekKey?: string;
+  },
+): WeeklyMissionProgressState {
+  const weekKey = args.weekKey ?? getWeekInfo(args.now ?? new Date()).weekKey;
+  const rankBefore = resolveRankIndex(args.tournamentPointsBefore, args.tournamentRankIdBefore);
+  const rankAfter = resolveRankIndex(args.tournamentPointsAfter, args.tournamentRankIdAfter);
+
+  const base: WeeklyMissionProgressState =
+    prev && prev.weekKey === weekKey
+      ? {
+          weekKey,
+          matches: Math.max(0, prev.matches ?? 0),
+          distinctGameIds: Array.isArray(prev.distinctGameIds) ? [...prev.distinctGameIds] : [],
+          xpEarned: Math.max(0, prev.xpEarned ?? 0),
+          dailyMissionsCompleted: Math.max(0, prev.dailyMissionsCompleted ?? 0),
+          rankedMatches: Math.max(0, prev.rankedMatches ?? 0),
+          startRankIndex:
+            typeof prev.startRankIndex === "number" ? prev.startRankIndex : rankBefore,
+          maxRankIndex:
+            typeof prev.maxRankIndex === "number" ? prev.maxRankIndex : rankBefore,
+          claimedIds: Array.isArray(prev.claimedIds) ? [...prev.claimedIds] : [],
+        }
+      : createEmptyWeeklyMissionProgress(weekKey, rankBefore);
+
+  base.matches += 1;
+  if (!base.distinctGameIds.includes(args.gameId)) {
+    base.distinctGameIds.push(args.gameId);
+  }
+  base.xpEarned += Math.max(0, Math.floor(args.earnedXp || 0));
+  if (args.mode === "torneio_semanal") {
+    base.rankedMatches += 1;
+  }
+  base.maxRankIndex = Math.max(base.maxRankIndex ?? rankBefore, rankAfter);
+
+  return base;
+}
+
+/**
+ * Incrementa o contador semanal de missões diárias concluídas.
+ */
+export function recordDailyMissionCompletedIntoWeekly(
+  prev: WeeklyMissionProgressState | undefined | null,
+  now?: Date,
+  explicitWeekKey?: string,
+): WeeklyMissionProgressState {
+  const weekKey = explicitWeekKey ?? getWeekInfo(now ?? new Date()).weekKey;
+  const base =
+    prev && prev.weekKey === weekKey
+      ? {
+          ...prev,
+          distinctGameIds: Array.isArray(prev.distinctGameIds) ? [...prev.distinctGameIds] : [],
+          claimedIds: Array.isArray(prev.claimedIds) ? [...prev.claimedIds] : [],
+        }
+      : createEmptyWeeklyMissionProgress(weekKey);
+  base.dailyMissionsCompleted = Math.max(0, base.dailyMissionsCompleted ?? 0) + 1;
+  return base;
+}
+
+/**
+ * Mescla dois estados semanais (local vs nuvem PlayFab) mantendo o maior progresso
+ * da semana mais recente sem perder missões já resgatadas.
+ */
+export function mergeWeeklyMissionProgress(
+  a?: WeeklyMissionProgressState | null,
+  b?: WeeklyMissionProgressState | null,
+): WeeklyMissionProgressState | undefined {
+  if (!a && !b) return undefined;
+  if (!a) return b ?? undefined;
+  if (!b) return a;
+  if (a.weekKey !== b.weekKey) {
+    return a.weekKey > b.weekKey ? a : b;
+  }
+  const startCandidates = [a.startRankIndex, b.startRankIndex].filter(
+    (v): v is number => typeof v === "number",
+  );
+  const maxCandidates = [a.maxRankIndex, b.maxRankIndex].filter(
+    (v): v is number => typeof v === "number",
+  );
+  return {
+    weekKey: a.weekKey,
+    matches: Math.max(a.matches ?? 0, b.matches ?? 0),
+    distinctGameIds: Array.from(new Set([...(a.distinctGameIds ?? []), ...(b.distinctGameIds ?? [])])),
+    xpEarned: Math.max(a.xpEarned ?? 0, b.xpEarned ?? 0),
+    dailyMissionsCompleted: Math.max(a.dailyMissionsCompleted ?? 0, b.dailyMissionsCompleted ?? 0),
+    rankedMatches: Math.max(a.rankedMatches ?? 0, b.rankedMatches ?? 0),
+    ...(startCandidates.length > 0 ? { startRankIndex: Math.min(...startCandidates) } : {}),
+    ...(maxCandidates.length > 0 ? { maxRankIndex: Math.max(...maxCandidates) } : {}),
+    claimedIds: Array.from(new Set([...(a.claimedIds ?? []), ...(b.claimedIds ?? [])])),
+  };
+}
+
 /**
  * Avalia o rank atual do jogador no Torneio Semanal e retorna a missão ranqueada
- * balanceada (apenas para jogadores de Nível 4+):
- * - Rank máximo (Mestre / 0 ranks restantes): missão apenas de jogar partidas ranqueadas.
- * - Rank muito alto (Diamante): no máximo 1 rank.
- * - Rank médio (Ouro / Platina): no máximo 2 ranks.
- * - Rank baixo (Bronze / Prata): até 3 ranks (2 no Nível 4–6, 3 no Nível 7–10).
+ * balanceada (apenas para jogadores de Nível 4+).
  */
 export function resolveRankedWeeklyMission(args: {
   level: number;
@@ -43,12 +185,7 @@ export function resolveRankedWeeklyMission(args: {
   tournamentRankId?: string;
 }): WeeklyMission {
   const safeLevel = Math.max(4, Math.floor(args.level));
-  const pointsRank = getTournamentRank(args.tournamentPoints ?? 0).currentRank;
-  const pointsIdx = TOURNAMENT_RANKS.findIndex((r) => r.id === pointsRank.id);
-  const idIdx = args.tournamentRankId
-    ? TOURNAMENT_RANKS.findIndex((r) => r.id === args.tournamentRankId)
-    : -1;
-  const currentIdx = Math.max(0, pointsIdx, idIdx);
+  const currentIdx = resolveRankIndex(args.tournamentPoints, args.tournamentRankId);
   const currentRank = TOURNAMENT_RANKS[currentIdx] ?? TOURNAMENT_RANKS[0];
   const remainingRanks = Math.max(0, TOURNAMENT_RANKS.length - 1 - currentIdx);
 
@@ -119,12 +256,25 @@ export function getEligibleGamesForWeeklyMissions(args: {
   return eligible.length > 0 ? eligible : [];
 }
 
+function formatWeeklyDescription(type: WeeklyMissionType, target: number): string {
+  switch (type) {
+    case "weekly_matches":
+      return `Conclua ${target} ${target === 1 ? "partida" : "partidas"} em qualquer jogo elegível nesta semana.`;
+    case "weekly_distinct_games":
+      return `Jogue em ${target} ${target === 1 ? "jogo diferente" : "jogos diferentes"} liberados para o seu nível nesta semana.`;
+    case "weekly_xp":
+      return `Conquiste ${target.toLocaleString("pt-BR")} XP ao longo desta semana.`;
+    case "weekly_daily_missions":
+      return `Complete ${target} ${target === 1 ? "missão diária" : "missões diárias"} durante esta semana.`;
+    case "weekly_ranked_ranks":
+      return `Suba ${target} ${target === 1 ? "rank" : "ranks"} nas partidas ranqueadas nesta semana.`;
+    case "weekly_ranked_matches":
+      return `Dispute ${target} ${target === 1 ? "partida ranqueada" : "partidas ranqueadas"} nesta semana.`;
+  }
+}
+
 /**
- * Gera exatamente 4 missões semanais conforme a faixa de nível do jogador
- * (Nível 1–3, Nível 4–6 e Nível 7–10), alternando automaticamente a cada semana
- * (Segunda 00:00 até Domingo 23:59) via `getWeekInfo`.
- *
- * Missões de subir ranks na ranqueada aparecem exclusivamente a partir do Nível 4.
+ * Gera exatamente 4 missões semanais com progresso real e status de resgate.
  */
 export function generateWeeklyMissions(args: {
   profile?: Partial<PlayerProfile> | null;
@@ -133,6 +283,8 @@ export function generateWeeklyMissions(args: {
   weekKey?: string;
   weekIndex?: number;
 }): WeeklyMission[] {
+  const weekInfo = getWeekInfo(args.now ?? new Date());
+  const weekKey = args.weekKey ?? weekInfo.weekKey;
   const cfgAny = args.adminConfig as
     | {
         coinRewardsConfig?: { weeklyMissionCoins?: number };
@@ -150,16 +302,116 @@ export function generateWeeklyMissions(args: {
     Math.floor(cfgAny?.coinRewardsConfig?.weeklyMissionCoins ?? DEFAULT_WEEKLY_MISSION_COINS),
   );
   const overrides = cfgAny?.weeklyRoutineConfig?.weeklyMissionOverrides ?? {};
-  return buildWeeklyMissionsList(args).map((m) => {
+  const progress =
+    args.profile?.weeklyMissionProgress?.weekKey === weekKey
+      ? args.profile.weeklyMissionProgress
+      : null;
+  const claimedSet = new Set<string>(progress?.claimedIds ?? []);
+
+  return buildWeeklyMissionsList({ ...args, weekKey }).map((m) => {
     const ov = overrides[m.type];
+    const target = ov?.target && ov.target > 0 ? Math.floor(ov.target) : m.target;
+    const rewardPoints = ov?.points !== undefined ? Math.max(0, Math.floor(ov.points)) : m.rewardPoints;
+    const rewardXp = ov?.xp !== undefined ? Math.max(0, Math.floor(ov.xp)) : m.rewardXp;
+    const rewardCoins = ov?.coins !== undefined ? Math.max(0, Math.floor(ov.coins)) : weeklyCoins;
+
+    let current = 0;
+    if (progress) {
+      if (m.type === "weekly_matches") current = progress.matches ?? 0;
+      else if (m.type === "weekly_distinct_games") current = progress.distinctGameIds?.length ?? 0;
+      else if (m.type === "weekly_xp") current = progress.xpEarned ?? 0;
+      else if (m.type === "weekly_daily_missions") current = progress.dailyMissionsCompleted ?? 0;
+      else if (m.type === "weekly_ranked_matches") current = progress.rankedMatches ?? 0;
+      else if (m.type === "weekly_ranked_ranks") {
+        const startIdx = progress.startRankIndex ?? 0;
+        const maxIdx = progress.maxRankIndex ?? startIdx;
+        current = Math.max(0, maxIdx - startIdx);
+      }
+    }
+
+    const description =
+      ov?.target && ov.target > 0 ? formatWeeklyDescription(m.type, target) : m.description;
+
     return {
       ...m,
-      target: ov?.target && ov.target > 0 ? Math.floor(ov.target) : m.target,
-      rewardPoints: ov?.points !== undefined ? Math.max(0, Math.floor(ov.points)) : m.rewardPoints,
-      rewardXp: ov?.xp !== undefined ? Math.max(0, Math.floor(ov.xp)) : m.rewardXp,
-      rewardCoins: ov?.coins !== undefined ? Math.max(0, Math.floor(ov.coins)) : weeklyCoins,
+      target,
+      current: Math.min(target, Math.max(0, current)),
+      description,
+      rewardPoints,
+      rewardXp,
+      rewardCoins,
+      claimed: claimedSet.has(m.id),
     };
   });
+}
+
+export interface ClaimWeeklyMissionResult {
+  ok: boolean;
+  alreadyClaimed?: boolean;
+  error?: string;
+  missionId: string;
+  pointsAwarded: number;
+  xpAwarded: number;
+  coinsAwarded: number;
+}
+
+/**
+ * Resgata uma missão semanal concluída (`current >= target`), de forma idempotente.
+ */
+export function claimWeeklyMissionForProfile(
+  profile: PlayerProfile,
+  missionId: string,
+  args?: {
+    adminConfig?: Partial<AdminConfig> | null;
+    now?: Date;
+    weekKey?: string;
+    weekIndex?: number;
+  },
+): ClaimWeeklyMissionResult {
+  const weekInfo = getWeekInfo(args?.now ?? new Date());
+  const weekKey = args?.weekKey ?? weekInfo.weekKey;
+  const missions = generateWeeklyMissions({
+    profile,
+    adminConfig: args?.adminConfig,
+    now: args?.now,
+    weekKey,
+    weekIndex: args?.weekIndex ?? weekInfo.weekIndex,
+  });
+  const mission = missions.find((m) => m.id === missionId);
+  if (!mission) {
+    return { ok: false, error: "Missão semanal não encontrada.", missionId, pointsAwarded: 0, xpAwarded: 0, coinsAwarded: 0 };
+  }
+  if (mission.claimed) {
+    return { ok: false, alreadyClaimed: true, error: "Missão semanal já resgatada.", missionId, pointsAwarded: 0, xpAwarded: 0, coinsAwarded: 0 };
+  }
+  if (mission.current < mission.target) {
+    return { ok: false, error: "Conclua o objetivo da missão antes de resgatar.", missionId, pointsAwarded: 0, xpAwarded: 0, coinsAwarded: 0 };
+  }
+
+  const prev =
+    profile.weeklyMissionProgress && profile.weeklyMissionProgress.weekKey === weekKey
+      ? profile.weeklyMissionProgress
+      : createEmptyWeeklyMissionProgress(weekKey);
+  const claimedIds = Array.from(new Set([...(prev.claimedIds ?? []), missionId]));
+  profile.weeklyMissionProgress = { ...prev, claimedIds };
+  profile.weeklyMissionsCompleted = (profile.weeklyMissionsCompleted ?? 0) + 1;
+
+  const pointsAwarded = Math.max(0, mission.rewardPoints);
+  const xpAwarded = Math.max(0, mission.rewardXp);
+  const coinsAwarded = Math.max(0, mission.rewardCoins ?? 0);
+
+  if (pointsAwarded > 0) {
+    awardCareerPoints(profile, pointsAwarded, `Missão Semanal: ${mission.title}`);
+  }
+  if (xpAwarded > 0) {
+    profile.xp = Math.max(0, (profile.xp ?? 0) + xpAwarded);
+    profile.seasonXp = Math.max(0, (profile.seasonXp ?? 0) + xpAwarded);
+  }
+  if (coinsAwarded > 0) {
+    awardCoins(profile, coinsAwarded, `Missão Semanal: ${mission.title}`, "missao_semanal");
+  }
+
+  return { ok: true, missionId, pointsAwarded, xpAwarded, coinsAwarded };
 }
 
 function buildWeeklyMissionsList(args: {
@@ -183,7 +435,6 @@ function buildWeeklyMissionsList(args: {
   });
   const maxEligibleGames = Math.max(1, eligibleGames.length);
 
-  // Nível 1 a 3: 4 missões semanais (sem ranqueada)
   if (level <= 3) {
     const distinctTarget = Math.min(5, maxEligibleGames);
     return [
@@ -234,7 +485,6 @@ function buildWeeklyMissionsList(args: {
     ];
   }
 
-  // Nível 4 a 6: 4 missões semanais (inclui subir 2 ranks nas ranqueadas)
   if (level <= 6) {
     const distinctTarget = Math.min(5, maxEligibleGames);
     const rotatingMission: WeeklyMission =
@@ -295,7 +545,6 @@ function buildWeeklyMissionsList(args: {
     ];
   }
 
-  // Nível 7 a 10: 4 missões semanais (inclui subir 3 ranks nas ranqueadas)
   const distinctTarget = Math.min(6, maxEligibleGames);
   const rotatingHighMission: WeeklyMission =
     variant === 0

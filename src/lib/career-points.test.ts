@@ -1,7 +1,9 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  applyRetroactiveMedalCoins,
   awardCareerPoints,
+  calculateRetroactiveMedalCoins,
   spendCareerPoints,
   checkAndApplyDailyLoginPoints,
   checkAndApplyFirstGameOfDayPoints,
@@ -209,5 +211,41 @@ describe("Sistema de Pontuação e Moeda de Carreira (career-points)", () => {
     assert.ok(!banana123.unlockedMedals?.some((m) => m.medalId === "beta_tester_ouro"));
     assert.ok(!banana123.unlockedMedals?.some((m) => m.medalId === "m_rpg_ametista"));
     assert.ok(!banana123.unlockedMedals?.some((m) => m.medalId === "streak_7_days"));
+  });
+
+  it("retroatribui moedas exclusivamente por medalhas de forma idempotente e sem reduzir pointsBalance no sanitizador", () => {
+    const student = createMockProfile({
+      nick: "aluno_retro_moedas",
+      level: 4,
+      matchesPlayed: 5,
+      streakDays: 3,
+      coins: 0,
+      lifetimeCoins: 0,
+      careerPoints: 2000, // propositalmente inflado para acionar o sanitizador
+      pointsBalance: 2000,
+      unlockedMedals: [
+        { medalId: "streak_3_days", unlockedAt: "2026-11-20T10:00:00Z" } as any, // bronze (5)
+        { medalId: "secret_streak_day3_x3", unlockedAt: "2026-11-20T10:00:00Z" } as any, // prata (10)
+      ],
+    });
+
+    const dry = calculateRetroactiveMedalCoins(student);
+    assert.equal(dry.coinsToAward, 15);
+    assert.equal(student.coins, 0);
+
+    const applied1 = applyRetroactiveMedalCoins(student);
+    assert.equal(applied1.coinsToAward, 15);
+    assert.equal(student.coins, 15);
+    assert.equal(student.lifetimeCoins, 15);
+
+    // Segunda execução é 100% idempotente
+    const applied2 = applyRetroactiveMedalCoins(student);
+    assert.equal(applied2.coinsToAward, 0);
+    assert.equal(student.coins, 15);
+
+    // Sanitizador não deve subtrair coins do pointsBalance nem remover streak_3_days quando streakDays === 3
+    sanitizeInflatedCareerPoints(student);
+    assert.equal(student.pointsBalance, student.careerPoints);
+    assert.ok(student.unlockedMedals?.some((m) => m.medalId === "streak_3_days"));
   });
 });
