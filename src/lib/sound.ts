@@ -682,7 +682,7 @@ export function playChestReveal() {
 }
 
 /**
- * Som de chave / arrombamento tentando abrir a fechadura durante o chacoalhado do baú.
+ * Som realista de baú pesado balançando com itens/moedas chacoalhando por dentro.
  * Adapta o peso e o timbre ao tamanho do baú (`compacto`, `padrao`, `largo`) e à variação (1..3).
  */
 export function playChestLockpickTick(
@@ -694,52 +694,117 @@ export function playChestLockpickTick(
   if (!ctx) return;
   try {
     const now = ctx.currentTime;
-    const sizeFactor = shape === "compacto" ? 1.24 : shape === "largo" ? 0.78 : 1.0;
-    const variantOffsets = variant === 1 ? [0, 0.075] : variant === 2 ? [0, 0.055, 0.12] : [0, 0.09];
+    const isLarge = shape === "largo";
+    const isCompact = shape === "compacto";
+    const baseThud = isLarge ? 105 : isCompact ? 168 : 132;
+    const volScale = isLarge ? 1.15 : isCompact ? 0.9 : 1.0;
 
-    // 1. Cliques metálicos da chave girando/raspando na fechadura
-    variantOffsets.forEach((offset, idx) => {
+    // 1. Camada grave: corpo pesado do baú balançando (ida e volta "tum-toc" oco)
+    const swingBeats =
+      variant === 1
+        ? [
+            { offset: 0, pitch: 1.0, gain: 0.13 },
+            { offset: 0.135, pitch: 0.9, gain: 0.095 },
+          ]
+        : variant === 2
+          ? [
+              { offset: 0, pitch: 1.04, gain: 0.12 },
+              { offset: 0.115, pitch: 0.94, gain: 0.1 },
+            ]
+          : [
+              { offset: 0, pitch: 0.96, gain: 0.135 },
+              { offset: 0.145, pitch: 1.02, gain: 0.09 },
+            ];
+
+    for (const beat of swingBeats) {
+      const t = now + beat.offset;
+      const thudOsc = ctx.createOscillator();
+      const thudGain = ctx.createGain();
+      thudOsc.type = "sine";
+      const startF = baseThud * beat.pitch;
+      thudOsc.frequency.setValueAtTime(startF, t);
+      thudOsc.frequency.exponentialRampToValueAtTime(Math.max(42, startF * 0.42), t + 0.095);
+      thudGain.gain.setValueAtTime(0.0001, t);
+      thudGain.gain.linearRampToValueAtTime(beat.gain * volScale, t + 0.009);
+      thudGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.115);
+      thudOsc.connect(thudGain);
+      thudGain.connect(ctx.destination);
+      thudOsc.start(t);
+      thudOsc.stop(t + 0.12);
+
+      // Corpo de madeira/caixa oca (ruído lowpass grave bem curto)
+      const woodDur = 0.07;
+      const woodSamples = Math.floor(ctx.sampleRate * woodDur);
+      const woodBuf = ctx.createBuffer(1, woodSamples, ctx.sampleRate);
+      const woodData = woodBuf.getChannelData(0);
+      for (let i = 0; i < woodSamples; i++) {
+        woodData[i] = (Math.random() * 2 - 1) * Math.exp(-i / (woodSamples * 0.35));
+      }
+      const woodSrc = ctx.createBufferSource();
+      woodSrc.buffer = woodBuf;
+      const woodFilter = ctx.createBiquadFilter();
+      woodFilter.type = "lowpass";
+      woodFilter.frequency.setValueAtTime(isLarge ? 260 : isCompact ? 420 : 320, t);
+      woodFilter.frequency.exponentialRampToValueAtTime(120, t + woodDur);
+      const woodGain = ctx.createGain();
+      woodGain.gain.setValueAtTime(0.0001, t);
+      woodGain.gain.linearRampToValueAtTime(0.075 * volScale, t + 0.008);
+      woodGain.gain.exponentialRampToValueAtTime(0.0001, t + woodDur);
+      woodSrc.connect(woodFilter);
+      woodFilter.connect(woodGain);
+      woodGain.connect(ctx.destination);
+      woodSrc.start(t);
+      woodSrc.stop(t + woodDur + 0.01);
+    }
+
+    // 2. Camada média: objetos soltos batendo nas paredes internas com pequeno atraso físico
+    const rattleOffsets =
+      variant === 1 ? [0.038, 0.095, 0.175] : variant === 2 ? [0.032, 0.082, 0.155, 0.21] : [0.045, 0.11, 0.19];
+    rattleOffsets.forEach((offset, idx) => {
       const t = now + offset;
-      const clickOsc = ctx.createOscillator();
-      const clickGain = ctx.createGain();
-      clickOsc.type = idx % 2 === 0 ? "triangle" : "square";
-      const baseFreq = (idx % 2 === 0 ? 1480 : 1960) * sizeFactor * (1 + (variant - 1) * 0.06);
-      clickOsc.frequency.setValueAtTime(baseFreq, t);
-      clickOsc.frequency.exponentialRampToValueAtTime(baseFreq * 0.62, t + 0.032);
-      clickGain.gain.setValueAtTime(0.0001, t);
-      clickGain.gain.linearRampToValueAtTime(0.055, t + 0.004);
-      clickGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.04);
-      clickOsc.connect(clickGain);
-      clickGain.connect(ctx.destination);
-      clickOsc.start(t);
-      clickOsc.stop(t + 0.045);
+      const dur = 0.038;
+      const samples = Math.floor(ctx.sampleRate * dur);
+      const buf = ctx.createBuffer(1, samples, ctx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < samples; i++) {
+        data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (samples * 0.28));
+      }
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      const bp = ctx.createBiquadFilter();
+      bp.type = "bandpass";
+      const centerFreq = (isLarge ? 360 : isCompact ? 620 : 480) + idx * 75 + variant * 20;
+      bp.frequency.setValueAtTime(centerFreq, t);
+      bp.Q.setValueAtTime(3.2, t);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.linearRampToValueAtTime(0.055 * volScale, t + 0.004);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      src.connect(bp);
+      bp.connect(g);
+      g.connect(ctx.destination);
+      src.start(t);
+      src.stop(t + dur + 0.01);
     });
 
-    // 2. Raspagem metálica curta da tranca
-    playFilteredNoise({
-      duration: 0.09,
-      freqStart: 2200 * sizeFactor,
-      freqEnd: 3300 * sizeFactor,
-      q: 2.2,
-      filterType: "bandpass",
-      vol: 0.065,
-      crackle: true,
+    // 3. Camada sutil: tilintar suave de moedas/itens internos (sine puro, nunca square agudo)
+    const clinkOffsets = variant === 2 ? [0.06, 0.165] : [0.07, 0.18];
+    clinkOffsets.forEach((offset, idx) => {
+      const t = now + offset;
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = "sine";
+      const f = (isLarge ? 880 : isCompact ? 1220 : 1040) + idx * 145 + variant * 25;
+      osc.frequency.setValueAtTime(f, t);
+      osc.frequency.exponentialRampToValueAtTime(f * 0.88, t + 0.042);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.linearRampToValueAtTime(0.02, t + 0.005);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.048);
+      osc.connect(g);
+      g.connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.052);
     });
-
-    // 3. Impacto grave do baú chacoalhando
-    const thudOsc = ctx.createOscillator();
-    const thudGain = ctx.createGain();
-    thudOsc.type = "sine";
-    const thudFreq = (shape === "largo" ? 115 : shape === "compacto" ? 195 : 148) + variant * 8;
-    thudOsc.frequency.setValueAtTime(thudFreq, now);
-    thudOsc.frequency.exponentialRampToValueAtTime(Math.max(55, thudFreq * 0.5), now + 0.085);
-    thudGain.gain.setValueAtTime(0.0001, now);
-    thudGain.gain.linearRampToValueAtTime(shape === "largo" ? 0.12 : 0.085, now + 0.008);
-    thudGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.095);
-    thudOsc.connect(thudGain);
-    thudGain.connect(ctx.destination);
-    thudOsc.start(now);
-    thudOsc.stop(now + 0.1);
   } catch {
     /* ignore */
   }

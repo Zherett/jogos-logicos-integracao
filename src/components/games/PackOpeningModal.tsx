@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Crown,
+  FastForward,
   Flame,
   Gem,
   Layers,
@@ -19,10 +20,12 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   CARD_PACK_COLOR_META,
+  groupDrawnCardsForBatchSummary,
   orderPackRevealCards,
   type CardDefinition,
   type CardPackDefinition,
   type CardPackIconId,
+  type GroupedBatchCard,
 } from "@/lib/cards-catalog";
 import {
   playCardFlip,
@@ -44,13 +47,14 @@ export interface PackOpenOutcome {
 
 interface PackOpeningModalProps {
   pack: CardPackDefinition | null;
-  onConfirmOpen: (pack: CardPackDefinition) => Promise<PackOpenOutcome | null>;
+  openQuantity?: number;
+  onConfirmOpen: (pack: CardPackDefinition, quantity: number) => Promise<PackOpenOutcome | null>;
   onClose: () => void;
   onRequestRelogin?: () => void;
   titlePrefix?: string;
 }
 
-type Stage = "sealed" | "tearing" | "stack" | "summary";
+type Stage = "sealed" | "tearing" | "batch-stacking" | "stack" | "summary";
 type SummaryPhase = "gathering" | "flipping" | "browsing";
 
 export function PackIconSvg({
@@ -199,20 +203,26 @@ function CardBackFace({ minimal = false }: { minimal?: boolean }) {
 
 export function PackOpeningModal({
   pack,
+  openQuantity = 1,
   onConfirmOpen,
   onClose,
   onRequestRelogin,
   titlePrefix = "Pacote",
 }: PackOpeningModalProps) {
+  const effectiveQty = Math.max(1, Math.floor(Number(openQuantity) || 1));
+  const isBatchMode = effectiveQty > 1;
   const [stage, setStage] = useState<Stage>("sealed");
   const [summaryPhase, setSummaryPhase] = useState<SummaryPhase>("gathering");
   const [isOpening, setIsOpening] = useState(false);
   const [openError, setOpenError] = useState<string | null>(null);
   const [orderedCards, setOrderedCards] = useState<CardDefinition[]>([]);
+  const [summaryEntries, setSummaryEntries] = useState<GroupedBatchCard[]>([]);
   const [newlyDiscovered, setNewlyDiscovered] = useState<string[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
   const [isExiting, setIsExiting] = useState(false);
+  const [batchStep, setBatchStep] = useState(0);
+  const [batchTotalCycles, setBatchTotalCycles] = useState(1);
   const [summaryIndex, setSummaryIndex] = useState(0);
   const [stackAnim, setStackAnim] = useState<{
     kind: "to-back" | "to-front";
@@ -244,13 +254,16 @@ export function PackOpeningModal({
     setIsOpening(false);
     setOpenError(null);
     setOrderedCards([]);
+    setSummaryEntries([]);
     setNewlyDiscovered([]);
     setCurrentIndex(0);
     setIsFlipped(false);
     setIsExiting(false);
+    setBatchStep(0);
+    setBatchTotalCycles(1);
     setSummaryIndex(0);
     setStackAnim(null);
-  }, [pack]);
+  }, [pack, effectiveQty]);
 
   useEffect(() => {
     return () => {
@@ -266,7 +279,7 @@ export function PackOpeningModal({
     setOpenError(null);
 
     try {
-      const outcome = await onConfirmOpen(pack);
+      const outcome = await onConfirmOpen(pack, effectiveQty);
       if (activePackIdRef.current !== requestedPackId) return;
 
       if (!outcome || outcome.error || outcome.drawn.length === 0) {
@@ -276,12 +289,56 @@ export function PackOpeningModal({
         return;
       }
 
-      const ordered = orderPackRevealCards(outcome.drawn);
-      setOrderedCards(ordered);
       setNewlyDiscovered(outcome.newlyDiscovered);
       setCurrentIndex(0);
       setIsFlipped(false);
       setIsExiting(false);
+      setSummaryIndex(0);
+      setStackAnim(null);
+
+      if (isBatchMode) {
+        const grouped = groupDrawnCardsForBatchSummary(outcome.drawn, outcome.newlyDiscovered);
+        setOrderedCards(outcome.drawn);
+        setSummaryEntries(grouped);
+
+        const cycles = Math.min(effectiveQty, 7);
+        setBatchTotalCycles(cycles);
+        setBatchStep(1);
+        setStage("batch-stacking");
+        playPackTear();
+
+        const cycleMs = 480;
+        for (let step = 2; step <= cycles; step++) {
+          scheduleTimer(() => {
+            setBatchStep(step);
+            playCardsGather();
+          }, (step - 1) * cycleMs);
+        }
+
+        scheduleTimer(() => {
+          setSummaryPhase("gathering");
+          setStage("summary");
+          playCardsGather();
+          scheduleTimer(() => {
+            setSummaryPhase("flipping");
+            playCardsFlipAll();
+          }, 260);
+          scheduleTimer(() => {
+            setSummaryPhase("browsing");
+          }, 860);
+        }, cycles * cycleMs + 120);
+        return;
+      }
+
+      const ordered = orderPackRevealCards(outcome.drawn);
+      setOrderedCards(ordered);
+      setSummaryEntries(
+        ordered.map((card) => ({
+          card,
+          count: 1,
+          isNew: outcome.newlyDiscovered.includes(card.id),
+        })),
+      );
       setStage("tearing");
 
       // Sons sincronizados com os 4 tempos da abertura do pacote
@@ -295,6 +352,15 @@ export function PackOpeningModal({
       openingLockRef.current = false;
       setIsOpening(false);
     }
+  }
+
+  function handleSkipBatchToSummary() {
+    clearAllTimers();
+    setSummaryIndex(0);
+    setStackAnim(null);
+    setSummaryPhase("browsing");
+    setStage("summary");
+    playCardsFlipAll();
   }
 
   function handleFlipCurrentCard() {
@@ -353,13 +419,13 @@ export function PackOpeningModal({
   }
 
   function handleSummaryNext() {
-    if (summaryPhase !== "browsing" || stackAnim || orderedCards.length <= 1) return;
+    if (summaryPhase !== "browsing" || stackAnim || summaryEntries.length <= 1) return;
     const outgoingIdx = summaryIndex;
     setStackAnim({ kind: "to-back", cardIndex: outgoingIdx, phase: "out" });
     playCardToss();
     scheduleTimer(() => {
       // Troca a ordem quando a carta já está totalmente fora da pilha à direita (zero sobreposição/piscada)
-      setSummaryIndex((prev) => (prev + 1) % orderedCards.length);
+      setSummaryIndex((prev) => (prev + 1) % summaryEntries.length);
       setStackAnim({ kind: "to-back", cardIndex: outgoingIdx, phase: "in" });
       scheduleTimer(() => {
         setStackAnim(null);
@@ -368,8 +434,8 @@ export function PackOpeningModal({
   }
 
   function handleSummaryPrev() {
-    if (summaryPhase !== "browsing" || stackAnim || orderedCards.length <= 1) return;
-    const incomingIdx = (summaryIndex - 1 + orderedCards.length) % orderedCards.length;
+    if (summaryPhase !== "browsing" || stackAnim || summaryEntries.length <= 1) return;
+    const incomingIdx = (summaryIndex - 1 + summaryEntries.length) % summaryEntries.length;
     setStackAnim({ kind: "to-front", cardIndex: incomingIdx, phase: "out" });
     playCardToss();
     scheduleTimer(() => {
@@ -417,7 +483,9 @@ export function PackOpeningModal({
             </span>
             {pack && (
               <span className="rounded-full bg-secondary px-2.5 py-0.5 font-mono text-[11px] font-bold text-muted-foreground">
-                {pack.cardsPerPack} cartas
+                {isBatchMode
+                  ? `${effectiveQty}x (${pack.cardsPerPack * effectiveQty} cartas)`
+                  : `${pack.cardsPerPack} cartas`}
               </span>
             )}
             {isFoilPack && (
@@ -473,7 +541,11 @@ export function PackOpeningModal({
                 className="rounded-2xl font-extrabold px-6 shadow-md"
               >
                 <Sparkles className="h-4 w-4 mr-2" />
-                {isOpening ? "Abrindo..." : "Abrir Pacote"}
+                {isOpening
+                  ? "Abrindo..."
+                  : isBatchMode
+                    ? `Abrir ${effectiveQty} Pacotes`
+                    : "Abrir Pacote"}
               </Button>
               {pack.description && (
                 <p className="max-w-xs text-center text-[11px] text-muted-foreground line-clamp-2">
@@ -530,6 +602,80 @@ export function PackOpeningModal({
 
             {/* Espaçador idêntico ao rodapé da etapa 1 para evitar qualquer salto vertical */}
             <div className="h-24 w-full shrink-0" aria-hidden="true" />
+          </div>
+        )}
+
+        {/* ETAPA 2B: EMPILHAMENTO RÁPIDO EM LOTE (ABRIR TODOS OS PACOTES) */}
+        {stage === "batch-stacking" && pack && (
+          <div className="relative flex h-[34rem] flex-col items-center justify-between overflow-hidden py-2">
+            <div className="flex w-full items-center justify-between px-2 text-xs font-bold text-muted-foreground">
+              <span>Empilhando pacotes...</span>
+              <span className="rounded-full bg-primary/15 px-2.5 py-0.5 font-mono text-[11px] font-extrabold text-primary">
+                Pacote{" "}
+                {Math.min(
+                  effectiveQty,
+                  Math.max(1, Math.round((batchStep / Math.max(1, batchTotalCycles)) * effectiveQty)),
+                )}{" "}
+                de {effectiveQty}
+              </span>
+            </div>
+
+            <div className="relative flex flex-1 w-full items-center justify-center">
+              {/* Maço de cartas de costas crescendo conforme cada pacote do lote abre */}
+              <div className="relative h-[21rem] w-60">
+                {Array.from({ length: Math.min(batchStep, 5) }).map((_, layerIdx) => (
+                  <div
+                    key={`batch_stack_layer_${layerIdx}`}
+                    className="absolute inset-0 transition-transform duration-200"
+                    style={{
+                      zIndex: layerIdx + 1,
+                      transform: `translateY(${(4 - layerIdx) * 3}px) translateX(${(layerIdx % 2 === 0 ? -1 : 1) * (4 - layerIdx) * 1.5}px) scale(${0.92 + layerIdx * 0.02})`,
+                    }}
+                  >
+                    <CardBackFace minimal />
+                  </div>
+                ))}
+
+                {/* Pacote abrindo rapidamente sobre a pilha a cada ciclo */}
+                <div
+                  key={`batch_pack_cycle_${batchStep}`}
+                  className="pointer-events-none absolute -top-4 left-1/2 z-30 -translate-x-1/2 animate-summary-gather"
+                >
+                  <PackArtwork
+                    pack={pack}
+                    quantity={Math.max(
+                      1,
+                      effectiveQty -
+                        Math.round(((batchStep - 1) / Math.max(1, batchTotalCycles)) * effectiveQty),
+                    )}
+                    className="w-36 opacity-95"
+                    bodyHeightClass="h-44"
+                    iconSizeClass="h-8 w-8"
+                    iconBoxSizeClass="h-16 w-16"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex h-24 w-full flex-col items-center justify-center gap-2">
+              <div className="h-2 w-48 overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-primary transition-all duration-300"
+                  style={{
+                    width: `${Math.min(100, Math.round((batchStep / Math.max(1, batchTotalCycles)) * 100))}%`,
+                  }}
+                />
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={handleSkipBatchToSummary}
+                className="h-7 rounded-xl px-3 text-[11px] font-bold text-muted-foreground hover:text-foreground"
+              >
+                <FastForward className="mr-1 h-3 w-3" /> Pular animação
+              </Button>
+            </div>
           </div>
         )}
 
@@ -689,27 +835,35 @@ export function PackOpeningModal({
         )}
 
         {/* ETAPA 4: RESUMO FINAL EM PILHA EMPILHADA (EMPILHAR DE COSTAS -> VIRAR JUNTAS -> FOLHEAR PILHA) */}
-        {stage === "summary" && orderedCards.length > 0 && (
+        {stage === "summary" && summaryEntries.length > 0 && (
           <div className="flex h-[34rem] flex-col items-center justify-between py-2 overflow-hidden">
             {/* Cabeçalho de posição na pilha */}
             <div className="flex w-full items-center justify-between px-2 text-xs font-bold text-muted-foreground">
-              <span>Resumo do Pacote</span>
+              <span>
+                {isBatchMode
+                  ? `Cartas obtidas (${orderedCards.length} total • ${summaryEntries.length} distintas)`
+                  : "Resumo do Pacote"}
+              </span>
               <span className="rounded-full bg-secondary px-2.5 py-0.5 font-mono text-[11px] font-extrabold text-foreground">
-                {summaryIndex + 1} / {orderedCards.length}
+                {summaryIndex + 1} / {summaryEntries.length}
               </span>
             </div>
 
-            {/* Pilha central em tamanho total */}
+            {/* Pilha central em tamanho total (otimizada para renderizar até 5 camadas visíveis + carta em movimento) */}
             <div
               className={`relative flex flex-1 w-full items-center justify-center ${
                 summaryPhase === "gathering" ? "animate-summary-gather" : ""
               }`}
             >
               <div className="perspective-1000 relative h-[22rem] w-60">
-                {orderedCards.map((card, idx) => {
-                  const total = orderedCards.length;
+                {summaryEntries.map((entry, idx) => {
+                  const total = summaryEntries.length;
                   const depth = (idx - summaryIndex + total) % total;
-                  const isMovingOut = stackAnim?.cardIndex === idx && stackAnim.phase === "out";
+                  const isMoving = stackAnim?.cardIndex === idx;
+                  const isMovingOut = isMoving && stackAnim?.phase === "out";
+
+                  // Otimização para lotes grandes: renderiza apenas as 5 primeiras cartas da pilha ou a carta em movimento
+                  if (depth > 4 && !isMoving) return null;
 
                   // Posicionamento estático da pilha (carta do topo em 0, demais levemente deslocadas para trás)
                   const stackY = Math.min(depth, 4) * 5;
@@ -730,7 +884,7 @@ export function PackOpeningModal({
 
                   return (
                     <div
-                      key={`summary_stack_${card.id}_${idx}`}
+                      key={`summary_stack_${entry.card.id}_${idx}`}
                       className="absolute inset-x-0 top-0 transition-transform duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]"
                       style={{
                         zIndex,
@@ -762,8 +916,9 @@ export function PackOpeningModal({
                           style={{ transform: "rotateY(180deg)" }}
                         >
                           <CollectibleCardView
-                            card={card}
-                            isNew={newlyDiscovered.includes(card.id)}
+                            card={entry.card}
+                            count={entry.count > 1 ? entry.count : undefined}
+                            isNew={entry.isNew}
                           />
                         </div>
                       </div>
@@ -784,29 +939,35 @@ export function PackOpeningModal({
                   type="button"
                   variant="outline"
                   size="sm"
-                  disabled={Boolean(stackAnim) || orderedCards.length <= 1}
+                  disabled={Boolean(stackAnim) || summaryEntries.length <= 1}
                   onClick={handleSummaryPrev}
                   className="rounded-xl font-bold"
                 >
                   <ChevronLeft className="h-4 w-4 mr-1" /> Anterior
                 </Button>
 
-                <div className="flex items-center gap-1.5">
-                  {orderedCards.map((c, idx) => (
-                    <span
-                      key={`dot_${c.id}_${idx}`}
-                      className={`h-2 rounded-full transition-all ${
-                        idx === summaryIndex ? "w-5 bg-primary" : "w-2 bg-muted-foreground/30"
-                      }`}
-                    />
-                  ))}
-                </div>
+                {summaryEntries.length <= 10 ? (
+                  <div className="flex items-center gap-1.5">
+                    {summaryEntries.map((entry, idx) => (
+                      <span
+                        key={`dot_${entry.card.id}_${idx}`}
+                        className={`h-2 rounded-full transition-all ${
+                          idx === summaryIndex ? "w-5 bg-primary" : "w-2 bg-muted-foreground/30"
+                        }`}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <span className="font-mono text-xs font-extrabold text-muted-foreground">
+                    {summaryIndex + 1} / {summaryEntries.length}
+                  </span>
+                )}
 
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  disabled={Boolean(stackAnim) || orderedCards.length <= 1}
+                  disabled={Boolean(stackAnim) || summaryEntries.length <= 1}
                   onClick={handleSummaryNext}
                   className="rounded-xl font-bold"
                 >

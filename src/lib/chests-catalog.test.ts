@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   consumeAndOpenChest,
+  consumeAndOpenChestsBatch,
   DEFAULT_CHESTS,
   mergeWithDefaultChests,
   openChest,
@@ -90,5 +91,28 @@ describe("Catálogo e Abertura de Baús", () => {
       { packId: "pack_iniciante", quantity: 2 },
       { packId: "pack_explorador", quantity: 1 },
     ]);
+  });
+
+  it("abre vários baús em lote atomicamente somando bônus, agrupando pacotes e deduplicando cosméticos", () => {
+    const chest = {
+      ...DEFAULT_CHESTS[0],
+      rewards: {
+        points: { min: 10, max: 10 },
+        xp: { min: 25, max: 25 },
+        coins: { min: 5, max: 5 },
+        cardPacks: [{ packId: "pack_iniciante", quantity: 2, chancePercent: 100 }],
+        cosmetics: [{ kind: "aura" as const, itemId: "aura_gold", chancePercent: 100 }],
+      },
+    };
+
+    const res = consumeAndOpenChestsBatch(chest, 4, { [chest.id]: 4 }, () => 0.1);
+    assert.equal(res.ok, true);
+    assert.equal(res.openedCount, 4);
+    assert.equal(res.updatedUnopenedChests[chest.id], undefined);
+    assert.equal(res.outcome?.points, 40);
+    assert.equal(res.outcome?.xp, 100);
+    assert.equal(res.outcome?.coins, 20);
+    assert.deepEqual(res.outcome?.packs, [{ packId: "pack_iniciante", quantity: 8 }]);
+    assert.deepEqual(res.outcome?.cosmetics, [{ kind: "aura", itemId: "aura_gold" }]);
   });
 });

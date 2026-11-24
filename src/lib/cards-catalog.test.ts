@@ -6,12 +6,14 @@ import {
   CARD_RARITIES,
   CARD_RARITY_META,
   consumeAndOpenCardPack,
+  consumeAndOpenCardPacksBatch,
   createCardBatch,
   createCardDefinition,
   DEFAULT_CARD_FOIL_CHANCE_PERCENT,
   DEFAULT_CARD_PACKS,
   editCardDefinition,
   generateMissingFoilDuplicates,
+  groupDrawnCardsForBatchSummary,
   mergeWithDefaultCardPacks,
   openCardPack,
   orderPackRevealCards,
@@ -290,5 +292,53 @@ describe("Sistema de Cartas Colecionáveis e Pacotes", () => {
     const eventDraw = openCardPack(pack, turingPair, {}, () => 0.50, 80);
     assert.equal(eventDraw.drawnCards.length, 1);
     assert.equal(eventDraw.drawnCards[0].isFoil, true);
+  });
+
+  it("abre vários pacotes em lote preservando NOVA! em cartas repetidas e agrupa com badge xN", () => {
+    const c1 = createCardDefinition({
+      name: "Transistor",
+      description: "Semicondutor",
+      rarity: "comum",
+      imageUrl: "https://example.com/t.png",
+    }).card!;
+    const c2 = createCardDefinition({
+      name: "Alan Turing",
+      description: "Lenda",
+      rarity: "lendaria",
+      imageUrl: "https://example.com/a.png",
+      isFoil: true,
+    }).card!;
+
+    const pack = {
+      ...DEFAULT_CARD_PACKS[0],
+      cardsPerPack: 2,
+      probabilities: { comum: 100, incomum: 0, rara: 0, epica: 0, lendaria: 0 },
+    };
+
+    // Abre 3 pacotes -> 6 cartas comuns (todas c1)
+    const batch = consumeAndOpenCardPacksBatch(
+      pack,
+      3,
+      [c1, c2],
+      {},
+      { [pack.id]: 3 },
+      () => 0.5,
+    );
+    assert.equal(batch.error, undefined);
+    assert.equal(batch.openedCount, 3);
+    assert.equal(batch.drawnCards.length, 6);
+    assert.equal(batch.updatedUnopenedPacks[pack.id], undefined);
+    assert.equal(batch.updatedCardsMap[c1.id], 6);
+    // Mesmo repetindo 6 vezes no lote, c1 era inédita antes do lote -> continua em newlyDiscoveredIds
+    assert.deepEqual(batch.newlyDiscoveredIds, [c1.id]);
+
+    // Agrupamento com badge xN e ordenação por raridade decrescente
+    const grouped = groupDrawnCardsForBatchSummary([c1, c1, c2, c1], [c1.id]);
+    assert.equal(grouped.length, 2);
+    assert.equal(grouped[0].card.id, c2.id);
+    assert.equal(grouped[0].count, 1);
+    assert.equal(grouped[1].card.id, c1.id);
+    assert.equal(grouped[1].count, 3);
+    assert.equal(grouped[1].isNew, true);
   });
 });

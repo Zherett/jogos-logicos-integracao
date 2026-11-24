@@ -786,6 +786,118 @@ export function consumeAndOpenCardPack(
   };
 }
 
+export interface ConsumePackBatchResult extends ConsumePackResult {
+  openedCount: number;
+}
+
+/**
+ * Consome até `quantity` unidades do mesmo pacote fechado atomicamente,
+ * preservando a flag `newlyDiscoveredIds` mesmo que uma carta nova repita dentro do lote.
+ */
+export function consumeAndOpenCardPacksBatch(
+  pack: CardPackDefinition,
+  quantity: number,
+  allCards: CardDefinition[],
+  currentCardsMap: Record<string, number> = {},
+  currentUnopenedPacks: Record<string, number> = {},
+  rng: () => number = Math.random,
+  foilChancePercent = DEFAULT_CARD_FOIL_CHANCE_PERCENT,
+): ConsumePackBatchResult {
+  const available = Math.max(0, Math.floor(Number(currentUnopenedPacks[pack.id]) || 0));
+  const requested = Math.max(1, Math.floor(Number(quantity) || 1));
+  const toOpen = Math.min(available, requested);
+  if (toOpen <= 0) {
+    return {
+      openedCount: 0,
+      drawnCards: [],
+      updatedCardsMap: { ...currentCardsMap },
+      updatedUnopenedPacks: { ...currentUnopenedPacks },
+      newlyDiscoveredIds: [],
+      error: "Você não possui unidades fechadas deste pacote.",
+    };
+  }
+
+  let runningCardsMap: Record<string, number> = { ...currentCardsMap };
+  let runningUnopenedPacks: Record<string, number> = { ...currentUnopenedPacks };
+  const allDrawn: CardDefinition[] = [];
+  const allNewlyDiscovered = new Set<string>();
+  let openedCount = 0;
+
+  for (let i = 0; i < toOpen; i++) {
+    const res = consumeAndOpenCardPack(
+      pack,
+      allCards,
+      runningCardsMap,
+      runningUnopenedPacks,
+      rng,
+      foilChancePercent,
+    );
+    if (res.error || res.drawnCards.length === 0) {
+      if (openedCount === 0) {
+        return {
+          ...res,
+          openedCount: 0,
+        };
+      }
+      break;
+    }
+    runningCardsMap = res.updatedCardsMap;
+    runningUnopenedPacks = res.updatedUnopenedPacks;
+    allDrawn.push(...res.drawnCards);
+    for (const id of res.newlyDiscoveredIds) {
+      allNewlyDiscovered.add(id);
+    }
+    openedCount += 1;
+  }
+
+  return {
+    openedCount,
+    drawnCards: allDrawn,
+    updatedCardsMap: runningCardsMap,
+    updatedUnopenedPacks: runningUnopenedPacks,
+    newlyDiscoveredIds: Array.from(allNewlyDiscovered),
+  };
+}
+
+export interface GroupedBatchCard {
+  card: CardDefinition;
+  count: number;
+  isNew: boolean;
+}
+
+/**
+ * Agrupa cartas repetidas obtidas em uma abertura em lote, mantendo badge `xN`
+ * e ordenando pelas mais raras / Foil / recém-descobertas primeiro.
+ */
+export function groupDrawnCardsForBatchSummary(
+  drawnCards: CardDefinition[],
+  newlyDiscoveredIds: readonly string[],
+): GroupedBatchCard[] {
+  const newSet = new Set(newlyDiscoveredIds);
+  const byId = new Map<string, GroupedBatchCard>();
+  for (const card of drawnCards) {
+    const existing = byId.get(card.id);
+    if (existing) {
+      existing.count += 1;
+    } else {
+      byId.set(card.id, {
+        card,
+        count: 1,
+        isNew: newSet.has(card.id),
+      });
+    }
+  }
+  return Array.from(byId.values()).sort((a, b) => {
+    const rankDiff = RARITY_REVEAL_RANK[b.card.rarity] - RARITY_REVEAL_RANK[a.card.rarity];
+    if (rankDiff !== 0) return rankDiff;
+    const foilDiff = (b.card.isFoil ? 1 : 0) - (a.card.isFoil ? 1 : 0);
+    if (foilDiff !== 0) return foilDiff;
+    const newDiff = (b.isNew ? 1 : 0) - (a.isNew ? 1 : 0);
+    if (newDiff !== 0) return newDiff;
+    return b.count - a.count;
+  });
+}
+
 const RARITY_REVEAL_RANK: Record<CardRarity, number> = {
   comum: 0,
   incomum: 1,

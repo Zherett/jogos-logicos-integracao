@@ -25,6 +25,7 @@ import { PackArtwork } from "./PackOpeningModal";
 interface ChestOpeningModalProps {
   chest: ChestDefinition | null;
   outcome: ChestOpenOutcome | null;
+  openedCount?: number;
   packsCatalog?: CardPackDefinition[];
   isSimulation?: boolean;
   onClose: () => void;
@@ -37,6 +38,7 @@ type RewardStepPhase = "mystery" | "reveal" | "flying";
 export function ChestOpeningModal({
   chest,
   outcome,
+  openedCount = 1,
   packsCatalog = [],
   isSimulation = false,
   onClose,
@@ -86,11 +88,14 @@ export function ChestOpeningModal({
   const hasExtras = distinctPacks.length > 0 || hasCosmetics;
 
   const rewardQueue = useMemo<RewardStepKind[]>(() => {
-    const q: RewardStepKind[] = ["points", "xp", "coins"];
+    const q: RewardStepKind[] = [];
+    if ((outcome?.points ?? 0) > 0) q.push("points");
+    if ((outcome?.xp ?? 0) > 0) q.push("xp");
+    if ((outcome?.coins ?? 0) > 0) q.push("coins");
     distinctPacks.forEach((_, idx) => q.push(`pack:${idx}`));
     if (hasCosmetics) q.push("cosmetics");
     return q;
-  }, [distinctPacks, hasCosmetics]);
+  }, [outcome, distinctPacks, hasCosmetics]);
 
   const allSettled = useMemo(
     () => rewardQueue.every((k) => Boolean(settledSteps[k])),
@@ -120,11 +125,16 @@ export function ChestOpeningModal({
     }
 
     setStage("unlocking");
+    skippedRef.current = false;
     setProgress(0);
     setShakeVariant(1);
     setActiveStep(null);
     setStepPhase("mystery");
-    setSettledSteps({});
+    setSettledSteps({
+      points: (outcome.points ?? 0) <= 0,
+      xp: (outcome.xp ?? 0) <= 0,
+      coins: (outcome.coins ?? 0) <= 0,
+    });
     setFlyTransform({ dx: 0, dy: 0, scaleX: 1, scaleY: 1 });
 
     const resolvedShape: ChestShape =
@@ -178,9 +188,12 @@ export function ChestOpeningModal({
     };
   }, [chest, outcome]);
 
+  const skippedRef = useRef(false);
+
   // Orquestra a revelação 1 a 1 quando o estágio chega em "revealed"
   useEffect(() => {
     if (stage !== "revealed" || !outcome) return;
+    if (skippedRef.current) return;
 
     clearTimers();
     let cancelled = false;
@@ -197,6 +210,10 @@ export function ChestOpeningModal({
       setActiveStep(kind);
       setStepPhase("mystery");
 
+      const mysteryDurationMs = isPackStep ? 220 : 90;
+      const revealDurationMs = isPackStep ? 900 : 320;
+      const flyDurationMs = isPackStep ? 520 : 240;
+
       schedule(() => {
         if (cancelled) return;
         setStepPhase("reveal");
@@ -204,9 +221,6 @@ export function ChestOpeningModal({
         else if (kind === "xp") playChestRewardXp();
         else if (kind === "coins") playChestRewardCoins();
         else playChestRewardPack();
-
-        const revealDurationMs = isPackStep ? 900 : 680;
-        const flyDurationMs = isPackStep ? 520 : 460;
 
         schedule(() => {
           if (cancelled) return;
@@ -218,7 +232,7 @@ export function ChestOpeningModal({
             runStep(idx + 1);
           }, flyDurationMs);
         }, revealDurationMs);
-      }, 220);
+      }, mysteryDurationMs);
     };
 
     runStep(0);
@@ -265,9 +279,23 @@ export function ChestOpeningModal({
   }, [stage, activeStep, stepPhase]);
 
   function handleSkipSequence() {
+    skippedRef.current = true;
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+    if (lockpickIntervalRef.current !== null) {
+      window.clearInterval(lockpickIntervalRef.current);
+      lockpickIntervalRef.current = null;
+    }
     clearTimers();
+    setStage("revealed");
     setActiveStep(null);
-    const nextSettled: Record<string, boolean> = {};
+    const nextSettled: Record<string, boolean> = {
+      points: true,
+      xp: true,
+      coins: true,
+    };
     for (const k of rewardQueue) {
       nextSettled[k] = true;
     }
@@ -309,6 +337,11 @@ export function ChestOpeningModal({
           <DialogTitle className="flex items-center justify-center gap-2 font-display text-xl font-black">
             <Gift className="h-5 w-5 text-amber-500" />
             <span>{chest.name}</span>
+            {openedCount > 1 && (
+              <span className="rounded-full bg-primary/15 border border-primary/30 px-2 py-0.5 font-mono text-xs font-black text-primary">
+                x{openedCount}
+              </span>
+            )}
             {isSimulation && (
               <span className="rounded-full bg-amber-500/20 border border-amber-500/40 px-2 py-0.5 text-[10px] font-black uppercase text-amber-600 dark:text-amber-300">
                 Prévia ADM
@@ -353,6 +386,16 @@ export function ChestOpeningModal({
                   : "Abrindo recompensas..."}
               </p>
             </div>
+
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={handleSkipSequence}
+              className="h-7 rounded-xl px-3 text-[11px] font-bold text-muted-foreground hover:text-foreground"
+            >
+              <FastForward className="mr-1 h-3 w-3" /> Pular animação
+            </Button>
           </div>
         )}
 
@@ -492,8 +535,8 @@ export function ChestOpeningModal({
                           : "translate(0px, 0px) scale(1)",
                       transition:
                         stepPhase === "flying"
-                          ? "transform 440ms cubic-bezier(0.22, 1, 0.36, 1), opacity 440ms ease"
-                          : "transform 220ms cubic-bezier(0.22, 1, 0.36, 1)",
+                          ? "transform 230ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease"
+                          : "transform 160ms cubic-bezier(0.22, 1, 0.36, 1)",
                       opacity: stepPhase === "flying" ? 0.25 : 1,
                     }}
                     className={`flex flex-col items-center justify-center gap-1.5 rounded-3xl border-2 px-6 py-5 shadow-2xl backdrop-blur-md ${

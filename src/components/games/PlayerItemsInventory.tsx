@@ -6,7 +6,7 @@ import {
   CARD_PACK_COLOR_META,
   CARD_RARITIES,
   CARD_RARITY_META,
-  consumeAndOpenCardPack,
+  consumeAndOpenCardPacksBatch,
   DEFAULT_CARD_FOIL_CHANCE_PERCENT,
   mergeWithDefaultCardPacks,
   openCardPack,
@@ -16,7 +16,7 @@ import {
 } from "@/lib/cards-catalog";
 import {
   CHEST_RARITY_META,
-  consumeAndOpenChest,
+  consumeAndOpenChestsBatch,
   mergeWithDefaultChests,
   type ChestDefinition,
   type ChestOpenOutcome,
@@ -24,7 +24,7 @@ import {
 import { usePlayerAuth } from "@/lib/player-auth";
 import { creditCoinMetrics } from "@/lib/career-points";
 import { isAdminUnlockedSession, syncActiveProfileChangeToPlayFab } from "@/lib/playfab";
-import { isAdminOrTestAccount } from "@/lib/player-profile";
+import { isAdminOrTestAccount, syncLevelStageProgress } from "@/lib/player-profile";
 import { CollectibleCardView } from "./CollectibleCardView";
 import { CardPagination, paginateItems } from "./CardPagination";
 import { ChestOpeningModal } from "./ChestOpeningModal";
@@ -55,9 +55,17 @@ export function PlayerItemsInventory() {
   const [rarityFilter, setRarityFilter] = useState<CardRarity | "todas">("todas");
   const [inspectCard, setInspectCard] = useState<{ card: CardDefinition; count: number } | null>(null);
   const [packToOpen, setPackToOpen] = useState<CardPackDefinition | null>(null);
+  const [packOpenQuantity, setPackOpenQuantity] = useState(1);
   const [openingChest, setOpeningChest] = useState<ChestDefinition | null>(null);
+  const [openingChestCount, setOpeningChestCount] = useState(1);
   const [chestOutcome, setChestOutcome] = useState<ChestOpenOutcome | null>(null);
   const [chestError, setChestError] = useState<string | null>(null);
+  const [isOpeningChest, setIsOpeningChest] = useState(false);
+  const [batchPrompt, setBatchPrompt] = useState<
+    | { kind: "chest"; item: ChestDefinition; quantity: number }
+    | { kind: "pack"; item: CardPackDefinition; quantity: number }
+    | null
+  >(null);
 
   const chests = useMemo(() => mergeWithDefaultChests(auth.adminConfig.chestsCatalog), [auth.adminConfig.chestsCatalog]);
   const ownedChests = useMemo(() => {
@@ -67,40 +75,82 @@ export function PlayerItemsInventory() {
       .filter((item) => item.qty > 0);
   }, [chests, auth.profile?.unopenedChests]);
 
-  async function handleOpenChest(chest: ChestDefinition) {
-    if (!auth.profile || !canViewCards) return;
+  async function handleOpenChest(chest: ChestDefinition, requestedQty?: number) {
+    if (!auth.profile || !canViewCards || isOpeningChest) return;
+    const available = Math.max(0, Math.floor(Number(auth.profile.unopenedChests?.[chest.id]) || 0));
+    if (available <= 0) return;
+
+    // Se houver 2+ unidades e a quantidade ainda não foi escolhida, pergunta "1 unidade" vs "Abrir todos"
+    if (requestedQty === undefined && available >= 2) {
+      setBatchPrompt({ kind: "chest", item: chest, quantity: available });
+      return;
+    }
+
+    const qtyToOpen = Math.max(1, Math.min(available, Math.floor(requestedQty ?? 1)));
     setChestError(null);
-    const res = consumeAndOpenChest(chest, auth.profile.unopenedChests ?? {});
-    if (!res.ok || !res.outcome) return;
-    const nextPacks = { ...(auth.profile.unopenedPacks ?? {}) };
-    for (const pk of res.outcome.packs) {
-      nextPacks[pk.packId] = (Number(nextPacks[pk.packId]) || 0) + pk.quantity;
-    }
-    let updatedProfile = {
-      ...auth.profile,
-      unopenedChests: res.updatedUnopenedChests,
-      unopenedPacks: nextPacks,
-      chestsOpenedTotal: Math.max(0, auth.profile.chestsOpenedTotal ?? 0) + 1,
-      pointsBalance: (auth.profile.pointsBalance ?? 0) + res.outcome.points,
-      careerPoints: (auth.profile.careerPoints ?? 0) + res.outcome.points,
-      xp: (auth.profile.xp ?? 0) + res.outcome.xp,
-      seasonXp: (auth.profile.seasonXp ?? 0) + res.outcome.xp,
-    };
-    creditCoinMetrics(updatedProfile, res.outcome.coins);
-    for (const cosm of res.outcome.cosmetics ?? []) {
-      updatedProfile = grantCosmeticToProfile(updatedProfile, cosm.kind, cosm.itemId).profile;
-    }
+    setIsOpeningChest(true);
     try {
+      const res = consumeAndOpenChestsBatch(chest, qtyToOpen, auth.profile.unopenedChests ?? {});
+      if (!res.ok || !res.outcome) return;
+
+      const nextPacks = { ...(auth.profile.unopenedPacks ?? {}) };
+      for (const pk of res.outcome.packs) {
+        nextPacks[pk.packId] = (Number(nextPacks[pk.packId]) || 0) + pk.quantity;
+      }
+
+      let updatedProfile = {
+        ...auth.profile,
+        unopenedChests: res.updatedUnopenedChests,
+        unopenedPacks: nextPacks,
+        chestsOpenedTotal: Math.max(0, auth.profile.chestsOpenedTotal ?? 0) + res.openedCount,
+        pointsBalance: (auth.profile.pointsBalance ?? 0) + res.outcome.points,
+        careerPoints: (auth.profile.careerPoints ?? 0) + res.outcome.points,
+        xp: (auth.profile.xp ?? 0) + res.outcome.xp,
+        seasonXp: (auth.profile.seasonXp ?? 0) + res.outcome.xp,
+      };
+      // Recalcula o nível imediatamente caso o XP acumulado em lote tenha ultrapassado um nível
+      const syncedLevel = syncLevelStageProgress({
+        xp: updatedProfile.xp,
+        lifetimeMatches: updatedProfile.matchesPlayed ?? 0,
+        lifetimeWins: updatedProfile.wins ?? 0,
+        lifetimeDistinctGames: updatedProfile.distinctGamesPlayed ?? 0,
+        currentLevel: updatedProfile.level,
+        existingStage: updatedProfile.levelStageProgress,
+      });
+      updatedProfile = {
+        ...updatedProfile,
+        level: syncedLevel.level,
+        levelStageProgress: syncedLevel.stageProgress,
+      };
+      creditCoinMetrics(updatedProfile, res.outcome.coins);
+
+      const newlyGrantedCosmetics: Array<{ kind: "avatar" | "aura"; itemId: string }> = [];
+      for (const cosm of res.outcome.cosmetics ?? []) {
+        const grant = grantCosmeticToProfile(updatedProfile, cosm.kind, cosm.itemId);
+        updatedProfile = grant.profile;
+        if (!grant.alreadyOwned) {
+          newlyGrantedCosmetics.push(cosm);
+        }
+      }
+
+      const finalOutcome: ChestOpenOutcome = {
+        ...res.outcome,
+        cosmetics: newlyGrantedCosmetics,
+      };
+
       await syncActiveProfileChangeToPlayFab(updatedProfile, { requireServerSync: true });
       await auth.refresh();
+      setOpeningChestCount(res.openedCount);
       setOpeningChest(chest);
-      setChestOutcome(res.outcome);
+      setChestOutcome(finalOutcome);
     } catch (err) {
       setChestError(
         err instanceof Error && err.message
           ? err.message
           : "Não foi possível abrir o baú. Tente novamente.",
       );
+    } finally {
+      setIsOpeningChest(false);
     }
   }
 
@@ -174,24 +224,41 @@ export function PlayerItemsInventory() {
     return catalog.filter((c) => c.rarity === rarityFilter);
   }, [catalog, rarityFilter]);
 
-  function handleOpenPack(pack: CardPackDefinition) {
+  function handleOpenPack(pack: CardPackDefinition, requestedQty?: number) {
+    const available = Math.max(0, Math.floor(Number(auth.profile?.unopenedPacks?.[pack.id]) || 0));
+    if (requestedQty === undefined && available >= 2) {
+      setBatchPrompt({ kind: "pack", item: pack, quantity: available });
+      return;
+    }
+    setPackOpenQuantity(Math.max(1, Math.floor(requestedQty ?? 1)));
     setPackToOpen(pack);
   }
 
-  async function confirmOpenPack(pack: CardPackDefinition): Promise<PackOpenOutcome | null> {
+  async function confirmOpenPack(
+    pack: CardPackDefinition,
+    quantity = 1,
+  ): Promise<PackOpenOutcome | null> {
     const unopenedMap = auth.profile?.unopenedPacks ?? {};
     const hasStock = (Number(unopenedMap[pack.id]) || 0) > 0;
     const foilChance = auth.adminConfig.cardFoilChancePercent ?? DEFAULT_CARD_FOIL_CHANCE_PERCENT;
 
     if (hasStock) {
-      const res = consumeAndOpenCardPack(pack, catalog, ownedCardsMap, unopenedMap, Math.random, foilChance);
+      const res = consumeAndOpenCardPacksBatch(
+        pack,
+        quantity,
+        catalog,
+        ownedCardsMap,
+        unopenedMap,
+        Math.random,
+        foilChance,
+      );
       if (res.error) {
         return { drawn: [], newlyDiscovered: [], error: res.error };
       }
       const saveRes = await auth.updatePlayerCards({
         cards: res.updatedCardsMap,
         unopenedPacks: res.updatedUnopenedPacks,
-        packsOpenedDelta: 1,
+        packsOpenedDelta: res.openedCount,
         requireServerSync: true,
       });
       if (!saveRes.ok) {
@@ -897,26 +964,101 @@ export function PlayerItemsInventory() {
         </DialogContent>
       </Dialog>
 
+      {/* Modal de Escolha: Abrir 1 unidade vs Abrir Todos */}
+      <Dialog open={Boolean(batchPrompt)} onOpenChange={(v) => !v && setBatchPrompt(null)}>
+        <DialogContent className="max-w-sm rounded-3xl p-6 text-center">
+          <DialogHeader>
+            <DialogTitle className="flex items-center justify-center gap-2 font-display text-lg font-extrabold">
+              {batchPrompt?.kind === "chest" ? (
+                <Gift className="h-5 w-5 text-amber-500" />
+              ) : (
+                <PackageOpen className="h-5 w-5 text-primary" />
+              )}
+              <span>{batchPrompt?.item.name}</span>
+            </DialogTitle>
+          </DialogHeader>
+
+          {batchPrompt && (
+            <div className="space-y-4 pt-1">
+              <p className="text-xs font-semibold text-muted-foreground">
+                Você possui{" "}
+                <span className="font-mono font-black text-foreground">
+                  {batchPrompt.quantity} unidades
+                </span>{" "}
+                deste {batchPrompt.kind === "chest" ? "baú" : "pacote"}. Como deseja abrir?
+              </p>
+
+              <div className="flex flex-col gap-2">
+                <Button
+                  type="button"
+                  size="lg"
+                  disabled={isOpeningChest}
+                  onClick={() => {
+                    const current = batchPrompt;
+                    setBatchPrompt(null);
+                    if (current.kind === "chest") {
+                      void handleOpenChest(current.item, current.quantity);
+                    } else {
+                      handleOpenPack(current.item, current.quantity);
+                    }
+                  }}
+                  className="w-full rounded-2xl font-display font-extrabold shadow-sm"
+                >
+                  <Sparkles className="h-4 w-4 mr-1.5" />
+                  Abrir todos ({batchPrompt.quantity}x)
+                </Button>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="lg"
+                  disabled={isOpeningChest}
+                  onClick={() => {
+                    const current = batchPrompt;
+                    setBatchPrompt(null);
+                    if (current.kind === "chest") {
+                      void handleOpenChest(current.item, 1);
+                    } else {
+                      handleOpenPack(current.item, 1);
+                    }
+                  }}
+                  className="w-full rounded-2xl font-display font-bold"
+                >
+                  Abrir 1 unidade por vez
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
       {/* Modal Interativo de Abertura de Pacote */}
       <PackOpeningModal
         pack={packToOpen}
+        openQuantity={packOpenQuantity}
         titlePrefix="Abrir Pacote"
         onConfirmOpen={confirmOpenPack}
-        onClose={() => setPackToOpen(null)}
+        onClose={() => {
+          setPackToOpen(null);
+          setPackOpenQuantity(1);
+        }}
         onRequestRelogin={() => {
           setPackToOpen(null);
+          setPackOpenQuantity(1);
           auth.openReloginDialog();
         }}
       />
 
-      {/* Modal Animado de Abertura de Baú (Prévia ADM) */}
+      {/* Modal Animado de Abertura de Baú */}
       <ChestOpeningModal
         chest={openingChest}
         outcome={chestOutcome}
+        openedCount={openingChestCount}
         packsCatalog={packs}
         onClose={() => {
           setOpeningChest(null);
           setChestOutcome(null);
+          setOpeningChestCount(1);
         }}
       />
     </div>

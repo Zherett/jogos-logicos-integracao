@@ -270,3 +270,76 @@ export function consumeAndOpenChest(
 
   return { ok: true, outcome, updatedUnopenedChests };
 }
+
+/**
+ * Consome até `quantity` unidades do mesmo baú atomicamente e consolida
+ * todos os bônus (pontos, XP, moedas, pacotes agrupados por packId e cosméticos deduplicados).
+ */
+export function consumeAndOpenChestsBatch(
+  chest: ChestDefinition,
+  quantity: number,
+  currentUnopenedChests: Record<string, number> = {},
+  rng: () => number = Math.random,
+): {
+  ok: boolean;
+  error?: string;
+  openedCount: number;
+  outcome?: ChestOpenOutcome;
+  updatedUnopenedChests: Record<string, number>;
+} {
+  const available = Math.max(0, Math.floor(Number(currentUnopenedChests[chest.id]) || 0));
+  const requested = Math.max(1, Math.floor(Number(quantity) || 1));
+  const toOpen = Math.min(available, requested);
+  if (toOpen <= 0) {
+    return {
+      ok: false,
+      error: "Você não possui este baú disponível na mochila.",
+      openedCount: 0,
+      updatedUnopenedChests: { ...currentUnopenedChests },
+    };
+  }
+
+  let totalPoints = 0;
+  let totalXp = 0;
+  let totalCoins = 0;
+  const packsMap = new Map<string, number>();
+  const cosmeticsMap = new Map<string, { kind: "avatar" | "aura"; itemId: string }>();
+
+  for (let i = 0; i < toOpen; i++) {
+    const single = openChest(chest, rng);
+    totalPoints += single.points;
+    totalXp += single.xp;
+    totalCoins += single.coins;
+    for (const pk of single.packs) {
+      if (pk.quantity > 0) {
+        packsMap.set(pk.packId, (packsMap.get(pk.packId) ?? 0) + pk.quantity);
+      }
+    }
+    for (const cosm of single.cosmetics) {
+      cosmeticsMap.set(`${cosm.kind}:${cosm.itemId}`, cosm);
+    }
+  }
+
+  const updatedUnopenedChests = { ...currentUnopenedChests };
+  const remaining = available - toOpen;
+  if (remaining > 0) updatedUnopenedChests[chest.id] = remaining;
+  else delete updatedUnopenedChests[chest.id];
+
+  return {
+    ok: true,
+    openedCount: toOpen,
+    outcome: {
+      chestId: chest.id,
+      chestName: chest.name,
+      points: totalPoints,
+      xp: totalXp,
+      coins: totalCoins,
+      packs: Array.from(packsMap.entries()).map(([packId, qty]) => ({
+        packId,
+        quantity: qty,
+      })),
+      cosmetics: Array.from(cosmeticsMap.values()),
+    },
+    updatedUnopenedChests,
+  };
+}
