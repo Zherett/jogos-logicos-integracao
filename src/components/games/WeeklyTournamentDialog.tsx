@@ -329,7 +329,7 @@ export function WeeklyTournamentDialog({
                     Projeção Atual: Top {snap.myStanding.rank} da {snap.playerStage.shortLabel}
                   </span>
                   <span className="text-[11px] text-muted-foreground">
-                    Mantenha sua posição até domingo às 23:59 para faturar a medalha definitiva!
+                    Mantenha sua posição até o fim da temporada ({snap.endsAtLabel}) para faturar a medalha definitiva!
                   </span>
                 </div>
               </div>
@@ -582,8 +582,8 @@ export function WeeklyTournamentDialog({
               <div className="font-bold text-foreground">🏆 Top 5 e Trilha de Ranks</div>
               <p>
                 Suba pelos 19 ranks da temporada para desbloquear medalhas de maestria e resgatar
-                recompensas exclusivas na aba <b>Trilha de Ranks</b>. No fechamento semanal (domingo
-                23:59), o Top 5 de cada etapa recebe prêmios oficiais no Correio!
+                recompensas exclusivas na aba <b>Trilha de Ranks</b>. No fechamento da temporada ({snap.endsAtLabel}),
+                o Top 5 de cada etapa recebe prêmios oficiais no Correio!
               </p>
             </div>
           </div>

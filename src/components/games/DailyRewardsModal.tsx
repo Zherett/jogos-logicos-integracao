@@ -26,6 +26,7 @@ import {
   getAuthoritativeDateKey,
   getAuthoritativeNow,
   isAdminUnlockedSession,
+  reconcileCurrentPlayerFromCloudRoster,
   syncPlayFabServerClock,
   type GameStatRow,
   type PlayerProfile,
@@ -83,13 +84,19 @@ export function DailyRewardsModal({
 
   useEffect(() => {
     if (!open) return;
+    let cancelled = false;
     setActiveTab("recompensas");
     setFeedbackMsg(null);
     let lastObservedDate = getAuthoritativeDateKey();
     void syncPlayFabServerClock().then((ms) => {
-      if (ms !== null) {
+      if (!cancelled && ms !== null) {
         lastObservedDate = getAuthoritativeDateKey();
         setClockTick((v) => v + 1);
+      }
+    });
+    void reconcileCurrentPlayerFromCloudRoster(false).then((updated) => {
+      if (!cancelled && updated) {
+        onProfileUpdated?.();
       }
     });
     // Atualiza automaticamente na virada de meia-noite oficial (UTC-4) com o modal aberto
@@ -100,19 +107,31 @@ export function DailyRewardsModal({
         setClockTick((v) => v + 1);
       }
     }, 30_000);
-    return () => window.clearInterval(timer);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
   }, [open]);
 
   const routineConfig = adminConfig?.weeklyRoutineConfig;
   const authoritativeNow = useMemo(() => getAuthoritativeNow(), [open, clockTick]);
   const todayKey = getAuthoritativeDateKey(authoritativeNow);
+  const claimState = getDailyRewardClaimState(profile, todayKey);
+  const { isTodayClaimed, currentDay, completedCycles } = claimState;
+
   const hasPriorActiveDates = Array.isArray(profile?.activeDates) && profile.activeDates.length > 0;
-  const computedStreak = profile ? getCurrentActiveStreakDays(profile, todayKey) : 1;
+  const previewProfileForStreak = useMemo(() => {
+    if (!profile || isTodayClaimed) return profile;
+    const dates = Array.isArray(profile.activeDates) ? profile.activeDates : [];
+    if (dates.includes(todayKey)) return profile;
+    return { ...profile, activeDates: [...dates, todayKey] };
+  }, [profile, isTodayClaimed, todayKey]);
+  const computedStreak = previewProfileForStreak
+    ? getCurrentActiveStreakDays(previewProfileForStreak, todayKey)
+    : 1;
   const streak = hasPriorActiveDates
     ? Math.max(1, computedStreak)
     : Math.max(1, computedStreak, profile?.streakDays ?? 1);
-  const claimState = getDailyRewardClaimState(profile, todayKey);
-  const { isTodayClaimed, currentDay, completedCycles } = claimState;
 
   const streakStepPts = Math.max(0, Math.floor(routineConfig?.streakPointsStep ?? DAILY_STREAK_BONUS_STEP));
   const streakCapPts = Math.max(0, Math.floor(routineConfig?.streakPointsCap ?? DAILY_STREAK_BONUS_CAP));

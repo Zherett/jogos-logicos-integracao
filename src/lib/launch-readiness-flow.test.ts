@@ -8,6 +8,7 @@ import {
   playfabRecoverByNameAndBirthdate,
   playfabSignIn,
   pushAdminConfigToPlayFab,
+  reconcileCurrentPlayerFromCloudRoster,
   ROSTER_SHARED_GROUP_ID,
   runRetroactiveCoinsAudit,
   runRetroactiveDay1CheckInAudit,
@@ -817,5 +818,95 @@ describe("Simulação Ponta-a-Ponta do Dia de Lançamento (Moedas + Dia 1 + Roll
     assert.equal(nextDayClaim.ok, true);
     assert.equal(nextDayClaim.claimedDay, 3);
     assert.equal(nextDayClaim.profile?.lastDailyRewardClaimDate, "2026-11-25");
+  });
+
+  it("reconcilia Retrocoleta do Dia 1 do Roster ANTES do resgate em sessão já aberta, coletando o Dia 2 em vez do Dia 1", async () => {
+    const pf = createLaunchPlayFabMock();
+    globalThis.fetch = pf.fetchMock;
+    const fixedServerUtcMs = Date.UTC(2026, 10, 24, 15, 0, 0); // 2026-11-24 11:00 UTC-4
+    pf.setServerTimeMs(() => fixedServerUtcMs);
+
+    const student = makeBaseProfile({
+      id: "PF_ALREADY_LOGGED",
+      playfabId: "PF_ALREADY_LOGGED",
+      nick: "SessaoAberta",
+      nickNormalized: "sessaoaberta",
+      full_name: "ALUNO SESSAO ABERTA",
+      xp: 40,
+      seasonXp: 40,
+      careerPoints: 50,
+      pointsBalance: 50,
+      activeDates: ["2026-11-23"],
+      lastActiveDate: "2026-11-23",
+      dailyCheckInCount: 0,
+      lastDailyRewardClaimDate: undefined,
+    });
+
+    pf.registerUser({
+      playfabId: "PF_ALREADY_LOGGED",
+      username: "sessaoaberta",
+      password: "200114",
+      sessionTicket: "PF_ALREADY_LOGGED-186F63-TKS",
+      userData: {
+        PlayerProfile: {
+          Value: JSON.stringify({ ...student, updatedAt: "2026-11-23T18:00:00.000Z" }),
+          LastUpdated: "2026-11-23T18:00:00.000Z",
+        },
+        GameStats: { Value: "[]", LastUpdated: "2026-11-23T18:00:00.000Z" },
+        UnlockedGames: { Value: "[]", LastUpdated: "2026-11-23T18:00:00.000Z" },
+      },
+    });
+
+    saveAdminConfig({
+      ...DEFAULT_ADMIN_CONFIG,
+      rolloutFlags: {
+        ...DEFAULT_ADMIN_CONFIG.rolloutFlags,
+        enableDailyRoutineForStudents: true,
+      },
+    });
+
+    // Aluno faz login ANTES de o ADM aplicar a Retrocoleta do Dia 1
+    const loginRes = await playfabSignIn("SessaoAberta", "200114");
+    assert.equal(loginRes.error, null);
+    assert.equal(loginRes.account?.profile.dailyCheckInCount, 0);
+
+    // Enquanto o aluno continua logado, o ADM aplica a Retrocoleta do Dia 1 no Roster na nuvem
+    pf.rosterData.set("stu_sessaoaberta", {
+      Value: JSON.stringify({
+        ...student,
+        dailyCheckInCount: 1,
+        lastDailyRewardClaimDate: "2026-11-23",
+        retroactiveDay1GrantedAt: "2026-11-24T12:00:00.000Z",
+        xp: 50,
+        seasonXp: 50,
+        updatedAt: "2026-11-24T12:00:00.000Z",
+      }),
+      LastUpdated: "2026-11-24T12:00:00.000Z",
+    });
+
+    // 1) Se o modal chamar reconcileCurrentPlayerFromCloudRoster, o cache local já avança para o Dia 2
+    const storedSession = JSON.parse(window.localStorage.getItem(SESSION_KEY)!);
+    const playerId = storedSession.playerId as string;
+    const updatedOnOpen = await reconcileCurrentPlayerFromCloudRoster(true);
+    assert.equal(updatedOnOpen, true);
+    const regAfterOpen = JSON.parse(window.localStorage.getItem(REGISTRY_KEY)!);
+    const profAfterOpen = regAfterOpen[playerId].profile as PlayerProfile;
+    const stateAfterOpen = getDailyRewardClaimState(profAfterOpen, "2026-11-24");
+    assert.equal(stateAfterOpen.currentDay, 2);
+    assert.equal(stateAfterOpen.isTodayClaimed, false);
+
+    // 2) Mesmo se o cache local estivesse defasado (sem ter aberto o modal), claimCurrentPlayerDailyReward
+    // reconcilia antes de resgatar e entrega o Dia 2 (e não o Dia 1 novamente)
+    regAfterOpen[playerId].profile.dailyCheckInCount = 0;
+    regAfterOpen[playerId].profile.lastDailyRewardClaimDate = undefined;
+    regAfterOpen[playerId].profile.retroactiveDay1GrantedAt = undefined;
+    window.localStorage.setItem(REGISTRY_KEY, JSON.stringify(regAfterOpen));
+
+    const claimRes = await claimCurrentPlayerDailyReward();
+    assert.equal(claimRes.ok, true);
+    assert.equal(claimRes.claimedDay, 2, "Deve resgatar o Dia 2 após reconciliar a retrocoleta do Roster");
+    assert.equal(claimRes.profile?.dailyCheckInCount, 2);
+    assert.equal(claimRes.profile?.lastDailyRewardClaimDate, "2026-11-24");
+    assert.equal(claimRes.streakBonusPoints, 5, "2º dia seguido deve conceder bônus de ofensiva (+5 pts)");
   });
 });

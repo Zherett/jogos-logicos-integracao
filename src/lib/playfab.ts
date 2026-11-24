@@ -10218,6 +10218,69 @@ export async function syncPlayFabServerClock(
 const inFlightRoutineClaims = new Set<string>();
 
 /**
+ * Reconcilia o perfil do jogador logado com o Roster da nuvem PlayFab (ex.: Retrocoleta do Dia 1,
+ * moedas retroativas ou check-in feito em outro dispositivo), atualizando o registro local quando houver mudança.
+ */
+export async function reconcileCurrentPlayerFromCloudRoster(force = false): Promise<boolean> {
+  if (!isPlayFabConfigured()) return false;
+  const session = loadStoredSession();
+  if (!session?.sessionTicket || session.sessionTicket.startsWith("admin-")) return false;
+
+  const reg = loadRegistry();
+  const acc = reg[session.playerId];
+  if (!acc || isSpecialAdminAccount(acc.profile)) return false;
+
+  const nowMs = Date.now();
+  const lastCheck = lastPushRosterReconcileAt.get(acc.profile.id) ?? 0;
+  if (!force && nowMs - lastCheck < 15_000) {
+    return false;
+  }
+  lastPushRosterReconcileAt.set(acc.profile.id, nowMs);
+
+  const beforeSnapshot = JSON.stringify({
+    dailyCheckInCount: acc.profile.dailyCheckInCount ?? 0,
+    lastDailyRewardClaimDate: acc.profile.lastDailyRewardClaimDate ?? null,
+    retroactiveDay1GrantedAt: acc.profile.retroactiveDay1GrantedAt ?? null,
+    retroactiveMedalCoinsGrantedAt: acc.profile.retroactiveMedalCoinsGrantedAt ?? null,
+    coins: acc.profile.coins ?? 0,
+    pointsBalance: acc.profile.pointsBalance ?? 0,
+    xp: acc.profile.xp ?? 0,
+    dailyMissionProgress: acc.profile.dailyMissionProgress ?? null,
+    weeklyMissionProgress: acc.profile.weeklyMissionProgress ?? null,
+  });
+
+  const clonedAcc: StoredAccount = {
+    ...acc,
+    profile: structuredClone(acc.profile),
+  };
+  await reconcileAccountWithCloudRoster(clonedAcc, session.sessionTicket);
+
+  const afterSnapshot = JSON.stringify({
+    dailyCheckInCount: clonedAcc.profile.dailyCheckInCount ?? 0,
+    lastDailyRewardClaimDate: clonedAcc.profile.lastDailyRewardClaimDate ?? null,
+    retroactiveDay1GrantedAt: clonedAcc.profile.retroactiveDay1GrantedAt ?? null,
+    retroactiveMedalCoinsGrantedAt: clonedAcc.profile.retroactiveMedalCoinsGrantedAt ?? null,
+    coins: clonedAcc.profile.coins ?? 0,
+    pointsBalance: clonedAcc.profile.pointsBalance ?? 0,
+    xp: clonedAcc.profile.xp ?? 0,
+    dailyMissionProgress: clonedAcc.profile.dailyMissionProgress ?? null,
+    weeklyMissionProgress: clonedAcc.profile.weeklyMissionProgress ?? null,
+  });
+
+  if (afterSnapshot === beforeSnapshot) return false;
+
+  const liveReg = loadRegistry();
+  const liveAcc = liveReg[session.playerId];
+  if (!liveAcc) return false;
+  liveReg[session.playerId] = {
+    ...liveAcc,
+    profile: clonedAcc.profile,
+  };
+  saveRegistry(liveReg);
+  return true;
+}
+
+/**
  * Resgata a recompensa diária do jogador logado usando o relógio oficial do PlayFab (`Client/GetTime`),
  * trava de acesso `canAccessDailyRoutine`, mutex contra cliques simultâneos e sync estrito no servidor.
  */
@@ -10317,6 +10380,9 @@ export async function claimCurrentPlayerDailyReward(): Promise<ClaimDailyRewardR
       }
       authoritativeTodayKey = formatUtcMsToOfficialDateKey(serverUtcMs);
       authoritativeNow = createOfficialWallDateFromUtcMs(serverUtcMs);
+      if (!isSpecialAdminAccount(initialAcc.profile)) {
+        await reconcileCurrentPlayerFromCloudRoster(true);
+      }
     }
 
     // Re-lê registro vivo pós-await para evitar race condition com outra aba ou partida em paralelo

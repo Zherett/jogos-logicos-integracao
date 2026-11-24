@@ -167,6 +167,7 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
   const [inboxOpen, setInboxOpen] = useState(false);
   const [promoCodeOpen, setPromoCodeOpen] = useState(false);
   const [dailyRewardsOpen, setDailyRewardsOpen] = useState(false);
+  const [dailyDateTick, setDailyDateTick] = useState(0);
   const [shopOpen, setShopOpen] = useState(false);
   const [customizeOpen, setCustomizeOpen] = useState(false);
   const [inboxCounts, setInboxCounts] = useState({ unreadCount: 0, unclaimedRewardsCount: 0, totalAlerts: 0 });
@@ -228,7 +229,18 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
     [effProg],
   );
   const dailyCap = auth.adminConfig.dailyXpCap ?? DEFAULT_DAILY_XP_CAP;
-  const authoritativeNow = getAuthoritativeNow();
+  useEffect(() => {
+    let lastObservedDate = getAuthoritativeDateKey();
+    const timer = window.setInterval(() => {
+      const currentDate = getAuthoritativeDateKey();
+      if (currentDate !== lastObservedDate) {
+        lastObservedDate = currentDate;
+        setDailyDateTick((v) => v + 1);
+      }
+    }, 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const authoritativeNow = useMemo(() => getAuthoritativeNow(), [dailyDateTick, profile?.lastDailyRewardClaimDate, profile?.dailyXpDate]);
   const todayKey = getAuthoritativeDateKey(authoritativeNow);
   const isTodayRecord = profile && profile.dailyXpDate === todayKey;
   const dailyXp = isTodayRecord ? Math.max(0, profile.dailyXp ?? 0) : 0;

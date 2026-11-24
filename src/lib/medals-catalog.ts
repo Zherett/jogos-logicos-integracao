@@ -898,7 +898,7 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
     {
       id: "tournament_top_1_gold",
       title: "Campeão Semanal (Ouro)",
-      description: "Mantenha o 1º lugar da sua etapa no fechamento do torneio semanal (domingo 23:59).",
+      description: "Mantenha o 1º lugar da sua etapa no fechamento da temporada ranqueada.",
       rarity: "ouro",
       category: "ranking",
       iconName: "Trophy",
@@ -907,7 +907,7 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
     {
       id: "tournament_top_2_silver",
       title: "Vice-Campeão Semanal (Prata)",
-      description: "Conquiste o 2º lugar da sua etapa no fechamento do torneio semanal.",
+      description: "Conquiste o 2º lugar da sua etapa no fechamento da temporada ranqueada.",
       rarity: "prata",
       category: "ranking",
       iconName: "Medal",
@@ -916,7 +916,7 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
     {
       id: "tournament_top_3_bronze",
       title: "3º Lugar Semanal (Bronze)",
-      description: "Conquiste o 3º lugar da sua etapa no fechamento do torneio semanal.",
+      description: "Conquiste o 3º lugar da sua etapa no fechamento da temporada ranqueada.",
       rarity: "bronze",
       category: "ranking",
       iconName: "Award",
