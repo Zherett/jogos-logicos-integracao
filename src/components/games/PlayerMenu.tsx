@@ -481,7 +481,7 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
         }
       >
         {leftSlot && (
-          <div className="order-1 sm:order-none flex items-center gap-3 min-w-0">
+          <div className="order-1 sm:order-none flex flex-1 sm:flex-initial items-center gap-2 sm:gap-3 min-w-0">
             {leftSlot}
           </div>
         )}
@@ -489,7 +489,7 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
         <div
           className={
             leftSlot
-              ? "order-3 flex w-full items-center justify-between gap-1.5 sm:order-none sm:ml-auto sm:w-auto sm:justify-end sm:gap-2"
+              ? "order-3 flex w-full items-center justify-around gap-1 rounded-2xl border bg-card/85 px-1.5 py-1 shadow-xs sm:order-none sm:ml-auto sm:w-auto sm:justify-end sm:gap-2 sm:border-0 sm:bg-transparent sm:p-0 sm:shadow-none"
               : "contents"
           }
         >
@@ -502,23 +502,23 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
             onClick={sound.toggle}
             title={sound.muted ? "Ativar som" : "Silenciar som"}
             aria-label={sound.muted ? "Ativar som" : "Silenciar som"}
-            className="grid h-11 w-11 place-items-center rounded-2xl border bg-card text-foreground shadow-sm transition-all hover:bg-secondary active:scale-95"
+            className="grid h-9 w-9 sm:h-11 sm:w-11 place-items-center rounded-xl sm:rounded-2xl border bg-card text-foreground shadow-sm transition-all hover:bg-secondary active:scale-95"
           >
             {sound.muted ? (
-              <VolumeX className="h-5 w-5 text-muted-foreground" />
+              <VolumeX className="h-4 w-4 sm:h-5 sm:w-5 text-muted-foreground" />
             ) : (
-              <Volume2 className="h-5 w-5 text-primary" />
+              <Volume2 className="h-4 w-4 sm:h-5 sm:w-5 text-primary" />
             )}
           </button>
 
           {/* Ranking Page Link */}
           <Link
             to="/ranking"
-            className="grid h-11 w-11 place-items-center rounded-2xl border bg-card text-foreground shadow-sm transition-all hover:bg-secondary active:scale-95"
+            className="grid h-9 w-9 sm:h-11 sm:w-11 place-items-center rounded-xl sm:rounded-2xl border bg-card text-foreground shadow-sm transition-all hover:bg-secondary active:scale-95"
             aria-label="Abrir Ranking"
             title="Ranking da Temporada (Por Etapa, Geral e Torneio)"
           >
-            <Trophy className="h-5 w-5 text-amber-500" />
+            <Trophy className="h-4 w-4 sm:h-5 sm:w-5 text-amber-500" />
           </Link>
 
           {/* Loja de Moedas (Restrita ao ADM / Testes até liberação futura) */}
@@ -526,7 +526,7 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
             <button
               type="button"
               onClick={() => setShopOpen(true)}
-              className="grid h-11 w-11 place-items-center rounded-2xl border border-amber-500/50 bg-gradient-to-br from-amber-500/20 to-yellow-500/10 text-amber-600 dark:text-amber-400 shadow-sm transition-all hover:bg-amber-500/30 active:scale-95 cursor-pointer"
+              className="grid h-9 w-9 sm:h-11 sm:w-11 place-items-center rounded-xl sm:rounded-2xl border border-amber-500/50 bg-gradient-to-br from-amber-500/20 to-yellow-500/10 text-amber-600 dark:text-amber-400 shadow-sm transition-all hover:bg-amber-500/30 active:scale-95 cursor-pointer"
               aria-label="Abrir Loja"
               title={
                 auth.adminConfig.rolloutFlags?.enableShopForStudents
@@ -534,7 +534,7 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
                   : "Loja de Moedas (Prévia ADM)"
               }
             >
-              <BadgeDollarSign className="h-5 w-5" />
+              <BadgeDollarSign className="h-4 w-4 sm:h-5 sm:w-5" />
             </button>
           )}
 
@@ -543,18 +543,18 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
             <button
               type="button"
               onClick={() => setDailyRewardsOpen(true)}
-              className="relative grid h-11 w-11 place-items-center rounded-2xl border border-amber-500/40 bg-gradient-to-r from-amber-500/10 to-amber-500/5 text-foreground shadow-sm transition-all hover:bg-amber-500/20 active:scale-95 cursor-pointer"
+              className="relative grid h-9 w-9 sm:h-11 sm:w-11 place-items-center rounded-xl sm:rounded-2xl border border-amber-500/40 bg-gradient-to-r from-amber-500/10 to-amber-500/5 text-foreground shadow-sm transition-all hover:bg-amber-500/20 active:scale-95 cursor-pointer"
               aria-label="Abrir Recompensas Diárias"
               title={`Central Diária e Missões (Dia ${currentCycleDay} do Ciclo)`}
             >
               <span className="flex items-center justify-center gap-0.5">
-                <span className="font-mono text-[11px] font-black text-amber-600 dark:text-amber-400 leading-none">
+                <span className="font-mono text-[10px] sm:text-[11px] font-black text-amber-600 dark:text-amber-400 leading-none">
                   {currentCycleDay}
                 </span>
-                <Calendar className="h-4 w-4 text-amber-500" />
+                <Calendar className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-amber-500" />
               </span>
               {pendingRoutineRewardsCount > 0 && (
-                <span className="absolute -top-1.5 -right-1.5 grid h-5 min-w-5 px-1 place-items-center rounded-full bg-amber-500 text-[10px] font-black text-zinc-950 shadow-md animate-pulse">
+                <span className="absolute -top-1.5 -right-1.5 grid h-4 min-w-4 sm:h-5 sm:min-w-5 px-1 place-items-center rounded-full bg-amber-500 text-[9px] sm:text-[10px] font-black text-zinc-950 shadow-md animate-pulse">
                   {pendingRoutineRewardsCount}
                 </span>
               )}
@@ -566,17 +566,17 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
             <button
               type="button"
               onClick={() => setInboxOpen(true)}
-              className="relative grid h-11 w-11 place-items-center rounded-2xl border bg-card text-foreground shadow-sm transition-all hover:bg-secondary active:scale-95"
+              className="relative grid h-9 w-9 sm:h-11 sm:w-11 place-items-center rounded-xl sm:rounded-2xl border bg-card text-foreground shadow-sm transition-all hover:bg-secondary active:scale-95"
               aria-label="Abrir Caixa de Entrada"
               title="Caixa de Entrada & Correio (Comunicados e Recompensas)"
             >
-              <Mail className="h-5 w-5 text-amber-500" />
+              <Mail className="h-4 w-4 sm:h-5 sm:w-5 text-amber-500" />
               {inboxCounts.unclaimedRewardsCount > 0 ? (
-                <span className="absolute -top-1.5 -right-1.5 grid h-5 w-5 place-items-center rounded-full bg-amber-500 text-[10px] font-black text-zinc-950 shadow-md animate-bounce">
+                <span className="absolute -top-1.5 -right-1.5 grid h-4 w-4 sm:h-5 sm:w-5 place-items-center rounded-full bg-amber-500 text-[9px] sm:text-[10px] font-black text-zinc-950 shadow-md animate-bounce">
                   🎁
                 </span>
               ) : inboxCounts.unreadCount > 0 ? (
-                <span className="absolute -top-1.5 -right-1.5 grid h-5 min-w-5 px-1 place-items-center rounded-full bg-primary text-[10px] font-black text-primary-foreground shadow-md animate-pulse">
+                <span className="absolute -top-1.5 -right-1.5 grid h-4 min-w-4 sm:h-5 sm:min-w-5 px-1 place-items-center rounded-full bg-primary text-[9px] sm:text-[10px] font-black text-primary-foreground shadow-md animate-pulse">
                   {inboxCounts.unreadCount}
                 </span>
               ) : null}
@@ -587,11 +587,11 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
           {auth.isAdmin && (
             <Link
               to="/admin"
-              className="grid h-11 w-11 place-items-center rounded-2xl border border-primary/50 bg-primary/10 text-primary shadow-sm transition-all hover:bg-primary/20 active:scale-95 cursor-pointer"
+              className="grid h-9 w-9 sm:h-11 sm:w-11 place-items-center rounded-xl sm:rounded-2xl border border-primary/50 bg-primary/10 text-primary shadow-sm transition-all hover:bg-primary/20 active:scale-95 cursor-pointer"
               aria-label="Painel do Administrador"
               title="Abrir Painel do Administrador em tela cheia rápida"
             >
-              <ShieldCheck className="h-5 w-5" />
+              <ShieldCheck className="h-4 w-4 sm:h-5 sm:w-5" />
             </Link>
           )}
         </div>
@@ -601,7 +601,7 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
           <button
             type="button"
             onClick={() => setAuthOpen(true)}
-            className="inline-flex items-center gap-1.5 rounded-2xl border border-amber-500/50 bg-amber-500/15 px-3 py-2 text-xs font-extrabold text-amber-700 dark:text-amber-300 shadow-sm transition-all hover:bg-amber-500/25 active:scale-95"
+            className="order-4 w-full justify-center sm:order-none sm:w-auto inline-flex items-center gap-1.5 rounded-2xl border border-amber-500/50 bg-amber-500/15 px-3 py-2 text-xs font-extrabold text-amber-700 dark:text-amber-300 shadow-sm transition-all hover:bg-amber-500/25 active:scale-95"
             title="Sua sessão na nuvem expirou (24h). Clique para renovar o login e abrir pacotes/baús."
           >
             <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
@@ -622,8 +622,8 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
             <button
               type="button"
               onClick={() => (profile ? setProfileOpen(true) : setAuthOpen(true))}
-              className={`flex items-center gap-2 rounded-2xl border bg-card px-3 py-1.5 text-left shadow-sm transition-all hover:bg-secondary active:scale-95 ${
-                leftSlot ? "order-2 shrink-0 max-w-[68vw] sm:order-none sm:max-w-none" : ""
+              className={`flex items-center gap-1.5 sm:gap-2 rounded-2xl border bg-card px-2 py-1 sm:px-3 sm:py-1.5 text-left shadow-sm transition-all hover:bg-secondary active:scale-95 ${
+                leftSlot ? "order-2 shrink-0 max-w-[46vw] sm:order-none sm:max-w-none" : ""
               } ${topAuraPres.className}`}
               style={topAuraPres.style}
               aria-label={profile ? "Abrir meu perfil" : "Entrar na minha conta"}

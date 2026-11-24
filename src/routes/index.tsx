@@ -533,11 +533,12 @@ function Index() {
                 />
               </div>
 
-              <div className="hidden sm:flex flex-col items-start min-w-0 border-l border-border/60 pl-3">
-                <span className="inline-flex items-center gap-1 rounded-full border bg-card px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-primary shadow-2xs">
-                  <Sparkles className="h-2.5 w-2.5" /> Plataforma Educacional
+              <div className="flex flex-col items-start min-w-0 border-l border-border/60 pl-2 sm:pl-3">
+                <span className="inline-flex items-center gap-1 rounded-full border bg-card px-1.5 sm:px-2 py-0.5 text-[8px] sm:text-[9px] font-bold uppercase tracking-wider text-primary shadow-2xs">
+                  <Sparkles className="h-2 w-2 sm:h-2.5 sm:w-2.5 shrink-0" />
+                  <span className="truncate">Plataforma Educacional</span>
                 </span>
-                <h1 className="font-display text-xl md:text-2xl font-extrabold leading-tight tracking-tight text-foreground truncate">
+                <h1 className="font-display text-sm sm:text-xl md:text-2xl font-extrabold leading-tight tracking-tight text-foreground truncate max-w-full">
                   Desafios de <span className="text-primary">Lógica</span>
                 </h1>
               </div>
@@ -548,16 +549,6 @@ function Index() {
             void auth.refresh();
           }}
         />
-      </div>
-
-      {/* Título compacto visível apenas no mobile */}
-      <div className="sm:hidden mb-3 flex items-center justify-between gap-2">
-        <h1 className="font-display text-xl font-extrabold leading-tight tracking-tight text-foreground">
-          Desafios de <span className="text-primary">Lógica</span>
-        </h1>
-        <span className="inline-flex items-center gap-1 rounded-full border bg-card px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-primary">
-          <Sparkles className="h-2.5 w-2.5" /> Plataforma Educacional
-        </span>
       </div>
 
       {view === "menu" && showGate && (
