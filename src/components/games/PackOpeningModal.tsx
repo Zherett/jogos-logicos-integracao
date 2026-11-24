@@ -217,6 +217,7 @@ export function PackOpeningModal({
   const [stackAnim, setStackAnim] = useState<{
     kind: "to-back" | "to-front";
     cardIndex: number;
+    phase: "out" | "in";
   } | null>(null);
   const timersRef = useRef<number[]>([]);
   const openingLockRef = useRef(false);
@@ -354,23 +355,31 @@ export function PackOpeningModal({
   function handleSummaryNext() {
     if (summaryPhase !== "browsing" || stackAnim || orderedCards.length <= 1) return;
     const outgoingIdx = summaryIndex;
-    setStackAnim({ kind: "to-back", cardIndex: outgoingIdx });
+    setStackAnim({ kind: "to-back", cardIndex: outgoingIdx, phase: "out" });
     playCardToss();
     scheduleTimer(() => {
+      // Troca a ordem quando a carta já está totalmente fora da pilha à direita (zero sobreposição/piscada)
       setSummaryIndex((prev) => (prev + 1) % orderedCards.length);
-      setStackAnim(null);
-    }, 460);
+      setStackAnim({ kind: "to-back", cardIndex: outgoingIdx, phase: "in" });
+      scheduleTimer(() => {
+        setStackAnim(null);
+      }, 240);
+    }, 210);
   }
 
   function handleSummaryPrev() {
     if (summaryPhase !== "browsing" || stackAnim || orderedCards.length <= 1) return;
     const incomingIdx = (summaryIndex - 1 + orderedCards.length) % orderedCards.length;
-    setStackAnim({ kind: "to-front", cardIndex: incomingIdx });
+    setStackAnim({ kind: "to-front", cardIndex: incomingIdx, phase: "out" });
     playCardToss();
     scheduleTimer(() => {
+      // Sobe para o topo quando a carta já está totalmente fora da pilha à esquerda (zero sobreposição/piscada)
       setSummaryIndex(incomingIdx);
-      setStackAnim(null);
-    }, 460);
+      setStackAnim({ kind: "to-front", cardIndex: incomingIdx, phase: "in" });
+      scheduleTimer(() => {
+        setStackAnim(null);
+      }, 240);
+    }, 210);
   }
 
   const colorMeta = CARD_PACK_COLOR_META[pack?.colorTheme ?? "teal"] ?? CARD_PACK_COLOR_META.teal;
@@ -696,38 +705,36 @@ export function PackOpeningModal({
                 summaryPhase === "gathering" ? "animate-summary-gather" : ""
               }`}
             >
-              <div className="perspective-1000 relative flex w-60 items-center justify-center">
+              <div className="perspective-1000 relative h-[22rem] w-60">
                 {orderedCards.map((card, idx) => {
                   const total = orderedCards.length;
                   const depth = (idx - summaryIndex + total) % total;
-                  const isTop = depth === 0;
-                  const isAnimatingToBack =
-                    stackAnim?.kind === "to-back" && stackAnim.cardIndex === idx;
-                  const isAnimatingToFront =
-                    stackAnim?.kind === "to-front" && stackAnim.cardIndex === idx;
+                  const isMovingOut = stackAnim?.cardIndex === idx && stackAnim.phase === "out";
 
                   // Posicionamento estático da pilha (carta do topo em 0, demais levemente deslocadas para trás)
                   const stackY = Math.min(depth, 4) * 5;
                   const stackScale = 1 - Math.min(depth, 4) * 0.03;
-                  const stackRotate = depth === 0 ? 0 : (depth % 2 === 1 ? 1.2 : -1.2);
-                  const zIndex = isAnimatingToBack || isAnimatingToFront ? undefined : total - depth;
+                  const stackRotate = depth === 0 ? 0 : depth % 2 === 1 ? 1.2 : -1.2;
+
+                  const transform = isMovingOut
+                    ? stackAnim.kind === "to-back"
+                      ? "translateX(104%) translateY(-8px) rotate(6deg) scale(0.96)"
+                      : "translateX(-104%) translateY(6px) rotate(-6deg) scale(0.94)"
+                    : `translateX(0px) translateY(${stackY}px) scale(${stackScale}) rotate(${stackRotate}deg)`;
+
+                  const zIndex = isMovingOut
+                    ? stackAnim.kind === "to-back"
+                      ? total + 5
+                      : 0
+                    : total - depth;
 
                   return (
                     <div
                       key={`summary_stack_${card.id}_${idx}`}
-                      className={`${isTop ? "relative" : "absolute inset-x-0 top-0"} transition-all duration-300 ${
-                        isAnimatingToBack
-                          ? "animate-stack-send-to-back"
-                          : isAnimatingToFront
-                            ? "animate-stack-bring-to-front"
-                            : ""
-                      }`}
+                      className="absolute inset-x-0 top-0 transition-transform duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]"
                       style={{
                         zIndex,
-                        transform:
-                          isAnimatingToBack || isAnimatingToFront
-                            ? undefined
-                            : `translateY(${stackY}px) scale(${stackScale}) rotate(${stackRotate}deg)`,
+                        transform,
                       }}
                     >
                       <div

@@ -409,7 +409,8 @@
 }
 @keyframes pack-top-rip {
   0%, 40% { transform: translateY(0) translateX(0) rotate(0deg); opacity: 1; }
-  68%, 100% { transform: translateY(-250px) translateX(40px) rotate(18deg); opacity: 0; }
+  62% { transform: translateY(-230px) translateX(36px) rotate(16deg); opacity: 1; }
+  68%, 100% { transform: translateY(-270px) translateX(44px) rotate(18deg); opacity: 0; }
 }
 @keyframes pack-cards-emerge {
   0%, 40% { transform: translateY(20px) scale(0.98); opacity: 1; }
@@ -417,23 +418,12 @@
 }
 @keyframes pack-body-drop {
   0%, 64% { transform: translateY(0) rotate(0deg); opacity: 1; }
-  98%, 100% { transform: translateY(460px) rotate(-3deg); opacity: 0; }
+  90% { transform: translateY(400px) rotate(-3deg); opacity: 1; }
+  98%, 100% { transform: translateY(480px) rotate(-3deg); opacity: 0; }
 }
 @keyframes card-toss-out {
   0% { transform: translateX(0) translateY(0) rotate(0deg) scale(1); opacity: 1; }
   100% { transform: translateX(135%) translateY(-36px) rotate(26deg) scale(0.84); opacity: 0; }
-}
-@keyframes stack-send-to-back {
-  0% { transform: translateX(0) translateY(0) rotate(0deg) scale(1); z-index: 40; }
-  48% { transform: translateX(108%) translateY(-10px) rotate(7deg) scale(0.96); z-index: 40; }
-  52% { transform: translateX(108%) translateY(-10px) rotate(7deg) scale(0.92); z-index: 1; }
-  100% { transform: translateX(0) translateY(10px) rotate(0deg) scale(0.92); z-index: 1; }
-}
-@keyframes stack-bring-to-front {
-  0% { transform: translateX(0) translateY(10px) rotate(0deg) scale(0.92); z-index: 1; }
-  48% { transform: translateX(-108%) translateY(-10px) rotate(-7deg) scale(0.96); z-index: 1; }
-  52% { transform: translateX(-108%) translateY(-10px) rotate(-7deg) scale(0.98); z-index: 40; }
-  100% { transform: translateX(0) translateY(0) rotate(0deg) scale(1); z-index: 40; }
 }
 .animate-pack-tear-line {
   transform-origin: left center;
@@ -453,12 +443,6 @@
 }
 .animate-card-toss-out {
   animation: card-toss-out 0.36s cubic-bezier(0.4, 0, 0.2, 1) forwards;
-}
-.animate-stack-send-to-back {
-  animation: stack-send-to-back 0.46s cubic-bezier(0.22, 1, 0.36, 1) forwards;
-}
-.animate-stack-bring-to-front {
-  animation: stack-bring-to-front 0.46s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 @keyframes summary-gather {
   0% { transform: scale(0.75) translateY(28px); opacity: 0; }
