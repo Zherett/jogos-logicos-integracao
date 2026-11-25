@@ -32,7 +32,7 @@ import {
   saveAdminConfig,
   type PlatformAdminConfig,
 } from "./game-codes.ts";
-import { getLocalDateKey, studentCustomId } from "./player-profile.ts";
+import { studentCustomId } from "./player-profile.ts";
 import {
   mergeWithDefaultAuras,
   purchaseStoreCardPack,
@@ -299,14 +299,16 @@ describe("Simulação Ponta-a-Ponta do Dia de Lançamento (Moedas + Dia 1 + Roll
   });
 
   it("executa a sequência oficial de lançamento sem vazar flags, sem duplicar prêmios e preservando inventário no PlayFab", async () => {
-    const todayKey = getLocalDateKey();
+    const pf = createLaunchPlayFabMock();
+    globalThis.fetch = pf.fetchMock;
+    const fixedServerUtcMs = Date.now();
+    pf.setServerTimeMs(() => fixedServerUtcMs);
+
+    const todayKey = formatUtcMsToOfficialDateKey(fixedServerUtcMs);
     const yesterdayKey = shiftDateKey(todayKey, -1);
     const twoDaysAgoKey = shiftDateKey(todayKey, -2);
     const tenDaysAgoKey = shiftDateKey(todayKey, -10);
     const oldUserDataIso = `${yesterdayKey}T15:00:00.000Z`;
-
-    const pf = createLaunchPlayFabMock();
-    globalThis.fetch = pf.fetchMock;
 
     // 3 perfis realistas com stats coerentes com suas medalhas (validados pelo anti-fraude do Roster):
     const statsAtivo1 = [
