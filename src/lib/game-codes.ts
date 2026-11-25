@@ -21,6 +21,7 @@ import {
   loadScheduledInboxRules,
   saveScheduledInboxRules,
 } from "./scheduled-inbox.ts";
+import { safeLocalStorageSet } from "./storage-guard.ts";
 
 const UNLOCK_KEY = "desafios-logica-unlocked-v1";
 const ADMIN_CONFIG_KEY = "desafios-logica-admin-config-v1";
@@ -298,6 +299,8 @@ export interface PlatformAdminConfig {
   tournamentPodiumRewards?: Partial<Record<TournamentPodiumRank, TournamentPodiumRewardSlot>>;
   /** Optional PlayFab Title ID configured via Admin UI. */
   playfabTitleId?: string;
+  /** Contador monotônico de revisões publicadas na nuvem (controle anti-Lost Update). */
+  configRevision?: number;
   updatedAt: string;
 }
 
@@ -617,7 +620,7 @@ export function saveAdminConfig(
     try {
       const serialized = JSON.stringify(normalized);
       const changed = serialized !== prevRaw;
-      window.localStorage.setItem(ADMIN_CONFIG_KEY, serialized);
+      safeLocalStorageSet(ADMIN_CONFIG_KEY, serialized);
       cachedAdminConfigRaw = serialized;
       cachedAdminConfigObj = normalized;
       if (Array.isArray(config.specialEvents)) {

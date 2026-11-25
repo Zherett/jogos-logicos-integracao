@@ -1798,6 +1798,13 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
   });
 
   it("sincroniza e reconcilia medalhas Ouro+ de alunos no correio do ADM e exclui contas de administradores", async () => {
+    const prevFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ code: 200, status: "OK", data: { Data: {} } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })) as typeof fetch;
+    try {
     const { syncAdminMedalNotificationsFromPlayFab, saveRegistry } = await import("./playfab.ts");
     const { loadAdminConfig, saveAdminConfig } = await import("./game-codes.ts");
 
@@ -1855,6 +1862,9 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
     assert.ok(!notifs.some((n) => (n.studentSchool || "").includes("ADMINISTRAÇÃO")));
     // Não deve listar medalha de bronze
     assert.ok(!notifs.some((n) => n.medalId === "first_game_played"));
+    } finally {
+      globalThis.fetch = prevFetch;
+    }
   });
 
   it("as medalhas do período Beta possuem descrição oficial válida até o dia 15 de Novembro", () => {

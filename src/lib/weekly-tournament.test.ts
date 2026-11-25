@@ -816,6 +816,13 @@ describe("Torneio Semanal Ranqueado (Nível 3+) e Regras da Arena X1 (Nível 5+,
       );
 
       // 5) executeRankedSeasonResetAsync executa em ordem atômica: avança temporada + inclui cartas em AdminConfig.inboxMessages + zera pontos preservando o troféu recém-aplicado
+      const prevFetch = globalThis.fetch;
+      globalThis.fetch = (async () =>
+        new Response(JSON.stringify({ code: 200, status: "OK", data: { Data: {} } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        })) as typeof fetch;
+      try {
       const { executeRankedSeasonResetAsync } = await import("./playfab.ts");
       saveAdminConfig({
         ...DEFAULT_ADMIN_CONFIG,
@@ -899,6 +906,9 @@ describe("Torneio Semanal Ranqueado (Nível 3+) e Regras da Arena X1 (Nível 5+,
       assert.equal(regPostAsync["camp-async"].profile.tournamentMedals?.length, 1, "Troféu recém-aplicado deve ser preservado");
       assert.equal(regPostAsync["camp-async"].profile.tournamentMedals[0].rank, 1);
       assert.equal(regPostAsync["camp-async"].profile.tournamentMedals[0].count, 1);
+      } finally {
+        globalThis.fetch = prevFetch;
+      }
     } finally {
       if (prevReg !== null) window.localStorage.setItem(REG_KEY, prevReg);
       else window.localStorage.removeItem(REG_KEY);

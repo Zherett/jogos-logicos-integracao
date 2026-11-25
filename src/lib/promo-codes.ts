@@ -8,6 +8,7 @@ import { calculatePlayerLevel, nickSlug } from "./player-profile.ts";
 import { recordScoreLedgerEntry } from "./score-history-ledger.ts";
 import { normalizeCardPackId } from "./chests-catalog.ts";
 import {
+  acquireCanonicalConfigWriteTicket,
   callPlayFabClient,
   getAdminPlayFabTicket,
   getAuthoritativeNow,
@@ -835,19 +836,64 @@ export function mergePromoCatalogs(
 }
 
 /**
- * Sincroniza os códigos com a nuvem PlayFab (SharedGroup público).
+ * Sincroniza os códigos com a nuvem PlayFab (SharedGroup público) com ticket canônico,
+ * read-merge e trava anti-wipe para evitar sobrescrita destrutiva entre dispositivos.
  */
 export async function syncPromoCodesToPlayFab(): Promise<boolean> {
   if (!isPlayFabConfigured()) return false;
   try {
-    const ticket = (await getAdminPlayFabTicket()) ?? loadStoredSession()?.sessionTicket;
+    const ticket = await acquireCanonicalConfigWriteTicket();
     if (!ticket) return false;
 
     await ensurePromoCodesSharedGroup(ticket);
 
     const deletedSet = loadDeletedPromoCleanCodes();
-    const list = loadLocalPromoCodes().filter((item) => !deletedSet.has(item.cleanCode));
-    const payload = JSON.stringify(list);
+    const localList = loadLocalPromoCodes().filter((item) => !deletedSet.has(item.cleanCode));
+
+    // Read-merge antes de gravar: preserva códigos criados em outros aparelhos e impede wipe acidental
+    let finalList = localList;
+    const remoteRes = await callPlayFabClient<{
+      Data?: {
+        promo_codes_catalog?: { Value?: string };
+        promo_codes_deleted_ids?: { Value?: string };
+      };
+    }>(
+      "GetSharedGroupData",
+      {
+        SharedGroupId: PROMO_CODES_SHARED_GROUP_ID,
+        Keys: ["promo_codes_catalog", "promo_codes_deleted_ids"],
+      },
+      ticket,
+    );
+    if (!remoteRes.error && remoteRes.data?.Data) {
+      const remDelRaw = remoteRes.data.Data.promo_codes_deleted_ids?.Value;
+      if (remDelRaw) {
+        try {
+          const parsedDel = JSON.parse(remDelRaw);
+          if (Array.isArray(parsedDel)) {
+            for (const d of parsedDel) {
+              if (typeof d === "string" && d.trim()) deletedSet.add(normalizePromoCodeInput(d));
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+      const remCatRaw = remoteRes.data.Data.promo_codes_catalog?.Value;
+      if (remCatRaw) {
+        try {
+          const remCat = JSON.parse(remCatRaw);
+          if (Array.isArray(remCat) && remCat.length > 0) {
+            finalList = mergePromoCatalogs(remCat as PromoCodeItem[], localList, deletedSet);
+            saveLocalPromoCodes(finalList);
+          }
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+
+    const payload = JSON.stringify(finalList);
     const deletedPayload = JSON.stringify(Array.from(deletedSet));
 
     const res = await callPlayFabClient(
@@ -875,6 +921,7 @@ export async function syncPromoCodesToPlayFab(): Promise<boolean> {
 
 /**
  * Baixa os códigos mais recentes da nuvem PlayFab.
+ * Nunca sobrescreve a nuvem quando a leitura falha por erro de rede ou parse.
  */
 export async function fetchPromoCodesFromPlayFab(): Promise<PromoCodeItem[]> {
   if (!isPlayFabConfigured()) return loadLocalPromoCodes();
@@ -929,18 +976,15 @@ export async function fetchPromoCodesFromPlayFab(): Promise<PromoCodeItem[]> {
       }
     }
 
+    // Somente inicializa o catálogo na nuvem se o servidor respondeu 200 OK com chave realmente inexistente
     const localFallback = loadLocalPromoCodes();
-    if (localFallback.length > 0 || deletedSet.size > 0) {
+    if (!raw && (localFallback.length > 0 || deletedSet.size > 0)) {
       await syncPromoCodesToPlayFab();
     }
     return localFallback;
   } catch (err) {
-    const localFallback = loadLocalPromoCodes();
-    if (localFallback.length > 0) {
-      await syncPromoCodesToPlayFab();
-    } else {
-      console.warn("[PromoCodes] Falha ao baixar códigos da nuvem:", err);
-    }
-    return localFallback;
+    // Nunca faz push cego no catch de leitura (evita sobrescrever a nuvem após erro transitório)
+    console.warn("[PromoCodes] Falha ao baixar códigos da nuvem:", err);
+    return loadLocalPromoCodes();
   }
 }

@@ -473,7 +473,10 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
   const triggerReset = useCallback(
     async (options: { clearXp: boolean; newSeasonName?: string; reason?: string }) => {
       const nextCfg = executeRankingReset(options);
-      const syncedCfg = await pushAdminConfigToPlayFab(nextCfg);
+      const syncedCfg = await pushAdminConfigToPlayFab(nextCfg, {
+        domain: "season",
+        allowSeasonChange: true,
+      });
       setAdminConfig(syncedCfg);
       const active = getActiveAccount();
       if (active) {
@@ -487,7 +490,10 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
   const triggerActivitySeasonReset = useCallback(
     async (options: { isBetaEnd?: boolean; newSeasonName?: string; reason?: string }) => {
       const nextCfg = executeActivitySeasonReset(options);
-      const syncedCfg = await pushAdminConfigToPlayFab(nextCfg);
+      const syncedCfg = await pushAdminConfigToPlayFab(nextCfg, {
+        domain: "season",
+        allowSeasonChange: true,
+      });
       setAdminConfig(syncedCfg);
       const active = getActiveAccount();
       if (active) {

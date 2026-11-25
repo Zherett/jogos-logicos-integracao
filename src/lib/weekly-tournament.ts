@@ -21,6 +21,7 @@ import {
   getAuthoritativeDateKey,
   getAuthoritativeNow,
   getPlayFabTitleId,
+  isBlockedRealPlayFabCallInTest,
   isPlayFabConfigured,
   loadStoredSession,
   syncStudentRosterFromPlayFab,
@@ -1442,6 +1443,7 @@ export async function pushSingleTournamentPlayerToPlayFab(
   seasonIdOverride?: number,
 ): Promise<boolean> {
   if (!isPlayFabConfigured()) return false;
+  if (isBlockedRealPlayFabCallInTest()) return false;
   const titleId = getPlayFabTitleId();
   if (!titleId) return false;
 
@@ -1565,6 +1567,7 @@ async function runSyncWeeklyTournamentWithPlayFab(): Promise<void> {
   }
 
   // 2. Prioriza o ticket administrativo de serviço para leitura global no SharedGroupData
+  if (isBlockedRealPlayFabCallInTest()) return;
   let ticket = await getAdminPlayFabTicket();
   const session = loadStoredSession();
   if (!ticket) {

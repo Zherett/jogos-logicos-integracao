@@ -27,6 +27,12 @@ import {
   serializeCardsCatalogChunks,
   type CardDefinition,
 } from "./cards-catalog.ts";
+import {
+  mergeAdminConfigForCloudWrite,
+  type AdminConfigWriteDomain,
+  type MergeAdminConfigWriteOptions,
+} from "./admin-config-guard.ts";
+import { safeLocalStorageSet } from "./storage-guard.ts";
 import type { PlayerAvatarConfig } from "./avatar.ts";
 import {
   abbreviateStudentName,
@@ -870,11 +876,17 @@ export function saveRegistry(reg: Record<string, StoredAccount>) {
   }
   try {
     const serialized = JSON.stringify(reg);
-    window.localStorage.setItem(REGISTRY_KEY, serialized);
-    cachedRegistryRaw = serialized;
-    cachedRegistryClean = null;
-    cachedRegistryReadOnly = null;
-    cachedTombstoneCount = -1;
+    const writeRes = safeLocalStorageSet(REGISTRY_KEY, serialized);
+    if (writeRes.ok) {
+      cachedRegistryRaw = serialized;
+      cachedRegistryClean = null;
+      cachedRegistryReadOnly = null;
+      cachedTombstoneCount = -1;
+    } else {
+      cachedRegistryRaw = null;
+      cachedRegistryClean = null;
+      cachedRegistryReadOnly = null;
+    }
   } catch {
     cachedRegistryRaw = null;
     cachedRegistryClean = null;
@@ -905,6 +917,29 @@ function saveStoredSession(session: StoredSession | null) {
 
 /* --------------------- PlayFab REST API Low-Level Call --------------------- */
 
+const INITIAL_GLOBAL_FETCH = typeof globalThis.fetch === "function" ? globalThis.fetch : undefined;
+
+/**
+ * Trava de segurança: bloqueia qualquer chamada HTTP real ao PlayFab de produção
+ * quando o código está rodando sob `node --test` sem que `globalThis.fetch` tenha sido mockado.
+ */
+export function isBlockedRealPlayFabCallInTest(): boolean {
+  const proc = (
+    globalThis as unknown as {
+      process?: { env?: Record<string, string | undefined>; argv?: string[] };
+    }
+  ).process;
+  if (!proc) return false;
+  const isTestRunner = Boolean(
+    proc.env?.NODE_TEST_CONTEXT ||
+      proc.env?.VITEST ||
+      proc.env?.JEST_WORKER_ID ||
+      proc.argv?.includes("--test"),
+  );
+  if (!isTestRunner) return false;
+  return Boolean(INITIAL_GLOBAL_FETCH && globalThis.fetch === INITIAL_GLOBAL_FETCH);
+}
+
 interface PlayFabResponse<T> {
   code: number;
   status: string;
@@ -923,6 +958,13 @@ export async function callPlayFabClient<T>(
   const titleId = getPlayFabTitleId();
   if (!titleId) {
     return { data: null, error: "Servidor da nuvem indisponível no momento." };
+  }
+  if (isBlockedRealPlayFabCallInTest()) {
+    return {
+      data: null,
+      error: "Chamada real ao PlayFab bloqueada automaticamente durante testes automatizados (configure mock de globalThis.fetch).",
+      errorCode: "RealPlayFabBlockedInTest",
+    };
   }
   try {
     let effectiveTicket = sessionTicket;
@@ -1361,7 +1403,10 @@ export async function executeRankedSeasonResetAsync(options?: {
   });
 
   // 3. Publica AdminConfig (novo rankedSeasonId + cartas do Top 5) no PlayFab ANTES de publicar troféus de Season_N no Roster
-  const syncedCfg = await pushAdminConfigToPlayFab(nextConfig);
+  const syncedCfg = await pushAdminConfigToPlayFab(nextConfig, {
+    domain: "season",
+    allowSeasonChange: true,
+  });
 
   // 4. Zera pontos ranqueados no registro local e aplica os troféus automaticamente + push para o Roster na nuvem
   const reg = loadRegistry();
@@ -1439,7 +1484,10 @@ export async function restoreRankedSeasonToOne(options?: {
     resetHistory: cleanedHistory,
   };
 
-  const pushed = await pushAdminConfigToPlayFab(nextConfig);
+  const pushed = await pushAdminConfigToPlayFab(nextConfig, {
+    domain: "season",
+    allowSeasonChange: true,
+  });
 
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent("desafios:weekly-tournament-updated"));
@@ -1472,7 +1520,9 @@ const VIEWER_USERNAME = "semedvisitante";
 const VIEWER_PASSWORD = "SemedVisitante2026";
 const VIEWER_TICKET_TTL_MS = 20 * 60 * 60 * 1000; // tickets PlayFab valem 24h
 
-export interface PushAdminConfigOptions {
+export interface PushAdminConfigOptions extends MergeAdminConfigWriteOptions {
+  /** Domínio funcional que originou o salvamento (evita Lost Update entre abas/ADMs). */
+  domain?: AdminConfigWriteDomain;
   /** Autoriza explicitamente gravar alterações no catálogo de cartas (usado pela aba Cartas & Pacotes). */
   allowCardsCatalogWrite?: boolean;
   /** Confirmação explícita para esvaziar o catálogo de cartas na nuvem (0 cartas). */
@@ -1481,11 +1531,7 @@ export interface PushAdminConfigOptions {
 
 function storeLocalCardsBackup(cards: CardDefinition[]) {
   if (typeof window === "undefined" || !Array.isArray(cards) || cards.length === 0) return;
-  try {
-    window.localStorage.setItem(LOCAL_CARDS_BACKUP_KEY, JSON.stringify(cards));
-  } catch {
-    /* ignore */
-  }
+  safeLocalStorageSet(LOCAL_CARDS_BACKUP_KEY, JSON.stringify(cards));
 }
 
 function loadLocalCardsBackup(): CardDefinition[] {
@@ -1522,16 +1568,20 @@ function loadCachedRemoteConfig(): Partial<PlatformAdminConfig> | null {
   }
 }
 
-function storeCachedRemoteConfig(raw: string) {
+function storeCachedRemoteConfig(_raw: string) {
+  // Evita duplicar ~235 KB extras no localStorage (saveAdminConfig já persiste em desafios-logica-admin-config-v1).
+  // Remove eventual cópia legada redundante para liberar cota no navegador.
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(REMOTE_CONFIG_CACHE_KEY, raw);
+    if (window.localStorage.getItem(REMOTE_CONFIG_CACHE_KEY) !== null) {
+      window.localStorage.removeItem(REMOTE_CONFIG_CACHE_KEY);
+    }
   } catch {
     /* ignore */
   }
 }
 
-function isCanonicalViewerTicket(ticket: string | null | undefined): boolean {
+export function isCanonicalViewerTicket(ticket: string | null | undefined): boolean {
   if (!ticket) return false;
   // No PlayFab real, o SessionTicket sempre começa com "<PlayFabId>-<TitleId>-...".
   // Apenas a conta oficial semedvisitante (1B2E1517154B2D49) é membro dos SharedGroups.
@@ -1765,15 +1815,7 @@ async function readRemoteAdminConfigRaw(ticket: string): Promise<{ raw: string |
     return { raw: JSON.stringify(parsed), ok: true };
   }
 
-  // Fallback secundário para SharedGroup APENAS se a conta oficial respondeu 200 OK sem nenhum PlatformAdminConfig
-  const sgRes = await callPlayFabClient<{ Data?: Record<string, { Value: string }> }>(
-    "GetSharedGroupData",
-    { SharedGroupId: ADMIN_CONFIG_SHARED_GROUP_ID },
-    ticket,
-  );
-  if (!sgRes.error && sgRes.data?.Data?.[ADMIN_CONFIG_USERDATA_KEY]?.Value) {
-    return { raw: sgRes.data.Data[ADMIN_CONFIG_USERDATA_KEY].Value, ok: true };
-  }
+  // Não utiliza mais o SharedGroup legado congelado (SEMED_PLATFORM_CONFIG_V1) como fallback.
   return { raw: null, ok: true };
 }
 
@@ -1853,7 +1895,7 @@ export async function syncAdminConfigFromPlayFab(sessionTicket?: string): Promis
   return inFlightConfigSyncPromise;
 }
 
-async function acquireCanonicalConfigWriteTicket(): Promise<string | null> {
+export async function acquireCanonicalConfigWriteTicket(): Promise<string | null> {
   let ticket = await getViewerPlayFabTicket();
   if (ticket && isCanonicalViewerTicket(ticket)) {
     return ticket;
@@ -1866,14 +1908,156 @@ async function acquireCanonicalConfigWriteTicket(): Promise<string | null> {
   return null;
 }
 
+export interface PlayFabStorageHealthReport {
+  ok: boolean;
+  error?: string;
+  totalOwnerBytes: number;
+  cardsCount: number;
+  cardsChunksCount: number;
+  configRevision: number;
+  keys: Array<{ key: string; bytes: number; lastUpdated?: string }>;
+  rosterKeysCount: number;
+  rosterTotalBytes: number;
+  notificationsKeysCount: number;
+  promoCodesBytes: number;
+  gameRecordsBytes: number;
+}
+
+/**
+ * Consulta somente leitura do tamanho real das chaves críticas no PlayFab
+ * para exibição no Monitor de Saúde do Painel ADM (aba Sistema).
+ */
+export async function fetchPlayFabStorageHealth(): Promise<PlayFabStorageHealthReport> {
+  const empty: PlayFabStorageHealthReport = {
+    ok: false,
+    totalOwnerBytes: 0,
+    cardsCount: 0,
+    cardsChunksCount: 0,
+    configRevision: 0,
+    keys: [],
+    rosterKeysCount: 0,
+    rosterTotalBytes: 0,
+    notificationsKeysCount: 0,
+    promoCodesBytes: 0,
+    gameRecordsBytes: 0,
+  };
+  if (!isPlayFabConfigured()) {
+    return { ...empty, error: "PlayFab não configurado." };
+  }
+  const ticket = await getViewerPlayFabTicket();
+  if (!ticket) {
+    return { ...empty, error: "Não foi possível autenticar no PlayFab." };
+  }
+
+  const measureBytes = (text: string) =>
+    typeof TextEncoder !== "undefined" ? new TextEncoder().encode(text).length : text.length * 2;
+
+  const [udRes, rosterRes, notifsSgRes, promoSgRes, recordsSgRes] = await Promise.all([
+    callPlayFabClient<{ Data?: Record<string, { Value: string; LastUpdated?: string }> }>(
+      "GetUserData",
+      { PlayFabId: ADMIN_CONFIG_OWNER_PLAYFAB_ID },
+      ticket,
+    ),
+    callPlayFabClient<{ Data?: Record<string, { Value: string }> }>(
+      "GetSharedGroupData",
+      { SharedGroupId: ROSTER_SHARED_GROUP_ID },
+      ticket,
+    ),
+    callPlayFabClient<{ Data?: Record<string, { Value: string }> }>(
+      "GetSharedGroupData",
+      { SharedGroupId: ADMIN_NOTIFICATIONS_SHARED_GROUP_ID },
+      ticket,
+    ),
+    callPlayFabClient<{ Data?: Record<string, { Value: string }> }>(
+      "GetSharedGroupData",
+      { SharedGroupId: "SEMED_PROMO_CODES_V1" },
+      ticket,
+    ),
+    callPlayFabClient<{ Data?: Record<string, { Value: string }> }>(
+      "GetSharedGroupData",
+      { SharedGroupId: "SEMED_GAME_RECORDS_V2" },
+      ticket,
+    ),
+  ]);
+
+  if (udRes.error) {
+    return { ...empty, error: udRes.error };
+  }
+
+  const udMap = udRes.data?.Data ?? {};
+  const keys: PlayFabStorageHealthReport["keys"] = [];
+  let totalOwnerBytes = 0;
+  let cardsCount = 0;
+  let cardsChunksCount = 0;
+  let configRevision = 0;
+
+  for (const [k, entry] of Object.entries(udMap)) {
+    const val = entry?.Value ?? "";
+    const bytes = measureBytes(val);
+    totalOwnerBytes += bytes;
+    keys.push({ key: k, bytes, lastUpdated: entry?.LastUpdated });
+    if (k === ADMIN_CARDS_META_USERDATA_KEY && val) {
+      try {
+        const meta = JSON.parse(val) as { totalCards?: number; chunkCount?: number };
+        cardsCount = Math.max(0, Math.floor(Number(meta.totalCards) || 0));
+        cardsChunksCount = Math.max(0, Math.floor(Number(meta.chunkCount) || 0));
+      } catch {
+        /* ignore */
+      }
+    }
+    if (k === ADMIN_CONFIG_USERDATA_KEY && val) {
+      try {
+        const cfg = JSON.parse(val) as { configRevision?: number };
+        configRevision = Math.max(0, Math.floor(Number(cfg.configRevision) || 0));
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+  keys.sort((a, b) => b.bytes - a.bytes);
+
+  const rosterData = rosterRes.data?.Data ?? {};
+  const rosterKeysCount = Object.keys(rosterData).length;
+  let rosterTotalBytes = 0;
+  for (const v of Object.values(rosterData)) {
+    rosterTotalBytes += measureBytes(v?.Value ?? "");
+  }
+
+  const notificationsKeysCount = Object.keys(notifsSgRes.data?.Data ?? {}).length;
+
+  let promoCodesBytes = 0;
+  for (const v of Object.values(promoSgRes.data?.Data ?? {})) {
+    promoCodesBytes += measureBytes(v?.Value ?? "");
+  }
+
+  let gameRecordsBytes = 0;
+  for (const v of Object.values(recordsSgRes.data?.Data ?? {})) {
+    gameRecordsBytes += measureBytes(v?.Value ?? "");
+  }
+
+  return {
+    ok: true,
+    totalOwnerBytes,
+    cardsCount,
+    cardsChunksCount,
+    configRevision,
+    keys,
+    rosterKeysCount,
+    rosterTotalBytes,
+    notificationsKeysCount,
+    promoCodesBytes,
+    gameRecordsBytes,
+  };
+}
+
 export async function pushAdminConfigToPlayFab(
   config: PlatformAdminConfig,
   options?: PushAdminConfigOptions,
 ): Promise<PlatformAdminConfig> {
-  const saved = saveAdminConfig(config);
+  const initialSaved = saveAdminConfig(config);
   if (!isPlayFabConfigured()) {
     lastAdminCloudSyncError = "PlayFab não configurado.";
-    return saved;
+    return initialSaved;
   }
 
   // Exige estritamente o ticket da conta oficial (semedvisitante = 1B2E1517154B2D49).
@@ -1882,30 +2066,81 @@ export async function pushAdminConfigToPlayFab(
   if (!ticket) {
     lastAdminCloudSyncError =
       "Não foi possível autenticar a conta oficial de configuração no PlayFab (1B2E1517154B2D49). Aguarde alguns segundos e tente novamente.";
-    return saved;
+    return initialSaved;
   }
 
-  const incomingCards = Array.isArray(saved.cardsCatalog) ? saved.cardsCatalog : [];
+  const incomingCards = Array.isArray(initialSaved.cardsCatalog) ? initialSaved.cardsCatalog : [];
   if (incomingCards.length > 0) {
     storeLocalCardsBackup(incomingCards);
   }
 
-  // Verifica o estado atual do catálogo de cartas na nuvem antes de escrever (trava anti-wipe + isolamento)
+  // Lê o estado atual completo do servidor (sem os chunks pesados de cartas) para:
+  // 1) Isolamento por domínio (evita Lost Update entre dois ADMs/abas diferentes)
+  // 2) Trava anti-wipe universal para TODAS as coleções críticas + proteção de temporada
   let remoteHasCardsMeta = false;
   let remoteCardsCount = 0;
   let remotePrevChunkCount = 0;
   let remoteLegacyCards: CardDefinition[] | null = null;
+  let remoteMergedState: Partial<PlatformAdminConfig> | null = null;
 
   const inspectRes = await callPlayFabClient<{ Data?: Record<string, { Value: string }> }>(
     "GetUserData",
     {
       PlayFabId: ADMIN_CONFIG_OWNER_PLAYFAB_ID,
-      Keys: [ADMIN_CARDS_META_USERDATA_KEY, ADMIN_CATALOGS_USERDATA_KEY],
+      Keys: [
+        ADMIN_CONFIG_USERDATA_KEY,
+        ADMIN_NOTIFS_USERDATA_KEY,
+        ADMIN_INBOX_USERDATA_KEY,
+        ADMIN_CATALOGS_USERDATA_KEY,
+        ADMIN_CARDS_META_USERDATA_KEY,
+      ],
     },
     ticket,
   );
   if (!inspectRes.error && inspectRes.data?.Data) {
-    const metaRaw = inspectRes.data.Data[ADMIN_CARDS_META_USERDATA_KEY]?.Value;
+    const inspectMap = inspectRes.data.Data;
+    const baseRaw = inspectMap[ADMIN_CONFIG_USERDATA_KEY]?.Value;
+    if (baseRaw) {
+      try {
+        remoteMergedState = JSON.parse(baseRaw) as Partial<PlatformAdminConfig>;
+      } catch {
+        remoteMergedState = {};
+      }
+    }
+    const notifsRaw = inspectMap[ADMIN_NOTIFS_USERDATA_KEY]?.Value;
+    if (notifsRaw && remoteMergedState) {
+      try {
+        remoteMergedState.adminMedalNotifications = JSON.parse(notifsRaw);
+      } catch {
+        /* ignore */
+      }
+    }
+    const inboxRaw = inspectMap[ADMIN_INBOX_USERDATA_KEY]?.Value;
+    if (inboxRaw && remoteMergedState) {
+      try {
+        remoteMergedState.inboxMessages = JSON.parse(inboxRaw);
+      } catch {
+        /* ignore */
+      }
+    }
+    const legRaw = inspectMap[ADMIN_CATALOGS_USERDATA_KEY]?.Value;
+    if (legRaw) {
+      try {
+        const legObj = JSON.parse(legRaw) as Partial<PlatformAdminConfig>;
+        if (remoteMergedState) {
+          if (legObj.cardPacks) remoteMergedState.cardPacks = legObj.cardPacks;
+          if (legObj.chestsCatalog) remoteMergedState.chestsCatalog = legObj.chestsCatalog;
+          if (legObj.avatarsCatalog) remoteMergedState.avatarsCatalog = legObj.avatarsCatalog;
+          if (legObj.aurasCatalog) remoteMergedState.aurasCatalog = legObj.aurasCatalog;
+        }
+        if (Array.isArray(legObj.cardsCatalog) && legObj.cardsCatalog.length > 0) {
+          remoteLegacyCards = legObj.cardsCatalog;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    const metaRaw = inspectMap[ADMIN_CARDS_META_USERDATA_KEY]?.Value;
     if (metaRaw) {
       remoteHasCardsMeta = true;
       try {
@@ -1915,28 +2150,18 @@ export async function pushAdminConfigToPlayFab(
       } catch {
         /* ignore */
       }
-    }
-    const legRaw = inspectRes.data.Data[ADMIN_CATALOGS_USERDATA_KEY]?.Value;
-    if (legRaw) {
-      try {
-        const legObj = JSON.parse(legRaw) as Partial<PlatformAdminConfig>;
-        if (Array.isArray(legObj.cardsCatalog) && legObj.cardsCatalog.length > 0) {
-          remoteLegacyCards = legObj.cardsCatalog;
-          if (!remoteHasCardsMeta) {
-            remoteCardsCount = legObj.cardsCatalog.length;
-          }
-        }
-      } catch {
-        /* ignore */
-      }
+    } else if (remoteLegacyCards) {
+      remoteCardsCount = remoteLegacyCards.length;
     }
   }
 
-  // Isolamento: somente a aba Cartas & Pacotes (allowCardsCatalogWrite) — ou migração inicial com cartas > 0 — grava nas chaves de cartas.
+  // Isolamento: somente a aba Cartas & Pacotes (allowCardsCatalogWrite / domain="cards") — ou migração inicial com cartas > 0 — grava nas chaves de cartas.
   const shouldWriteCards =
-    Boolean(options?.allowCardsCatalogWrite) || (incomingCards.length > 0 && !remoteHasCardsMeta);
+    Boolean(options?.allowCardsCatalogWrite) ||
+    options?.domain === "cards" ||
+    (incomingCards.length > 0 && !remoteHasCardsMeta);
 
-  // Trava anti-wipe: bloqueia sobrescrever um catálogo remoto populado com 0 cartas sem confirmação explícita.
+  // Trava anti-wipe estrita para cardsCatalog baseada na contagem real em PlatformAdminCardsMeta
   if (
     shouldWriteCards &&
     remoteCardsCount > 0 &&
@@ -1944,7 +2169,20 @@ export async function pushAdminConfigToPlayFab(
     !options?.allowEmptyCardsCatalog
   ) {
     lastAdminCloudSyncError = `Proteção anti-perda ativada: o servidor possui ${remoteCardsCount} carta(s) e o envio com catálogo vazio foi bloqueado.`;
-    return saved;
+    return initialSaved;
+  }
+
+  // Aplica merge por domínio + anti-wipe universal em todas as coleções + incremento de configRevision
+  const mergeRes = mergeAdminConfigForCloudWrite(remoteMergedState, initialSaved, options);
+  if (mergeRes.blockedError) {
+    lastAdminCloudSyncError = mergeRes.blockedError;
+    return initialSaved;
+  }
+
+  const saved = saveAdminConfig(mergeRes.merged);
+  const finalCards = Array.isArray(saved.cardsCatalog) ? saved.cardsCatalog : [];
+  if (finalCards.length > 0) {
+    storeLocalCardsBackup(finalCards);
   }
 
   // Separa arrays/catálogos pesados em chaves próprias para nunca estourar limites do PlayFab
@@ -2004,7 +2242,7 @@ export async function pushAdminConfigToPlayFab(
 
   // 1. Se autorizado, grava primeiro as fatias do catálogo de cartas em chaves dedicadas (PlatformAdminCards_0..N + Meta por último)
   if (shouldWriteCards) {
-    const { meta, chunks } = serializeCardsCatalogChunks(incomingCards);
+    const { meta, chunks } = serializeCardsCatalogChunks(finalCards);
     if (chunks.length > MAX_CARDS_CHUNKS) {
       lastAdminCloudSyncError = `Catálogo de cartas excedeu o limite máximo de ${MAX_CARDS_CHUNKS} blocos.`;
       return saved;
@@ -4218,33 +4456,44 @@ async function pushProfileToPlayFab(
   const p = account.profile;
   const isAdminSessionActive = isSpecialAdminAccount(p) && isAdminUnlockedSession();
 
-  // Proteção anti-Lost Update: se um aluno já estava logado quando o ADM aplicou
-  // moedas retroativas, retrocoleta do Dia 1 ou troféus de encerramento mensal no Roster, reconcilia antes de gravar.
+  // Proteção anti-Lost Update: reconcilia o Roster periodicamente (15s se houver pendências/temporada nova,
+  // ou 60s para contas já alinhadas) garantindo que concessões manuais do ADM (medalhas, moedas, pacotes, baús)
+  // feitas enquanto o aluno estava logado nunca sejam sobrescritas pelo cliente.
   const activeRankedSeasonId = loadAdminConfig().rankedSeasonId ?? 1;
-  const needsRosterReconcile =
+  const urgentRosterReconcile =
     !p.retroactiveMedalCoinsGrantedAt ||
     !p.retroactiveDay1GrantedAt ||
     (p.rankedSeasonId ?? 1) < activeRankedSeasonId;
+  const reconcileCooldownMs = urgentRosterReconcile ? 15_000 : 60_000;
   if (
     ticket &&
     !ticket.startsWith("admin-") &&
-    !isSpecialAdminAccount(p) &&
-    needsRosterReconcile
+    !isSpecialAdminAccount(p)
   ) {
     const nowMs = Date.now();
     const lastCheck = lastPushRosterReconcileAt.get(p.id) ?? 0;
-    if (nowMs - lastCheck >= 15_000) {
+    if (nowMs - lastCheck >= reconcileCooldownMs) {
       lastPushRosterReconcileAt.set(p.id, nowMs);
       const prevCoins = p.coins ?? 0;
       const prevRetroCoins = p.retroactiveMedalCoinsGrantedAt;
       const prevRetroDay1 = p.retroactiveDay1GrantedAt;
       const prevTrophySig = JSON.stringify(p.tournamentMedals ?? []);
+      const prevInventorySig = JSON.stringify([
+        p.unopenedPacks ?? {},
+        p.unopenedChests ?? {},
+        p.unlockedMedals?.length ?? 0,
+      ]);
       await reconcileAccountWithCloudRoster(account, ticket);
       if (
         (p.coins ?? 0) !== prevCoins ||
         p.retroactiveMedalCoinsGrantedAt !== prevRetroCoins ||
         p.retroactiveDay1GrantedAt !== prevRetroDay1 ||
-        JSON.stringify(p.tournamentMedals ?? []) !== prevTrophySig
+        JSON.stringify(p.tournamentMedals ?? []) !== prevTrophySig ||
+        JSON.stringify([
+          p.unopenedPacks ?? {},
+          p.unopenedChests ?? {},
+          p.unlockedMedals?.length ?? 0,
+        ]) !== prevInventorySig
       ) {
         const reg = loadRegistry();
         if (reg[p.id]) {
@@ -6139,14 +6388,24 @@ export async function syncAdminMedalNotificationsFromPlayFab(
     try {
       const ticket = sessionTicket ?? (await getAdminPlayFabTicket()) ?? loadStoredSession()?.sessionTicket;
       if (ticket) {
-        const res = await callPlayFabClient<{ Data?: Record<string, { Value: string }> }>(
+        const res = await callPlayFabClient<{ Data?: Record<string, { Value: string; LastUpdated?: string }> }>(
           "GetSharedGroupData",
           { SharedGroupId: ADMIN_NOTIFICATIONS_SHARED_GROUP_ID },
           ticket,
         );
 
         if (res.data?.Data) {
+          const ninetyDaysAgoMs = Date.now() - 90 * 24 * 60 * 60 * 1000;
+          const expiredKeys: string[] = [];
           for (const [k, v] of Object.entries(res.data.Data)) {
+            const lastMs = v?.LastUpdated ? Date.parse(v.LastUpdated) : NaN;
+            if (
+              !Number.isNaN(lastMs) &&
+              lastMs < ninetyDaysAgoMs &&
+              (k.startsWith("inbox_read_") || k.startsWith("notif_"))
+            ) {
+              expiredKeys.push(k);
+            }
             if (!k.startsWith("notif_") || !v?.Value) continue;
             try {
               const parsed = JSON.parse(v.Value) as AdminMedalNotification;
@@ -6161,6 +6420,20 @@ export async function syncAdminMedalNotificationsFromPlayFab(
             } catch {
               // ignore
             }
+          }
+          // Poda automática em segundo plano (> 90 dias, até 30 chaves por ciclo) apenas em sessão ADM
+          if (expiredKeys.length > 0 && isAdminUnlockedSession()) {
+            void acquireCanonicalConfigWriteTicket().then((canonTk) => {
+              if (!canonTk) return;
+              void callPlayFabClient(
+                "UpdateSharedGroupData",
+                {
+                  SharedGroupId: ADMIN_NOTIFICATIONS_SHARED_GROUP_ID,
+                  KeysToRemove: expiredKeys.slice(0, 30),
+                },
+                canonTk,
+              );
+            });
           }
         }
       }

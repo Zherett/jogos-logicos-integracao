@@ -413,7 +413,7 @@ export function AdminEventsTab({
       setEvAttachedMedals([]);
       const nextCfg = { ...draft, specialEvents: list, customMedals: newCustoms };
       setDraft(nextCfg);
-      await auth.updateAdminConfig(nextCfg);
+      await auth.updateAdminConfig(nextCfg, { domain: "events" });
       flashSaved("✅ Evento especial atualizado com sucesso!");
       onConfigSaved?.();
       return;
@@ -457,7 +457,7 @@ export function AdminEventsTab({
     setEvAttachedMedals([]);
     const nextCfg = { ...draft, specialEvents: updated, customMedals: newCustoms };
     setDraft(nextCfg);
-    await auth.updateAdminConfig(nextCfg);
+    await auth.updateAdminConfig(nextCfg, { domain: "events" });
     flashSaved(
       isPlayFabConfigured()
         ? "✅ Evento especial salvo no Banco de Dados (PlayFab) e ativado!"
@@ -474,7 +474,7 @@ export function AdminEventsTab({
     saveSpecialEvents(list);
     const nextCfg = { ...draft, specialEvents: list };
     setDraft(nextCfg);
-    await auth.updateAdminConfig(nextCfg);
+    await auth.updateAdminConfig(nextCfg, { domain: "events" });
     flashSaved(
       isPlayFabConfigured()
         ? "✅ Status sincronizado com o Banco de Dados (PlayFab)!"
@@ -493,7 +493,7 @@ export function AdminEventsTab({
     saveSpecialEvents(list);
     const nextCfg = { ...draft, specialEvents: list };
     setDraft(nextCfg);
-    await auth.updateAdminConfig(nextCfg);
+    await auth.updateAdminConfig(nextCfg, { domain: "events" });
     flashSaved("✅ Escopo do evento atualizado com sucesso!");
     onConfigSaved?.();
   }
@@ -504,7 +504,7 @@ export function AdminEventsTab({
     saveSpecialEvents(list);
     const nextCfg = { ...draft, specialEvents: list };
     setDraft(nextCfg);
-    await auth.updateAdminConfig(nextCfg);
+    await auth.updateAdminConfig(nextCfg, { domain: "events" });
     flashSaved(
       isPlayFabConfigured()
         ? "✅ Evento excluído do Banco de Dados (PlayFab)!"
@@ -603,7 +603,7 @@ export function AdminEventsTab({
       setRecAttachedMedals([]);
       const nextCfg = { ...draft, recurringEvents: list, customMedals: newCustoms };
       setDraft(nextCfg);
-      await auth.updateAdminConfig(nextCfg);
+      await auth.updateAdminConfig(nextCfg, { domain: "events" });
       flashSaved("✅ Evento recorrente atualizado com sucesso!");
       onConfigSaved?.();
       return;
@@ -639,7 +639,7 @@ export function AdminEventsTab({
     setRecAttachedMedals([]);
     const nextCfg = { ...draft, recurringEvents: updated, customMedals: newCustoms };
     setDraft(nextCfg);
-    await auth.updateAdminConfig(nextCfg);
+    await auth.updateAdminConfig(nextCfg, { domain: "events" });
     flashSaved(
       isPlayFabConfigured()
         ? "✅ Evento recorrente salvo no Banco de Dados (PlayFab) e ativado!"
@@ -656,7 +656,7 @@ export function AdminEventsTab({
     saveRecurringEvents(list);
     const nextCfg = { ...draft, recurringEvents: list };
     setDraft(nextCfg);
-    await auth.updateAdminConfig(nextCfg);
+    await auth.updateAdminConfig(nextCfg, { domain: "events" });
     flashSaved(
       isPlayFabConfigured()
         ? "✅ Status recorrente sincronizado com o Banco de Dados (PlayFab)!"
@@ -675,7 +675,7 @@ export function AdminEventsTab({
     saveRecurringEvents(list);
     const nextCfg = { ...draft, recurringEvents: list };
     setDraft(nextCfg);
-    await auth.updateAdminConfig(nextCfg);
+    await auth.updateAdminConfig(nextCfg, { domain: "events" });
     flashSaved("✅ Escopo do evento recorrente atualizado com sucesso!");
     onConfigSaved?.();
   }
@@ -686,7 +686,7 @@ export function AdminEventsTab({
     saveRecurringEvents(list);
     const nextCfg = { ...draft, recurringEvents: list };
     setDraft(nextCfg);
-    await auth.updateAdminConfig(nextCfg);
+    await auth.updateAdminConfig(nextCfg, { domain: "events" });
     flashSaved(
       isPlayFabConfigured()
         ? "✅ Evento recorrente excluído do Banco de Dados (PlayFab)!"

@@ -569,11 +569,14 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
         const allMsgs = loadAllInboxMessages();
         const canceledIds = Array.from(loadCanceledMessageIds());
         try {
-          await auth.updateAdminConfig({
-            ...auth.adminConfig,
-            inboxMessages: allMsgs.slice(0, 50),
-            canceledInboxMessageIds: canceledIds,
-          });
+          await auth.updateAdminConfig(
+            {
+              ...auth.adminConfig,
+              inboxMessages: allMsgs.slice(0, 50),
+              canceledInboxMessageIds: canceledIds,
+            },
+            { domain: "inbox" },
+          );
         } catch (err) {
           console.warn("Aviso ao salvar configuração remota após cancelamento:", err);
         }
@@ -1015,10 +1018,13 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
       // Sincroniza imediatamente com PlayFab Cloud através de PlatformAdminConfig
       const allMsgs = loadAllInboxMessages();
       try {
-        await auth.updateAdminConfig({
-          ...auth.adminConfig,
-          inboxMessages: allMsgs.slice(0, 50),
-        });
+        await auth.updateAdminConfig(
+          {
+            ...auth.adminConfig,
+            inboxMessages: allMsgs.slice(0, 50),
+          },
+          { domain: "inbox" },
+        );
       } catch (err) {
         console.warn("Aviso ao salvar configuração remota:", err);
       }
@@ -1114,11 +1120,14 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
         refreshScheduledRules();
         refreshHistory();
         try {
-          auth.updateAdminConfig({
-            ...auth.adminConfig,
-            inboxMessages: loadAllInboxMessages().slice(0, 50),
-            scheduledInboxRules: loadScheduledInboxRules(),
-          }).catch(console.warn);
+          auth.updateAdminConfig(
+            {
+              ...auth.adminConfig,
+              inboxMessages: loadAllInboxMessages().slice(0, 50),
+              scheduledInboxRules: loadScheduledInboxRules(),
+            },
+            { domain: "inbox" },
+          ).catch(console.warn);
         } catch {
           /* ignore */
         }
@@ -1276,10 +1285,13 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
     setScheduledRules(updatedList);
 
     try {
-      await auth.updateAdminConfig({
-        ...auth.adminConfig,
-        scheduledInboxRules: updatedList,
-      });
+      await auth.updateAdminConfig(
+        {
+          ...auth.adminConfig,
+          scheduledInboxRules: updatedList,
+        },
+        { domain: "inbox" },
+      );
     } catch (err) {
       console.warn("Aviso ao salvar configuração remota:", err);
     }
@@ -1377,10 +1389,13 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
     const updated = toggleScheduledInboxRuleActive(ruleId, !currentActive);
     setScheduledRules(updated);
     try {
-      await auth.updateAdminConfig({
-        ...auth.adminConfig,
-        scheduledInboxRules: updated,
-      });
+      await auth.updateAdminConfig(
+        {
+          ...auth.adminConfig,
+          scheduledInboxRules: updated,
+        },
+        { domain: "inbox" },
+      );
     } catch (err) {
       console.warn("Aviso ao atualizar status remoto da regra:", err);
     }
@@ -1394,10 +1409,13 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
       handleCancelEditScheduledRule();
     }
     try {
-      await auth.updateAdminConfig({
-        ...auth.adminConfig,
-        scheduledInboxRules: updated,
-      });
+      await auth.updateAdminConfig(
+        {
+          ...auth.adminConfig,
+          scheduledInboxRules: updated,
+        },
+        { domain: "inbox" },
+      );
     } catch (err) {
       console.warn("Aviso ao excluir regra remota:", err);
     }
@@ -1409,11 +1427,14 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
       refreshScheduledRules();
       refreshHistory();
       try {
-        await auth.updateAdminConfig({
-          ...auth.adminConfig,
-          inboxMessages: loadAllInboxMessages().slice(0, 50),
-          scheduledInboxRules: loadScheduledInboxRules(),
-        });
+        await auth.updateAdminConfig(
+          {
+            ...auth.adminConfig,
+            inboxMessages: loadAllInboxMessages().slice(0, 50),
+            scheduledInboxRules: loadScheduledInboxRules(),
+          },
+          { domain: "inbox" },
+        );
       } catch (err) {
         console.warn("Aviso ao salvar PlayFab:", err);
       }

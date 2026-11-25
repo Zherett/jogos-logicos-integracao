@@ -199,6 +199,11 @@ const AdminStoreTab = lazy(() =>
 const AdminRoutineTab = lazy(() =>
   import("./AdminRoutineTab").then((m) => ({ default: m.AdminRoutineTab })),
 );
+const AdminSystemBackupHealthCard = lazy(() =>
+  import("./AdminSystemBackupHealthCard").then((m) => ({
+    default: m.AdminSystemBackupHealthCard,
+  })),
+);
 import {
   AGE_STAGES,
   getTournamentRank,
@@ -5442,6 +5447,24 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                     </div>
                   )}
                 </div>
+
+                <Suspense
+                  fallback={
+                    <div className="rounded-2xl border bg-card p-4 text-center text-xs text-muted-foreground">
+                      Carregando Backup &amp; Monitor de Saúde...
+                    </div>
+                  }
+                >
+                  <AdminSystemBackupHealthCard
+                    draft={draft}
+                    setDraft={setDraft}
+                    onSaveConfig={async (nextCfg, opts) => {
+                      await auth.updateAdminConfig(nextCfg, opts);
+                      onConfigSaved?.();
+                    }}
+                    onShowFeedback={(msg) => flashSaved(msg)}
+                  />
+                </Suspense>
               </div>
             )}
 
@@ -5603,7 +5626,10 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                   draft={draft}
                   setDraft={setDraft}
                   onSaveConfig={async (nextCfg, opts) => {
-                    await auth.updateAdminConfig(nextCfg, opts);
+                    await auth.updateAdminConfig(nextCfg, {
+                      domain: opts?.allowCardsCatalogWrite ? "cards" : "packs",
+                      ...opts,
+                    });
                     onConfigSaved?.();
                     flashSaved("Catálogo de Cartas e Pacotes salvo!");
                   }}
@@ -5620,7 +5646,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                   onSaveChests={async (nextChests) => {
                     const nextCfg = { ...draft, chestsCatalog: nextChests };
                     setDraft(nextCfg);
-                    await auth.updateAdminConfig(nextCfg);
+                    await auth.updateAdminConfig(nextCfg, { domain: "chests" });
                     onConfigSaved?.();
                   }}
                   onShowFeedback={(msg) => flashSaved(msg)}
@@ -5639,7 +5665,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                   onSyncStudents={handleRefreshRoster}
                   onSaveConfig={async (nextCfg) => {
                     setDraft(nextCfg);
-                    await auth.updateAdminConfig(nextCfg);
+                    await auth.updateAdminConfig(nextCfg, { domain: "cosmetics" });
                     onConfigSaved?.();
                   }}
                   onShowFeedback={(msg) => flashSaved(msg)}
@@ -5655,7 +5681,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                   setDraft={setDraft}
                   onSaveConfig={async (nextCfg) => {
                     setDraft(nextCfg);
-                    await auth.updateAdminConfig(nextCfg);
+                    await auth.updateAdminConfig(nextCfg, { domain: "routine" });
                     onConfigSaved?.();
                   }}
                   onShowFeedback={(msg) => flashSaved(msg)}

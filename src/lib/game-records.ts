@@ -1,9 +1,11 @@
 import type { GameId } from "./game-storage.ts";
 import { stageForPlayer, type AgeStageId } from "./player-profile.ts";
 import {
+  acquireCanonicalConfigWriteTicket,
   getAdminPlayFabTicket,
   getPlayFabTitleId,
   getViewerPlayFabTicket,
+  isBlockedRealPlayFabCallInTest,
   loadRegistry,
   loadStoredSession,
   sanitizeGameBestScore,
@@ -382,6 +384,7 @@ export async function syncGameRecordsWithPlayFab(
   }
 
   const run = async (): Promise<AllGameRecords> => {
+  if (isBlockedRealPlayFabCallInTest()) return store;
   const session = loadStoredSession();
   const titleId = getPlayFabTitleId();
   const ticket = (await getViewerPlayFabTicket()) ?? (await getAdminPlayFabTicket()) ?? session?.sessionTicket;
@@ -413,9 +416,20 @@ export async function syncGameRecordsWithPlayFab(
       body: JSON.stringify({ TitleId: titleId, SharedGroupId: groupId }),
     });
 
+    if (!getRes.ok) {
+      // Nunca sobrescreve a nuvem se a leitura falhou (ex.: 429 / 500)
+      return store;
+    }
+
     const json = (await getRes.json()) as {
+      code?: number;
+      error?: string;
       data?: { Data?: Record<string, { Value: string }> };
     };
+
+    if (json.error || (typeof json.code === "number" && json.code !== 200)) {
+      return store;
+    }
 
     let hasLocalChanges = sanitizeRecordsStore(store);
     let hasRemoteChanges = false;
@@ -470,21 +484,24 @@ export async function syncGameRecordsWithPlayFab(
       saveGameRecords(store);
     }
 
-    // 3. Push merged records back to SharedGroupData ONLY if local had newer/higher records
+    // 3. Push merged records back to SharedGroupData ONLY if local had newer/higher records (usando ticket canônico)
     if (hasRemoteChanges) {
-      await fetch(`https://${titleId}.playfabapi.com/Client/UpdateSharedGroupData`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Authorization": ticket,
-        },
-        body: JSON.stringify({
-          TitleId: titleId,
-          SharedGroupId: groupId,
-          Data: { Records: JSON.stringify(store) },
-          Permission: "Public",
-        }),
-      });
+      const writeTicket = await acquireCanonicalConfigWriteTicket();
+      if (writeTicket) {
+        await fetch(`https://${titleId}.playfabapi.com/Client/UpdateSharedGroupData`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Authorization": writeTicket,
+          },
+          body: JSON.stringify({
+            TitleId: titleId,
+            SharedGroupId: groupId,
+            Data: { Records: JSON.stringify(store) },
+            Permission: "Public",
+          }),
+        });
+      }
     }
     lastGameRecordsSyncAt = Date.now();
   } catch {

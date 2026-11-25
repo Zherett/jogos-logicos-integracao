@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   __setPlayFabServerClockOffsetForTests,
+  callPlayFabClient,
   claimCurrentPlayerDailyReward,
   formatUtcMsToOfficialDateKey,
   getLastAdminCloudSyncError,
+  isBlockedRealPlayFabCallInTest,
   playfabRecoverByNameAndBirthdate,
   playfabSignIn,
   pushAdminConfigToPlayFab,
@@ -1000,5 +1002,65 @@ describe("Simulação Ponta-a-Ponta do Dia de Lançamento (Moedas + Dia 1 + Roll
     window.localStorage.clear();
     const syncedAfterExplicitClear = await syncAdminConfigFromPlayFab();
     assert.equal(syncedAfterExplicitClear.cardsCatalog?.length, 0);
+  });
+
+  it("bloqueia chamadas reais ao PlayFab em testes sem mock e protege domínios ADM contra Lost Update", async () => {
+    // 1. Com globalThis.fetch nativo (sem mock), callPlayFabClient DEVE bloquear antes de tocar na rede!
+    globalThis.fetch = originalFetch;
+    assert.equal(isBlockedRealPlayFabCallInTest(), true);
+    const blockedRes = await callPlayFabClient("GetTime", {});
+    assert.equal(blockedRes.errorCode, "RealPlayFabBlockedInTest");
+
+    // 2. Com mock ativo, dois ADMs salvando domínios diferentes preservam ambos os dados e avançam configRevision
+    const pf = createLaunchPlayFabMock();
+    globalThis.fetch = pf.fetchMock;
+    assert.equal(isBlockedRealPlayFabCallInTest(), false);
+
+    // ADM 1 salva eventos e avisos
+    await pushAdminConfigToPlayFab(
+      {
+        ...DEFAULT_ADMIN_CONFIG,
+        specialEvents: [{ id: "ev_1", title: "Semana da Lógica" } as any],
+        noticeSlides: [
+          {
+            id: "not_1",
+            title: "Aviso Importante",
+            message: "Participe!",
+            type: "announcement",
+            active: true,
+            createdAt: "2026-11-25T00:00:00.000Z",
+          },
+        ],
+        inboxMessages: [{ id: "m_1", title: "Comunicado 1" }, { id: "m_2", title: "Comunicado 2" }],
+      },
+      { domain: "all" },
+    );
+
+    // ADM 2 (em outro dispositivo com draft desatualizado sem eventos/avisos/mensagens) salva apenas na aba Rotina
+    await pushAdminConfigToPlayFab(
+      {
+        ...DEFAULT_ADMIN_CONFIG,
+        specialEvents: [],
+        noticeSlides: [],
+        inboxMessages: [],
+        rankedSeasonId: 99, // tentativa acidental fora de domain: "season"
+        rolloutFlags: {
+          enableDailyRoutineForStudents: true,
+          enableCoinsWalletForStudents: true,
+          enableDefaultAvatarForStudents: true,
+          enableShopForStudents: true,
+        },
+      },
+      { domain: "routine" },
+    );
+
+    window.localStorage.clear();
+    const synced = await syncAdminConfigFromPlayFab();
+    assert.equal(synced.rolloutFlags?.enableShopForStudents, true);
+    assert.equal(synced.specialEvents?.length, 1, "Eventos do ADM 1 devem permanecer intactos");
+    assert.equal(synced.noticeSlides?.length, 1, "Avisos do ADM 1 devem permanecer intactos");
+    assert.equal(synced.inboxMessages?.length, 2, "Mensagens do ADM 1 devem permanecer intactas");
+    assert.equal(synced.rankedSeasonId, 1, "Temporada não pode ser alterada fora de domain='season'");
+    assert.ok((synced.configRevision ?? 0) >= 2, "configRevision deve avançar monotonicamente");
   });
 });
