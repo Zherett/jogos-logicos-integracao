@@ -624,15 +624,22 @@ describe("Torneio Semanal Ranqueado (Nível 3+) e Regras da Arena X1 (Nível 5+,
     assert.ok(res.totalMedalsAwarded >= 2);
     assert.ok(res.podiumSummary.etapa_2.length >= 2);
 
-    // Verifica que a mensagem chegou ao correio do campeão
+    // Verifica que a mensagem chegou ao correio do campeão (idempotente, sem XP oculto quando zerado)
     const inbox = getInboxMessagesForRecipient("campeao-etapa2");
     const seasonMsg = inbox.find((m) => m.title.includes("Campeão da Temporada 1"));
     assert.ok(seasonMsg, "Carta de campeão deve existir no correio do aluno");
     assert.equal(seasonMsg.reward?.type, "medal");
     assert.equal(seasonMsg.reward?.medalId, "tournament_top_1_gold");
-    assert.equal(seasonMsg.reward?.pointsAmount, 150);
+    assert.equal(seasonMsg.rewards?.length, 1, "Sem XP/pontos/moedas configurados (>0), envia apenas a medalha");
 
-    // O aluno agora pode resgatar a medalha pelo correio
+    // Re-executar para a mesma temporada NÃO duplica carta no Correio
+    await finalizeRankedSeasonAndAwardMedalsViaInbox(1, mockStore);
+    const inboxAfterDup = getInboxMessagesForRecipient("campeao-etapa2").filter((m) =>
+      m.title.includes("Campeão da Temporada 1"),
+    );
+    assert.equal(inboxAfterDup.length, 1);
+
+    // O aluno resgata a medalha pelo correio sem XP oculto
     const mockStudentProfile: any = {
       id: "campeao-etapa2",
       nick: "campeao2",
@@ -646,10 +653,261 @@ describe("Torneio Semanal Ranqueado (Nível 3+) e Regras da Arena X1 (Nível 5+,
 
     const claimRes = claimInboxReward(seasonMsg.id, mockStudentProfile);
     assert.equal(claimRes.success, true);
-    assert.equal(claimRes.profile.tournamentMedals?.length, 1);
-    assert.equal(claimRes.profile.tournamentMedals?.[0].rank, 1);
-    assert.equal(claimRes.profile.tournamentMedals?.[0].tier, "gold");
-    assert.equal(claimRes.profile.xp, 1150); // 1000 + 150 bônus do 1º lugar
+    assert.equal(
+      claimRes.profile.unlockedMedals?.some((m) => m.medalId === "tournament_top_1_gold"),
+      true,
+    );
+    assert.equal(claimRes.profile.xp, 1000, "Com XP=0 na config do ADM, não injeta XP oculto");
+  });
+
+  it("aplica troféus automaticamente ao Top 3, envia prêmios customizados do ADM no Correio e mantém merge/ofensiva mensal idempotentes", async () => {
+    const { DEFAULT_ADMIN_CONFIG, saveAdminConfig } = await import("./game-codes.ts");
+    const { mergeTournamentMedalsList } = await import("./playfab.ts");
+    const { getTop1ConsecutiveWeeks } = await import("./medals-catalog.ts");
+    const { accumulateTournamentMedal } = await import("./player-profile.ts");
+
+    const hadWindow = typeof (globalThis as any).window !== "undefined";
+    const prevWindow = (globalThis as any).window;
+    const memStorage = new Map<string, string>();
+    if (!hadWindow) {
+      (globalThis as any).window = {
+        localStorage: {
+          getItem: (k: string) => (memStorage.has(k) ? memStorage.get(k)! : null),
+          setItem: (k: string, v: string) => memStorage.set(k, String(v)),
+          removeItem: (k: string) => memStorage.delete(k),
+          clear: () => memStorage.clear(),
+        },
+        dispatchEvent: () => true,
+      };
+    }
+
+    // Registra vencedor no registry local para testar aplicação automática do troféu
+    const REG_KEY = "desafios-playfab-registry-v1";
+    const prevReg = window.localStorage.getItem(REG_KEY);
+    try {
+      // Configura prêmios customizados no Top 1 (medalha + XP + pontos + moedas + baú + pacote) e Top 2 zerado exceto medalha
+      saveAdminConfig({
+        ...DEFAULT_ADMIN_CONFIG,
+        playfabTitleId: "",
+        tournamentPodiumRewards: {
+          1: {
+            medalId: "tournament_top_1_gold",
+            xp: 250,
+            points: 120,
+            coins: 40,
+            items: [
+              { itemCategory: "chest", itemId: "weekly_epic", itemName: "Grande Baú Semanal", quantity: 1 },
+              { itemCategory: "card_pack", itemId: "pack_basico", itemName: "Pacote Básico", quantity: 2 },
+            ],
+          },
+          2: { medalId: "tournament_top_2_silver", xp: 0, points: 0, coins: 0, items: [] },
+          3: { medalId: "tournament_top_3_bronze", xp: 0, points: 0, coins: 0, items: [] },
+          4: { medalId: "tour_master_bronze", xp: 0, points: 50, coins: 0, items: [] },
+          5: { medalId: null, xp: 0, points: 0, coins: 0, items: [] },
+        },
+      });
+      window.localStorage.setItem(
+        REG_KEY,
+        JSON.stringify({
+          "camp-s2": {
+            profile: {
+              id: "camp-s2",
+              nick: "CampeaoMensal",
+              nickNormalized: "campeaomensal",
+              xp: 500,
+              seasonXp: 500,
+              pointsBalance: 100,
+              careerPoints: 100,
+              coins: 10,
+              lifetimeCoins: 10,
+              peakCoins: 10,
+              level: 3,
+              matchesPlayed: 5,
+              wins: 5,
+              unlockedMedals: [],
+              tournamentMedals: [],
+              claimedInboxRewardIds: [],
+              unopenedChests: {},
+              unopenedPacks: {},
+            },
+            stats: [],
+            unlocked: [],
+            updatedAt: new Date().toISOString(),
+          },
+        }),
+      );
+
+      const mockStore: WeeklyTournamentStore = {
+        weekKey: "2027-W05",
+        seasonId: 2,
+        gameId: "logica",
+        records: {
+          "camp-s2": {
+            playerId: "camp-s2",
+            nick: "CampeaoMensal",
+            fullName: "Aluno Campeão Mensal",
+            school: "Escola Modelo",
+            age: 13,
+            stage: "etapa_2",
+            level: 5,
+            bestScore: 500,
+            totalEntries: 20,
+            tournamentPoints: 500,
+            activeTop5Since: null,
+            accumulatedTop5Ms: 60_000,
+            updatedAt: Date.now(),
+          },
+        },
+        updatedAt: Date.now(),
+      };
+
+      await finalizeRankedSeasonAndAwardMedalsViaInbox(2, mockStore);
+
+      // 1) Troféu de Ouro foi aplicado AUTOMATICAMENTE no perfil do registro local (sem depender de abrir o Correio!)
+      const regAfter = JSON.parse(window.localStorage.getItem(REG_KEY)!);
+      const savedProf = regAfter["camp-s2"].profile;
+      assert.equal(savedProf.tournamentMedals?.length, 1);
+      assert.equal(savedProf.tournamentMedals[0].rank, 1);
+      assert.equal(savedProf.tournamentMedals[0].count, 1);
+
+      // 2) Carta do Correio contém exatamente Medalha + XP + Pontos + Moedas + 2 Itens (6 recompensas)
+      const msgs = getInboxMessagesForRecipient("camp-s2");
+      const s2Msg = msgs.find((m) => m.id === "msg_rnk_s2_etapa_2_r1");
+      assert.ok(s2Msg, "Carta determinística da Temporada 2 deve existir");
+      assert.equal(s2Msg.rewards?.length, 6);
+
+      const claim = claimInboxReward(s2Msg.id, savedProf);
+      assert.equal(claim.success, true);
+      assert.equal(claim.profile.xp, 750); // 500 + 250
+      assert.equal(claim.profile.pointsBalance, 220); // 100 + 120
+      assert.equal(claim.profile.coins, 50); // 10 + 40
+      assert.equal(claim.profile.unopenedChests?.weekly_epic, 1);
+      assert.equal(claim.profile.unopenedPacks?.pack_basico, 2);
+      // Troféu NÃO foi duplicado ao resgatar a carta do Correio!
+      assert.equal(claim.profile.tournamentMedals?.[0].count, 1);
+
+      // 3) Acumulação multi-mês + merge idempotente (re-aplicar Season_2 após Season_3 não duplica!)
+      const s3Medal = {
+        ...savedProf.tournamentMedals[0],
+        id: "medal_season_3_etapa_2_r1",
+        weekKey: "Season_3",
+      };
+      let list = accumulateTournamentMedal(claim.profile.tournamentMedals ?? [], s3Medal);
+      assert.equal(list[0].count, 2);
+      // Re-aplicar Season_2 (que já está em historyWeeks) NÃO incrementa para 3!
+      list = accumulateTournamentMedal(list, savedProf.tournamentMedals[0]);
+      assert.equal(list[0].count, 2);
+      const merged = mergeTournamentMedalsList(list, list);
+      assert.equal(merged[0].count, 2);
+
+      // 4) getTop1ConsecutiveWeeks reconhece temporadas e meses consecutivos
+      assert.equal(
+        getTop1ConsecutiveWeeks({
+          tournamentMedals: [
+            {
+              ...s3Medal,
+              weekKey: "2027-03",
+              historyWeeks: ["2027-01", "2027-02", "2027-03"],
+              count: 3,
+            },
+          ],
+        } as any),
+        3,
+      );
+
+      // 5) executeRankedSeasonResetAsync executa em ordem atômica: avança temporada + inclui cartas em AdminConfig.inboxMessages + zera pontos preservando o troféu recém-aplicado
+      const { executeRankedSeasonResetAsync } = await import("./playfab.ts");
+      saveAdminConfig({
+        ...DEFAULT_ADMIN_CONFIG,
+        playfabTitleId: "",
+        rankedSeasonId: 1,
+        rankedSeasonCycleMode: "monthly",
+        rankedSeasonEndAt: "2027-01-01T03:59:59.999Z", // 31/12/2026 23:59 UTC-4
+        tournamentPodiumRewards: {
+          1: { medalId: "tournament_top_1_gold", xp: 100, points: 50, coins: 0, items: [] },
+          2: { medalId: "tournament_top_2_silver", xp: 0, points: 0, coins: 0, items: [] },
+          3: { medalId: "tournament_top_3_bronze", xp: 0, points: 0, coins: 0, items: [] },
+          4: { medalId: "tour_master_bronze", xp: 0, points: 0, coins: 0, items: [] },
+          5: { medalId: "tour_master_bronze", xp: 0, points: 0, coins: 0, items: [] },
+        },
+      });
+      window.localStorage.setItem(
+        REG_KEY,
+        JSON.stringify({
+          "camp-async": {
+            profile: {
+              id: "camp-async",
+              nick: "CampeaoAsync",
+              nickNormalized: "campeaoasync",
+              xp: 500,
+              seasonXp: 500,
+              tournamentPoints: 400,
+              bestTournamentPoints: 400,
+              tournamentRankId: "ouro_1",
+              rankedSeasonId: 1,
+              level: 4,
+              matchesPlayed: 5,
+              wins: 5,
+              unlockedMedals: [],
+              tournamentMedals: [],
+              claimedInboxRewardIds: [],
+            },
+            stats: [],
+            unlocked: [],
+            updatedAt: new Date().toISOString(),
+          },
+        }),
+      );
+      window.localStorage.setItem(
+        "desafios-weekly-tournament-v1",
+        JSON.stringify({
+          weekKey: "2026-W53",
+          seasonId: 1,
+          gameId: "logica",
+          records: {
+            "camp-async": {
+              playerId: "camp-async",
+              nick: "CampeaoAsync",
+              fullName: "Aluno Campeão Async",
+              school: "Escola Modelo",
+              age: 13,
+              stage: "etapa_2",
+              level: 4,
+              bestScore: 400,
+              totalEntries: 12,
+              tournamentPoints: 400,
+              activeTop5Since: null,
+              accumulatedTop5Ms: 60_000,
+              updatedAt: Date.now(),
+            },
+          },
+          updatedAt: Date.now(),
+        }),
+      );
+
+      const syncedAfterReset = await executeRankedSeasonResetAsync();
+      assert.equal(syncedAfterReset.rankedSeasonId, 2);
+      assert.equal(syncedAfterReset.rankedSeasonName, "Torneio Mensal Janeiro/2027 • SEMED Coari");
+      assert.equal(
+        syncedAfterReset.inboxMessages?.some((m) => m.id === "msg_rnk_s1_etapa_2_r1"),
+        true,
+        "Carta do 1º lugar já deve estar presente em AdminConfig.inboxMessages antes do push na nuvem",
+      );
+      const regPostAsync = JSON.parse(window.localStorage.getItem(REG_KEY)!);
+      assert.equal(regPostAsync["camp-async"].profile.tournamentPoints, 0, "Pontos ranqueados devem zerar");
+      assert.equal(regPostAsync["camp-async"].profile.rankedSeasonId, 2);
+      assert.equal(regPostAsync["camp-async"].profile.tournamentMedals?.length, 1, "Troféu recém-aplicado deve ser preservado");
+      assert.equal(regPostAsync["camp-async"].profile.tournamentMedals[0].rank, 1);
+      assert.equal(regPostAsync["camp-async"].profile.tournamentMedals[0].count, 1);
+    } finally {
+      if (prevReg !== null) window.localStorage.setItem(REG_KEY, prevReg);
+      else window.localStorage.removeItem(REG_KEY);
+      saveAdminConfig(DEFAULT_ADMIN_CONFIG);
+      if (!hadWindow) {
+        if (prevWindow === undefined) delete (globalThis as any).window;
+        else (globalThis as any).window = prevWindow;
+      }
+    }
   });
 
   it("reseta deterministamente os pontos de ranqueada apenas quando rankedSeasonId do ADM avança", () => {

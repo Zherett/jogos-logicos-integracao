@@ -295,44 +295,144 @@ export function PlayerMedalsInventory({
             )}
           </div>
 
-          {/* Medalhas do Torneio Semanal Ranqueado (Top 5 com contadores acumulativos) */}
-          {profile?.tournamentMedals && profile.tournamentMedals.length > 0 && (
-            <div className="rounded-2xl border bg-card/80 p-4 space-y-2.5">
-              <span className="font-display text-xs font-black uppercase text-amber-500 flex items-center gap-1.5">
-                <Trophy className="h-4 w-4" /> Medalhas do Torneio Semanal (Top 5)
-              </span>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {profile.tournamentMedals.map((tm) => (
-                  <div
-                    key={tm.id}
-                    className="flex items-center justify-between gap-2 rounded-xl border bg-secondary/30 p-2.5"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="text-xl">
-                        {tm.rank === 1 ? "🥇" : tm.rank === 2 ? "🥈" : tm.rank === 3 ? "🥉" : "🏅"}
-                      </span>
-                      <div>
-                        <div className="flex items-center gap-1.5 font-display text-xs font-black">
-                          <span>Top {tm.rank} Semanal</span>
-                          {(tm.count ?? 1) > 1 && (
-                            <span className="rounded-full bg-amber-500/20 border border-amber-500/40 px-1.5 py-0.2 text-[10px] font-black text-amber-600 dark:text-amber-400">
-                              x{tm.count}
+          {/* Troféus do Torneio Mensal (3 slots fixos em formato de pódio: Prata | Ouro | Bronze) */}
+          {(() => {
+            const podiumEntries = Array.isArray(profile?.tournamentMedals)
+              ? profile.tournamentMedals
+              : [];
+            const countForRank = (targetRank: 1 | 2 | 3): number =>
+              podiumEntries.reduce((sum, tm) => {
+                if (tm && tm.rank === targetRank) {
+                  return sum + Math.max(1, Math.floor(Number(tm.count ?? 1) || 1));
+                }
+                return sum;
+              }, 0);
+
+            const silverCount = countForRank(2);
+            const goldCount = countForRank(1);
+            const bronzeCount = countForRank(3);
+
+            const slots: Array<{
+              rank: 1 | 2 | 3;
+              label: string;
+              placeLabel: string;
+              count: number;
+              isCenter: boolean;
+              activeCardClass: string;
+              activeIconClass: string;
+              activeBadgeClass: string;
+              activeLabelClass: string;
+            }> = [
+              {
+                rank: 2,
+                label: "Prata",
+                placeLabel: "2º Lugar",
+                count: silverCount,
+                isCenter: false,
+                activeCardClass:
+                  "border-slate-400/60 dark:border-slate-300/60 bg-gradient-to-b from-slate-400/20 via-slate-400/10 to-card shadow-sm ring-1 ring-slate-400/30",
+                activeIconClass:
+                  "text-slate-500 dark:text-slate-300 drop-shadow-[0_2px_6px_rgba(148,163,184,0.45)]",
+                activeBadgeClass:
+                  "bg-slate-500/15 dark:bg-slate-200/20 border-slate-400/60 dark:border-slate-300/50 text-slate-700 dark:text-slate-100",
+                activeLabelClass: "text-slate-700 dark:text-slate-200",
+              },
+              {
+                rank: 1,
+                label: "Ouro",
+                placeLabel: "1º Lugar",
+                count: goldCount,
+                isCenter: true,
+                activeCardClass:
+                  "border-amber-400/75 bg-gradient-to-b from-amber-400/25 via-amber-500/10 to-card shadow-md ring-2 ring-amber-400/35",
+                activeIconClass: "text-amber-400 drop-shadow-[0_2px_10px_rgba(251,191,36,0.55)]",
+                activeBadgeClass:
+                  "bg-amber-500/25 border-amber-400/60 text-amber-700 dark:text-amber-300",
+                activeLabelClass: "text-amber-600 dark:text-amber-300",
+              },
+              {
+                rank: 3,
+                label: "Bronze",
+                placeLabel: "3º Lugar",
+                count: bronzeCount,
+                isCenter: false,
+                activeCardClass:
+                  "border-orange-500/60 bg-gradient-to-b from-orange-500/20 via-amber-700/10 to-card shadow-sm ring-1 ring-orange-500/30",
+                activeIconClass: "text-orange-400 drop-shadow-[0_2px_6px_rgba(251,146,60,0.45)]",
+                activeBadgeClass:
+                  "bg-orange-500/20 border-orange-500/50 text-orange-700 dark:text-orange-300",
+                activeLabelClass: "text-orange-600 dark:text-orange-300",
+              },
+            ];
+
+            return (
+              <div className="rounded-2xl border bg-card/80 p-4 space-y-3">
+                <div className="text-center">
+                  <span className="font-display text-xs font-black uppercase tracking-wide text-amber-500">
+                    Troféus do Torneio Mensal (Top 3)
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-3 items-end gap-2 sm:gap-3 pt-1">
+                  {slots.map((slot) => {
+                    const earned = slot.count > 0;
+                    return (
+                      <div
+                        key={slot.rank}
+                        title={
+                          earned
+                            ? `Top ${slot.rank} (${slot.label}) • ${slot.count} ${slot.count === 1 ? "troféu conquistado" : "troféus conquistados"}`
+                            : `Slot vago — Conquiste o ${slot.placeLabel} no fechamento do Torneio Mensal`
+                        }
+                        className={`relative flex flex-col items-center justify-center rounded-2xl border transition-all ${
+                          slot.isCenter ? "px-2 py-4 sm:py-5 min-h-[112px]" : "px-2 py-3 sm:py-3.5 min-h-[92px]"
+                        } ${
+                          earned
+                            ? slot.activeCardClass
+                            : "border-border/50 bg-muted/35 dark:bg-zinc-950/60 opacity-60"
+                        }`}
+                      >
+                        {earned ? (
+                          <>
+                            <span
+                              className={`absolute top-1.5 right-1.5 rounded-full border px-1.5 py-0.5 font-mono text-[10px] font-black leading-none ${slot.activeBadgeClass}`}
+                            >
+                              x{slot.count}
                             </span>
-                          )}
-                        </div>
-                        <div className="text-[10px] text-muted-foreground">{tm.label}</div>
+                            <Trophy
+                              className={`${slot.isCenter ? "h-8 w-8 sm:h-9 sm:w-9" : "h-6 w-6 sm:h-7 sm:w-7"} ${slot.activeIconClass}`}
+                            />
+                            <span
+                              className={`mt-1.5 font-display font-black leading-tight ${
+                                slot.isCenter ? "text-xs sm:text-sm" : "text-[11px] sm:text-xs"
+                              } ${slot.activeLabelClass}`}
+                            >
+                              {slot.placeLabel}
+                            </span>
+                            <span className="text-[10px] font-semibold text-muted-foreground">
+                              Troféu {slot.label}
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <Trophy
+                              className={`${slot.isCenter ? "h-7 w-7 sm:h-8 sm:w-8" : "h-5 w-5 sm:h-6 sm:w-6"} text-muted-foreground/30`}
+                            />
+                            <span className="mt-1.5 font-display text-[11px] font-bold text-muted-foreground/60">
+                              {slot.placeLabel}
+                            </span>
+                            <span className="text-[9px] font-medium text-muted-foreground/45 uppercase">
+                              Vago
+                            </span>
+                          </>
+                        )}
                       </div>
-                    </div>
-                    {(tm.count ?? 1) > 1 && (
-                      <span className="rounded-lg bg-primary/10 px-2 py-1 font-mono text-xs font-extrabold text-primary">
-                        {tm.count}x Conquistada
-                      </span>
-                    )}
-                  </div>
-                ))}
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* Quick link to catalogue (apenas quando a vitrine é aba separada) */}
           {!alwaysShowShowcase && (

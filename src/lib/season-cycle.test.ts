@@ -1,8 +1,12 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
+  computeMonthlyTournamentDates,
+  computeMonthlyTournamentDatesForYearMonth,
+  computeNextMonthlyTournamentDates,
   computeSeasonDates,
   extendSeasonDate,
+  formatOfficialCoariDate,
   getSeasonProgress,
   toDatetimeLocalString,
   parseDatetimeLocal,
@@ -82,6 +86,44 @@ describe("Gestão de Ciclos de Temporada (season-cycle)", () => {
     assert.equal(parsed?.getFullYear(), 2026);
     assert.equal(parsed?.getMonth(), 10);
     assert.equal(parsed?.getDate(), 15);
+  });
+
+  it("calcula ciclos mensais exatos em UTC-4 (28, 29, 30 e 31 dias) e transiciona Beta 31/12/2026 -> 12 meses de 2027", () => {
+    // Beta encerra em 31/12/2026 às 23:59:59.999 UTC-4 (= 2027-01-01T03:59:59.999Z)
+    const betaEndIso = "2027-01-01T03:59:59.999Z";
+    const jan2027 = computeNextMonthlyTournamentDates(betaEndIso, new Date("2027-01-01T04:00:05.000Z"));
+    assert.equal(jan2027.monthKey, "2027-01");
+    assert.equal(jan2027.monthLabel, "Janeiro/2027");
+    assert.equal(jan2027.durationDays, 31);
+    assert.equal(jan2027.start.toISOString(), "2027-01-01T04:00:00.000Z");
+    assert.equal(jan2027.end.toISOString(), "2027-02-01T03:59:59.999Z");
+
+    // Fevereiro/2027 (ano não bissexto = 28 dias)
+    const fev2027 = computeNextMonthlyTournamentDates(jan2027.end.toISOString(), new Date("2027-02-01T04:00:05.000Z"));
+    assert.equal(fev2027.monthKey, "2027-02");
+    assert.equal(fev2027.durationDays, 28);
+    assert.equal(fev2027.start.toISOString(), "2027-02-01T04:00:00.000Z");
+    assert.equal(fev2027.end.toISOString(), "2027-03-01T03:59:59.999Z");
+
+    // Abril/2027 (30 dias) e Fevereiro/2028 (ano bissexto = 29 dias)
+    const abr2027 = computeMonthlyTournamentDatesForYearMonth(2027, 3);
+    assert.equal(abr2027.durationDays, 30);
+    assert.equal(abr2027.end.toISOString(), "2027-05-01T03:59:59.999Z");
+
+    const fev2028 = computeMonthlyTournamentDatesForYearMonth(2028, 1);
+    assert.equal(fev2028.durationDays, 29);
+    assert.equal(fev2028.end.toISOString(), "2028-03-01T03:59:59.999Z");
+
+    // Verifica que 2027-01-31 22:00 UTC-4 (= 2027-02-01T02:00:00Z) ainda pertence a Janeiro/2027 em Coari!
+    const lateJanCoari = computeMonthlyTournamentDates(new Date("2027-02-01T02:00:00.000Z"));
+    assert.equal(lateJanCoari.monthKey, "2027-01");
+
+    // Verifica que formatOfficialCoariDate nunca desloca 23:59 UTC-4 para o dia seguinte em outros fusos
+    assert.equal(formatOfficialCoariDate(betaEndIso), "31/12/2026");
+    assert.equal(formatOfficialCoariDate(betaEndIso, { includeYear: false }), "31/12");
+    assert.equal(formatOfficialCoariDate(jan2027.end), "31/01/2027");
+    assert.equal(formatOfficialCoariDate(jan2027.end, { includeYear: false }), "31/01");
+    assert.equal(formatOfficialCoariDate(fev2027.end), "28/02/2027");
   });
 });
 

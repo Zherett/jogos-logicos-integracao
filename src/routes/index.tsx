@@ -866,7 +866,7 @@ function Index() {
               Abandonar Desafio Ranqueado?
             </AlertDialogTitle>
             <AlertDialogDescription className="text-sm text-muted-foreground">
-              Você está disputando uma partida oficial do <b>Torneio Semanal Ranqueado</b>.
+              Você está disputando uma partida oficial do <b>Torneio Mensal Ranqueado</b>.
               Se sair agora antes de finalizar a atividade, o seu progresso não será computado no ranking e a tentativa será perdida.
             </AlertDialogDescription>
           </AlertDialogHeader>

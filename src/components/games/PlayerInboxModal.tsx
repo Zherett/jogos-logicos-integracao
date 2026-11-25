@@ -741,6 +741,11 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                                   ⭐
                                 </div>
                               )}
+                              {rew.type === "xp" && (
+                                <div className="grid h-11 w-11 place-items-center rounded-2xl bg-sky-500/20 text-2xl shrink-0">
+                                  ⚡
+                                </div>
+                              )}
                               {rew.type === "coins" && (
                                 <div className="grid h-11 w-11 place-items-center rounded-2xl bg-amber-500/20 text-2xl shrink-0">
                                   🪙
@@ -761,6 +766,9 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                                 <div className="font-display text-sm sm:text-base font-black text-foreground">
                                   {rew.type === "points" && (
                                     <span>+{rew.pointsAmount} Pontos Conquistados</span>
+                                  )}
+                                  {rew.type === "xp" && (
+                                    <span>+{rew.pointsAmount} XP de Experiência</span>
                                   )}
                                   {rew.type === "coins" && (
                                     <span>+{rew.pointsAmount} Moedas da Loja</span>
@@ -797,7 +805,9 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                                 <div className="text-xs text-muted-foreground">
                                   {rew.type === "points"
                                     ? "Pontos serão somados à sua carteira e Hall da Fama"
-                                    : rew.type === "coins"
+                                    : rew.type === "xp"
+                                      ? "XP será somado ao seu progresso de nível e temporada"
+                                      : rew.type === "coins"
                                       ? "Moedas serão adicionadas à sua carteira da Loja"
                                       : rew.type === "future_item"
                                         ? inventoryOpen
@@ -903,6 +913,16 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                       </div>
                       <div className="text-xs text-muted-foreground font-semibold">
                         Adicionados à sua carteira e ao Hall da Fama
+                      </div>
+                    </>
+                  )}
+                  {rew.type === "xp" && (
+                    <>
+                      <div className="font-display text-2xl font-black text-sky-500">
+                        ⚡ +{rew.pointsAmount} XP
+                      </div>
+                      <div className="text-xs text-muted-foreground font-semibold">
+                        Adicionado ao seu progresso de nível e temporada
                       </div>
                     </>
                   )}

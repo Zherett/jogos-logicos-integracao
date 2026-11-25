@@ -897,7 +897,7 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
   medals.push(
     {
       id: "tournament_top_1_gold",
-      title: "Campeão Semanal (Ouro)",
+      title: "Campeão Mensal (Ouro)",
       description: "Mantenha o 1º lugar da sua etapa no fechamento da temporada ranqueada.",
       rarity: "ouro",
       category: "ranking",
@@ -906,7 +906,7 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
     },
     {
       id: "tournament_top_2_silver",
-      title: "Vice-Campeão Semanal (Prata)",
+      title: "Vice-Campeão Mensal (Prata)",
       description: "Conquiste o 2º lugar da sua etapa no fechamento da temporada ranqueada.",
       rarity: "prata",
       category: "ranking",
@@ -915,7 +915,7 @@ export function buildBaseMedalsCatalog(): MedalDefinition[] {
     },
     {
       id: "tournament_top_3_bronze",
-      title: "3º Lugar Semanal (Bronze)",
+      title: "3º Lugar Mensal (Bronze)",
       description: "Conquiste o 3º lugar da sua etapa no fechamento da temporada ranqueada.",
       rarity: "bronze",
       category: "ranking",
@@ -1711,25 +1711,72 @@ export function getTop5TotalWeeks(profile?: PlayerProfile | null): number {
   return Math.max(weeks.size, countSum);
 }
 
-/** Maximum streak of consecutive weeks a player finished in Top 1 */
+/** Maximum streak of consecutive tournament cycles (ISO weeks, YYYY-MM months, or Season_N) a player finished in Top 1 */
 export function getTop1ConsecutiveWeeks(profile?: PlayerProfile | null): number {
   if (!profile || !Array.isArray(profile.tournamentMedals)) return 0;
-  const weeks = new Set<string>();
+  const keys = new Set<string>();
 
   for (const m of profile.tournamentMedals) {
     if (m.rank === 1) {
-      if (m.weekKey) weeks.add(m.weekKey);
+      if (m.weekKey) keys.add(m.weekKey);
       if (Array.isArray(m.historyWeeks)) {
-        for (const w of m.historyWeeks) weeks.add(w);
+        for (const w of m.historyWeeks) keys.add(w);
       }
     }
   }
 
-  const streak = calculateMaxConsecutiveWeeks(Array.from(weeks));
-  if (streak === 0 && profile.tournamentMedals.some((m) => m.rank === 1 && (m.count ?? 1) >= 1)) {
+  const keyArr = Array.from(keys);
+  let maxStreak = calculateMaxConsecutiveWeeks(keyArr);
+
+  // Suporte a chaves mensais consecutivas (YYYY-MM, ex.: 2027-01, 2027-02)
+  const monthIndices = keyArr
+    .map((k) => {
+      const m = /^(\d{4})-(\d{2})$/.exec(k);
+      if (!m) return null;
+      return parseInt(m[1], 10) * 12 + (parseInt(m[2], 10) - 1);
+    })
+    .filter((n): n is number => n !== null)
+    .sort((a, b) => a - b);
+  if (monthIndices.length > 0) {
+    let cur = 1;
+    let best = 1;
+    for (let i = 1; i < monthIndices.length; i++) {
+      if (monthIndices[i] - monthIndices[i - 1] === 1) {
+        cur++;
+        if (cur > best) best = cur;
+      } else if (monthIndices[i] - monthIndices[i - 1] > 1) {
+        cur = 1;
+      }
+    }
+    if (best > maxStreak) maxStreak = best;
+  }
+
+  // Suporte a temporadas sequenciais (Season_1, Season_2, ...)
+  const seasonNums = keyArr
+    .map((k) => {
+      const m = /^Season_(\d+)$/i.exec(k);
+      return m ? parseInt(m[1], 10) : null;
+    })
+    .filter((n): n is number => n !== null)
+    .sort((a, b) => a - b);
+  if (seasonNums.length > 0) {
+    let cur = 1;
+    let best = 1;
+    for (let i = 1; i < seasonNums.length; i++) {
+      if (seasonNums[i] - seasonNums[i - 1] === 1) {
+        cur++;
+        if (cur > best) best = cur;
+      } else if (seasonNums[i] - seasonNums[i - 1] > 1) {
+        cur = 1;
+      }
+    }
+    if (best > maxStreak) maxStreak = best;
+  }
+
+  if (maxStreak === 0 && profile.tournamentMedals.some((m) => m.rank === 1 && (m.count ?? 1) >= 1)) {
     return 1;
   }
-  return streak;
+  return maxStreak;
 }
 
 let cachedBaseMedalsCatalog: MedalDefinition[] | null = null;

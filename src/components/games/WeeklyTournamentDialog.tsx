@@ -89,13 +89,13 @@ export function WeeklyTournamentDialog({
         <DialogContent className="rounded-3xl sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 font-display text-2xl font-extrabold">
-              <Trophy className="h-6 w-6 text-accent" /> Torneio Semanal Ranqueado
+              <Trophy className="h-6 w-6 text-accent" /> Torneio Mensal Ranqueado
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2 text-center">
             <p className="text-sm text-muted-foreground">
-              Entre no seu perfil de jogador para disputar o Torneio Semanal Ranqueado da sua etapa,
-              subir de divisão e conquistar medalhas!
+              Entre no seu perfil de jogador para disputar o Torneio Mensal Ranqueado da sua etapa,
+              subir de divisão e conquistar troféus e medalhas!
             </p>
             <Button
               size="lg"
@@ -121,7 +121,7 @@ export function WeeklyTournamentDialog({
         <DialogContent className="rounded-3xl sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 font-display text-2xl font-extrabold">
-              <Lock className="h-6 w-6 text-accent" /> Torneio Semanal (Nível {TOURNAMENT_MIN_LEVEL}+)
+              <Lock className="h-6 w-6 text-accent" /> Torneio Mensal (Nível {TOURNAMENT_MIN_LEVEL}+)
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2 text-center">
@@ -130,7 +130,7 @@ export function WeeklyTournamentDialog({
                 Alcance o Nível {TOURNAMENT_MIN_LEVEL} para participar!
               </p>
               <p className="text-xs text-muted-foreground">
-                Você está no <b>Nível {profile.level}</b> ({profile.xp} XP). O Torneio Semanal
+                Você está no <b>Nível {profile.level}</b> ({profile.xp} XP). O Torneio Mensal
                 Ranqueado é liberado automaticamente ao atingir o Nível {TOURNAMENT_MIN_LEVEL}.
               </p>
             </div>
@@ -234,7 +234,7 @@ export function WeeklyTournamentDialog({
 
             <DialogTitle className="flex items-center justify-center gap-1.5 font-display text-lg sm:text-xl font-extrabold text-center truncate">
               <Trophy className="h-5 w-5 text-accent shrink-0" />
-              <span className="truncate">Torneio Semanal Ranqueado</span>
+              <span className="truncate">Torneio Mensal Ranqueado</span>
             </DialogTitle>
 
             <div
@@ -329,7 +329,9 @@ export function WeeklyTournamentDialog({
                     Projeção Atual: Top {snap.myStanding.rank} da {snap.playerStage.shortLabel}
                   </span>
                   <span className="text-[11px] text-muted-foreground">
-                    Mantenha sua posição até o fim da temporada ({snap.endsAtLabel}) para faturar a medalha definitiva!
+                    {snap.myStanding.rank <= 3
+                      ? `Mantenha sua posição até o fim da temporada (${snap.endsAtLabel}) para faturar o troféu e os prêmios definitivos!`
+                      : `Mantenha sua posição até o fim da temporada (${snap.endsAtLabel}) para faturar os prêmios do Top 5 no Correio!`}
                   </span>
                 </div>
               </div>

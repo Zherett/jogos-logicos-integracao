@@ -440,6 +440,10 @@ export function createInboxMessage(
   };
 
   const all = loadAllInboxMessages();
+  if (data.id) {
+    const existing = all.find((m) => m.id === msg.id);
+    if (existing) return existing;
+  }
   all.unshift(msg);
   saveAllInboxMessages(all);
 

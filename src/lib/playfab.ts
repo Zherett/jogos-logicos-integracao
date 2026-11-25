@@ -19,7 +19,7 @@ import {
   type PlatformAdminConfig,
   type ResetHistoryEntry,
 } from "./game-codes.ts";
-import { computeSeasonDates, extendSeasonDate } from "./season-cycle.ts";
+import { computeNextMonthlyTournamentDates, computeSeasonDates, extendSeasonDate } from "./season-cycle.ts";
 import { ensureLevel5InitialLetterUnlock, mergeMonotonicCountRecords } from "./cosmetics-catalog.ts";
 import type { PlayerAvatarConfig } from "./avatar.ts";
 import {
@@ -1041,9 +1041,9 @@ export function checkAndApplyScheduledReset(options?: {
     }
   }
 
-  // 2. Encerramento automático agendado da Temporada do Modo Ranqueado (14 dias ou definido no ADM)
+  // 2. Encerramento automático agendado da Temporada do Modo Ranqueado (somente em sessão ADM quando PlayFab está ativo, evitando duplicação por clientes de alunos)
   const rankedEnd = cfg.rankedSeasonEndAt;
-  if (rankedEnd) {
+  if (rankedEnd && (!isPlayFabConfigured() || isAdminUnlockedSession())) {
     const dueRanked = new Date(rankedEnd).getTime();
     if (!Number.isNaN(dueRanked) && authoritativeNowMs >= dueRanked) {
       cfg = executeRankedSeasonReset({
@@ -1172,10 +1172,21 @@ export function executeRankedSeasonReset(options?: {
   const currentRankedSeasonId = cfg.rankedSeasonId ?? 1;
   const nextRankedSeasonId = currentRankedSeasonId + 1;
 
-  // 1. Encerra oficialmente a temporada anterior, congela o pódio e envia as medalhas com carta oficial ao Correio dos vencedores
-  void finalizeRankedSeasonAndAwardMedalsViaInbox(currentRankedSeasonId);
+  // 1. Captura o snapshot do torneio antes de limpar o localStorage e dispara o encerramento oficial (troféus automáticos + prêmios no Correio)
+  let pastStoreSnapshot: any = undefined;
+  if (typeof window !== "undefined") {
+    try {
+      const rawStore = window.localStorage.getItem("desafios-weekly-tournament-v1");
+      if (rawStore) {
+        pastStoreSnapshot = JSON.parse(rawStore);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  void finalizeRankedSeasonAndAwardMedalsViaInbox(currentRankedSeasonId, pastStoreSnapshot);
 
-  // 2. Limpa o armazenamento local do Torneio Semanal para iniciar a nova Temporada com registros limpos
+  // 2. Limpa o armazenamento local do Torneio para iniciar a nova Temporada com registros limpos
   if (typeof window !== "undefined") {
     try {
       window.localStorage.removeItem("desafios-weekly-tournament-v1");
@@ -1184,8 +1195,18 @@ export function executeRankedSeasonReset(options?: {
     }
   }
 
-  const durationDays = cfg.rankedSeasonDurationDays && cfg.rankedSeasonDurationDays > 0 ? cfg.rankedSeasonDurationDays : 14;
-  const { start: nStart, end: nEnd } = computeSeasonDates(new Date(nowIso), durationDays);
+  const isMonthlyCycle = cfg.rankedSeasonCycleMode !== "days";
+  const monthlyWindow = isMonthlyCycle
+    ? computeNextMonthlyTournamentDates(cfg.rankedSeasonEndAt, new Date(nowIso))
+    : null;
+  const durationDays = monthlyWindow
+    ? monthlyWindow.durationDays
+    : cfg.rankedSeasonDurationDays && cfg.rankedSeasonDurationDays > 0
+      ? cfg.rankedSeasonDurationDays
+      : 30;
+  const { start: nStart, end: nEnd } = monthlyWindow
+    ? { start: monthlyWindow.start, end: monthlyWindow.end }
+    : computeSeasonDates(new Date(nowIso), durationDays);
 
   const entry: ResetHistoryEntry = {
     id: `rst_rnk_${Date.now()}`,
@@ -1193,16 +1214,23 @@ export function executeRankedSeasonReset(options?: {
     seasonName: cfg.rankedSeasonName || `Temporada ${currentRankedSeasonId} Ranqueada`,
     executedAt: nowIso,
     resetXp: false,
-    reason: options?.reason || "Reset da Temporada de Ranqueada (2 semanas)",
+    reason:
+      options?.reason ||
+      (isMonthlyCycle ? "Encerramento do Torneio Mensal Ranqueado" : "Reset da Temporada de Ranqueada"),
   };
 
   const nextConfig = saveAdminConfig({
     ...cfg,
     rankedSeasonId: nextRankedSeasonId,
-    rankedSeasonName: options?.newSeasonName?.trim() || `Temporada ${nextRankedSeasonId} Ranqueada • SEMED Coari`,
+    rankedSeasonName:
+      options?.newSeasonName?.trim() ||
+      (monthlyWindow
+        ? `Torneio Mensal ${monthlyWindow.monthLabel} • SEMED Coari`
+        : `Temporada ${nextRankedSeasonId} Ranqueada • SEMED Coari`),
     rankedSeasonStartAt: nStart.toISOString(),
     rankedSeasonEndAt: nEnd.toISOString(),
     rankedSeasonDurationDays: durationDays,
+    rankedSeasonCycleMode: isMonthlyCycle ? "monthly" : "days",
     resetHistory: [entry, ...cfg.resetHistory].slice(0, 25),
   });
 
@@ -1226,6 +1254,126 @@ export function executeRankedSeasonReset(options?: {
   }
 
   return nextConfig;
+}
+
+/**
+ * Execução assíncrona e ordenada do encerramento da Temporada Ranqueada (usada pelo ADM):
+ * 1) Gera as cartas do Correio (Top 1 a Top 5) e coleta os troféus automáticos (Top 3 + histórico Top 5) antes de limpar o torneio.
+ * 2) Avança `rankedSeasonId` e publica `AdminConfig` (com as cartas em `inboxMessages`) no PlayFab PRIMEIRO,
+ *    impedindo que qualquer cliente/sanitizador trate `Season_N` como temporada em andamento.
+ * 3) Zera `tournamentPoints` localmente e aplica os troféus no registro + Roster na nuvem PlayFab sem race condition.
+ */
+export async function executeRankedSeasonResetAsync(options?: {
+  newSeasonName?: string;
+  reason?: string;
+}): Promise<PlatformAdminConfig> {
+  const cfg = loadAdminConfig();
+  const nowIso = new Date().toISOString();
+  const currentRankedSeasonId = cfg.rankedSeasonId ?? 1;
+  const nextRankedSeasonId = currentRankedSeasonId + 1;
+
+  // 1. Captura o snapshot do torneio antes de limpar o armazenamento local
+  let pastStoreSnapshot: any = undefined;
+  if (typeof window !== "undefined") {
+    try {
+      const rawStore = window.localStorage.getItem("desafios-weekly-tournament-v1");
+      if (rawStore) {
+        pastStoreSnapshot = JSON.parse(rawStore);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Gera cartas determinísticas no Correio + AdminConfig.inboxMessages, adiando gravação de troféus para após o avanço de rankedSeasonId
+  const finalization = await finalizeRankedSeasonAndAwardMedalsViaInbox(
+    currentRankedSeasonId,
+    pastStoreSnapshot,
+    { deferTrophyGrant: true },
+  );
+
+  // 2. Limpa o armazenamento local do Torneio para a nova temporada
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.removeItem("desafios-weekly-tournament-v1");
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const isMonthlyCycle = cfg.rankedSeasonCycleMode !== "days";
+  const monthlyWindow = isMonthlyCycle
+    ? computeNextMonthlyTournamentDates(cfg.rankedSeasonEndAt, new Date(nowIso))
+    : null;
+  const durationDays = monthlyWindow
+    ? monthlyWindow.durationDays
+    : cfg.rankedSeasonDurationDays && cfg.rankedSeasonDurationDays > 0
+      ? cfg.rankedSeasonDurationDays
+      : 30;
+  const { start: nStart, end: nEnd } = monthlyWindow
+    ? { start: monthlyWindow.start, end: monthlyWindow.end }
+    : computeSeasonDates(new Date(nowIso), durationDays);
+
+  const entry: ResetHistoryEntry = {
+    id: `rst_rnk_${Date.now()}`,
+    seasonId: currentRankedSeasonId,
+    seasonName: cfg.rankedSeasonName || `Temporada ${currentRankedSeasonId} Ranqueada`,
+    executedAt: nowIso,
+    resetXp: false,
+    reason:
+      options?.reason ||
+      (isMonthlyCycle ? "Encerramento do Torneio Mensal Ranqueado" : "Reset da Temporada de Ranqueada"),
+  };
+
+  // Re-lê config vivo já contendo as cartas do Correio recém-adicionadas por finalizeRankedSeasonAndAwardMedalsViaInbox
+  const cfgWithInbox = loadAdminConfig();
+  const nextConfig = saveAdminConfig({
+    ...cfgWithInbox,
+    rankedSeasonId: nextRankedSeasonId,
+    rankedSeasonName:
+      options?.newSeasonName?.trim() ||
+      (monthlyWindow
+        ? `Torneio Mensal ${monthlyWindow.monthLabel} • SEMED Coari`
+        : `Temporada ${nextRankedSeasonId} Ranqueada • SEMED Coari`),
+    rankedSeasonStartAt: nStart.toISOString(),
+    rankedSeasonEndAt: nEnd.toISOString(),
+    rankedSeasonDurationDays: durationDays,
+    rankedSeasonCycleMode: isMonthlyCycle ? "monthly" : "days",
+    resetHistory: [entry, ...cfgWithInbox.resetHistory].slice(0, 25),
+  });
+
+  // 3. Publica AdminConfig (novo rankedSeasonId + cartas do Top 5) no PlayFab ANTES de publicar troféus de Season_N no Roster
+  const syncedCfg = await pushAdminConfigToPlayFab(nextConfig);
+
+  // 4. Zera pontos ranqueados no registro local e aplica os troféus automaticamente + push para o Roster na nuvem
+  const reg = loadRegistry();
+  for (const key of Object.keys(reg)) {
+    const acc = reg[key];
+    acc.profile.tournamentPoints = 0;
+    acc.profile.bestTournamentPoints = 0;
+    acc.profile.tournamentRankId = "bronze_1";
+    acc.profile.rankedSeasonId = nextRankedSeasonId;
+    acc.profile.dailyTournamentEntries = 0;
+    acc.updatedAt = nowIso;
+  }
+  saveRegistry(reg);
+
+  if (finalization.autoTrophyGrants.length > 0) {
+    try {
+      await grantTournamentMedalsBatchToPlayers(finalization.autoTrophyGrants);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  invalidatePioneersCache();
+
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("desafios:weekly-tournament-updated"));
+    window.dispatchEvent(new CustomEvent("desafios:profile-updated"));
+  }
+
+  return syncedCfg;
 }
 
 /**
@@ -2918,6 +3066,12 @@ async function reconcileAccountWithCloudRoster(
         new Set([...(account.profile.achievedTournamentTiers ?? []), ...rProf.achievedTournamentTiers]),
       );
     }
+    if (Array.isArray(rProf.tournamentMedals) && rProf.tournamentMedals.length > 0) {
+      account.profile.tournamentMedals = mergeTournamentMedalsList(
+        account.profile.tournamentMedals,
+        rProf.tournamentMedals,
+      );
+    }
     if (Array.isArray(rProf.activeDates)) {
       account.profile.activeDates = Array.from(
         new Set([...(account.profile.activeDates ?? []), ...rProf.activeDates]),
@@ -3737,12 +3891,17 @@ async function pushProfileToPlayFab(
   const isAdminSessionActive = isSpecialAdminAccount(p) && isAdminUnlockedSession();
 
   // Proteção anti-Lost Update: se um aluno já estava logado quando o ADM aplicou
-  // moedas retroativas ou retrocoleta do Dia 1 no Roster, reconcilia antes de gravar.
+  // moedas retroativas, retrocoleta do Dia 1 ou troféus de encerramento mensal no Roster, reconcilia antes de gravar.
+  const activeRankedSeasonId = loadAdminConfig().rankedSeasonId ?? 1;
+  const needsRosterReconcile =
+    !p.retroactiveMedalCoinsGrantedAt ||
+    !p.retroactiveDay1GrantedAt ||
+    (p.rankedSeasonId ?? 1) < activeRankedSeasonId;
   if (
     ticket &&
     !ticket.startsWith("admin-") &&
     !isSpecialAdminAccount(p) &&
-    (!p.retroactiveMedalCoinsGrantedAt || !p.retroactiveDay1GrantedAt)
+    needsRosterReconcile
   ) {
     const nowMs = Date.now();
     const lastCheck = lastPushRosterReconcileAt.get(p.id) ?? 0;
@@ -3751,11 +3910,13 @@ async function pushProfileToPlayFab(
       const prevCoins = p.coins ?? 0;
       const prevRetroCoins = p.retroactiveMedalCoinsGrantedAt;
       const prevRetroDay1 = p.retroactiveDay1GrantedAt;
+      const prevTrophySig = JSON.stringify(p.tournamentMedals ?? []);
       await reconcileAccountWithCloudRoster(account, ticket);
       if (
         (p.coins ?? 0) !== prevCoins ||
         p.retroactiveMedalCoinsGrantedAt !== prevRetroCoins ||
-        p.retroactiveDay1GrantedAt !== prevRetroDay1
+        p.retroactiveDay1GrantedAt !== prevRetroDay1 ||
+        JSON.stringify(p.tournamentMedals ?? []) !== prevTrophySig
       ) {
         const reg = loadRegistry();
         if (reg[p.id]) {
@@ -7721,7 +7882,12 @@ export function accumulateTournamentMedal(
   medal: TournamentMedal,
 ): TournamentMedal[] {
   const copy = [...existing];
-  const sameWeekIndex = copy.findIndex((m) => m.id === medal.id || m.weekKey === medal.weekKey);
+  const sameWeekIndex = copy.findIndex(
+    (m) =>
+      m.id === medal.id ||
+      m.weekKey === medal.weekKey ||
+      (Array.isArray(m.historyWeeks) && m.historyWeeks.includes(medal.weekKey)),
+  );
 
   if (sameWeekIndex >= 0) {
     const cur = copy[sameWeekIndex];
@@ -7786,6 +7952,142 @@ export async function grantPlayerTournamentMedal(
   invalidatePioneersCache();
   await pushProfileToPlayFab(acc, session.sessionTicket);
   return acc.profile;
+}
+
+/**
+ * Mescla listas de troféus/medalhas de pódio de forma idempotente (sem duplicar ciclos já registrados em historyWeeks).
+ */
+export function mergeTournamentMedalsList(
+  baseList?: TournamentMedal[] | null,
+  incomingList?: TournamentMedal[] | null,
+): TournamentMedal[] {
+  let acc = Array.isArray(baseList) ? baseList.map((m) => ({ ...m })) : [];
+  if (!Array.isArray(incomingList) || incomingList.length === 0) return acc;
+  for (const inc of incomingList) {
+    if (!inc || typeof inc !== "object" || !inc.weekKey) continue;
+    const weeks =
+      Array.isArray(inc.historyWeeks) && inc.historyWeeks.length > 0
+        ? inc.historyWeeks
+        : [inc.weekKey];
+    for (const wk of weeks) {
+      acc = accumulateTournamentMedal(acc, { ...inc, weekKey: wk, historyWeeks: [wk] });
+    }
+    const idx = acc.findIndex((m) => m.rank === inc.rank);
+    if (idx >= 0) {
+      acc[idx] = {
+        ...acc[idx],
+        count: Math.max(
+          acc[idx].count ?? 1,
+          inc.count ?? 1,
+          Array.isArray(acc[idx].historyWeeks) ? acc[idx].historyWeeks.length : 1,
+        ),
+      };
+    }
+  }
+  return acc;
+}
+
+/**
+ * Aplica troféus/registros de pódio automaticamente aos perfis dos vencedores (online e offline),
+ * persistindo no registro local e publicando no Roster da nuvem PlayFab para que alunos offline
+ * recebam o troféu automaticamente ao logar.
+ */
+export async function grantTournamentMedalsBatchToPlayers(
+  grants: Array<{ playerId: string; nick?: string; medal: TournamentMedal }>,
+): Promise<{ updatedCount: number; cloudPushedCount: number }> {
+  if (!Array.isArray(grants) || grants.length === 0) {
+    return { updatedCount: 0, cloudPushedCount: 0 };
+  }
+  const reg = loadRegistry();
+  const cfg = loadAdminConfig();
+  const activeSession = loadStoredSession();
+  const nowIso = new Date().toISOString();
+  const rosterUpdates: Record<string, string> = {};
+  let updatedCount = 0;
+  let activeSessionUpdatedAcc: StoredAccount | null = null;
+
+  for (const grant of grants) {
+    const pidLower = grant.playerId.toLowerCase().trim();
+    const nickLower = (grant.nick || "").toLowerCase().trim();
+    const matchEntry = Object.entries(reg).find(([k, acc]) => {
+      if (!acc?.profile) return false;
+      const p = acc.profile;
+      return (
+        k.toLowerCase().trim() === pidLower ||
+        p.id.toLowerCase().trim() === pidLower ||
+        (p.playfabId && p.playfabId.toLowerCase().trim() === pidLower) ||
+        (nickLower &&
+          (p.nick.toLowerCase().trim() === nickLower ||
+            (p.nickNormalized && p.nickNormalized.toLowerCase().trim() === nickLower)))
+      );
+    });
+    if (!matchEntry) continue;
+    const [regKey, acc] = matchEntry;
+    acc.profile.tournamentMedals = accumulateTournamentMedal(
+      acc.profile.tournamentMedals ?? [],
+      grant.medal,
+    );
+    acc.updatedAt = nowIso;
+    reg[regKey] = acc;
+    updatedCount++;
+
+    if (!isSpecialAdminAccount(acc.profile)) {
+      const cloudKey = getStudentRosterCloudKey(acc.profile);
+      rosterUpdates[cloudKey] = buildStudentRosterCloudEntry(acc, cfg);
+    }
+    if (activeSession && activeSession.playerId === regKey) {
+      activeSessionUpdatedAcc = acc;
+    }
+  }
+
+  if (updatedCount > 0) {
+    saveRegistry(reg);
+    invalidatePioneersCache();
+  }
+
+  let cloudPushedCount = 0;
+  const rosterKeys = Object.keys(rosterUpdates);
+  if (isPlayFabConfigured() && rosterKeys.length > 0) {
+    try {
+      const adminTicket =
+        (isAdminUnlockedSession() ? await getAdminPlayFabTicket() : null) ??
+        (activeSession?.sessionTicket && !activeSession.sessionTicket.startsWith("admin-")
+          ? activeSession.sessionTicket
+          : null);
+      if (adminTicket) {
+        const CHUNK_SIZE = 10;
+        for (let i = 0; i < rosterKeys.length; i += CHUNK_SIZE) {
+          const chunkKeys = rosterKeys.slice(i, i + CHUNK_SIZE);
+          const chunkData: Record<string, string> = {};
+          for (const ck of chunkKeys) chunkData[ck] = rosterUpdates[ck];
+          const res = await callPlayFabClient(
+            "UpdateSharedGroupData",
+            {
+              SharedGroupId: ROSTER_SHARED_GROUP_ID,
+              Data: chunkData,
+              Permission: "Public",
+            },
+            adminTicket,
+          );
+          if (!res.error) {
+            cloudPushedCount += chunkKeys.length;
+          }
+        }
+      }
+    } catch {
+      /* ignore network error; local registry remains updated */
+    }
+  }
+
+  if (activeSessionUpdatedAcc && activeSession?.sessionTicket && isPlayFabConfigured()) {
+    try {
+      await pushProfileToPlayFab(activeSessionUpdatedAcc, activeSession.sessionTicket);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return { updatedCount, cloudPushedCount };
 }
 
 /**
@@ -8416,6 +8718,10 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
                   cloudProfile.retroactiveMedalCoinsGrantedAt ?? udProf.retroactiveMedalCoinsGrantedAt,
                 retroactiveDay1GrantedAt:
                   cloudProfile.retroactiveDay1GrantedAt ?? udProf.retroactiveDay1GrantedAt,
+                tournamentMedals: mergeTournamentMedalsList(
+                  cloudProfile.tournamentMedals,
+                  udProf.tournamentMedals,
+                ),
                 coinRewardedMedalIds: (() => {
                   const out: Record<string, number> = {};
                   for (const src of [cloudProfile.coinRewardedMedalIds, udProf.coinRewardedMedalIds]) {
@@ -8814,6 +9120,10 @@ export async function syncSinglePlayerFromPlayFab(identifier: string): Promise<P
               retroactiveDay1GrantedAt:
                 existing.profile.retroactiveDay1GrantedAt ??
                 cloudProfile.retroactiveDay1GrantedAt,
+              tournamentMedals: mergeTournamentMedalsList(
+                existing.profile.tournamentMedals,
+                cloudProfile.tournamentMedals,
+              ),
               coinRewardedMedalIds: (() => {
                 const out: Record<string, number> = {};
                 for (const src of [

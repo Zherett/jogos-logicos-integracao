@@ -26,7 +26,7 @@ import {
 import {
   CLOUD_SESSION_EXPIRED_EVENT,
   executeActivitySeasonReset,
-  executeRankedSeasonReset,
+  executeRankedSeasonResetAsync,
   executeRankingReset,
   getActiveAccount,
   getAdminPin,
@@ -496,8 +496,7 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
 
   const triggerRankedSeasonReset = useCallback(
     async (options?: { newSeasonName?: string; reason?: string }) => {
-      const nextCfg = executeRankedSeasonReset(options);
-      const syncedCfg = await pushAdminConfigToPlayFab(nextCfg);
+      const syncedCfg = await executeRankedSeasonResetAsync(options);
       setAdminConfig(syncedCfg);
       const active = getActiveAccount();
       if (active) {

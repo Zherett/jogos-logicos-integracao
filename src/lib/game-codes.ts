@@ -292,9 +292,83 @@ export interface PlatformAdminConfig {
     enableDefaultAvatarForStudents?: boolean;
     enableShopForStudents?: boolean;
   };
+  /** Modo de renovação da Temporada Ranqueada: mensal (dia 1º ao último dia do mês) ou dias fixos */
+  rankedSeasonCycleMode?: "monthly" | "days";
+  /** Premiações configuráveis pelo ADM para o Top 1 a Top 5 do encerramento do Torneio Mensal (entregues no Correio) */
+  tournamentPodiumRewards?: Partial<Record<TournamentPodiumRank, TournamentPodiumRewardSlot>>;
   /** Optional PlayFab Title ID configured via Admin UI. */
   playfabTitleId?: string;
   updatedAt: string;
+}
+
+export type TournamentPodiumRank = 1 | 2 | 3 | 4 | 5;
+
+export interface TournamentPodiumRewardItem {
+  itemCategory: "chest" | "card_pack" | "cosmetic";
+  itemId: string;
+  itemName: string;
+  quantity: number;
+  cosmeticKind?: "avatar" | "aura";
+}
+
+export interface TournamentPodiumRewardSlot {
+  /** ID da medalha entregue no Correio (null/vazio = sem medalha) */
+  medalId?: string | null;
+  points: number;
+  xp: number;
+  coins: number;
+  items: TournamentPodiumRewardItem[];
+}
+
+export type TournamentPodiumRewardsConfig = Record<TournamentPodiumRank, TournamentPodiumRewardSlot>;
+
+export const TOURNAMENT_PODIUM_RANKS: readonly TournamentPodiumRank[] = [1, 2, 3, 4, 5] as const;
+
+export const DEFAULT_TOURNAMENT_PODIUM_REWARDS: TournamentPodiumRewardsConfig = {
+  1: { medalId: "tournament_top_1_gold", points: 0, xp: 0, coins: 0, items: [] },
+  2: { medalId: "tournament_top_2_silver", points: 0, xp: 0, coins: 0, items: [] },
+  3: { medalId: "tournament_top_3_bronze", points: 0, xp: 0, coins: 0, items: [] },
+  4: { medalId: "tour_master_bronze", points: 0, xp: 0, coins: 0, items: [] },
+  5: { medalId: "tour_master_bronze", points: 0, xp: 0, coins: 0, items: [] },
+};
+
+export function resolveTournamentPodiumRewards(
+  raw?: Partial<Record<number | string, Partial<TournamentPodiumRewardSlot>>> | null,
+): TournamentPodiumRewardsConfig {
+  const out = {} as TournamentPodiumRewardsConfig;
+  for (const rank of TOURNAMENT_PODIUM_RANKS) {
+    const def = DEFAULT_TOURNAMENT_PODIUM_REWARDS[rank];
+    const src = raw?.[rank] ?? raw?.[String(rank)];
+    const hasExplicitMedal = Boolean(src && Object.prototype.hasOwnProperty.call(src, "medalId"));
+    const normalizedMedalId = hasExplicitMedal
+      ? src?.medalId && String(src.medalId).trim()
+        ? String(src.medalId).trim()
+        : null
+      : def.medalId ?? null;
+    const rawItems = Array.isArray(src?.items) ? src.items : [];
+    const items: TournamentPodiumRewardItem[] = rawItems
+      .filter((it): it is TournamentPodiumRewardItem => Boolean(it && typeof it === "object" && it.itemId))
+      .map((it) => ({
+        itemCategory:
+          it.itemCategory === "chest" || it.itemCategory === "card_pack" || it.itemCategory === "cosmetic"
+            ? it.itemCategory
+            : "chest",
+        itemId: String(it.itemId).trim(),
+        itemName: String(it.itemName || it.itemId).trim(),
+        quantity: it.itemCategory === "cosmetic" ? 1 : Math.max(1, Math.floor(Number(it.quantity) || 1)),
+        ...(it.cosmeticKind === "avatar" || it.cosmeticKind === "aura"
+          ? { cosmeticKind: it.cosmeticKind }
+          : {}),
+      }));
+    out[rank] = {
+      medalId: normalizedMedalId,
+      points: Math.max(0, Math.floor(Number(src?.points ?? 0) || 0)),
+      xp: Math.max(0, Math.floor(Number(src?.xp ?? 0) || 0)),
+      coins: Math.max(0, Math.floor(Number(src?.coins ?? 0) || 0)),
+      items,
+    };
+  }
+  return out;
 }
 
 export type AdminConfig = PlatformAdminConfig;
@@ -316,7 +390,7 @@ export const SYSTEM_DEFAULT_NOTICES: DefaultNoticeDescriptor[] = [
   {
     id: "default_weekly_tournament",
     badgeLabel: "TORNEIO RANQUEADO",
-    title: "Torneio Semanal Ranqueado (Desafio da Semana)",
+    title: "Torneio Mensal Ranqueado (Desafio da Semana)",
     description: "Incentiva a disputa diária de 10 partidas ranqueadas para subir da Liga Bronze até o Mestre (+100 XP extras).",
   },
   {
@@ -360,6 +434,14 @@ export const DEFAULT_ADMIN_CONFIG: PlatformAdminConfig = {
   rankedSeasonStartAt: "2026-11-01T00:00:00.000Z",
   rankedSeasonEndAt: null,
   rankedSeasonDurationDays: 14,
+  rankedSeasonCycleMode: "monthly",
+  tournamentPodiumRewards: {
+    1: { ...DEFAULT_TOURNAMENT_PODIUM_REWARDS[1], items: [] },
+    2: { ...DEFAULT_TOURNAMENT_PODIUM_REWARDS[2], items: [] },
+    3: { ...DEFAULT_TOURNAMENT_PODIUM_REWARDS[3], items: [] },
+    4: { ...DEFAULT_TOURNAMENT_PODIUM_REWARDS[4], items: [] },
+    5: { ...DEFAULT_TOURNAMENT_PODIUM_REWARDS[5], items: [] },
+  },
   rankedOpenHour: 7,
   rankedCloseHour: 22,
   rankedForceOpen: true,
@@ -442,6 +524,8 @@ export function loadAdminConfig(): PlatformAdminConfig {
       },
       gameCodes: { ...DEFAULT_GAME_CODES, ...(parsed.gameCodes ?? {}) },
       masterCode: normalizeCode(parsed.masterCode || DEFAULT_MASTER_CODE) || DEFAULT_MASTER_CODE,
+      rankedSeasonCycleMode: parsed.rankedSeasonCycleMode === "days" ? "days" : "monthly",
+      tournamentPodiumRewards: resolveTournamentPodiumRewards(parsed.tournamentPodiumRewards),
       resetHistory: Array.isArray(parsed.resetHistory) ? parsed.resetHistory : [],
       x1Enabled: typeof parsed.x1Enabled === "boolean" ? parsed.x1Enabled : true,
       x1OpenHour: typeof parsed.x1OpenHour === "number" ? parsed.x1OpenHour : 7,

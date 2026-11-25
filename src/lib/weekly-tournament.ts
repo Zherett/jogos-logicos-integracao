@@ -5,9 +5,16 @@
 
 import { ALL_GAME_IDS, GAME_NAMES, type GameId } from "./game-storage.ts";
 import { creditCoinMetrics } from "./career-points.ts";
-import { loadAdminConfig, type RankedMilestoneReward } from "./game-codes.ts";
+import {
+  loadAdminConfig,
+  resolveTournamentPodiumRewards,
+  saveAdminConfig,
+  type RankedMilestoneReward,
+  type TournamentPodiumRank,
+} from "./game-codes.ts";
 import {
   grantPlayerTournamentMedal,
+  grantTournamentMedalsBatchToPlayers,
   deductPaidTournamentPoints,
   getAdminPlayFabTicket,
   getAllRegisteredPlayers,
@@ -23,12 +30,13 @@ import {
   getStudentRosterCloudKey,
   type PlayerProfile,
 } from "./playfab.ts";
-import { createInboxMessage } from "./inbox-messages.ts";
+import { createInboxMessage, type InboxReward, type SystemInboxMessage } from "./inbox-messages.ts";
 import {
   getActiveEventBonuses,
   type SpecialEvent,
   type RecurringEvent,
 } from "./custom-events.ts";
+import { formatOfficialCoariDate } from "./season-cycle.ts";
 import {
   awardCareerPoints,
   checkTournamentTierPromotion,
@@ -768,14 +776,24 @@ export function evaluateTournamentStandings(
 export async function finalizeRankedSeasonAndAwardMedalsViaInbox(
   seasonId: number,
   pastStore?: WeeklyTournamentStore,
-): Promise<{ totalMedalsAwarded: number; podiumSummary: Record<string, string[]> }> {
+  options?: { deferTrophyGrant?: boolean },
+): Promise<{
+  totalMedalsAwarded: number;
+  podiumSummary: Record<string, string[]>;
+  createdMessages: SystemInboxMessage[];
+  autoTrophyGrants: Array<{ playerId: string; nick?: string; medal: TournamentMedal }>;
+}> {
   const store = pastStore ?? loadTournamentStore();
+  const cfg = loadAdminConfig();
+  const podiumRewards = resolveTournamentPodiumRewards(cfg.tournamentPodiumRewards);
   const stages: AgeStageId[] = ["etapa_1", "etapa_2", "etapa_3"];
   let totalMedalsAwarded = 0;
   const podiumSummary: Record<string, string[]> = {};
+  const autoTrophyGrants: Array<{ playerId: string; nick?: string; medal: TournamentMedal }> = [];
+  const createdMessages: SystemInboxMessage[] = [];
 
   if (!store || !store.records || Object.keys(store.records).length === 0) {
-    return { totalMedalsAwarded: 0, podiumSummary };
+    return { totalMedalsAwarded: 0, podiumSummary, createdMessages, autoTrophyGrants };
   }
 
   for (const st of stages) {
@@ -784,15 +802,9 @@ export async function finalizeRankedSeasonAndAwardMedalsViaInbox(
     podiumSummary[st] = [];
 
     for (const row of winners) {
+      const rankKey = Math.min(5, Math.max(1, row.rank)) as TournamentPodiumRank;
+      const slot = podiumRewards[rankKey];
       const proj = projectedMedalForRank(row.rank, row.holdMinutes);
-      const medalId =
-        row.rank === 1
-          ? "tournament_top_1_gold"
-          : row.rank === 2
-          ? "tournament_top_2_silver"
-          : row.rank === 3
-          ? "tournament_top_3_bronze"
-          : "tour_master_bronze";
 
       const tourMedal: TournamentMedal = {
         id: `medal_season_${seasonId}_${st}_r${row.rank}`,
@@ -802,31 +814,114 @@ export async function finalizeRankedSeasonAndAwardMedalsViaInbox(
         tier: proj.tier,
         label: `${proj.emoji} Top ${row.rank} ${row.stageLabel} (Temporada ${seasonId})`,
         heldMinutes: row.holdMinutes,
-        bonusXpAwarded: proj.bonusXp,
+        bonusXpAwarded: 0,
         earnedAt: new Date(store.updatedAt).toISOString(),
       };
 
+      // Troféus (Top 3) e histórico Top 5 são aplicados automaticamente no perfil + Roster na nuvem
+      autoTrophyGrants.push({
+        playerId: row.playerId,
+        nick: row.nick,
+        medal: tourMedal,
+      });
+
+      const rewBaseId = `rew_rnk_s${seasonId}_${st}_r${row.rank}`;
+      const rewardsList: InboxReward[] = [];
+
+      if (slot.medalId) {
+        rewardsList.push({
+          id: `${rewBaseId}_medal`,
+          type: "medal",
+          medalId: slot.medalId,
+          isSecret: false,
+          claimed: false,
+          itemData: {
+            seasonId,
+            stage: st,
+            rank: row.rank,
+            tier: proj.tier,
+          },
+        });
+      }
+      if (slot.xp > 0) {
+        rewardsList.push({
+          id: `${rewBaseId}_xp`,
+          type: "xp",
+          pointsAmount: slot.xp,
+          isSecret: false,
+          claimed: false,
+        });
+      }
+      if (slot.points > 0) {
+        rewardsList.push({
+          id: `${rewBaseId}_points`,
+          type: "points",
+          pointsAmount: slot.points,
+          isSecret: false,
+          claimed: false,
+        });
+      }
+      if (slot.coins > 0) {
+        rewardsList.push({
+          id: `${rewBaseId}_coins`,
+          type: "coins",
+          pointsAmount: slot.coins,
+          isSecret: false,
+          claimed: false,
+        });
+      }
+      for (let i = 0; i < slot.items.length; i++) {
+        const item = slot.items[i];
+        rewardsList.push({
+          id: `${rewBaseId}_item_${i}`,
+          type: "future_item",
+          isSecret: false,
+          claimed: false,
+          itemData: {
+            itemCategory: item.itemCategory,
+            itemId: item.itemId,
+            itemName: item.itemName,
+            quantity: item.quantity,
+            ...(item.cosmeticKind ? { cosmeticKind: item.cosmeticKind } : {}),
+          },
+        });
+      }
+
       const title =
         row.rank === 1
-          ? `🏆 Campeão da Temporada ${seasonId} Ranqueada!`
+          ? `🏆 Campeão da Temporada ${seasonId} do Torneio Mensal!`
           : row.rank === 2
-          ? `🥈 Vice-Campeão da Temporada ${seasonId} Ranqueada!`
+          ? `🥈 Vice-Campeão da Temporada ${seasonId} do Torneio Mensal!`
           : row.rank === 3
-          ? `🥉 3º Lugar da Temporada ${seasonId} Ranqueada!`
-          : `🎖️ Top ${row.rank} de Elite da Temporada ${seasonId} Ranqueada!`;
+          ? `🥉 3º Lugar da Temporada ${seasonId} do Torneio Mensal!`
+          : `🎖️ Top ${row.rank} de Elite da Temporada ${seasonId} do Torneio Mensal!`;
+
+      const trophyNotice =
+        row.rank === 1
+          ? " Seu Troféu de Ouro do Torneio Mensal já foi aplicado automaticamente no seu perfil!"
+          : row.rank === 2
+          ? " Seu Troféu de Prata do Torneio Mensal já foi aplicado automaticamente no seu perfil!"
+          : row.rank === 3
+          ? " Seu Troféu de Bronze do Torneio Mensal já foi aplicado automaticamente no seu perfil!"
+          : "";
+
+      const collectNotice =
+        rewardsList.length > 0
+          ? " Resgate abaixo suas recompensas oficiais desta colocação."
+          : "";
 
       const body =
         row.rank === 1
-          ? `Parabéns pelo feito extraordinário! Você conquistou o 1º Lugar na sua etapa (${row.stageLabel}) durante a Temporada ${seasonId} do Modo Ranqueado da SEMED Coari. Sua dedicação e conhecimento levaram você ao topo mais alto do pódio! Reivindique sua Medalha de Ouro Oficial de Campeão e seus pontos de prestígio abaixo.`
+          ? `Parabéns pelo feito extraordinário! Você conquistou o 1º Lugar na sua etapa (${row.stageLabel}) durante a Temporada ${seasonId} do Torneio Mensal Ranqueado da SEMED Coari.${trophyNotice}${collectNotice}`
           : row.rank === 2
-          ? `Parabéns pela grande conquista! Você conquistou o 2º Lugar na sua etapa (${row.stageLabel}) durante a Temporada ${seasonId} do Modo Ranqueado da SEMED Coari. Excelente desempenho e determinação! Reivindique sua Medalha de Prata Oficial de Vice-Campeão e seus pontos de prestígio abaixo.`
+          ? `Parabéns pela grande conquista! Você conquistou o 2º Lugar na sua etapa (${row.stageLabel}) durante a Temporada ${seasonId} do Torneio Mensal Ranqueado da SEMED Coari.${trophyNotice}${collectNotice}`
           : row.rank === 3
-          ? `Parabéns pelo pódio! Você garantiu o 3º Lugar na sua etapa (${row.stageLabel}) durante a Temporada ${seasonId} do Modo Ranqueado da SEMED Coari. Você faz parte dos melhores da rede municipal! Reivindique sua Medalha de Bronze Oficial de 3º Lugar e seus pontos de prestígio abaixo.`
-          : `Parabéns! Você alcançou o Top ${row.rank} na sua etapa (${row.stageLabel}) durante a Temporada ${seasonId} do Modo Ranqueado da SEMED Coari, consolidando-se entre os melhores competidores da rede municipal! Reivindique sua Medalha de Honra de Elite Oficial e seus pontos de prestígio abaixo.`;
+          ? `Parabéns pelo pódio! Você garantiu o 3º Lugar na sua etapa (${row.stageLabel}) durante a Temporada ${seasonId} do Torneio Mensal Ranqueado da SEMED Coari.${trophyNotice}${collectNotice}`
+          : `Parabéns! Você alcançou o Top ${row.rank} na sua etapa (${row.stageLabel}) durante a Temporada ${seasonId} do Torneio Mensal Ranqueado da SEMED Coari, consolidando-se entre os melhores competidores da rede municipal!${collectNotice}`;
 
-      const rewId = `rew_rnk_s${seasonId}_${st}_r${row.rank}_${Date.now()}`;
-      // Envia exatamente 1 mensagem canônica por vencedor (matchPlayerIdentifier resolve tanto playerId quanto nick)
-      createInboxMessage({
+      const msgId = `msg_rnk_s${seasonId}_${st}_r${row.rank}`;
+      const msg = createInboxMessage({
+        id: msgId,
         recipientId: row.playerId,
         recipientFilter: {
           targetStudentIds: Array.from(new Set([row.playerId, ...(row.nick ? [row.nick] : [])])),
@@ -836,44 +931,66 @@ export async function finalizeRankedSeasonAndAwardMedalsViaInbox(
         category: "recompensa_especial",
         title,
         body,
-        reward: {
-          id: rewId,
-          type: "medal",
-          medalId,
-          pointsAmount: proj.bonusXp,
-          isSecret: false,
-          claimed: false,
-          itemData: {
-            tournamentMedal: tourMedal,
-            seasonId,
-            stage: st,
-            rank: row.rank,
-            tier: proj.tier,
-          },
-        },
+        ...(rewardsList.length > 0
+          ? {
+              reward: rewardsList[0],
+              rewards: rewardsList,
+            }
+          : {}),
       });
-
-      try {
-        const activeSession = loadStoredSession();
-        const sessionPid = activeSession?.playerId?.toLowerCase().trim();
-        const isCurrentSessionWinner = Boolean(
-          sessionPid &&
-            (sessionPid === row.playerId.toLowerCase().trim() ||
-              (row.nick && sessionPid === row.nick.toLowerCase().trim())),
-        );
-        if (isCurrentSessionWinner) {
-          await grantPlayerTournamentMedal(tourMedal);
-        }
-      } catch {
-        /* ignore */
-      }
+      createdMessages.push(msg);
 
       podiumSummary[st].push(`Top ${row.rank}: ${row.nick} (${row.tournamentPoints ?? row.bestScore} pts)`);
       totalMedalsAwarded++;
     }
   }
 
-  return { totalMedalsAwarded, podiumSummary };
+  // Inclui as cartas criadas em AdminConfig.inboxMessages para sincronização na nuvem PlayFab
+  if (createdMessages.length > 0) {
+    try {
+      const liveCfg = loadAdminConfig();
+      const existingList = Array.isArray(liveCfg.inboxMessages) ? liveCfg.inboxMessages : [];
+      const existingIds = new Set(existingList.map((m) => m.id));
+      const newOnes = createdMessages.filter((m) => !existingIds.has(m.id));
+      if (newOnes.length > 0) {
+        saveAdminConfig({
+          ...liveCfg,
+          inboxMessages: [...newOnes, ...existingList],
+        });
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  if (!options?.deferTrophyGrant) {
+    // Aplica os troféus/pódios automaticamente nos perfis locais e no Roster da nuvem PlayFab
+    try {
+      await grantTournamentMedalsBatchToPlayers(autoTrophyGrants);
+    } catch {
+      /* ignore */
+    }
+
+    // Fallback para sessão ativa caso o vencedor não estivesse mapeado na lista do registro
+    try {
+      const activeSession = loadStoredSession();
+      const sessionPid = activeSession?.playerId?.toLowerCase().trim();
+      if (sessionPid) {
+        for (const g of autoTrophyGrants) {
+          if (
+            sessionPid === g.playerId.toLowerCase().trim() ||
+            (g.nick && sessionPid === g.nick.toLowerCase().trim())
+          ) {
+            await grantPlayerTournamentMedal(g.medal);
+          }
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  return { totalMedalsAwarded, podiumSummary, createdMessages, autoTrophyGrants };
 }
 
 /**
@@ -1529,7 +1646,7 @@ export function getWeeklyTournamentSnapshot(
   const seasonEnd = cfg.rankedSeasonEndAt ? new Date(cfg.rankedSeasonEndAt) : null;
   const endsAtLabel =
     seasonEnd && !Number.isNaN(seasonEnd.getTime())
-      ? `${seasonEnd.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })} às 23:59`
+      ? `${formatOfficialCoariDate(seasonEnd, { includeYear: false })} às 23:59`
       : defaultWeekEnd;
   const seasonLabel = `Temporada ${currentSeasonId}`;
   const playerStageInfo = profile

@@ -941,7 +941,12 @@ export function accumulateTournamentMedal(
   medal: TournamentMedal,
 ): TournamentMedal[] {
   const copy = [...existing];
-  const sameWeekIndex = copy.findIndex((m) => m.id === medal.id || m.weekKey === medal.weekKey);
+  const sameWeekIndex = copy.findIndex(
+    (m) =>
+      m.id === medal.id ||
+      m.weekKey === medal.weekKey ||
+      (Array.isArray(m.historyWeeks) && m.historyWeeks.includes(medal.weekKey)),
+  );
 
   if (sameWeekIndex >= 0) {
     const cur = copy[sameWeekIndex];

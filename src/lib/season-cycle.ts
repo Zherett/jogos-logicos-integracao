@@ -10,6 +10,129 @@ export type SeasonDurationPreset = (typeof SEASON_DURATION_PRESETS)[number];
 
 export const DEFAULT_SEASON_DURATION_DAYS: SeasonDurationPreset = 14;
 
+/** Fuso oficial da SEMED Coari/AM (UTC-4) */
+const OFFICIAL_COARI_UTC_OFFSET_MS = -4 * 60 * 60 * 1000;
+
+const PT_BR_MONTH_NAMES = [
+  "Janeiro",
+  "Fevereiro",
+  "Março",
+  "Abril",
+  "Maio",
+  "Junho",
+  "Julho",
+  "Agosto",
+  "Setembro",
+  "Outubro",
+  "Novembro",
+  "Dezembro",
+] as const;
+
+export interface MonthlyTournamentDates {
+  start: Date;
+  end: Date;
+  year: number;
+  /** 1..12 */
+  month: number;
+  monthKey: string;
+  monthLabel: string;
+  durationDays: number;
+}
+
+/**
+ * Calcula início (01/MM 00:00:00-04:00) e término (último dia/MM 23:59:59.999-04:00)
+ * de um mês calendário no fuso oficial de Coari/AM (UTC-4), suportando 28/29/30/31 dias.
+ */
+export function computeMonthlyTournamentDatesForYearMonth(
+  year: number,
+  monthIndexZeroBased: number,
+): MonthlyTournamentDates {
+  const normalized = new Date(Date.UTC(year, monthIndexZeroBased, 1));
+  const y = normalized.getUTCFullYear();
+  const m0 = normalized.getUTCMonth();
+  const lastDay = new Date(Date.UTC(y, m0 + 1, 0)).getUTCDate();
+
+  // 00:00:00.000 UTC-4 === 04:00:00.000 UTC
+  const start = new Date(Date.UTC(y, m0, 1, 4, 0, 0, 0));
+  // 23:59:59.999 UTC-4 do último dia === 03:59:59.999 UTC do dia 1º do mês seguinte
+  const end = new Date(Date.UTC(y, m0 + 1, 1, 3, 59, 59, 999));
+  const monthNum = m0 + 1;
+  const monthKey = `${y}-${String(monthNum).padStart(2, "0")}`;
+  const monthLabel = `${PT_BR_MONTH_NAMES[m0]}/${y}`;
+
+  return {
+    start,
+    end,
+    year: y,
+    month: monthNum,
+    monthKey,
+    monthLabel,
+    durationDays: lastDay,
+  };
+}
+
+/**
+ * Retorna os limites do mês calendário (UTC-4) correspondente à data de referência.
+ */
+export function computeMonthlyTournamentDates(
+  referenceDate: Date = new Date(),
+  options?: { advanceMonths?: number },
+): MonthlyTournamentDates {
+  const safeMs =
+    referenceDate instanceof Date && !Number.isNaN(referenceDate.getTime())
+      ? referenceDate.getTime()
+      : Date.now();
+  const shifted = new Date(safeMs + OFFICIAL_COARI_UTC_OFFSET_MS);
+  const advance = Math.trunc(options?.advanceMonths ?? 0);
+  return computeMonthlyTournamentDatesForYearMonth(
+    shifted.getUTCFullYear(),
+    shifted.getUTCMonth() + advance,
+  );
+}
+
+/**
+ * Calcula o próximo ciclo mensal do Torneio Ranqueado ao encerrar a temporada atual.
+ * Ex.: Beta terminando em 31/12/2026 -> Janeiro/2027 (01/01/2027 00:00 até 31/01/2027 23:59:59 UTC-4);
+ * Janeiro/2027 -> Fevereiro/2027 (01/02/2027 até 28/02/2027 UTC-4).
+ */
+export function computeNextMonthlyTournamentDates(
+  previousEndIso?: string | null,
+  now: Date = new Date(),
+): MonthlyTournamentDates {
+  const currentMonth = computeMonthlyTournamentDates(now, { advanceMonths: 0 });
+  if (previousEndIso) {
+    const prevEnd = new Date(previousEndIso);
+    if (!Number.isNaN(prevEnd.getTime())) {
+      const nextFromPrev = computeMonthlyTournamentDates(prevEnd, { advanceMonths: 1 });
+      if (nextFromPrev.end.getTime() >= now.getTime()) {
+        return nextFromPrev;
+      }
+    }
+  }
+  return currentMonth;
+}
+
+/**
+ * Formata uma data/ISO no fuso oficial de Coari/AM (UTC-4) de forma determinística,
+ * independente do fuso horário configurado no navegador do usuário (ex.: Brasília UTC-3 ou UTC).
+ */
+export function formatOfficialCoariDate(
+  dateOrIso: Date | string | null | undefined,
+  options?: { includeYear?: boolean },
+): string {
+  if (!dateOrIso) return "";
+  const dt = dateOrIso instanceof Date ? dateOrIso : new Date(dateOrIso);
+  if (Number.isNaN(dt.getTime())) return "";
+  const shifted = new Date(dt.getTime() + OFFICIAL_COARI_UTC_OFFSET_MS);
+  const dd = String(shifted.getUTCDate()).padStart(2, "0");
+  const mm = String(shifted.getUTCMonth() + 1).padStart(2, "0");
+  if (options?.includeYear === false) {
+    return `${dd}/${mm}`;
+  }
+  const yyyy = shifted.getUTCFullYear();
+  return `${dd}/${mm}/${yyyy}`;
+}
+
 export interface SeasonProgressInfo {
   start: Date;
   end: Date | null;

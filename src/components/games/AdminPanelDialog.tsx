@@ -46,8 +46,10 @@ import {
   Gift,
 } from "lucide-react";
 import {
+  computeMonthlyTournamentDates,
   computeSeasonDates,
   extendSeasonDate,
+  formatOfficialCoariDate,
   getSeasonProgress,
   toDatetimeLocalString,
   parseDatetimeLocal,
@@ -73,6 +75,7 @@ import {
   DEFAULT_ADMIN_ONLY_GAMES,
   DEFAULT_ENABLED_DEFAULT_NOTICES,
   SYSTEM_DEFAULT_NOTICES,
+  loadAdminConfig,
   normalizeCode,
   type PlatformAdminConfig,
   type PlatformNoticeSlide,
@@ -170,6 +173,7 @@ import {
 import { TournamentRankBadge } from "./TournamentRankBadge";
 import { RankedPathTrack } from "./RankedPathTrack";
 import { AdminPromoCodesTab } from "./AdminPromoCodesTab";
+import { AdminTournamentPodiumRewards } from "./AdminTournamentPodiumRewards";
 import type { RankedMilestoneReward } from "@/lib/game-codes";
 
 const PlayerInspectModal = lazy(() =>
@@ -439,6 +443,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
 
   // --- RANQUEADA (COMPETITIVO) STATES ---
   const [rankedDurationDays, setRankedDurationDays] = useState<number>(14);
+  const [rankedCycleMode, setRankedCycleMode] = useState<"monthly" | "days">("monthly");
+  const [savingPodiumRewards, setSavingPodiumRewards] = useState(false);
   const [rankedStartInput, setRankedStartInput] = useState<string>("");
   const [rankedEndInput, setRankedEndInput] = useState<string>("");
   const [rankedSeasonName, setRankedSeasonName] = useState<string>("");
@@ -671,7 +677,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
     setActivityEndInput(toDatetimeLocalString(actEnd));
 
     // Initialize Ranked Season states
-    setRankedDurationDays(auth.adminConfig.rankedSeasonDurationDays || 14);
+    setRankedDurationDays(auth.adminConfig.rankedSeasonDurationDays || 30);
+    setRankedCycleMode(auth.adminConfig.rankedSeasonCycleMode === "days" ? "days" : "monthly");
     setRankedSeasonName(
       auth.adminConfig.rankedSeasonName || "Temporada 1 Ranqueada • SEMED Coari",
     );
@@ -681,7 +688,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
     setRankedStartInput(toDatetimeLocalString(rnkStart));
     const rnkEnd = auth.adminConfig.rankedSeasonEndAt
       ? new Date(auth.adminConfig.rankedSeasonEndAt)
-      : new Date(2026, 10, 15, 23, 59, 59, 999);
+      : new Date("2027-01-01T03:59:59.999Z");
     setRankedEndInput(toDatetimeLocalString(rnkEnd));
 
     const sStart = auth.adminConfig.seasonStartAt
@@ -1147,7 +1154,17 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
   };
 
   // --- RANQUEADA HANDLERS ---
+  const handleSelectRankedMonthlyPreset = () => {
+    setRankedCycleMode("monthly");
+    const baseStart = parseDatetimeLocal(rankedStartInput) || new Date();
+    const monthly = computeMonthlyTournamentDates(baseStart);
+    setRankedDurationDays(monthly.durationDays);
+    setRankedStartInput(toDatetimeLocalString(monthly.start));
+    setRankedEndInput(toDatetimeLocalString(monthly.end));
+  };
+
   const handleSelectRankedPreset = (days: number) => {
+    setRankedCycleMode("days");
     setRankedDurationDays(days);
     const baseStart = parseDatetimeLocal(rankedStartInput) || new Date();
     const { start, end } = computeSeasonDates(baseStart, days);
@@ -1175,6 +1192,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
       rankedSeasonStartAt: start.toISOString(),
       rankedSeasonEndAt: end ? end.toISOString() : null,
       rankedSeasonDurationDays: rankedDurationDays,
+      rankedSeasonCycleMode: rankedCycleMode,
     };
     setDraft(updated);
     await auth.updateAdminConfig(updated);
@@ -1207,12 +1225,23 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
 
   const executeRankedResetAction = async () => {
     await auth.triggerRankedSeasonReset({
-      newSeasonName: `Temporada ${(draft.rankedSeasonId ?? 1) + 1} Ranqueada • SEMED Coari`,
-      reason: "Reset da Temporada de Ranqueada pelo Administrador",
+      ...(rankedCycleMode === "days"
+        ? { newSeasonName: `Temporada ${(draft.rankedSeasonId ?? 1) + 1} Ranqueada • SEMED Coari` }
+        : {}),
+      reason: "Encerramento do Torneio Mensal Ranqueado pelo Administrador",
     });
+    const refreshed = loadAdminConfig();
+    setDraft(refreshed);
+    setRankedSeasonName(refreshed.rankedSeasonName || `Temporada ${refreshed.rankedSeasonId ?? 1} Ranqueada • SEMED Coari`);
+    if (refreshed.rankedSeasonStartAt) {
+      setRankedStartInput(toDatetimeLocalString(new Date(refreshed.rankedSeasonStartAt)));
+    }
+    if (refreshed.rankedSeasonEndAt) {
+      setRankedEndInput(toDatetimeLocalString(new Date(refreshed.rankedSeasonEndAt)));
+    }
     setConfirmRankedResetNow(false);
     onConfigSaved?.();
-    flashSaved("Temporada de Ranqueada resetada com sucesso! Pontos zerados e medalhas preservadas.");
+    flashSaved("Torneio Mensal encerrado! Troféus Top 3 aplicados automaticamente, prêmios Top 5 enviados ao Correio e pontos zerados.");
   };
 
 
@@ -2270,10 +2299,10 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                   <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-secondary/30 p-4">
                     <div>
                       <h3 className="flex items-center gap-2 font-display text-base font-extrabold text-foreground">
-                        <Trophy className="h-5 w-5 text-accent" /> Torneio Semanal Ranqueado
+                        <Trophy className="h-5 w-5 text-accent" /> Torneio Mensal Ranqueado
                       </h3>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        Gerencie o jogo oficial da semana, ative/desative o torneio e inspecione a classificação e ranks de todas as etapas escolares.
+                        Gerencie a rotação semanal do jogo oficial, ative/desative o torneio, configure as premiações do Top 1 ao Top 5 e inspecione a classificação de todas as etapas escolares.
                       </p>
                     </div>
 
@@ -2319,7 +2348,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                       {/* Ativar / Desativar Torneio */}
                       <div className="flex items-center justify-between rounded-xl border bg-secondary/20 p-3.5">
                         <div className="space-y-0.5">
-                          <Label className="font-bold text-xs">Torneio Semanal Ativo</Label>
+                          <Label className="font-bold text-xs">Torneio Mensal Ativo</Label>
                           <p className="text-[11px] text-muted-foreground">
                             Permite aos alunos a partir do Nível 3 entrarem na disputa ranqueada.
                           </p>
@@ -2361,17 +2390,25 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                   <div className="rounded-2xl border bg-gradient-to-r from-primary/10 via-card to-accent/10 p-4 space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           <Trophy className="h-5 w-5 text-accent" />
                           <span className="font-display text-base font-extrabold text-foreground">
                             {draft.rankedSeasonName || "Temporada 1 Ranqueada • SEMED Coari"}
                           </span>
                           <span className="rounded-full bg-accent/20 border border-accent/40 px-2.5 py-0.5 text-[10px] font-black text-accent uppercase">
-                            Ciclo de 2 Semanas (14 Dias)
+                            {draft.rankedSeasonCycleMode === "days"
+                              ? `Ciclo de ${draft.rankedSeasonDurationDays ?? 14} Dias`
+                              : "Ciclo Mensal (Dia 1º ao Fim do Mês)"}
                           </span>
                         </div>
                         <p className="text-xs text-muted-foreground mt-1">
-                          Domingo 08/11/2026 completa metade da Temporada 1. O encerramento oficial e reset ocorrerão no próximo domingo, <b>15/11/2026 às 23:59:59</b>.
+                          Rotação do jogo 1x por semana (domingo 23:59). Encerramento oficial da temporada atual:{" "}
+                          <b>
+                            {draft.rankedSeasonEndAt
+                              ? `${formatOfficialCoariDate(draft.rankedSeasonEndAt)} às 23:59`
+                              : "31/12/2026 às 23:59"}
+                          </b>{" "}
+                          (próximos ciclos fecham mensalmente a partir de 01/01/2027).
                         </p>
                       </div>
 
@@ -2390,23 +2427,49 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                       <div className="rounded-xl bg-background/80 p-2.5 border">
                         <span className="text-[10px] uppercase font-bold text-muted-foreground block">Início da Temporada</span>
                         <span className="font-bold text-foreground">
-                          {new Date(draft.rankedSeasonStartAt || "2026-11-01T00:00:00.000Z").toLocaleDateString("pt-BR")}
+                          {formatOfficialCoariDate(draft.rankedSeasonStartAt || "2026-11-01T04:00:00.000Z")}
                         </span>
                       </div>
                       <div className="rounded-xl bg-background/80 p-2.5 border">
                         <span className="text-[10px] uppercase font-bold text-muted-foreground block">Término & Reset</span>
                         <span className="font-bold text-primary font-mono">
-                          {new Date(draft.rankedSeasonEndAt || "2026-11-15T23:59:59.999Z").toLocaleDateString("pt-BR")} às 23:59
+                          {draft.rankedSeasonEndAt
+                            ? `${formatOfficialCoariDate(draft.rankedSeasonEndAt)} às 23:59`
+                            : "31/12/2026 às 23:59"}
                         </span>
                       </div>
                       <div className="rounded-xl bg-background/80 p-2.5 border">
-                        <span className="text-[10px] uppercase font-bold text-muted-foreground block">Regra de Reset</span>
+                        <span className="text-[10px] uppercase font-bold text-muted-foreground block">Regra de Fechamento</span>
                         <span className="font-bold text-foreground">
-                          Zera pontos ranqueados • Mantém todas as medalhas
+                          Troféus Top 3 automáticos • Prêmios Top 5 no Correio
                         </span>
                       </div>
                     </div>
                   </div>
+
+                  {/* Premiações Configuráveis do Top 1 ao Top 5 no Encerramento Mensal */}
+                  <AdminTournamentPodiumRewards
+                    draft={draft}
+                    saving={savingPodiumRewards}
+                    onChange={(nextRewards) =>
+                      setDraft((prev) => ({ ...prev, tournamentPodiumRewards: nextRewards }))
+                    }
+                    onSave={async () => {
+                      setSavingPodiumRewards(true);
+                      try {
+                        await auth.updateAdminConfig(draft);
+                        onConfigSaved?.();
+                        const cloudErr = getLastAdminCloudSyncError();
+                        flashSaved(
+                          cloudErr
+                            ? `⚠️ Salvo localmente, mas falhou ao sincronizar com PlayFab: ${cloudErr}`
+                            : "Premiações do Top 1 ao Top 5 salvas na nuvem com sucesso!",
+                        );
+                      } finally {
+                        setSavingPodiumRewards(false);
+                      }
+                    }}
+                  />
 
                   {/* Horário de Funcionamento das Partidas Ranqueadas */}
                   <div className="rounded-2xl border bg-card p-4 space-y-3">
@@ -4020,16 +4083,18 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                         <Trophy className="h-6 w-6" />
                       </div>
                       <div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
                           <h2 className="font-display text-base font-black text-foreground">
-                            2. Temporada de Ranqueada (Modo Competitivo)
+                            2. Torneio Mensal Ranqueado (Modo Competitivo)
                           </h2>
                           <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/20 border border-amber-500/40 px-2.5 py-0.5 text-[11px] font-black text-amber-600 dark:text-amber-400">
-                            ⚡ CICLO DE 2 SEMANAS
+                            {rankedCycleMode === "monthly" ? "📅 CICLO MENSAL" : `⚡ CICLO DE ${rankedDurationDays > 0 ? rankedDurationDays : "N"} DIAS`}
                           </span>
                         </div>
                         <p className="text-xs text-muted-foreground mt-0.5">
-                          Ciclo quinzenal fixo (14 dias) • Domingo 08/11 marca metade do período • Encerramento no domingo seguinte, 15/11 às 23:59:59
+                          {rankedCycleMode === "monthly"
+                            ? `Fecha por mês calendário (UTC-4) • Encerramento atual: ${draft.rankedSeasonEndAt ? `${formatOfficialCoariDate(draft.rankedSeasonEndAt)} às 23:59` : "31/12/2026 às 23:59"} • Próximos ciclos: dia 1º ao último dia de cada mês`
+                            : `Ciclo personalizado em dias • Encerramento atual: ${draft.rankedSeasonEndAt ? `${formatOfficialCoariDate(draft.rankedSeasonEndAt)} às 23:59` : "não agendado"}`}
                         </p>
                       </div>
                     </div>
@@ -4087,7 +4152,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                     </div>
                     <ul className="list-disc list-inside space-y-1 text-muted-foreground leading-relaxed">
                       <li>
-                        <b className="text-foreground">Duração Quinzenal (14 Dias):</b> O ciclo reinicia a cada duas semanas, permitindo novas disputas pelos primeiros lugares do pódio escolar.
+                        <b className="text-foreground">Ciclo Mensal (12 Torneios/Ano):</b> Após o fechamento da Beta (31/12/2026), cada torneio inicia no dia 1º às 00:00 e encerra no último dia do mês às 23:59 (UTC-4), mantendo a rotação do jogo 1x por semana.
                       </li>
                       <li>
                         <b className="text-foreground">Zera Apenas Pontos Ranqueados:</b> No reset, somente a pontuação do torneio (<code className="font-mono text-[11px]">tournamentPoints</code>) volta a zero e a divisão retorna para Bronze I.
@@ -4096,7 +4161,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                         <b className="text-foreground">Nenhum Nível ou XP Perdido:</b> O nível escolar, XP geral e moedas dos alunos NÃO são alterados no reset de ranqueada.
                       </li>
                       <li>
-                        <b className="text-foreground">Medalhas de Pódio Empilham (Cumulativas):</b> As medalhas de 1º, 2º e 3º lugar são dinâmicas. Ao conquistar novamente, o aluno acumula um contador (<code className="font-mono text-[11px]">2x, 3x...</code>) e todo o histórico de temporadas conquistadas fica gravado na mesma medalha!
+                        <b className="text-foreground">Troféus Top 3 Automáticos + Prêmios Top 5 no Correio:</b> Ao encerrar, os Troféus do Top 3 acumulam automaticamente no perfil (<code className="font-mono text-[11px]">x1, x2...</code>) e as medalhas + XP/pontos/moedas/itens configurados na aba Torneio são enviados no Correio!
                       </li>
                     </ul>
                   </div>
@@ -4104,11 +4169,24 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                   {/* Presets e Datas da Ranqueada */}
                   <div className="space-y-3 pt-1">
                     <Label className="text-xs font-bold text-foreground">
-                      Duração Padrão da Temporada de Ranqueada
+                      Modo e Duração da Temporada de Ranqueada
                     </Label>
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                      {[7, 14, 21].map((days) => {
-                        const isSelected = rankedDurationDays === days;
+                      <button
+                        type="button"
+                        onClick={handleSelectRankedMonthlyPreset}
+                        className={`flex flex-col items-center justify-center p-3 rounded-2xl border transition-all cursor-pointer ${
+                          rankedCycleMode === "monthly"
+                            ? "border-amber-500 bg-amber-500/10 text-amber-600 dark:text-amber-400 ring-2 ring-amber-500/30 shadow-xs"
+                            : "border-border/70 bg-secondary/30 text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
+                        }`}
+                      >
+                        <span className="font-display text-base font-black">📅 Mensal</span>
+                        <span className="text-[10px] font-semibold mt-0.5">Dia 1º ao fim do mês</span>
+                      </button>
+
+                      {[7, 14].map((days) => {
+                        const isSelected = rankedCycleMode === "days" && rankedDurationDays === days;
                         return (
                           <button
                             key={days}
@@ -4121,10 +4199,10 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                             }`}
                           >
                             <span className="font-display text-base font-black">
-                              {days === 7 ? "⚡ 7 Dias" : days === 14 ? "⭐ 14 Dias" : "🗓️ 21 Dias"}
+                              {days === 7 ? "⚡ 7 Dias" : "⭐ 14 Dias"}
                             </span>
                             <span className="text-[10px] font-semibold mt-0.5">
-                              {days === 7 ? "Semanal" : days === 14 ? "Quinzenal (Padrão)" : "3 Semanas"}
+                              {days === 7 ? "Semanal" : "Quinzenal"}
                             </span>
                           </button>
                         );
@@ -4132,9 +4210,12 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
 
                       <button
                         type="button"
-                        onClick={() => setRankedDurationDays(-1)}
+                        onClick={() => {
+                          setRankedCycleMode("days");
+                          setRankedDurationDays(-1);
+                        }}
                         className={`flex flex-col items-center justify-center p-3 rounded-2xl border transition-all cursor-pointer ${
-                          ![7, 14, 21].includes(rankedDurationDays)
+                          rankedCycleMode === "days" && ![7, 14].includes(rankedDurationDays)
                             ? "border-amber-500 bg-amber-500/10 text-amber-600 dark:text-amber-400 ring-2 ring-amber-500/30 shadow-xs"
                             : "border-border/70 bg-secondary/30 text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
                         }`}

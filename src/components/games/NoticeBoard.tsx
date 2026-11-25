@@ -62,7 +62,7 @@ export const NoticeBoard: React.FC<NoticeBoardProps> = ({
           id: "default_weekly_tournament",
           title: `Desafio da Semana: ${weeklyGameName}`,
           message:
-            "Participe do Torneio Semanal Ranqueado! Dispute as 10 entradas diárias, garanta +100 XP extras e suba de Rank da Liga Bronze até o Mestre!",
+            "Participe do Torneio Mensal Ranqueado! O jogo oficial muda toda semana — dispute as 10 entradas diárias, garanta +100 XP extras e conquiste troféus e medalhas!",
           badgeLabel: "TORNEIO RANQUEADO",
           type: "event_challenge",
           featuredGameId: null,

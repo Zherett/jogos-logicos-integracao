@@ -541,7 +541,7 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
             <div className="text-xs font-bold text-muted-foreground flex items-center gap-1.5">
               <Trophy className="h-4 w-4 text-accent" />
               <span>
-                Torneio Semanal:{" "}
+                Torneio Mensal (Jogo da Semana):{" "}
                 <b className="text-foreground">{tournamentSnap?.gameName ?? "Carregando..."}</b>
               </span>
             </div>
