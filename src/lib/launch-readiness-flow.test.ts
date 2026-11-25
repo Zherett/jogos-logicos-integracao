@@ -911,4 +911,94 @@ describe("Simulação Ponta-a-Ponta do Dia de Lançamento (Moedas + Dia 1 + Roll
     assert.equal(claimRes.profile?.lastDailyRewardClaimDate, "2026-11-24");
     assert.equal(claimRes.streakBonusPoints, 5, "2º dia seguido deve conceder bônus de ofensiva (+5 pts)");
   });
+
+  it("blinda cardsCatalog em chaves dedicadas com anti-wipe, isolamento entre abas e parse resiliente", async () => {
+    const pf = createLaunchPlayFabMock();
+    globalThis.fetch = pf.fetchMock;
+
+    const sampleCards = Array.from({ length: 6 }, (_, i) => ({
+      id: `card_shield_${i}`,
+      name: `Carta Blindada ${i}`,
+      description: `Descrição segura da carta ${i}`,
+      rarity: "rara" as const,
+      imageUrl: `https://example.com/c_${i}.png`,
+      imageFit: "contain-blur" as const,
+      colorVariant: 1 as const,
+      isFoil: i % 2 === 0,
+      createdAt: "2026-11-24T00:00:00.000Z",
+      updatedAt: "2026-11-24T00:00:00.000Z",
+    }));
+
+    // 1. Publica catálogo de cartas pela aba Cartas & Pacotes (allowCardsCatalogWrite: true)
+    await pushAdminConfigToPlayFab(
+      {
+        ...DEFAULT_ADMIN_CONFIG,
+        cardsCatalog: sampleCards,
+      },
+      { allowCardsCatalogWrite: true },
+    );
+    assert.equal(getLastAdminCloudSyncError(), null);
+
+    const viewerData = pf.usersByPfId.get(VIEWER_PF_ID)!.userData;
+    assert.ok(viewerData.PlatformAdminCardsMeta?.Value, "Deve gravar PlatformAdminCardsMeta");
+    assert.ok(viewerData.PlatformAdminCards_0?.Value, "Deve gravar PlatformAdminCards_0");
+    // PlatformAdminCatalogs não mistura mais cardsCatalog quando gravado em chaves dedicadas
+    const catJson = JSON.parse(viewerData.PlatformAdminCatalogs.Value);
+    assert.equal(catJson.cardsCatalog, undefined);
+
+    // 2. Outra aba (ex.: Correio / Torneio / Rotina) salva com cardsCatalog: [] (sem allowCardsCatalogWrite)
+    //    -> NÃO pode apagar o catálogo de cartas na nuvem!
+    await pushAdminConfigToPlayFab({
+      ...DEFAULT_ADMIN_CONFIG,
+      cardsCatalog: [],
+      rolloutFlags: {
+        enableDailyRoutineForStudents: true,
+        enableCoinsWalletForStudents: true,
+        enableDefaultAvatarForStudents: true,
+        enableShopForStudents: true,
+      },
+    });
+    assert.equal(getLastAdminCloudSyncError(), null);
+
+    // Dispositivo limpo sincroniza e recupera TODAS as 6 cartas + as novas rolloutFlags!
+    window.localStorage.clear();
+    const syncedAfterOtherTab = await syncAdminConfigFromPlayFab();
+    assert.equal(syncedAfterOtherTab.cardsCatalog?.length, 6);
+    assert.equal(syncedAfterOtherTab.rolloutFlags?.enableShopForStudents, true);
+
+    // 3. Mesmo com allowCardsCatalogWrite: true, tentar enviar 0 cartas sem allowEmptyCardsCatalog é bloqueado!
+    await pushAdminConfigToPlayFab(
+      {
+        ...DEFAULT_ADMIN_CONFIG,
+        cardsCatalog: [],
+      },
+      { allowCardsCatalogWrite: true },
+    );
+    assert.ok(
+      getLastAdminCloudSyncError()?.includes("Proteção anti-perda"),
+      "Deve bloquear apagamento acidental com catálogo vazio",
+    );
+    window.localStorage.clear();
+    const syncedAfterBlockedWipe = await syncAdminConfigFromPlayFab();
+    assert.equal(syncedAfterBlockedWipe.cardsCatalog?.length, 6);
+
+    // 4. Corromper PlatformAdminInbox no servidor NÃO pode impedir leitura de cardsCatalog!
+    viewerData.PlatformAdminInbox = { Value: "{json-quebrado", LastUpdated: "2026-11-24T12:00:00.000Z" };
+    window.localStorage.clear();
+    const syncedWithBrokenInbox = await syncAdminConfigFromPlayFab();
+    assert.equal(syncedWithBrokenInbox.cardsCatalog?.length, 6);
+
+    // 5. Esvaziamento explícito (allowEmptyCardsCatalog: true) é permitido quando confirmado pelo ADM
+    await pushAdminConfigToPlayFab(
+      {
+        ...DEFAULT_ADMIN_CONFIG,
+        cardsCatalog: [],
+      },
+      { allowCardsCatalogWrite: true, allowEmptyCardsCatalog: true },
+    );
+    assert.equal(getLastAdminCloudSyncError(), null);
+    window.localStorage.clear();
+    const syncedAfterExplicitClear = await syncAdminConfigFromPlayFab();
+    assert.equal(syncedAfterExplicitClear.cardsCatalog?.length, 0);
+  });
 });

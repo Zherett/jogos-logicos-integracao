@@ -97,9 +97,48 @@ export interface ScoreLedgerFilter {
 
 const LEDGER_STORAGE_KEY = "desafios_score_history_ledger_v1";
 const MAX_ENTRIES_PER_PLAYER = 150;
+export const MAX_CLOUD_ENTRIES_PER_PLAYER = 80;
 const MAX_TOTAL_ENTRIES = 3000;
 
 let inMemoryLedger: ScoreLedgerEntry[] = [];
+
+/**
+ * Funde múltiplas listas de transações de um jogador (ex.: localStorage + nuvem PlayFab),
+ * deduplicando por `id`, higienizando loops de medalha e mantendo os lançamentos mais recentes.
+ */
+export function mergePlayerScoreLedgerEntries(
+  lists: Array<ScoreLedgerEntry[] | undefined | null>,
+  limit = MAX_CLOUD_ENTRIES_PER_PLAYER,
+): ScoreLedgerEntry[] {
+  const byId = new Map<string, ScoreLedgerEntry>();
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const entry of list) {
+      if (!entry || !entry.id || !entry.type) continue;
+      if (!byId.has(entry.id)) {
+        byId.set(entry.id, entry);
+      }
+    }
+  }
+  const merged = sanitizeScoreLedgerEntries(Array.from(byId.values()));
+  merged.sort((a, b) => (a.timestamp > b.timestamp ? 1 : a.timestamp < b.timestamp ? -1 : 0));
+  return limit > 0 && merged.length > limit ? merged.slice(-limit) : merged;
+}
+
+/**
+ * Recupera as entradas brutas gravadas no navegador local para um jogador (usado ao sincronizar o extrato na nuvem).
+ */
+export function getPlayerRawLedgerEntries(
+  playerId: string,
+  limit = MAX_CLOUD_ENTRIES_PER_PLAYER,
+): ScoreLedgerEntry[] {
+  if (!playerId) return [];
+  const cleanId = nickSlug(playerId);
+  const all = loadAllLedgerEntries().filter(
+    (e) => e && (nickSlug(e.playerId || "") === cleanId || nickSlug(e.playerNick || "") === cleanId),
+  );
+  return mergePlayerScoreLedgerEntries([all], limit);
+}
 
 /**
  * Higieniza o ledger de auditoria removendo transações duplicadas geradas por loops anômalos
@@ -360,12 +399,145 @@ export function reconstructStudentLedgerFromProfile(profile: PlayerProfile): Sco
     currentXpSum += diffXp;
   }
 
+  // 5. Reconstituição da Pontuação Ranqueada (Torneio Semanal/Mensal) para contas legadas sem log detalhado na nuvem
+  const targetTourPts = Math.max(0, Math.floor(profile.tournamentPoints ?? 0));
+  if (targetTourPts > 0) {
+    let accountedTourPts = 0;
+    const rankedStats = Array.isArray(profile.stats)
+      ? profile.stats.filter((s) => s && s.mode === "torneio_semanal" && (s.plays ?? 0) > 0)
+      : [];
+    const totalRankedPlays = rankedStats.reduce((sum, s) => sum + Math.max(0, s.plays ?? 0), 0);
+    if (rankedStats.length > 0 && totalRankedPlays > 0) {
+      for (const st of rankedStats) {
+        const gName = (GAME_NAMES as Record<string, string>)[st.game_id] || st.game_id;
+        const share = Math.min(
+          targetTourPts - accountedTourPts,
+          Math.max(1, Math.round((st.plays / totalRankedPlays) * targetTourPts)),
+        );
+        if (share > 0) {
+          accountedTourPts += share;
+          results.push({
+            id: `syn_tour_pts_${st.game_id}`,
+            playerId: cleanId,
+            playerNick,
+            type: "tournament_pts",
+            source: "torneio_semanal",
+            amount: share,
+            balanceAfter: accountedTourPts,
+            reason: `Pontos Ranqueados em ${gName} (${st.plays} partidas, ${st.wins} vitórias)`,
+            metadata: { gameId: st.game_id, mode: "torneio_semanal", score: st.best_score },
+            timestamp: st.last_played_at || baseTimestamp,
+          });
+        }
+      }
+    }
+    const remainingTourPts = targetTourPts - accountedTourPts;
+    if (remainingTourPts > 0) {
+      results.push({
+        id: `syn_reconcile_tour_pts`,
+        playerId: cleanId,
+        playerNick,
+        type: "tournament_pts",
+        source: "torneio_semanal",
+        amount: remainingTourPts,
+        balanceAfter: targetTourPts,
+        reason: `Pontuação Acumulada no Torneio Ranqueado (Temporada #${profile.rankedSeasonId ?? 1})`,
+        metadata: { mode: "torneio_semanal" },
+        timestamp: profile.lastKnownActivityAt || baseTimestamp,
+      });
+    }
+  }
+
   return results.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+}
+
+function applyLedgerFilters(
+  entries: ScoreLedgerEntry[],
+  filter?: Omit<ScoreLedgerFilter, "playerId">,
+): ScoreLedgerEntry[] {
+  let filtered = entries;
+  if (filter?.type) {
+    filtered = filtered.filter((e) => e.type === filter.type);
+  }
+  if (filter?.source) {
+    filtered = filtered.filter((e) => e.source === filter.source);
+  }
+  if (filter?.gameId) {
+    filtered = filtered.filter((e) => e.metadata?.gameId === filter.gameId);
+  }
+  if (filter?.startDate) {
+    filtered = filtered.filter((e) => (e.timestamp || "") >= filter.startDate!);
+  }
+  if (filter?.endDate) {
+    filtered = filtered.filter((e) => (e.timestamp || "") <= filter.endDate!);
+  }
+  if (filter?.search) {
+    const sLower = filter.search.toLowerCase().trim();
+    if (sLower) {
+      filtered = filtered.filter(
+        (e) =>
+          (e.reason || "").toLowerCase().includes(sLower) ||
+          (e.playerNick || "").toLowerCase().includes(sLower) ||
+          (e.source || "").toLowerCase().includes(sLower) ||
+          (e.metadata?.medalTitle || "").toLowerCase().includes(sLower) ||
+          (e.metadata?.gameId || "").toLowerCase().includes(sLower),
+      );
+    }
+  }
+  filtered = [...filtered].sort((a, b) =>
+    b.timestamp > a.timestamp ? 1 : b.timestamp < a.timestamp ? -1 : 0,
+  );
+  if (filter?.limit && filter.limit > 0) {
+    filtered = filtered.slice(0, filter.limit);
+  }
+  return filtered;
+}
+
+function collectUnifiedPlayerLedgerEntries(
+  playerId: string,
+  playerProfile?: PlayerProfile | null,
+): ScoreLedgerEntry[] {
+  const cleanId = nickSlug(playerId);
+  const localRaw = loadAllLedgerEntries().filter(
+    (e) => e && (nickSlug(e.playerId || "") === cleanId || nickSlug(e.playerNick || "") === cleanId),
+  );
+  const cloudRaw = Array.isArray(playerProfile?.scoreLedger) ? playerProfile!.scoreLedger : [];
+  let unified = mergePlayerScoreLedgerEntries([cloudRaw, localRaw], MAX_ENTRIES_PER_PLAYER);
+
+  const target = playerProfile;
+  if (
+    unified.length === 0 &&
+    target &&
+    ((target.xp ?? 0) > 0 ||
+      (target.careerPoints ?? 0) > 0 ||
+      (target.tournamentPoints ?? 0) > 0 ||
+      (target.unlockedMedals?.length ?? 0) > 0 ||
+      (target.stats?.length ?? 0) > 0)
+  ) {
+    return reconstructStudentLedgerFromProfile(target);
+  }
+
+  // Se já existem registros de XP/medalha mas ainda não há nenhum lançamento `tournament_pts`
+  // para um aluno legado com pontuação ranqueada ativa, complementa com a reconstituição ranqueada.
+  if (
+    target &&
+    (target.tournamentPoints ?? 0) > 0 &&
+    !unified.some((e) => e.type === "tournament_pts")
+  ) {
+    const syntheticTour = reconstructStudentLedgerFromProfile(target).filter(
+      (e) => e.type === "tournament_pts",
+    );
+    if (syntheticTour.length > 0) {
+      unified = mergePlayerScoreLedgerEntries([unified, syntheticTour], MAX_ENTRIES_PER_PLAYER);
+    }
+  }
+
+  return unified;
 }
 
 /**
  * Retorna as transações de histórico de um jogador específico, ordenadas da mais recente para a mais antiga.
- * Suporta fallback inteligente de reconstrução sintética se o log local estiver vazio nesta máquina.
+ * Combina o extrato sincronizado na nuvem (`profile.scoreLedger`) com registros locais e fallback sintético.
  */
 export function getPlayerScoreLedger(
   playerId: string,
@@ -373,46 +545,8 @@ export function getPlayerScoreLedger(
   playerProfile?: PlayerProfile | null,
 ): ScoreLedgerEntry[] {
   if (!playerId) return [];
-  const cleanId = nickSlug(playerId);
-  const localEntries = getAllScoreLedger({ ...filter, playerId: cleanId });
-
-  if (localEntries.length > 0) {
-    return localEntries;
-  }
-
-  // Fallback quando não há registros locais salvos no browser da máquina atual
-  const target = playerProfile;
-  if (
-    target &&
-    ((target.xp ?? 0) > 0 ||
-      (target.careerPoints ?? 0) > 0 ||
-      (target.unlockedMedals?.length ?? 0) > 0 ||
-      (target.stats?.length ?? 0) > 0)
-  ) {
-    const synthetic = reconstructStudentLedgerFromProfile(target);
-    let filtered = synthetic;
-    if (filter?.type) {
-      filtered = filtered.filter((e) => e.type === filter.type);
-    }
-    if (filter?.source) {
-      filtered = filtered.filter((e) => e.source === filter.source);
-    }
-    if (filter?.search) {
-      const sLower = filter.search.toLowerCase().trim();
-      filtered = filtered.filter(
-        (e) =>
-          e.reason.toLowerCase().includes(sLower) ||
-          e.playerNick.toLowerCase().includes(sLower) ||
-          e.source.toLowerCase().includes(sLower),
-      );
-    }
-    if (filter?.limit && filter.limit > 0) {
-      filtered = filtered.slice(0, filter.limit);
-    }
-    return filtered;
-  }
-
-  return [];
+  const unified = collectUnifiedPlayerLedgerEntries(playerId, playerProfile);
+  return applyLedgerFilters(unified, filter);
 }
 
 /**
@@ -487,24 +621,7 @@ export function calculateStudentScoreBreakdown(
   transactionsCount: number;
   sourcesBreakdown: Record<ScoreTransactionSource, { xp: number; points: number; count: number }>;
 } {
-  const cleanId = nickSlug(playerId);
-  let entries = loadAllLedgerEntries().filter((e) => {
-    if (!e) return false;
-    return nickSlug(e.playerId || "") === cleanId || nickSlug(e.playerNick || "") === cleanId;
-  });
-
-  if (entries.length === 0) {
-    const target = playerProfile;
-    if (
-      target &&
-      ((target.xp ?? 0) > 0 ||
-        (target.careerPoints ?? 0) > 0 ||
-        (target.unlockedMedals?.length ?? 0) > 0 ||
-        (target.stats?.length ?? 0) > 0)
-    ) {
-      entries = reconstructStudentLedgerFromProfile(target);
-    }
-  }
+  const entries = collectUnifiedPlayerLedgerEntries(playerId, playerProfile);
 
   let totalXpFromMatches = 0;
   let totalXpFromMedals = 0;

@@ -969,3 +969,366 @@ export function mergeWithDefaultCardPacks(
   }
   return merged;
 }
+
+/* --------------------- Particionamento (Chunks) & Backup JSON --------------------- */
+
+export const CARDS_CHUNK_MAX_BYTES = 45_000;
+export const MAX_CARDS_CHUNKS = 20;
+export const CARDS_BACKUP_SCHEMA = "desafios-cards-backup-v1";
+
+export interface CardsCatalogChunkMeta {
+  version: 1;
+  chunkCount: number;
+  totalCards: number;
+  updatedAt: string;
+}
+
+function measureUtf8Bytes(text: string): number {
+  if (typeof TextEncoder !== "undefined") {
+    return new TextEncoder().encode(text).length;
+  }
+  return text.length * 2;
+}
+
+/**
+ * Divide o catálogo de cartas em fatias JSON independentes de até `maxChunkBytes`
+ * para armazenamento seguro no PlayFab UserData sem nunca estourar o limite por chave.
+ */
+export function serializeCardsCatalogChunks(
+  cards: CardDefinition[],
+  maxChunkBytes = CARDS_CHUNK_MAX_BYTES,
+): { meta: CardsCatalogChunkMeta; chunks: string[] } {
+  const safeLimit = Math.max(2_000, Math.floor(maxChunkBytes));
+  const list = Array.isArray(cards) ? cards : [];
+  const chunks: string[] = [];
+
+  if (list.length > 0) {
+    let currentBatch: CardDefinition[] = [];
+    let currentBytes = 2; // "[]"
+
+    for (const card of list) {
+      const cardStr = JSON.stringify(card);
+      const cardBytes = measureUtf8Bytes(cardStr);
+      const separatorBytes = currentBatch.length > 0 ? 1 : 0;
+
+      if (currentBatch.length > 0 && currentBytes + separatorBytes + cardBytes > safeLimit) {
+        chunks.push(JSON.stringify(currentBatch));
+        currentBatch = [card];
+        currentBytes = 2 + cardBytes;
+      } else {
+        currentBatch.push(card);
+        currentBytes += separatorBytes + cardBytes;
+      }
+    }
+    if (currentBatch.length > 0) {
+      chunks.push(JSON.stringify(currentBatch));
+    }
+  }
+
+  return {
+    meta: {
+      version: 1,
+      chunkCount: chunks.length,
+      totalCards: list.length,
+      updatedAt: new Date().toISOString(),
+    },
+    chunks,
+  };
+}
+
+/**
+ * Reconstrói o catálogo completo a partir dos metadados e das fatias armazenadas.
+ * Retorna `ok: false` se qualquer fatia esperada estiver ausente ou corrompida,
+ * evitando que leituras parciais sejam confundidas com um catálogo vazio.
+ */
+export function deserializeCardsCatalogChunks(
+  metaRaw: string | null | undefined,
+  chunkRaws: Array<string | null | undefined>,
+): {
+  cards: CardDefinition[];
+  ok: boolean;
+  expectedChunks: number;
+  loadedChunks: number;
+  totalCardsExpected: number;
+} {
+  if (!metaRaw || typeof metaRaw !== "string") {
+    return { cards: [], ok: false, expectedChunks: 0, loadedChunks: 0, totalCardsExpected: 0 };
+  }
+  try {
+    const meta = JSON.parse(metaRaw) as Partial<CardsCatalogChunkMeta>;
+    const expectedChunks =
+      typeof meta.chunkCount === "number" && Number.isFinite(meta.chunkCount) && meta.chunkCount >= 0
+        ? Math.floor(meta.chunkCount)
+        : -1;
+    const totalCardsExpected =
+      typeof meta.totalCards === "number" && Number.isFinite(meta.totalCards) && meta.totalCards >= 0
+        ? Math.floor(meta.totalCards)
+        : 0;
+    if (expectedChunks < 0 || expectedChunks > MAX_CARDS_CHUNKS) {
+      return { cards: [], ok: false, expectedChunks: 0, loadedChunks: 0, totalCardsExpected: 0 };
+    }
+    if (expectedChunks === 0) {
+      return { cards: [], ok: true, expectedChunks: 0, loadedChunks: 0, totalCardsExpected: 0 };
+    }
+
+    const cards: CardDefinition[] = [];
+    let loadedChunks = 0;
+    for (let i = 0; i < expectedChunks; i++) {
+      const raw = chunkRaws[i];
+      if (!raw || typeof raw !== "string") {
+        return { cards: [], ok: false, expectedChunks, loadedChunks, totalCardsExpected };
+      }
+      const parsedChunk = JSON.parse(raw);
+      if (!Array.isArray(parsedChunk)) {
+        return { cards: [], ok: false, expectedChunks, loadedChunks, totalCardsExpected };
+      }
+      for (const item of parsedChunk) {
+        if (item && typeof item === "object" && typeof (item as CardDefinition).id === "string") {
+          cards.push(item as CardDefinition);
+        }
+      }
+      loadedChunks += 1;
+    }
+
+    return { cards, ok: true, expectedChunks, loadedChunks, totalCardsExpected };
+  } catch {
+    return { cards: [], ok: false, expectedChunks: 0, loadedChunks: 0, totalCardsExpected: 0 };
+  }
+}
+
+const VALID_RARITY_SET = new Set<string>(CARD_RARITIES);
+const VALID_DUNGEON_SKILL_SET = new Set<string>([
+  "chronomancer",
+  "aegis",
+  "regeneration",
+  "miner",
+  "explorer",
+  "critical",
+  "economy",
+  "pocket",
+]);
+
+function sanitizeImportedCard(raw: unknown): CardDefinition | null {
+  if (!raw || typeof raw !== "object") return null;
+  const obj = raw as Record<string, unknown>;
+  const id = typeof obj.id === "string" ? obj.id.trim() : "";
+  const name = typeof obj.name === "string" ? obj.name.trim() : "";
+  const rarity = typeof obj.rarity === "string" ? obj.rarity.trim().toLowerCase() : "";
+  const imageUrl = typeof obj.imageUrl === "string" ? obj.imageUrl.trim() : "";
+  if (!id || !name || !VALID_RARITY_SET.has(rarity) || !isValidCardMediaUrl(imageUrl)) {
+    return null;
+  }
+  const now = new Date().toISOString();
+  const description = typeof obj.description === "string" ? obj.description.trim() : "";
+  const imageFit: CardImageFit = obj.imageFit === "cover" ? "cover" : "contain-blur";
+  const colorVariant: CardColorVariant =
+    obj.colorVariant === 2 || obj.colorVariant === 3 ? obj.colorVariant : 1;
+  const isFoil = Boolean(obj.isFoil);
+  const dungeonSkillId =
+    typeof obj.dungeonSkillId === "string" && VALID_DUNGEON_SKILL_SET.has(obj.dungeonSkillId)
+      ? (obj.dungeonSkillId as DungeonCardSkillId)
+      : undefined;
+  const createdAt = typeof obj.createdAt === "string" && obj.createdAt.trim() ? obj.createdAt : now;
+  const updatedAt = typeof obj.updatedAt === "string" && obj.updatedAt.trim() ? obj.updatedAt : now;
+
+  return {
+    id,
+    name,
+    description,
+    rarity: rarity as CardRarity,
+    imageUrl,
+    imageFit,
+    colorVariant,
+    isFoil,
+    ...(dungeonSkillId ? { dungeonSkillId } : {}),
+    createdAt,
+    updatedAt,
+  };
+}
+
+/**
+ * Serializa o catálogo de cartas em um arquivo JSON de backup portável.
+ */
+export function exportCardsCatalogBackup(cards: CardDefinition[]): string {
+  const list = Array.isArray(cards) ? cards : [];
+  return JSON.stringify(
+    {
+      schema: CARDS_BACKUP_SCHEMA,
+      exportedAt: new Date().toISOString(),
+      count: list.length,
+      cardsCatalog: list,
+    },
+    null,
+    2,
+  );
+}
+
+/**
+ * Lê e valida um JSON de backup de cartas. Aceita:
+ * 1) Backup oficial (`{ schema, cardsCatalog: [...] }`)
+ * 2) Dump completo de `PlatformAdminConfig` / `localStorage` (`{ cardsCatalog: [...] }`)
+ * 3) Array direto de cartas (`[CardDefinition, ...]`)
+ * Preserva os `id` originais para manter o vínculo com os álbuns dos jogadores.
+ */
+export function parseCardsCatalogBackup(rawJson: string): {
+  cards: CardDefinition[];
+  skippedCount: number;
+  error?: string;
+} {
+  if (!rawJson || typeof rawJson !== "string" || !rawJson.trim()) {
+    return { cards: [], skippedCount: 0, error: "Arquivo JSON vazio." };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawJson);
+    // Suporta caso o usuário tenha colado uma string JSON duplamente serializada do Console
+    if (typeof parsed === "string") {
+      parsed = JSON.parse(parsed);
+    }
+  } catch {
+    return { cards: [], skippedCount: 0, error: "JSON inválido. Verifique o arquivo selecionado." };
+  }
+
+  let candidateList: unknown[] | null = null;
+  if (Array.isArray(parsed)) {
+    candidateList = parsed;
+  } else if (parsed && typeof parsed === "object") {
+    const obj = parsed as Record<string, unknown>;
+    if (Array.isArray(obj.cardsCatalog)) {
+      candidateList = obj.cardsCatalog;
+    } else if (Array.isArray(obj.cards)) {
+      candidateList = obj.cards;
+    }
+  }
+
+  if (!candidateList) {
+    return {
+      cards: [],
+      skippedCount: 0,
+      error: "Nenhuma lista de cartas (cardsCatalog) encontrada neste JSON.",
+    };
+  }
+
+  const seenIds = new Set<string>();
+  const cards: CardDefinition[] = [];
+  let skippedCount = 0;
+
+  for (const item of candidateList) {
+    const clean = sanitizeImportedCard(item);
+    if (!clean || seenIds.has(clean.id)) {
+      skippedCount += 1;
+      continue;
+    }
+    seenIds.add(clean.id);
+    cards.push(clean);
+  }
+
+  if (cards.length === 0) {
+    return {
+      cards: [],
+      skippedCount,
+      error: "Nenhuma carta válida encontrada no backup.",
+    };
+  }
+
+  return { cards, skippedCount };
+}
+
+/**
+ * Mescla ou substitui o catálogo atual com cartas importadas, preservando IDs originais.
+ */
+export function mergeCardsCatalog(
+  existing: CardDefinition[],
+  incoming: CardDefinition[],
+  mode: "merge" | "replace" = "merge",
+): { cards: CardDefinition[]; addedCount: number; updatedCount: number } {
+  const safeExisting = Array.isArray(existing) ? existing : [];
+  const safeIncoming = Array.isArray(incoming) ? incoming : [];
+
+  if (mode === "replace") {
+    const existingIds = new Set(safeExisting.map((c) => c.id));
+    let addedCount = 0;
+    let updatedCount = 0;
+    for (const c of safeIncoming) {
+      if (existingIds.has(c.id)) updatedCount += 1;
+      else addedCount += 1;
+    }
+    return { cards: [...safeIncoming], addedCount, updatedCount };
+  }
+
+  const byId = new Map<string, CardDefinition>();
+  const order: string[] = [];
+  for (const c of safeExisting) {
+    byId.set(c.id, c);
+    order.push(c.id);
+  }
+
+  let addedCount = 0;
+  let updatedCount = 0;
+  for (const c of safeIncoming) {
+    if (byId.has(c.id)) {
+      byId.set(c.id, c);
+      updatedCount += 1;
+    } else {
+      byId.set(c.id, c);
+      order.push(c.id);
+      addedCount += 1;
+    }
+  }
+
+  return {
+    cards: order.map((id) => byId.get(id)!),
+    addedCount,
+    updatedCount,
+  };
+}
+
+export interface AlbumCollectionSummary {
+  discoveredCount: number;
+  totalCatalogCount: number;
+  ownedUniqueCount: number;
+  totalOwnedCopies: number;
+  missingFromCatalogUniqueCount: number;
+  missingFromCatalogCopies: number;
+}
+
+/**
+ * Consolida a coleção do jogador em relação ao catálogo ativo, contabilizando
+ * também cartas já conquistadas no perfil cujas definições estejam temporariamente
+ * ausentes do catálogo (evitando a impressão de perda do inventário).
+ */
+export function summarizeAlbumCollection(
+  catalog: CardDefinition[],
+  ownedCardsMap: Record<string, number> = {},
+): AlbumCollectionSummary {
+  const safeCatalog = Array.isArray(catalog) ? catalog : [];
+  const catalogIds = new Set(safeCatalog.map((c) => c.id));
+
+  let ownedUniqueCount = 0;
+  let totalOwnedCopies = 0;
+  let discoveredCount = 0;
+  let missingFromCatalogUniqueCount = 0;
+  let missingFromCatalogCopies = 0;
+
+  for (const [id, rawQty] of Object.entries(ownedCardsMap ?? {})) {
+    const qty = Math.max(0, Math.floor(Number(rawQty) || 0));
+    if (qty <= 0) continue;
+    ownedUniqueCount += 1;
+    totalOwnedCopies += qty;
+    if (catalogIds.has(id)) {
+      discoveredCount += 1;
+    } else {
+      missingFromCatalogUniqueCount += 1;
+      missingFromCatalogCopies += qty;
+    }
+  }
+
+  return {
+    discoveredCount,
+    totalCatalogCount: safeCatalog.length,
+    ownedUniqueCount,
+    totalOwnedCopies,
+    missingFromCatalogUniqueCount,
+    missingFromCatalogCopies,
+  };
+}

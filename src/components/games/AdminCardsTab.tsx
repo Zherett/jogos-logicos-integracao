@@ -11,6 +11,8 @@ import {
   X,
   Image as ImageIcon,
   Save,
+  Download,
+  Upload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,9 +29,12 @@ import {
   createCardBatch,
   DEFAULT_CARD_FOIL_CHANCE_PERCENT,
   editCardDefinition,
+  exportCardsCatalogBackup,
   generateMissingFoilDuplicates,
+  mergeCardsCatalog,
   mergeWithDefaultCardPacks,
   openCardPack,
+  parseCardsCatalogBackup,
   resolveCardBgClass,
   sumPackProbabilities,
   validatePackProbabilities,
@@ -47,7 +52,7 @@ import { DUNGEON_CARD_SKILL_LIST } from "@/lib/dungeon-config";
 import { resolveCardDungeonBonus } from "@/lib/dungeon-engine";
 import type { PlatformAdminConfig } from "@/lib/game-codes";
 import { usePlayerAuth } from "@/lib/player-auth";
-import { getLastAdminCloudSyncError } from "@/lib/playfab";
+import { getLastAdminCloudSyncError, type PushAdminConfigOptions } from "@/lib/playfab";
 import { CollectibleCardView } from "./CollectibleCardView";
 import { CardPagination, paginateItems } from "./CardPagination";
 import { PackIconSvg, PackOpeningModal, type PackOpenOutcome } from "./PackOpeningModal";
@@ -55,7 +60,10 @@ import { PackIconSvg, PackOpeningModal, type PackOpenOutcome } from "./PackOpeni
 interface AdminCardsTabProps {
   draft: PlatformAdminConfig;
   setDraft: React.Dispatch<React.SetStateAction<PlatformAdminConfig>>;
-  onSaveConfig: (nextCfg: PlatformAdminConfig) => Promise<void> | void;
+  onSaveConfig: (
+    nextCfg: PlatformAdminConfig,
+    options?: PushAdminConfigOptions,
+  ) => Promise<void> | void;
 }
 
 export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabProps) {
@@ -117,6 +125,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
   }, [cards, rarityFilter]);
 
   const autoSeededRef = useRef(false);
+  const backupFileInputRef = useRef<HTMLInputElement | null>(null);
   const missingFoilCount = useMemo(
     () => generateMissingFoilDuplicates(cards).addedCount,
     [cards],
@@ -133,15 +142,19 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
       foilDuplicatesSeededV2: true,
     };
     setDraft(nextCfg);
-    void onSaveConfig(nextCfg);
+    void onSaveConfig(nextCfg, { allowCardsCatalogWrite: addedCount > 0 });
   }, [cards, draft, onSaveConfig, setDraft]);
 
-  async function persistConfig(nextCfg: PlatformAdminConfig, successMsg?: string) {
+  async function persistConfig(
+    nextCfg: PlatformAdminConfig,
+    successMsg?: string,
+    options?: PushAdminConfigOptions,
+  ) {
     setSaving(true);
     setCloudFeedback(null);
     try {
       setDraft(nextCfg);
-      await onSaveConfig(nextCfg);
+      await onSaveConfig(nextCfg, options);
       const cloudErr = getLastAdminCloudSyncError();
       if (cloudErr) {
         setCloudFeedback(`⚠️ Salvo apenas localmente — erro ao publicar no PlayFab: ${cloudErr}`);
@@ -153,6 +166,65 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
     }
   }
 
+  function handleExportCardsBackup() {
+    if (cards.length === 0) {
+      setCloudFeedback("⚠️ Não há cartas no catálogo para exportar.");
+      return;
+    }
+    const json = exportCardsCatalogBackup(cards);
+    const blob = new Blob([json], { type: "application/json;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const dateStamp = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `cartas-catalogo-backup-${dateStamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    setCloudFeedback(`💾 Backup exportado com ${cards.length} carta(s)! Guarde o arquivo em local seguro.`);
+  }
+
+  async function handleImportCardsBackupFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setCloudFeedback(null);
+    try {
+      const text = await file.text();
+      const parsed = parseCardsCatalogBackup(text);
+      if (parsed.error || parsed.cards.length === 0) {
+        setCloudFeedback(`⚠️ ${parsed.error ?? "Nenhuma carta válida encontrada no backup."}`);
+        return;
+      }
+
+      const mode: "merge" | "replace" =
+        cards.length === 0
+          ? "replace"
+          : window.confirm(
+                `Encontradas ${parsed.cards.length} carta(s) válida(s) no arquivo.\n\nClique em OK para MESCLAR com as ${cards.length} carta(s) atuais (recomendado) ou Cancelar para SUBSTITUIR todo o catálogo atual.`,
+              )
+            ? "merge"
+            : "replace";
+
+      const merged = mergeCardsCatalog(cards, parsed.cards, mode);
+      const nextCfg: PlatformAdminConfig = {
+        ...draft,
+        cardsCatalog: merged.cards,
+      };
+      const skippedHint = parsed.skippedCount > 0 ? ` (${parsed.skippedCount} ignorada(s))` : "";
+      await persistConfig(
+        nextCfg,
+        `✅ Catálogo restaurado na nuvem! ${merged.cards.length} carta(s) ativas (+${merged.addedCount} adicionada(s), ${merged.updatedCount} atualizada(s))${skippedHint}.`,
+        { allowCardsCatalogWrite: true },
+      );
+    } catch (err) {
+      setCloudFeedback(
+        `⚠️ Erro ao ler arquivo de backup: ${err instanceof Error ? err.message : "arquivo inválido."}`,
+      );
+    }
+  }
+
   async function handleGenerateMissingFoils() {
     const { updatedCatalog, addedCount } = generateMissingFoilDuplicates(cards);
     if (addedCount <= 0) return;
@@ -161,7 +233,9 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
       cardsCatalog: updatedCatalog,
       foilDuplicatesSeededV2: true,
     };
-    await persistConfig(nextCfg, `✨ ${addedCount} carta(s) Foil geradas e sincronizadas!`);
+    await persistConfig(nextCfg, `✨ ${addedCount} carta(s) Foil geradas e sincronizadas!`, {
+      allowCardsCatalogWrite: true,
+    });
   }
 
   function resetCardForm() {
@@ -237,6 +311,7 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
     await persistConfig(
       nextCfg,
       editingCardId ? "✅ Carta atualizada na nuvem!" : "✅ Carta criada e publicada na nuvem!",
+      { allowCardsCatalogWrite: true },
     );
     resetCardForm();
   }
@@ -245,12 +320,24 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
     const card = cards.find((c) => c.id === cardId);
     if (!window.confirm(`Deseja excluir a carta "${card?.name ?? cardId}"?`)) return;
     const nextCards = cards.filter((c) => c.id !== cardId);
+    if (nextCards.length === 0) {
+      if (
+        !window.confirm(
+          "Atenção: esta é a ÚLTIMA carta do catálogo. Confirmar esvaziamento completo do catálogo de cartas na nuvem?",
+        )
+      ) {
+        return;
+      }
+    }
     // Remove referências órfãs desta carta nos pools de pacotes
     const nextPacks = packs.map((p) =>
       Array.isArray(p.cardIds) ? { ...p, cardIds: p.cardIds.filter((id) => id !== cardId) } : p,
     );
     const nextCfg: PlatformAdminConfig = { ...draft, cardsCatalog: nextCards, cardPacks: nextPacks };
-    await persistConfig(nextCfg, "🗑️ Carta removida do catálogo e dos pacotes.");
+    await persistConfig(nextCfg, "🗑️ Carta removida do catálogo e dos pacotes.", {
+      allowCardsCatalogWrite: true,
+      allowEmptyCardsCatalog: nextCards.length === 0,
+    });
     if (editingCardId === cardId) resetCardForm();
   }
 
@@ -703,6 +790,37 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
                 <h4 className="font-display text-sm font-extrabold text-foreground">
                   Catálogo de Cartas ({filteredCards.length})
                 </h4>
+                <input
+                  ref={backupFileInputRef}
+                  type="file"
+                  accept="application/json,.json"
+                  className="hidden"
+                  onChange={(e) => void handleImportCardsBackupFile(e)}
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={saving || cards.length === 0}
+                  onClick={handleExportCardsBackup}
+                  className="h-7 rounded-lg text-[11px] font-bold"
+                  title="Baixa um backup JSON completo de todas as cartas do catálogo"
+                >
+                  <Download className="h-3 w-3 mr-1" />
+                  Exportar Backup
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={saving}
+                  onClick={() => backupFileInputRef.current?.click()}
+                  className="h-7 rounded-lg text-[11px] font-bold border-primary/40 text-primary"
+                  title="Importa/restaura cartas de um arquivo JSON de backup (ou cache exportado), preservando os IDs originais"
+                >
+                  <Upload className="h-3 w-3 mr-1" />
+                  Restaurar JSON
+                </Button>
                 {missingFoilCount > 0 && (
                   <Button
                     type="button"

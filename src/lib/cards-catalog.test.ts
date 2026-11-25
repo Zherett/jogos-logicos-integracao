@@ -11,13 +11,19 @@ import {
   createCardDefinition,
   DEFAULT_CARD_FOIL_CHANCE_PERCENT,
   DEFAULT_CARD_PACKS,
+  deserializeCardsCatalogChunks,
   editCardDefinition,
+  exportCardsCatalogBackup,
   generateMissingFoilDuplicates,
   groupDrawnCardsForBatchSummary,
+  mergeCardsCatalog,
   mergeWithDefaultCardPacks,
   openCardPack,
   orderPackRevealCards,
+  parseCardsCatalogBackup,
   resolveCardBgClass,
+  serializeCardsCatalogChunks,
+  summarizeAlbumCollection,
   sumPackProbabilities,
   validatePackProbabilities,
   type CardDefinition,
@@ -340,5 +346,118 @@ describe("Sistema de Cartas Colecionáveis e Pacotes", () => {
     assert.equal(grouped[1].card.id, c1.id);
     assert.equal(grouped[1].count, 3);
     assert.equal(grouped[1].isNew, true);
+  });
+
+  it("particiona e reconstrói catálogos grandes em múltiplos chunks e detecta chunk faltante", () => {
+    const manyCards: CardDefinition[] = Array.from({ length: 40 }, (_, idx) => ({
+      id: `card_chunk_${idx}`,
+      name: `Carta ${idx}`,
+      description: `Descrição detalhada da carta ${idx} `.repeat(6),
+      rarity: CARD_RARITIES[idx % CARD_RARITIES.length],
+      imageUrl: `https://example.com/cards/${idx}.png`,
+      imageFit: "contain-blur",
+      colorVariant: 1,
+      isFoil: idx % 2 === 1,
+      createdAt: "2026-11-24T00:00:00.000Z",
+      updatedAt: "2026-11-24T00:00:00.000Z",
+    }));
+
+    // Limite pequeno (3.5 KB) para forçar vários chunks
+    const serialized = serializeCardsCatalogChunks(manyCards, 3_500);
+    assert.ok(serialized.meta.chunkCount >= 3, "Deve dividir em múltiplos chunks");
+    assert.equal(serialized.meta.totalCards, 40);
+
+    const restored = deserializeCardsCatalogChunks(
+      JSON.stringify(serialized.meta),
+      serialized.chunks,
+    );
+    assert.equal(restored.ok, true);
+    assert.equal(restored.cards.length, 40);
+    assert.deepEqual(
+      restored.cards.map((c) => c.id),
+      manyCards.map((c) => c.id),
+    );
+
+    // Se 1 chunk estiver ausente, deve falhar de forma segura (ok: false) em vez de retornar [] silenciosamente
+    const corruptedChunks = [...serialized.chunks];
+    corruptedChunks[1] = undefined as unknown as string;
+    const partial = deserializeCardsCatalogChunks(
+      JSON.stringify(serialized.meta),
+      corruptedChunks,
+    );
+    assert.equal(partial.ok, false);
+  });
+
+  it("exporta, importa e mescla backup JSON de cartas preservando os IDs originais", () => {
+    const c1: CardDefinition = {
+      id: "card_1795281886942_50eay",
+      name: "Robô Lógico",
+      description: "Guardião da lógica",
+      rarity: "rara",
+      imageUrl: "https://example.com/robo.png",
+      imageFit: "cover",
+      colorVariant: 2,
+      isFoil: false,
+      createdAt: "2026-11-21T17:24:46.942Z",
+      updatedAt: "2026-11-21T17:24:46.942Z",
+    };
+    const c2: CardDefinition = {
+      id: "card_1795500054371_ozrd2",
+      name: "Mestre Estelar",
+      description: "Brilho foil",
+      rarity: "lendaria",
+      imageUrl: "https://example.com/mestre.gif",
+      imageFit: "contain-blur",
+      colorVariant: 3,
+      isFoil: true,
+      createdAt: "2026-11-24T06:00:54.371Z",
+      updatedAt: "2026-11-24T06:00:54.371Z",
+    };
+
+    // 1) Backup oficial
+    const exported = exportCardsCatalogBackup([c1, c2]);
+    const parsed = parseCardsCatalogBackup(exported);
+    assert.equal(parsed.error, undefined);
+    assert.equal(parsed.cards.length, 2);
+    assert.equal(parsed.cards[0].id, c1.id);
+    assert.equal(parsed.cards[1].id, c2.id);
+
+    // 2) Dump bruto de localStorage (PlatformAdminConfig completo, inclusive string duplamente serializada)
+    const doubleSerialized = JSON.stringify(JSON.stringify({ seasonId: 1, cardsCatalog: [c1] }));
+    const parsedFromConsole = parseCardsCatalogBackup(doubleSerialized);
+    assert.equal(parsedFromConsole.error, undefined);
+    assert.equal(parsedFromConsole.cards.length, 1);
+    assert.equal(parsedFromConsole.cards[0].id, c1.id);
+
+    // 3) Merge mantém existentes e adiciona/atualiza por ID
+    const merged = mergeCardsCatalog([c1], [{ ...c1, name: "Robô Lógico V2" }, c2], "merge");
+    assert.equal(merged.cards.length, 2);
+    assert.equal(merged.updatedCount, 1);
+    assert.equal(merged.addedCount, 1);
+    assert.equal(merged.cards[0].name, "Robô Lógico V2");
+  });
+
+  it("contabiliza cartas órfãs no álbum quando o catálogo está vazio ou incompleto", () => {
+    const c1: CardDefinition = {
+      id: "card_1",
+      name: "Carta 1",
+      description: "",
+      rarity: "comum",
+      imageUrl: "https://example.com/1.png",
+      createdAt: "2026-11-24T00:00:00.000Z",
+      updatedAt: "2026-11-24T00:00:00.000Z",
+    };
+
+    const summaryEmpty = summarizeAlbumCollection([], { card_1: 3, card_2: 2 });
+    assert.equal(summaryEmpty.discoveredCount, 0);
+    assert.equal(summaryEmpty.ownedUniqueCount, 2);
+    assert.equal(summaryEmpty.totalOwnedCopies, 5);
+    assert.equal(summaryEmpty.missingFromCatalogUniqueCount, 2);
+    assert.equal(summaryEmpty.missingFromCatalogCopies, 5);
+
+    const summaryPartial = summarizeAlbumCollection([c1], { card_1: 3, card_2: 2 });
+    assert.equal(summaryPartial.discoveredCount, 1);
+    assert.equal(summaryPartial.missingFromCatalogUniqueCount, 1);
+    assert.equal(summaryPartial.missingFromCatalogCopies, 2);
   });
 });

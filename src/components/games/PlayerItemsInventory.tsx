@@ -9,6 +9,7 @@ import {
   consumeAndOpenCardPacksBatch,
   DEFAULT_CARD_FOIL_CHANCE_PERCENT,
   mergeWithDefaultCardPacks,
+  summarizeAlbumCollection,
   type CardDefinition,
   type CardPackDefinition,
   type CardRarity,
@@ -327,14 +328,12 @@ export function PlayerItemsInventory() {
   );
   const ownedCardsMap = useMemo(() => auth.profile?.cards ?? {}, [auth.profile?.cards]);
 
-  const discoveredCount = useMemo(
-    () => catalog.filter((c) => (ownedCardsMap[c.id] ?? 0) > 0).length,
+  const albumSummary = useMemo(
+    () => summarizeAlbumCollection(catalog, ownedCardsMap),
     [catalog, ownedCardsMap],
   );
-  const totalOwnedCount = useMemo(
-    () => Object.values(ownedCardsMap).reduce((sum, n) => sum + (Number(n) || 0), 0),
-    [ownedCardsMap],
-  );
+  const discoveredCount = albumSummary.discoveredCount;
+  const totalOwnedCount = albumSummary.totalOwnedCopies;
 
   const filteredCatalog = useMemo(() => {
     if (rarityFilter === "todas") return catalog;
@@ -870,6 +869,16 @@ export function PlayerItemsInventory() {
                 </span>
               )}
             </div>
+            {albumSummary.missingFromCatalogUniqueCount > 0 && (
+              <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] font-semibold text-amber-800 dark:text-amber-200">
+                🛡️ Sua conta possui{" "}
+                <b>
+                  {albumSummary.missingFromCatalogUniqueCount} carta(s) única(s) (
+                  {albumSummary.missingFromCatalogCopies} cópia(s))
+                </b>{" "}
+                salvas com segurança no seu perfil que ainda não estão no catálogo ativo. Assim que o catálogo for sincronizado ou restaurado pelo ADM, elas voltarão a aparecer automaticamente aqui.
+              </div>
+            )}
           </div>
 
           {/* Abertura de teste livre foi movida exclusivamente para o Painel ADM (simulação sem afetar conta) */}

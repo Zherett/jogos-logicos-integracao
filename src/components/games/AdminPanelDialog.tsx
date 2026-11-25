@@ -109,6 +109,8 @@ import {
   type MedalsAuditResult,
   runGlobalStudentsIntegrityAudit,
   type StudentsIntegrityAuditResult,
+  recoverLostRankedPointsFromCloud,
+  type RankedPointsRecoveryResult,
   type PlayerProfile,
 } from "@/lib/playfab";
 import { getCachedMedalPioneers, formatPioneerLabel } from "@/lib/medal-pioneers";
@@ -491,6 +493,9 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
   const [auditingStudents, setAuditingStudents] = useState(false);
   const [studentsAuditModalResult, setStudentsAuditModalResult] =
     useState<StudentsIntegrityAuditResult | null>(null);
+  const [recoveringRanked, setRecoveringRanked] = useState(false);
+  const [rankedRecoveryResult, setRankedRecoveryResult] =
+    useState<RankedPointsRecoveryResult | null>(null);
 
   // Consolidação de partidas jogadas por jogo para a Lista de Jogos do ADM
   const gameStatsSummary = useMemo(() => {
@@ -716,7 +721,54 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
     setConfirmActivityResetNow(false);
     setConfirmRankedResetNow(false);
     setSavedMsg(null);
+
+    // Recuperação automática (1x por temporada) de pontos ranqueados perdidos a partir das provas do PlayFab
+    const seasonId = auth.adminConfig.rankedSeasonId ?? 1;
+    const autoRecoveryKey = `desafios-ranked-recovery-s${seasonId}-v1`;
+    if (typeof window !== "undefined" && !window.localStorage.getItem(autoRecoveryKey)) {
+      window.localStorage.setItem(autoRecoveryKey, new Date().toISOString());
+      void (async () => {
+        try {
+          await syncStudentRosterFromPlayFab(undefined, true);
+          const rec = await recoverLostRankedPointsFromCloud();
+          if (rec.recoveredStudentsCount > 0) {
+            const updatedPlayers = await syncStudentRosterFromPlayFab(undefined, true);
+            setRegisteredStudents(updatedPlayers);
+            setRankedRecoveryResult(rec);
+            flashSaved(
+              `🏆 Recuperação automática da Ranqueada: ${rec.recoveredStudentsCount} conta(s) restaurada(s) (+${rec.totalPointsRestored} pts)!`,
+            );
+          }
+        } catch {
+          window.localStorage.removeItem(autoRecoveryKey);
+        }
+      })();
+    }
   }, [open, auth.adminConfig]);
+
+  async function handleRunRankedRecovery() {
+    setRecoveringRanked(true);
+    try {
+      await syncStudentRosterFromPlayFab(undefined, true);
+      const rec = await recoverLostRankedPointsFromCloud();
+      const refreshed = await syncStudentRosterFromPlayFab(undefined, true);
+      setRegisteredStudents(refreshed);
+      setRankedRecoveryResult(rec);
+      if (rec.recoveredStudentsCount > 0) {
+        flashSaved(
+          `🏆 Recuperação concluída: ${rec.recoveredStudentsCount} conta(s) restaurada(s) (+${rec.totalPointsRestored} pts totais)!`,
+        );
+      } else {
+        flashSaved(
+          `🏆 Varredura da Ranqueada concluída: nenhuma pontuação perdida pendente nas ${rec.evaluatedStudentsCount} contas.`,
+        );
+      }
+    } catch (err: any) {
+      flashSaved(`❌ Erro na recuperação da Ranqueada: ${err?.message || "Falha desconhecida"}`);
+    } finally {
+      setRecoveringRanked(false);
+    }
+  }
 
   async function handleRefreshRoster() {
     setSyncingRoster(true);
@@ -3236,14 +3288,29 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                       variant="default"
                       size="sm"
                       onClick={handleRunStudentsAudit}
-                      disabled={auditingStudents || syncingRoster}
+                      disabled={auditingStudents || syncingRoster || recoveringRanked}
                       className="rounded-xl font-bold gap-1.5 text-xs h-9 bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm"
-                      title="Realiza varredura em 100% dos alunos, recalcula requisitos de nível, expurga partidas fantasmas e resíduos de torneio"
+                      title="Realiza varredura em 100% dos alunos, recalcula requisitos de nível e expurga partidas fantasmas sem apagar pontos ranqueados de Nível 3+"
                     >
                       <ShieldCheck
                         className={`h-3.5 w-3.5 ${auditingStudents ? "animate-spin" : ""}`}
                       />
                       {auditingStudents ? "Auditando Alunos..." : "Auditar & Corrigir Histórico de Alunos"}
+                    </Button>
+
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={handleRunRankedRecovery}
+                      disabled={recoveringRanked || auditingStudents || syncingRoster}
+                      className="rounded-xl font-bold gap-1.5 text-xs h-9 border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-300 hover:bg-amber-500/20"
+                      title="Cruza TOURNAMENT_SEASON, UserData, Roster e marcos/medalhas no PlayFab para restaurar automaticamente pontos ranqueados perdidos"
+                    >
+                      <Trophy
+                        className={`h-3.5 w-3.5 ${recoveringRanked ? "animate-spin" : ""}`}
+                      />
+                      {recoveringRanked ? "Recuperando Ranqueada..." : "Recuperar Pontos Ranqueada"}
                     </Button>
 
                     <div className="flex items-center gap-1 rounded-xl bg-background border p-1">
@@ -3277,6 +3344,56 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                     </div>
                   </div>
                 </div>
+
+                {/* RELATÓRIO EXPANSÍVEL DA RECUPERAÇÃO AUTOMÁTICA DA RANQUEADA */}
+                {rankedRecoveryResult && (
+                  <div className="rounded-2xl border border-amber-500/35 bg-amber-500/10 p-3.5 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Trophy className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                        <span className="font-display text-xs font-bold text-foreground">
+                          Relatório de Recuperação Automática — Ranqueada (Temporada #{rankedRecoveryResult.seasonId})
+                        </span>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setRankedRecoveryResult(null)}
+                        className="h-6 px-2 text-[11px]"
+                      >
+                        Fechar
+                      </Button>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">
+                      Contas avaliadas: <b className="text-foreground">{rankedRecoveryResult.evaluatedStudentsCount}</b> •{" "}
+                      Restauradas: <b className="text-emerald-600 dark:text-emerald-400">{rankedRecoveryResult.recoveredStudentsCount}</b> •{" "}
+                      Total recuperado: <b className="text-amber-700 dark:text-amber-300">+{rankedRecoveryResult.totalPointsRestored} pts</b>
+                    </p>
+                    {rankedRecoveryResult.details.length > 0 && (
+                      <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
+                        {rankedRecoveryResult.details.map((item) => (
+                          <div
+                            key={item.id}
+                            className="flex flex-wrap items-center justify-between gap-2 rounded-xl border bg-card/80 px-2.5 py-1.5 text-[11px]"
+                          >
+                            <div>
+                              <span className="font-bold text-foreground">{item.nick}</span>{" "}
+                              <span className="text-muted-foreground">({item.school})</span>
+                              <span className="block text-[10px] text-muted-foreground">
+                                Fonte: {item.sourceLabel}
+                                {item.isFloorEstimate ? " • piso comprovado (ajuste fino disponível no Extrato)" : " • valor exato"}
+                              </span>
+                            </div>
+                            <span className="font-mono font-extrabold text-emerald-600 dark:text-emerald-400">
+                              {item.previousPoints} → {item.restoredPoints} pts ({item.restoredRankName})
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* RELATÓRIO EXPANSÍVEL DA AUDITORIA GLOBAL DOS ALUNOS */}
                 {studentsAuditModalResult && (
@@ -5485,8 +5602,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                 <AdminCardsTab
                   draft={draft}
                   setDraft={setDraft}
-                  onSaveConfig={async (nextCfg) => {
-                    await auth.updateAdminConfig(nextCfg);
+                  onSaveConfig={async (nextCfg, opts) => {
+                    await auth.updateAdminConfig(nextCfg, opts);
                     onConfigSaved?.();
                     flashSaved("Catálogo de Cartas e Pacotes salvo!");
                   }}

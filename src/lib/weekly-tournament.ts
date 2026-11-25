@@ -48,6 +48,7 @@ import {
   getAgeStageInfo,
   getLocalDateKey,
   isMatchVictory,
+  nickSlug,
   stageForPlayer,
   TOURNAMENT_DAILY_FREE_ENTRIES,
   TOURNAMENT_DAILY_PAID_ENTRIES_LIMIT,
@@ -59,6 +60,7 @@ import {
   type AgeStageId,
   type TournamentMedal,
 } from "./player-profile.ts";
+import { recordScoreLedgerEntry } from "./score-history-ledger.ts";
 
 export type { AgeStageId };
 
@@ -504,6 +506,71 @@ export interface TournamentStandingRow {
 
 export function getTournamentSeasonGroupId(seasonId: number): string {
   return `TOURNAMENT_SEASON_${seasonId}`;
+}
+
+export const TOURNAMENT_PLAYER_KEY_PREFIX = "rnk_";
+
+/** Chave individual isolada por jogador dentro do SharedGroup `TOURNAMENT_SEASON_N` (evita sobrescrita entre dispositivos). */
+export function getTournamentPlayerCloudKey(identifier: string): string {
+  const clean = nickSlug(identifier || "desconhecido") || "desconhecido";
+  return `${TOURNAMENT_PLAYER_KEY_PREFIX}${clean}`;
+}
+
+/**
+ * Faz o parse unificado de todos os registros de `TOURNAMENT_SEASON_N`:
+ * - Lê primeiro a chave legada `Standings` (somente leitura, retrocompatibilidade).
+ * - Sobrepõe com todas as chaves individuais `rnk_<slug>` (fonte canônica isolada por jogador).
+ */
+export function parseTournamentSharedGroupRecords(
+  groupData?: Record<string, { Value?: string }> | null,
+): {
+  records: Record<string, TournamentPlayerRecord>;
+  perPlayerKeys: Set<string>;
+} {
+  const records: Record<string, TournamentPlayerRecord> = {};
+  const perPlayerKeys = new Set<string>();
+  if (!groupData || typeof groupData !== "object") {
+    return { records, perPlayerKeys };
+  }
+
+  // 1. Leitura retrocompatível da chave monolítica legada `Standings` (nunca mais sobrescrita por clientes)
+  const legacyRaw = groupData.Standings?.Value;
+  if (legacyRaw) {
+    try {
+      const parsed = JSON.parse(legacyRaw) as Record<string, TournamentPlayerRecord>;
+      if (parsed && typeof parsed === "object") {
+        for (const [id, rec] of Object.entries(parsed)) {
+          if (!rec || typeof rec !== "object") continue;
+          const canonical = nickSlug(rec.nick || rec.playerId || id) || id.toLowerCase().trim();
+          if (!canonical) continue;
+          const prev = records[canonical];
+          if (!prev || (rec.tournamentPoints ?? 0) > (prev.tournamentPoints ?? 0)) {
+            records[canonical] = { ...rec, playerId: canonical };
+          }
+        }
+      }
+    } catch {
+      /* ignore invalid legacy JSON */
+    }
+  }
+
+  // 2. Leitura autoritativa das chaves individuais `rnk_<slug>` (sempre prevalecem sobre o legado)
+  for (const [key, item] of Object.entries(groupData)) {
+    if (!key.startsWith(TOURNAMENT_PLAYER_KEY_PREFIX) || !item?.Value) continue;
+    try {
+      const rec = JSON.parse(item.Value) as TournamentPlayerRecord;
+      if (!rec || typeof rec !== "object") continue;
+      const slugFromKey = key.slice(TOURNAMENT_PLAYER_KEY_PREFIX.length);
+      const canonical = nickSlug(rec.nick || rec.playerId || slugFromKey) || slugFromKey;
+      if (!canonical) continue;
+      records[canonical] = { ...rec, playerId: canonical };
+      perPlayerKeys.add(canonical);
+    } catch {
+      /* ignore malformed per-player entry */
+    }
+  }
+
+  return { records, perPlayerKeys };
 }
 
 export interface WeeklyTournamentStore {
@@ -1069,10 +1136,12 @@ function loadTournamentStore(now = new Date()): WeeklyTournamentStore {
     for (const p of players) {
       const pId = p.id || p.nickNormalized;
       if (!pId || pId.startsWith("admin-system")) continue;
-      const pts = Math.max(
-        typeof p.tournamentPoints === "number" ? p.tournamentPoints : 0,
-        typeof p.bestTournamentPoints === "number" ? p.bestTournamentPoints : 0,
-      );
+      const pts = resolveCanonicalTournamentPoints({
+        level: p.level,
+        isAdmin: Boolean(p.isAdmin),
+        tournamentPoints: p.tournamentPoints,
+        bestTournamentPoints: p.bestTournamentPoints,
+      });
 
       if (!hasBaseRecords && pts === 0 && (p.dailyTournamentEntries ?? 0) === 0) {
         continue;
@@ -1220,6 +1289,7 @@ export function deductTournamentRecordPoints(
   const cleanNick = (nick ?? "").toLowerCase().trim();
   let updated = false;
 
+  let lastUpdatedRec: TournamentPlayerRecord | null = null;
   for (const [key, rec] of Object.entries(store.records)) {
     const kLower = key.toLowerCase().trim();
     const rId = (rec.playerId || "").toLowerCase().trim();
@@ -1231,6 +1301,7 @@ export function deductTournamentRecordPoints(
       rec.tournamentPoints = clamped;
       rec.highestRankId = getTournamentRank(clamped).currentRank.id;
       rec.updatedAt = nowMs;
+      lastUpdatedRec = { ...rec };
       updated = true;
     }
   }
@@ -1240,7 +1311,9 @@ export function deductTournamentRecordPoints(
     window.dispatchEvent(
       new CustomEvent("desafios:weekly-tournament-updated", { detail: store }),
     );
-    void syncWeeklyTournamentWithPlayFab();
+    if (lastUpdatedRec) {
+      void pushSingleTournamentPlayerToPlayFab(lastUpdatedRec);
+    }
   }
 }
 
@@ -1327,16 +1400,17 @@ export function getTournamentStoreRecord(
   const reg = loadRegistryReadOnly();
   const memAcc = (cleanId ? reg[cleanId] : undefined) || (cleanNick ? reg[cleanNick] : undefined);
   if (memAcc && typeof memAcc === "object" && memAcc.profile) {
-    if ((memAcc.profile.level ?? 1) < TOURNAMENT_MIN_LEVEL) {
+    if (!memAcc.profile.isAdmin && (memAcc.profile.level ?? 1) < TOURNAMENT_MIN_LEVEL) {
       return null;
     }
-    const memPts = Math.max(
-      typeof memAcc.profile.tournamentPoints === "number" ? memAcc.profile.tournamentPoints : 0,
-      typeof memAcc.profile.bestTournamentPoints === "number"
-        ? memAcc.profile.bestTournamentPoints
-        : 0,
-    );
-    if (bestRec && memPts > (bestRec.tournamentPoints ?? 0)) {
+    const memPts = resolveCanonicalTournamentPoints({
+      level: memAcc.profile.level,
+      isAdmin: Boolean(memAcc.profile.isAdmin),
+      tournamentPoints: memAcc.profile.tournamentPoints,
+      bestTournamentPoints: memAcc.profile.bestTournamentPoints,
+      record: bestRec,
+    });
+    if (bestRec && memPts !== (bestRec.tournamentPoints ?? 0)) {
       return { ...bestRec, tournamentPoints: memPts };
     }
   }
@@ -1363,6 +1437,108 @@ let inFlightTournamentSyncPromise: Promise<void> | null = null;
 let lastTournamentSyncCompletedAt = 0;
 const TOURNAMENT_SYNC_TTL_MS = 45_000;
 
+export async function pushSingleTournamentPlayerToPlayFab(
+  record: TournamentPlayerRecord,
+  seasonIdOverride?: number,
+): Promise<boolean> {
+  if (!isPlayFabConfigured()) return false;
+  const titleId = getPlayFabTitleId();
+  if (!titleId) return false;
+
+  let ticket = await getAdminPlayFabTicket();
+  if (!ticket) {
+    const session = loadStoredSession();
+    ticket = session?.sessionTicket && !session.sessionTicket.startsWith("admin-")
+      ? session.sessionTicket
+      : null;
+  }
+  if (!ticket) return false;
+
+  const cfg = loadAdminConfig();
+  const seasonId = seasonIdOverride ?? cfg.rankedSeasonId ?? 1;
+  const groupId = getTournamentSeasonGroupId(seasonId);
+  const canonical = nickSlug(record.nick || record.playerId) || record.playerId;
+  const cloudKey = getTournamentPlayerCloudKey(canonical);
+  const payloadRec: TournamentPlayerRecord = {
+    ...record,
+    playerId: canonical,
+  };
+
+  try {
+    if (!ensuredTournamentGroups.has(groupId)) {
+      await fetch(`https://${titleId}.playfabapi.com/Client/CreateSharedGroup`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Authorization": ticket,
+        },
+        body: JSON.stringify({ TitleId: titleId, SharedGroupId: groupId }),
+      });
+      ensuredTournamentGroups.add(groupId);
+    }
+
+    const res = await fetch(`https://${titleId}.playfabapi.com/Client/UpdateSharedGroupData`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Authorization": ticket,
+      },
+      body: JSON.stringify({
+        TitleId: titleId,
+        SharedGroupId: groupId,
+        Data: { [cloudKey]: JSON.stringify(payloadRec) },
+        Permission: "Public",
+      }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Atualiza o registro ranqueado de um único jogador localmente e (opcionalmente) na sua chave individual `rnk_<slug>` no PlayFab.
+ * Nunca sobrescreve a chave monolítica `Standings` nem os registros de outros jogadores.
+ */
+export async function upsertTournamentRecordForPlayer(
+  record: TournamentPlayerRecord,
+  options?: { syncCloud?: boolean; seasonId?: number },
+): Promise<boolean> {
+  const nowDate = getAuthoritativeNow();
+  const canonical = nickSlug(record.nick || record.playerId) || record.playerId;
+  const cleanRec: TournamentPlayerRecord = {
+    ...record,
+    playerId: canonical,
+    updatedAt: record.updatedAt || nowDate.getTime(),
+  };
+
+  if (typeof window !== "undefined") {
+    const store = loadTournamentStore(nowDate);
+    for (const [k, existing] of Object.entries(store.records)) {
+      if (
+        k !== canonical &&
+        (nickSlug(k) === canonical ||
+          nickSlug(existing.playerId || "") === canonical ||
+          (cleanRec.nick && nickSlug(existing.nick || "") === canonical))
+      ) {
+        delete store.records[k];
+      }
+    }
+    store.records[canonical] = cleanRec;
+    const evaluated = evaluateTournamentStandings(store.records, nowDate.getTime());
+    store.records = evaluated.updatedRecords;
+    saveTournamentStore(store);
+    window.dispatchEvent(
+      new CustomEvent("desafios:weekly-tournament-updated", { detail: store }),
+    );
+  }
+
+  if (options?.syncCloud !== false) {
+    return pushSingleTournamentPlayerToPlayFab(cleanRec, options?.seasonId);
+  }
+  return true;
+}
+
 export async function syncWeeklyTournamentWithPlayFab(force = false): Promise<void> {
   if (!force && inFlightTournamentSyncPromise) return inFlightTournamentSyncPromise;
   if (!force && Date.now() - lastTournamentSyncCompletedAt < TOURNAMENT_SYNC_TTL_MS) return;
@@ -1388,11 +1564,13 @@ async function runSyncWeeklyTournamentWithPlayFab(): Promise<void> {
     /* ignore */
   }
 
-  // 2. Prioriza o ticket administrativo de serviço para ter permissão global no SharedGroupData
+  // 2. Prioriza o ticket administrativo de serviço para leitura global no SharedGroupData
   let ticket = await getAdminPlayFabTicket();
+  const session = loadStoredSession();
   if (!ticket) {
-    const session = loadStoredSession();
-    ticket = session?.sessionTicket ?? null;
+    ticket = session?.sessionTicket && !session.sessionTicket.startsWith("admin-")
+      ? session.sessionTicket
+      : null;
   }
   if (!ticket) return;
 
@@ -1415,7 +1593,7 @@ async function runSyncWeeklyTournamentWithPlayFab(): Promise<void> {
       ensuredTournamentGroups.add(groupId);
     }
 
-    // 2. Busca os competidores remotos no grupo oficial da temporada
+    // 2. Busca todos os registros remotos (chaves individuais `rnk_<slug>` + fallback somente-leitura do legado `Standings`)
     const getRes = await fetch(`https://${titleId}.playfabapi.com/Client/GetSharedGroupData`, {
       method: "POST",
       headers: {
@@ -1428,17 +1606,11 @@ async function runSyncWeeklyTournamentWithPlayFab(): Promise<void> {
       data?: { Data?: Record<string, { Value: string }> };
     };
 
-    let changed = false;
-    let remoteRecords: Record<string, TournamentPlayerRecord> = {};
-    if (json.data?.Data?.Standings?.Value) {
-      try {
-        remoteRecords = JSON.parse(json.data.Data.Standings.Value);
-      } catch {
-        remoteRecords = {};
-      }
-    }
+    const parsedCloud = parseTournamentSharedGroupRecords(json.data?.Data);
+    const remoteRecords: Record<string, TournamentPlayerRecord> = { ...parsedCloud.records };
+    const perPlayerKeys = parsedCloud.perPlayerKeys;
 
-    // Se for Temporada 1 e ainda não verificou o legado nesta sessão, migra da chave semanal legada se necessário
+    // Se for Temporada 1 e ainda não verificou o legado semanal nesta sessão, lê em modo somente-leitura para não perder histórico
     if (seasonId === 1 && !checkedLegacyTournamentSeason1) {
       checkedLegacyTournamentSeason1 = true;
       try {
@@ -1454,17 +1626,12 @@ async function runSyncWeeklyTournamentWithPlayFab(): Promise<void> {
         const legacyJson = (await legacyRes.json()) as {
           data?: { Data?: Record<string, { Value: string }> };
         };
-        if (legacyJson.data?.Data?.Standings?.Value) {
-          const legacyRecords = JSON.parse(legacyJson.data.Data.Standings.Value) as Record<
-            string,
-            TournamentPlayerRecord
-          >;
-          for (const [id, lr] of Object.entries(legacyRecords)) {
-            const cur = remoteRecords[id];
-            if (!cur || (lr.tournamentPoints ?? 0) > (cur.tournamentPoints ?? 0)) {
-              remoteRecords[id] = lr;
-              changed = true;
-            }
+        const legacyParsed = parseTournamentSharedGroupRecords(legacyJson.data?.Data);
+        for (const [canonical, lr] of Object.entries(legacyParsed.records)) {
+          if (perPlayerKeys.has(canonical)) continue; // Chave individual `rnk_<slug>` tem prioridade absoluta
+          const cur = remoteRecords[canonical];
+          if (!cur || (lr.tournamentPoints ?? 0) > (cur.tournamentPoints ?? 0)) {
+            remoteRecords[canonical] = lr;
           }
         }
       } catch {
@@ -1473,157 +1640,150 @@ async function runSyncWeeklyTournamentWithPlayFab(): Promise<void> {
     }
 
     const reg = loadRegistry();
+    const activeSlug = session?.playerId ? nickSlug(session.playerId) : "";
 
-    for (const [id, r] of Object.entries(remoteRecords)) {
+    const findAccByCanonical = (canonical: string, nick?: string) => {
+      const nickLower = (nick || "").toLowerCase().trim();
       const matchKey = Object.keys(reg).find(
         (k) =>
-          k.toLowerCase() === id.toLowerCase() ||
-          reg[k].profile.id?.toLowerCase() === id.toLowerCase() ||
-          reg[k].profile.nick?.toLowerCase() === r.nick?.toLowerCase() ||
-          reg[k].profile.nickNormalized?.toLowerCase() === r.nick?.toLowerCase(),
+          nickSlug(k) === canonical ||
+          nickSlug(reg[k].profile.id || "") === canonical ||
+          nickSlug(reg[k].profile.nickNormalized || "") === canonical ||
+          (nickLower && reg[k].profile.nick?.toLowerCase().trim() === nickLower),
       );
-      const acc = matchKey ? reg[matchKey] : undefined;
-      const effLevel = r.level ?? acc?.profile?.level ?? 1;
+      return matchKey ? { key: matchKey, acc: reg[matchKey] } : null;
+    };
 
-      // Alunos abaixo do Nível 3 são descartados e purgados do store
-      if (effLevel < TOURNAMENT_MIN_LEVEL) {
-        if (store.records[id]) {
-          delete store.records[id];
-          changed = true;
-        }
+    // 3. Constrói a visão local como reflexo estrito da verdade do servidor
+    //    (Apenas o jogador atualmente logado pode reconciliar um ganho local ainda não enviado para sua própria chave `rnk_<slug>`)
+    const serverReflected: Record<string, TournamentPlayerRecord> = {};
+    let activePlayerNeedsCloudPush: TournamentPlayerRecord | null = null;
+
+    for (const [canonical, r] of Object.entries(remoteRecords)) {
+      const found = findAccByCanonical(canonical, r.nick);
+      const isAccAdmin = Boolean(found?.acc.profile.isAdmin);
+      const effLevel = Math.max(r.level ?? 1, found?.acc.profile.level ?? 1);
+
+      if (!isAccAdmin && effLevel < TOURNAMENT_MIN_LEVEL) {
         continue;
       }
 
-      const existingKey = Object.keys(store.records).find(
-        (k) =>
-          k.toLowerCase() === id.toLowerCase() ||
-          store.records[k].playerId?.toLowerCase() === id.toLowerCase() ||
-          (r.nick && store.records[k].nick?.toLowerCase() === r.nick.toLowerCase()),
-      );
-      const targetKey = existingKey ?? id;
-      const local = store.records[targetKey];
-      const remotePts = r.tournamentPoints ?? 0;
-      const localPts = local ? (local.tournamentPoints ?? 0) : 0;
-      const remoteNewer = (r.updatedAt ?? 0) > (local?.updatedAt ?? 0);
-      const localIsNewer = Boolean(local && (local.updatedAt ?? 0) > (r.updatedAt ?? 0));
+      const isActivePlayer = Boolean(activeSlug && canonical === activeSlug);
+      const localRec = isActivePlayer
+        ? Object.values(store.records).find(
+            (lr) =>
+              nickSlug(lr.playerId || "") === canonical ||
+              nickSlug(lr.nick || "") === canonical,
+          )
+        : undefined;
 
-      if (!local || (!localIsNewer && remotePts >= localPts) || remoteNewer) {
-        const mergedPts =
-          localIsNewer
-            ? localPts
-            : remoteNewer
-              ? remotePts
-              : Math.max(remotePts, localPts);
-        store.records[targetKey] = {
-          ...(local ?? {}),
+      if (isActivePlayer && localRec && (localRec.updatedAt ?? 0) > (r.updatedAt ?? 0)) {
+        const mergedActive: TournamentPlayerRecord = {
           ...r,
-          tournamentPoints: mergedPts,
-          bestScore: Math.max(r.bestScore ?? 0, local?.bestScore ?? 0),
-          updatedAt: Math.max(r.updatedAt ?? 0, local?.updatedAt ?? 0),
+          ...localRec,
+          playerId: canonical,
+          level: effLevel,
         };
-        changed = true;
+        serverReflected[canonical] = mergedActive;
+        activePlayerNeedsCloudPush = mergedActive;
+      } else {
+        serverReflected[canonical] = {
+          ...r,
+          playerId: canonical,
+          level: effLevel,
+        };
       }
     }
 
-    // Purga qualquer registro residual em store.records de alunos com level < TOURNAMENT_MIN_LEVEL
-    for (const [id, r] of Object.entries(store.records)) {
-      const matchKey = Object.keys(reg).find(
-        (k) =>
-          k.toLowerCase() === id.toLowerCase() ||
-          reg[k].profile.id?.toLowerCase() === id.toLowerCase() ||
-          reg[k].profile.nick?.toLowerCase() === r.nick?.toLowerCase() ||
-          reg[k].profile.nickNormalized?.toLowerCase() === r.nick?.toLowerCase(),
+    // Se o jogador ativo tem registro local elegível que ainda não existe no servidor, preserva e sobe APENAS sua própria chave
+    if (activeSlug && !serverReflected[activeSlug]) {
+      const localActive = Object.values(store.records).find(
+        (lr) =>
+          nickSlug(lr.playerId || "") === activeSlug ||
+          nickSlug(lr.nick || "") === activeSlug,
       );
-      const acc = matchKey ? reg[matchKey] : undefined;
-      const effLevel = r.level ?? acc?.profile?.level ?? 1;
-      if (effLevel < TOURNAMENT_MIN_LEVEL) {
-        delete store.records[id];
-        changed = true;
+      const foundActive = findAccByCanonical(activeSlug, localActive?.nick);
+      const isAccAdmin = Boolean(foundActive?.acc.profile.isAdmin);
+      const effLevel = Math.max(localActive?.level ?? 1, foundActive?.acc.profile.level ?? 1);
+      if (localActive && (isAccAdmin || effLevel >= TOURNAMENT_MIN_LEVEL) && (localActive.tournamentPoints ?? 0) > 0) {
+        const cleanActive: TournamentPlayerRecord = {
+          ...localActive,
+          playerId: activeSlug,
+          level: effLevel,
+        };
+        serverReflected[activeSlug] = cleanActive;
+        activePlayerNeedsCloudPush = cleanActive;
       }
     }
 
-    const evaluated = evaluateTournamentStandings(store.records);
+    // Complementa com perfis do Roster na nuvem (somente leitura) que já têm pontos mas ainda não tinham chave em TOURNAMENT_SEASON_N
+    for (const acc of Object.values(reg)) {
+      const p = acc?.profile;
+      if (!p || p.id?.startsWith("admin-system")) continue;
+      if (!p.isAdmin && (p.level ?? 1) < TOURNAMENT_MIN_LEVEL) continue;
+      const canonical = nickSlug(p.nickNormalized || p.nick || p.id);
+      if (!canonical || serverReflected[canonical]) continue;
+      const pPts = resolveCanonicalTournamentPoints({
+        level: p.level,
+        isAdmin: Boolean(p.isAdmin),
+        tournamentPoints: p.tournamentPoints,
+        bestTournamentPoints: p.bestTournamentPoints,
+      });
+      if (pPts <= 0) continue;
+      const nowDate = getAuthoritativeNow();
+      const pStageInfo = stageForPlayer(p.school, p.birthdate, nowDate, p.ageStage);
+      serverReflected[canonical] = {
+        playerId: canonical,
+        nick: p.nick,
+        fullName: p.full_name,
+        school: p.school,
+        birthdate: p.birthdate,
+        age: p.birthdate ? ageFrom(p.birthdate, nowDate) : pStageInfo.minAge,
+        stage: pStageInfo.id,
+        level: p.level,
+        bestScore: pPts,
+        totalEntries: Math.max(1, p.dailyTournamentEntries ?? 1),
+        tournamentPoints: pPts,
+        highestRankId: getTournamentRank(pPts).currentRank.id,
+        activeTop5Since: null,
+        accumulatedTop5Ms: 0,
+        updatedAt: Date.parse(acc.updatedAt || "") || nowDate.getTime(),
+      };
+    }
+
+    const evaluated = evaluateTournamentStandings(serverReflected);
     store.records = evaluated.updatedRecords;
     saveTournamentStore(store);
 
-    // 3. Atualiza o catálogo local de alunos no registro para sincronizar tournamentPoints e rankId
+    // 4. Atualiza apenas o catálogo local (sem sobrescrever o Roster na nuvem por clientes comuns)
     let regUpdated = false;
-    const rosterUpdatesForCloud: Record<string, string> = {};
-
-    for (const [id, r] of Object.entries(store.records)) {
-      const matchKey = Object.keys(reg).find(
-        (k) =>
-          k.toLowerCase() === id.toLowerCase() ||
-          reg[k].profile.id?.toLowerCase() === id.toLowerCase() ||
-          reg[k].profile.nick?.toLowerCase() === r.nick.toLowerCase() ||
-          reg[k].profile.nickNormalized?.toLowerCase() === r.nick.toLowerCase(),
-      );
-      if (matchKey) {
-        const acc = reg[matchKey];
-        const rPts = r.tournamentPoints ?? 0;
-        if (rPts > (acc.profile.tournamentPoints ?? 0)) {
-          acc.profile.tournamentPoints = rPts;
-          acc.profile.bestTournamentPoints = Math.max(acc.profile.bestTournamentPoints ?? 0, rPts);
-          acc.profile.tournamentRankId = getTournamentRank(rPts).currentRank.id;
-          acc.updatedAt = new Date().toISOString();
-          regUpdated = true;
-
-          if (acc.profile.nickNormalized) {
-            rosterUpdatesForCloud[getStudentRosterCloudKey(acc.profile)] = JSON.stringify({
-              ...acc.profile,
-              stats: acc.stats,
-              updatedAt: acc.updatedAt,
-            });
-          }
-        }
+    for (const [canonical, r] of Object.entries(store.records)) {
+      const found = findAccByCanonical(canonical, r.nick);
+      if (!found) continue;
+      const acc = found.acc;
+      const rPts = Math.max(0, Math.floor(r.tournamentPoints ?? 0));
+      const hasAuthoritativePerPlayerKey = perPlayerKeys.has(canonical);
+      const curProfilePts = Math.max(0, Math.floor(acc.profile.tournamentPoints ?? 0));
+      if (
+        (hasAuthoritativePerPlayerKey && rPts !== curProfilePts) ||
+        (!hasAuthoritativePerPlayerKey && rPts > curProfilePts)
+      ) {
+        acc.profile.tournamentPoints = rPts;
+        acc.profile.bestTournamentPoints = Math.max(acc.profile.bestTournamentPoints ?? 0, rPts);
+        acc.profile.tournamentRankId = getTournamentRank(rPts).currentRank.id;
+        regUpdated = true;
       }
     }
     if (regUpdated) {
       saveRegistry(reg);
     }
 
-    // 4. Atualiza na nuvem apenas quando os dados mesclados diferirem do snapshot remoto
-    const remoteStandingsRaw = json.data?.Data?.Standings?.Value ?? "";
-    const mergedStandingsRaw = JSON.stringify(store.records);
-    if (mergedStandingsRaw !== remoteStandingsRaw && Object.keys(store.records).length > 0) {
-      await fetch(`https://${titleId}.playfabapi.com/Client/UpdateSharedGroupData`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Authorization": ticket,
-        },
-        body: JSON.stringify({
-          TitleId: titleId,
-          SharedGroupId: groupId,
-          Data: { Standings: mergedStandingsRaw },
-          Permission: "Public",
-        }),
-      });
+    // 5. Envia para a nuvem EXCLUSIVAMENTE a chave individual do jogador ativo (nunca sobrescreve `Standings` nem outros alunos!)
+    if (activePlayerNeedsCloudPush) {
+      await pushSingleTournamentPlayerToPlayFab(activePlayerNeedsCloudPush, seasonId);
     }
 
-    // Se temos credencial de ADM e houve atualização no catálogo de alunos, atualiza também o SEMED_STUDENT_ROSTER_V1
-    const adminTicket = await getAdminPlayFabTicket();
-    if (adminTicket && Object.keys(rosterUpdatesForCloud).length > 0) {
-      try {
-        await fetch(`https://${titleId}.playfabapi.com/Client/UpdateSharedGroupData`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Authorization": adminTicket,
-          },
-          body: JSON.stringify({
-            TitleId: titleId,
-            SharedGroupId: "SEMED_STUDENT_ROSTER_V1",
-            Data: rosterUpdatesForCloud,
-            Permission: "Public",
-          }),
-        });
-      } catch {
-        /* ignore roster sync error */
-      }
-    }
-
-    // 5. Notifica todas as abas e componentes da tela em tempo real
+    // 6. Notifica todas as abas e componentes da tela em tempo real
     if (typeof window !== "undefined") {
       window.dispatchEvent(
         new CustomEvent("desafios:weekly-tournament-updated", { detail: store }),
@@ -1849,7 +2009,7 @@ export async function recordWeeklyTournamentAttempt(args: {
   const newTournamentPoints = Math.max(0, curPoints + pointsDelta);
   const rankInfo = getTournamentRank(newTournamentPoints);
 
-  store.records[canonicalKey] = {
+  const savedRecord: TournamentPlayerRecord = {
     playerId: canonicalKey,
     nick: args.profile.nick,
     fullName: args.profile.full_name,
@@ -1870,6 +2030,7 @@ export async function recordWeeklyTournamentAttempt(args: {
     accumulatedTop5Ms: existing?.accumulatedTop5Ms ?? 0,
     updatedAt: nowMs,
   };
+  store.records[canonicalKey] = savedRecord;
 
   const evaluated = evaluateTournamentStandings(store.records, nowMs, pStage.id);
   store.records = evaluated.updatedRecords;
@@ -1879,7 +2040,78 @@ export async function recordWeeklyTournamentAttempt(args: {
       new CustomEvent("desafios:weekly-tournament-updated", { detail: store }),
     );
   }
-  void syncWeeklyTournamentWithPlayFab();
+  // Envia exclusivamente a chave individual `rnk_<slug>` deste jogador (nunca sobrescreve outros competidores)
+  void pushSingleTournamentPlayerToPlayFab(savedRecord);
+
+  // Registro oficial no Extrato de Auditoria (type: "tournament_pts")
+  if (matchPoints > 0) {
+    try {
+      const gName = GAME_NAMES[store.gameId] || store.gameId;
+      const multTag = rankedMultiplier > 1 ? ` [${rankedMultiplier}x]` : "";
+      recordScoreLedgerEntry({
+        playerId: args.profile.id || args.profile.nickNormalized || args.profile.nick,
+        playerNick: args.profile.nick,
+        type: "tournament_pts",
+        source: "torneio_semanal",
+        amount: matchPoints,
+        balanceAfter: curPoints + matchPoints,
+        reason: `Partida Ranqueada (${gName} • ${safeCorrect} acertos, ${safeWrong} erros)${multTag}`,
+        metadata: {
+          gameId: store.gameId,
+          mode: "torneio_semanal",
+          score: safeScore,
+        },
+      });
+    } catch {
+      /* ignore ledger error */
+    }
+  }
+  if (dailyBonusAwarded) {
+    try {
+      recordScoreLedgerEntry({
+        playerId: args.profile.id || args.profile.nickNormalized || args.profile.nick,
+        playerNick: args.profile.nick,
+        type: "tournament_pts",
+        source: "torneio_semanal",
+        amount: 25,
+        balanceAfter: newTournamentPoints,
+        reason: "Bônus Diário Ranqueada: 10 Partidas Perfeitas (+25 pts)",
+        metadata: { gameId: store.gameId, mode: "torneio_semanal" },
+      });
+    } catch {
+      /* ignore ledger error */
+    }
+  }
+
+  // Opcional: notifica CloudScript autoritativo `RecordRankedMatch` se publicado no PlayFab
+  if (isPlayFabConfigured() && pointsDelta > 0) {
+    const titleId = getPlayFabTitleId();
+    const session = loadStoredSession();
+    const tk = session?.sessionTicket;
+    if (titleId && tk && !tk.startsWith("admin-")) {
+      void fetch(`https://${titleId}.playfabapi.com/Client/ExecuteCloudScript`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Authorization": tk,
+        },
+        body: JSON.stringify({
+          FunctionName: "RecordRankedMatch",
+          FunctionParameter: {
+            seasonId: store.seasonId ?? loadAdminConfig().rankedSeasonId ?? 1,
+            gameId: store.gameId,
+            score: safeScore,
+            correct: safeCorrect,
+            wrong: safeWrong,
+            pointsDelta,
+            newTournamentPoints,
+            dailyBonusAwarded,
+          },
+          GeneratePlayStreamEvent: false,
+        }),
+      }).catch(() => {});
+    }
+  }
 
   const myRow =
     evaluated.allStandings.find(

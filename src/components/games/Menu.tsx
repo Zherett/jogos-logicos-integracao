@@ -121,7 +121,8 @@ export function Menu({
   const isAdminBypass = isAdminOrTestAccount(playerProfile, isAdmin);
   const effectiveX1Enabled = Boolean(x1Enabled || isAdminBypass);
   const effectiveX1ArenaClosed = Boolean(x1ArenaClosed && !isAdminBypass);
-  const canTournament = Boolean(playerProfile && (isAdminBypass || playerLevel >= TOURNAMENT_MIN_LEVEL));
+  // Na Ranqueada, contas de teste (LORD e ZHERET) seguem exatamente as mesmas regras dos alunos (Nível 3+)
+  const canTournament = Boolean(playerProfile && (playerProfile.isAdmin || playerLevel >= TOURNAMENT_MIN_LEVEL));
   const canX1 = Boolean(playerProfile && (isAdminBypass || (playerLevel >= X1_MIN_LEVEL && x1OpenNow)));
 
   const [legalOpen, setLegalOpen] = useState(false);

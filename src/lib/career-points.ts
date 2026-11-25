@@ -501,14 +501,14 @@ export function sanitizeInflatedCareerPoints(
   }
   profile.achievedLevelsPoints = Array.from(lvlSet);
 
-  // Restaura achievedTournamentTiers de acordo com a patente máxima já alcançada
+  // Restaura achievedTournamentTiers de acordo com a patente máxima já alcançada (alinhado a TOURNAMENT_RANKS)
   const tierSet = new Set<string>(Array.isArray(profile.achievedTournamentTiers) ? profile.achievedTournamentTiers : []);
   const maxPts = Math.max(profile.tournamentPoints ?? 0, profile.bestTournamentPoints ?? 0);
-  if (maxPts >= 31) tierSet.add("prata");
-  if (maxPts >= 61) tierSet.add("ouro");
-  if (maxPts >= 91) tierSet.add("platina");
-  if (maxPts >= 121) tierSet.add("diamante");
-  if (maxPts >= 151) tierSet.add("mestre");
+  if (maxPts >= 91) tierSet.add("prata");
+  if (maxPts >= 241) tierSet.add("ouro");
+  if (maxPts >= 451) tierSet.add("platina");
+  if (maxPts >= 681) tierSet.add("diamante");
+  if (maxPts >= 850) tierSet.add("mestre");
   profile.achievedTournamentTiers = Array.from(tierSet);
 
   // Higieniza medalhas incompatíveis com o histórico real de partidas do aluno

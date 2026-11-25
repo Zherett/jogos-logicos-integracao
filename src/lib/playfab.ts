@@ -21,6 +21,12 @@ import {
 } from "./game-codes.ts";
 import { computeNextMonthlyTournamentDates, computeSeasonDates, extendSeasonDate } from "./season-cycle.ts";
 import { ensureLevel5InitialLetterUnlock, mergeMonotonicCountRecords } from "./cosmetics-catalog.ts";
+import {
+  deserializeCardsCatalogChunks,
+  MAX_CARDS_CHUNKS,
+  serializeCardsCatalogChunks,
+  type CardDefinition,
+} from "./cards-catalog.ts";
 import type { PlayerAvatarConfig } from "./avatar.ts";
 import {
   abbreviateStudentName,
@@ -158,7 +164,13 @@ import {
   getTournamentStoreRecord,
   getWeekInfo,
   finalizeRankedSeasonAndAwardMedalsViaInbox,
+  parseTournamentSharedGroupRecords,
+  pushSingleTournamentPlayerToPlayFab,
+  upsertTournamentRecordForPlayer,
   TOURNAMENT_DAILY_FREE_ENTRIES,
+  TOURNAMENT_RANKS,
+  RANKED_MASTERY_MEDAL_BY_RANK,
+  type TournamentPlayerRecord,
 } from "./weekly-tournament.ts";
 import {
   createInboxMessage,
@@ -170,7 +182,12 @@ import {
 } from "./inbox-messages.ts";
 import { checkEventObjectiveMet, getEventActivationKey } from "./custom-events.ts";
 import { invalidatePioneersCache } from "./medal-pioneers.ts";
-import { recordScoreLedgerEntry } from "./score-history-ledger.ts";
+import {
+  getPlayerRawLedgerEntries,
+  mergePlayerScoreLedgerEntries,
+  recordScoreLedgerEntry,
+  type ScoreLedgerEntry,
+} from "./score-history-ledger.ts";
 import {
   mergeDungeonStates,
   recordExternalMatchForDungeonStamina,
@@ -363,6 +380,7 @@ export interface PlayerProfile {
   achievedLevelsPoints?: number[];
   tournamentMedals?: TournamentMedal[];
   unlockedMedals?: PlayerUnlockedMedal[];
+  scoreLedger?: ScoreLedgerEntry[];
   eventProgress?: Record<string, EventProgressData>;
   stats?: GameStatRow[];
   badges: Badge[];
@@ -1444,11 +1462,43 @@ const ADMIN_CONFIG_USERDATA_KEY = "PlatformAdminConfig";
 const ADMIN_NOTIFS_USERDATA_KEY = "PlatformAdminMedalsNotifs";
 const ADMIN_INBOX_USERDATA_KEY = "PlatformAdminInbox";
 const ADMIN_CATALOGS_USERDATA_KEY = "PlatformAdminCatalogs";
+export const ADMIN_CARDS_META_USERDATA_KEY = "PlatformAdminCardsMeta";
+export const ADMIN_CARDS_CHUNK_PREFIX = "PlatformAdminCards_";
+const INITIAL_CARDS_CHUNK_READ_COUNT = 8;
 const REMOTE_CONFIG_CACHE_KEY = "desafios-remote-admin-config-v1";
+const LOCAL_CARDS_BACKUP_KEY = "desafios-cards-catalog-backup-v1";
 const VIEWER_TICKET_KEY = "desafios-playfab-viewer-ticket-v1";
 const VIEWER_USERNAME = "semedvisitante";
 const VIEWER_PASSWORD = "SemedVisitante2026";
 const VIEWER_TICKET_TTL_MS = 20 * 60 * 60 * 1000; // tickets PlayFab valem 24h
+
+export interface PushAdminConfigOptions {
+  /** Autoriza explicitamente gravar alterações no catálogo de cartas (usado pela aba Cartas & Pacotes). */
+  allowCardsCatalogWrite?: boolean;
+  /** Confirmação explícita para esvaziar o catálogo de cartas na nuvem (0 cartas). */
+  allowEmptyCardsCatalog?: boolean;
+}
+
+function storeLocalCardsBackup(cards: CardDefinition[]) {
+  if (typeof window === "undefined" || !Array.isArray(cards) || cards.length === 0) return;
+  try {
+    window.localStorage.setItem(LOCAL_CARDS_BACKUP_KEY, JSON.stringify(cards));
+  } catch {
+    /* ignore */
+  }
+}
+
+function loadLocalCardsBackup(): CardDefinition[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(LOCAL_CARDS_BACKUP_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as CardDefinition[]) : [];
+  } catch {
+    return [];
+  }
+}
 
 let cachedViewerTicket: string | null = null;
 let cachedViewerTicketTime = 0;
@@ -1585,48 +1635,137 @@ function clearViewerTicket() {
 }
 
 async function readRemoteAdminConfigRaw(ticket: string): Promise<{ raw: string | null; ok: boolean }> {
+  const initialKeys: string[] = [
+    ADMIN_CONFIG_USERDATA_KEY,
+    ADMIN_NOTIFS_USERDATA_KEY,
+    ADMIN_INBOX_USERDATA_KEY,
+    ADMIN_CATALOGS_USERDATA_KEY,
+    ADMIN_CARDS_META_USERDATA_KEY,
+  ];
+  for (let i = 0; i < INITIAL_CARDS_CHUNK_READ_COUNT; i++) {
+    initialKeys.push(`${ADMIN_CARDS_CHUNK_PREFIX}${i}`);
+  }
+
   const res = await callPlayFabClient<{ Data?: Record<string, { Value: string }> }>(
     "GetUserData",
     {
       PlayFabId: ADMIN_CONFIG_OWNER_PLAYFAB_ID,
-      Keys: [
-        ADMIN_CONFIG_USERDATA_KEY,
-        ADMIN_NOTIFS_USERDATA_KEY,
-        ADMIN_INBOX_USERDATA_KEY,
-        ADMIN_CATALOGS_USERDATA_KEY,
-      ],
+      Keys: initialKeys,
     },
     ticket,
   );
-  if (!res.error) {
-    const baseRaw = res.data?.Data?.[ADMIN_CONFIG_USERDATA_KEY]?.Value ?? null;
-    if (baseRaw) {
+
+  // Nunca cai em fallback de SharedGroup congelado quando GetUserData falha por rede/429.
+  if (res.error) {
+    return { raw: null, ok: false };
+  }
+
+  const dataMap = res.data?.Data ?? {};
+  const baseRaw = dataMap[ADMIN_CONFIG_USERDATA_KEY]?.Value ?? null;
+  if (baseRaw) {
+    let parsed: Partial<PlatformAdminConfig>;
+    try {
+      parsed = JSON.parse(baseRaw) as Partial<PlatformAdminConfig>;
+    } catch {
+      return { raw: null, ok: false };
+    }
+
+    // Parse isolado por chave: erro em notificações ou inbox JAMAIS descarta catálogos/cartas
+    const notifsRaw = dataMap[ADMIN_NOTIFS_USERDATA_KEY]?.Value;
+    if (notifsRaw) {
       try {
-        const parsed = JSON.parse(baseRaw) as Partial<PlatformAdminConfig>;
-        const notifsRaw = res.data?.Data?.[ADMIN_NOTIFS_USERDATA_KEY]?.Value;
-        if (notifsRaw) {
-          parsed.adminMedalNotifications = JSON.parse(notifsRaw);
-        }
-        const inboxRaw = res.data?.Data?.[ADMIN_INBOX_USERDATA_KEY]?.Value;
-        if (inboxRaw) {
-          parsed.inboxMessages = JSON.parse(inboxRaw);
-        }
-        const catalogsRaw = res.data?.Data?.[ADMIN_CATALOGS_USERDATA_KEY]?.Value;
-        if (catalogsRaw) {
-          const catObj = JSON.parse(catalogsRaw) as Partial<PlatformAdminConfig>;
-          if (catObj.cardsCatalog) parsed.cardsCatalog = catObj.cardsCatalog;
-          if (catObj.cardPacks) parsed.cardPacks = catObj.cardPacks;
-          if (catObj.chestsCatalog) parsed.chestsCatalog = catObj.chestsCatalog;
-          if (catObj.avatarsCatalog) parsed.avatarsCatalog = catObj.avatarsCatalog;
-          if (catObj.aurasCatalog) parsed.aurasCatalog = catObj.aurasCatalog;
-        }
-        return { raw: JSON.stringify(parsed), ok: true };
+        parsed.adminMedalNotifications = JSON.parse(notifsRaw);
       } catch {
-        return { raw: baseRaw, ok: true };
+        /* mantém ausente/local sem afetar demais chaves */
       }
     }
+
+    const inboxRaw = dataMap[ADMIN_INBOX_USERDATA_KEY]?.Value;
+    if (inboxRaw) {
+      try {
+        parsed.inboxMessages = JSON.parse(inboxRaw);
+      } catch {
+        /* mantém ausente/local sem afetar demais chaves */
+      }
+    }
+
+    let legacyCardsCatalog: CardDefinition[] | undefined;
+    const catalogsRaw = dataMap[ADMIN_CATALOGS_USERDATA_KEY]?.Value;
+    if (catalogsRaw) {
+      try {
+        const catObj = JSON.parse(catalogsRaw) as Partial<PlatformAdminConfig>;
+        if (Array.isArray(catObj.cardsCatalog)) legacyCardsCatalog = catObj.cardsCatalog;
+        if (catObj.cardPacks) parsed.cardPacks = catObj.cardPacks;
+        if (catObj.chestsCatalog) parsed.chestsCatalog = catObj.chestsCatalog;
+        if (catObj.avatarsCatalog) parsed.avatarsCatalog = catObj.avatarsCatalog;
+        if (catObj.aurasCatalog) parsed.aurasCatalog = catObj.aurasCatalog;
+      } catch {
+        /* mantém ausente/local sem afetar demais chaves */
+      }
+    }
+
+    const cardsMetaRaw = dataMap[ADMIN_CARDS_META_USERDATA_KEY]?.Value;
+    if (cardsMetaRaw) {
+      let expectedChunks = 0;
+      try {
+        const metaPreview = JSON.parse(cardsMetaRaw) as { chunkCount?: number };
+        if (typeof metaPreview.chunkCount === "number" && Number.isFinite(metaPreview.chunkCount)) {
+          expectedChunks = Math.max(0, Math.min(MAX_CARDS_CHUNKS, Math.floor(metaPreview.chunkCount)));
+        }
+      } catch {
+        expectedChunks = 0;
+      }
+
+      const chunkRaws: Array<string | null | undefined> = [];
+      for (let i = 0; i < Math.min(expectedChunks, INITIAL_CARDS_CHUNK_READ_COUNT); i++) {
+        chunkRaws[i] = dataMap[`${ADMIN_CARDS_CHUNK_PREFIX}${i}`]?.Value;
+      }
+
+      // Busca chunks extras (8..expectedChunks-1) se o catálogo for muito grande
+      if (expectedChunks > INITIAL_CARDS_CHUNK_READ_COUNT) {
+        const extraKeys: string[] = [];
+        for (let i = INITIAL_CARDS_CHUNK_READ_COUNT; i < expectedChunks; i++) {
+          extraKeys.push(`${ADMIN_CARDS_CHUNK_PREFIX}${i}`);
+        }
+        const extraRes = await callPlayFabClient<{ Data?: Record<string, { Value: string }> }>(
+          "GetUserData",
+          {
+            PlayFabId: ADMIN_CONFIG_OWNER_PLAYFAB_ID,
+            Keys: extraKeys,
+          },
+          ticket,
+        );
+        if (!extraRes.error && extraRes.data?.Data) {
+          for (let i = INITIAL_CARDS_CHUNK_READ_COUNT; i < expectedChunks; i++) {
+            chunkRaws[i] = extraRes.data.Data[`${ADMIN_CARDS_CHUNK_PREFIX}${i}`]?.Value;
+          }
+        }
+      }
+
+      const chunkRes = deserializeCardsCatalogChunks(cardsMetaRaw, chunkRaws);
+      if (chunkRes.ok) {
+        parsed.cardsCatalog = chunkRes.cards;
+        if (chunkRes.cards.length > 0) {
+          storeLocalCardsBackup(chunkRes.cards);
+        }
+      } else if (legacyCardsCatalog && legacyCardsCatalog.length > 0) {
+        parsed.cardsCatalog = legacyCardsCatalog;
+        storeLocalCardsBackup(legacyCardsCatalog);
+      } else {
+        // Leitura parcial de chunks: omite cardsCatalog para não sobrescrever o cache local
+        delete parsed.cardsCatalog;
+      }
+    } else if (Array.isArray(legacyCardsCatalog)) {
+      parsed.cardsCatalog = legacyCardsCatalog;
+      if (legacyCardsCatalog.length > 0) {
+        storeLocalCardsBackup(legacyCardsCatalog);
+      }
+    }
+
+    return { raw: JSON.stringify(parsed), ok: true };
   }
-  // Fallback secundário para SharedGroup caso exista
+
+  // Fallback secundário para SharedGroup APENAS se a conta oficial respondeu 200 OK sem nenhum PlatformAdminConfig
   const sgRes = await callPlayFabClient<{ Data?: Record<string, { Value: string }> }>(
     "GetSharedGroupData",
     { SharedGroupId: ADMIN_CONFIG_SHARED_GROUP_ID },
@@ -1635,18 +1774,30 @@ async function readRemoteAdminConfigRaw(ticket: string): Promise<{ raw: string |
   if (!sgRes.error && sgRes.data?.Data?.[ADMIN_CONFIG_USERDATA_KEY]?.Value) {
     return { raw: sgRes.data.Data[ADMIN_CONFIG_USERDATA_KEY].Value, ok: true };
   }
-  return { raw: null, ok: !res.error };
+  return { raw: null, ok: true };
 }
 
 function applyRemoteConfig(
   localCfg: PlatformAdminConfig,
   remote: Partial<PlatformAdminConfig>,
 ): PlatformAdminConfig {
+  // Se a leitura remota veio sem cardsCatalog (ex.: falha parcial de chunks), preserva o catálogo local/backup.
+  const preservedLocalCards =
+    Array.isArray(localCfg.cardsCatalog) && localCfg.cardsCatalog.length > 0
+      ? localCfg.cardsCatalog
+      : loadLocalCardsBackup();
+  const nextCardsCatalog = Array.isArray(remote.cardsCatalog)
+    ? remote.cardsCatalog
+    : preservedLocalCards;
+  if (nextCardsCatalog.length > 0) {
+    storeLocalCardsBackup(nextCardsCatalog);
+  }
   // A configuração publicada pelo ADM é sempre a fonte da verdade; preserva updatedAt remoto para evitar eventos redundantes.
   return saveAdminConfig(
     {
       ...localCfg,
       ...remote,
+      cardsCatalog: nextCardsCatalog,
       enabledGames: { ...DEFAULT_ENABLED_GAMES, ...(remote.enabledGames ?? {}) },
       gameCodes: { ...localCfg.gameCodes, ...(remote.gameCodes ?? {}) },
     } as PlatformAdminConfig,
@@ -1702,26 +1853,105 @@ export async function syncAdminConfigFromPlayFab(sessionTicket?: string): Promis
   return inFlightConfigSyncPromise;
 }
 
-export async function pushAdminConfigToPlayFab(config: PlatformAdminConfig): Promise<PlatformAdminConfig> {
+async function acquireCanonicalConfigWriteTicket(): Promise<string | null> {
+  let ticket = await getViewerPlayFabTicket();
+  if (ticket && isCanonicalViewerTicket(ticket)) {
+    return ticket;
+  }
+  clearViewerTicket();
+  ticket = await getViewerPlayFabTicket();
+  if (ticket && isCanonicalViewerTicket(ticket)) {
+    return ticket;
+  }
+  return null;
+}
+
+export async function pushAdminConfigToPlayFab(
+  config: PlatformAdminConfig,
+  options?: PushAdminConfigOptions,
+): Promise<PlatformAdminConfig> {
   const saved = saveAdminConfig(config);
   if (!isPlayFabConfigured()) {
     lastAdminCloudSyncError = "PlayFab não configurado.";
     return saved;
   }
 
-  // Sempre prioriza a conta dona do config (semedvisitante = ADMIN_CONFIG_OWNER_PLAYFAB_ID),
-  // garantindo que UpdateUserData grave exatamente no PlayFabId que todos os alunos leem em readRemoteAdminConfigRaw.
-  let ticket = (await getViewerPlayFabTicket()) ?? (await getAdminPlayFabTicket());
+  // Exige estritamente o ticket da conta oficial (semedvisitante = 1B2E1517154B2D49).
+  // Nunca grava em contas descartáveis ("semedv...") ou contas pessoais de ADM para evitar falso positivo.
+  let ticket = await acquireCanonicalConfigWriteTicket();
   if (!ticket) {
-    lastAdminCloudSyncError = "Não foi possível autenticar a conta de configuração no PlayFab (aguarde alguns segundos e tente novamente).";
+    lastAdminCloudSyncError =
+      "Não foi possível autenticar a conta oficial de configuração no PlayFab (1B2E1517154B2D49). Aguarde alguns segundos e tente novamente.";
     return saved;
   }
-  const raw = JSON.stringify(saved);
-  // Separa arrays/catálogos pesados em chaves próprias para nunca estourar o limite de 100 KB por chave no PlayFab
+
+  const incomingCards = Array.isArray(saved.cardsCatalog) ? saved.cardsCatalog : [];
+  if (incomingCards.length > 0) {
+    storeLocalCardsBackup(incomingCards);
+  }
+
+  // Verifica o estado atual do catálogo de cartas na nuvem antes de escrever (trava anti-wipe + isolamento)
+  let remoteHasCardsMeta = false;
+  let remoteCardsCount = 0;
+  let remotePrevChunkCount = 0;
+  let remoteLegacyCards: CardDefinition[] | null = null;
+
+  const inspectRes = await callPlayFabClient<{ Data?: Record<string, { Value: string }> }>(
+    "GetUserData",
+    {
+      PlayFabId: ADMIN_CONFIG_OWNER_PLAYFAB_ID,
+      Keys: [ADMIN_CARDS_META_USERDATA_KEY, ADMIN_CATALOGS_USERDATA_KEY],
+    },
+    ticket,
+  );
+  if (!inspectRes.error && inspectRes.data?.Data) {
+    const metaRaw = inspectRes.data.Data[ADMIN_CARDS_META_USERDATA_KEY]?.Value;
+    if (metaRaw) {
+      remoteHasCardsMeta = true;
+      try {
+        const metaObj = JSON.parse(metaRaw) as { totalCards?: number; chunkCount?: number };
+        remoteCardsCount = Math.max(0, Math.floor(Number(metaObj.totalCards) || 0));
+        remotePrevChunkCount = Math.max(0, Math.floor(Number(metaObj.chunkCount) || 0));
+      } catch {
+        /* ignore */
+      }
+    }
+    const legRaw = inspectRes.data.Data[ADMIN_CATALOGS_USERDATA_KEY]?.Value;
+    if (legRaw) {
+      try {
+        const legObj = JSON.parse(legRaw) as Partial<PlatformAdminConfig>;
+        if (Array.isArray(legObj.cardsCatalog) && legObj.cardsCatalog.length > 0) {
+          remoteLegacyCards = legObj.cardsCatalog;
+          if (!remoteHasCardsMeta) {
+            remoteCardsCount = legObj.cardsCatalog.length;
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  // Isolamento: somente a aba Cartas & Pacotes (allowCardsCatalogWrite) — ou migração inicial com cartas > 0 — grava nas chaves de cartas.
+  const shouldWriteCards =
+    Boolean(options?.allowCardsCatalogWrite) || (incomingCards.length > 0 && !remoteHasCardsMeta);
+
+  // Trava anti-wipe: bloqueia sobrescrever um catálogo remoto populado com 0 cartas sem confirmação explícita.
+  if (
+    shouldWriteCards &&
+    remoteCardsCount > 0 &&
+    incomingCards.length === 0 &&
+    !options?.allowEmptyCardsCatalog
+  ) {
+    lastAdminCloudSyncError = `Proteção anti-perda ativada: o servidor possui ${remoteCardsCount} carta(s) e o envio com catálogo vazio foi bloqueado.`;
+    return saved;
+  }
+
+  // Separa arrays/catálogos pesados em chaves próprias para nunca estourar limites do PlayFab
   const {
     adminMedalNotifications,
     inboxMessages,
-    cardsCatalog,
+    cardsCatalog: _omitCardsFromCore,
     cardPacks,
     chestsCatalog,
     avatarsCatalog,
@@ -1736,13 +1966,19 @@ export async function pushAdminConfigToPlayFab(config: PlatformAdminConfig): Pro
         .sort((a, b) => Date.parse(b?.createdAt || "") - Date.parse(a?.createdAt || ""))
         .slice(0, 80)
     : [];
-  const catalogsPayload = {
-    cardsCatalog,
+
+  // PlatformAdminCatalogs armazena apenas pacotes, baús, avatares e auras.
+  // Se o servidor ainda só tiver cartas no formato legado e esta chamada NÃO for da aba Cartas, preserva-as intactas.
+  const catalogsPayload: Record<string, unknown> = {
     cardPacks,
     chestsCatalog,
     avatarsCatalog,
     aurasCatalog,
+    ...(!remoteHasCardsMeta && !shouldWriteCards && remoteLegacyCards
+      ? { cardsCatalog: remoteLegacyCards }
+      : {}),
   };
+
   const dataPayload: Record<string, string> = {
     [ADMIN_CONFIG_USERDATA_KEY]: JSON.stringify(coreConfig),
     [ADMIN_NOTIFS_USERDATA_KEY]: JSON.stringify(trimmedNotifs),
@@ -1750,42 +1986,75 @@ export async function pushAdminConfigToPlayFab(config: PlatformAdminConfig): Pro
     [ADMIN_CATALOGS_USERDATA_KEY]: JSON.stringify(catalogsPayload),
   };
 
-  let res = await callPlayFabClient(
-    "UpdateUserData",
-    { Data: dataPayload, Permission: "Public" },
-    ticket,
-  );
-  // Se o ticket cacheado expirou, renova uma vez automaticamente (viewer canônico primeiro)
-  if (res.error) {
-    clearViewerTicket();
-    clearCachedAdminPlayFabTicket();
-    ticket = (await getViewerPlayFabTicket()) ?? (await getAdminPlayFabTicket());
-    if (ticket) {
-      res = await callPlayFabClient(
-        "UpdateUserData",
-        { Data: dataPayload, Permission: "Public" },
-        ticket,
-      );
+  const writeUpdateWithRetry = async (
+    payload: { Data?: Record<string, string>; KeysToRemove?: string[]; Permission: "Public" },
+  ) => {
+    let attempt = await callPlayFabClient("UpdateUserData", payload, ticket!);
+    if (attempt.error) {
+      clearViewerTicket();
+      clearCachedAdminPlayFabTicket();
+      const renewed = await acquireCanonicalConfigWriteTicket();
+      if (renewed) {
+        ticket = renewed;
+        attempt = await callPlayFabClient("UpdateUserData", payload, ticket);
+      }
+    }
+    return attempt;
+  };
+
+  // 1. Se autorizado, grava primeiro as fatias do catálogo de cartas em chaves dedicadas (PlatformAdminCards_0..N + Meta por último)
+  if (shouldWriteCards) {
+    const { meta, chunks } = serializeCardsCatalogChunks(incomingCards);
+    if (chunks.length > MAX_CARDS_CHUNKS) {
+      lastAdminCloudSyncError = `Catálogo de cartas excedeu o limite máximo de ${MAX_CARDS_CHUNKS} blocos.`;
+      return saved;
+    }
+
+    // Envia blocos de dados em lotes de até 4 chaves (~180 KB máx. por request, bem abaixo de 300 KB)
+    const CHUNKS_PER_REQUEST = 4;
+    for (let i = 0; i < chunks.length; i += CHUNKS_PER_REQUEST) {
+      const batchData: Record<string, string> = {};
+      for (let j = i; j < Math.min(chunks.length, i + CHUNKS_PER_REQUEST); j++) {
+        batchData[`${ADMIN_CARDS_CHUNK_PREFIX}${j}`] = chunks[j];
+      }
+      const chunkWriteRes = await writeUpdateWithRetry({
+        Data: batchData,
+        Permission: "Public",
+      });
+      if (chunkWriteRes.error) {
+        lastAdminCloudSyncError = chunkWriteRes.error;
+        return saved;
+      }
+    }
+
+    // Commit atômico: grava PlatformAdminCardsMeta por último e remove blocos antigos excedentes
+    const keysToRemove: string[] = [];
+    for (let k = chunks.length; k < remotePrevChunkCount; k++) {
+      keysToRemove.push(`${ADMIN_CARDS_CHUNK_PREFIX}${k}`);
+    }
+    const metaWriteRes = await writeUpdateWithRetry({
+      Data: { [ADMIN_CARDS_META_USERDATA_KEY]: JSON.stringify(meta) },
+      ...(keysToRemove.length > 0 ? { KeysToRemove: keysToRemove } : {}),
+      Permission: "Public",
+    });
+    if (metaWriteRes.error) {
+      lastAdminCloudSyncError = metaWriteRes.error;
+      return saved;
     }
   }
+
+  // 2. Grava a configuração central e os catálogos auxiliares (sem risco de estourar payload junto com cartas)
+  const res = await writeUpdateWithRetry({
+    Data: dataPayload,
+    Permission: "Public",
+  });
+
   if (res.error) {
     lastAdminCloudSyncError = res.error;
   } else {
     lastAdminCloudSyncError = null;
     hasSyncedAdminConfigFromCloud = true;
-    storeCachedRemoteConfig(raw);
-    // Espelha também no SharedGroup em segundo plano
-    if (ticket) {
-      void callPlayFabClient(
-        "UpdateSharedGroupData",
-        {
-          SharedGroupId: ADMIN_CONFIG_SHARED_GROUP_ID,
-          Data: { [ADMIN_CONFIG_USERDATA_KEY]: raw },
-          Permission: "Public",
-        },
-        ticket,
-      );
-    }
+    storeCachedRemoteConfig(JSON.stringify(saved));
   }
   return saved;
 }
@@ -1935,10 +2204,30 @@ export function ensurePlayerSeasonAligned(
 
   // Se a temporada de ranqueada avançou no ADM, zera os pontos do jogador para a nova temporada
   if (playerRankedSeason < currentRankedSeason) {
+    const prevSeasonPts = Math.max(0, Math.floor(acc.profile.tournamentPoints ?? 0));
     acc.profile.tournamentPoints = 0;
     acc.profile.bestTournamentPoints = 0;
     acc.profile.tournamentRankId = "bronze_1";
     acc.profile.rankedSeasonId = currentRankedSeason;
+    if (prevSeasonPts > 0) {
+      try {
+        const entry = recordScoreLedgerEntry({
+          playerId: acc.profile.id || acc.profile.nickNormalized || acc.profile.nick,
+          playerNick: acc.profile.nick,
+          type: "tournament_pts",
+          source: "sanitizacao",
+          amount: -prevSeasonPts,
+          balanceAfter: 0,
+          reason: `Virada de Temporada Ranqueada (#${playerRankedSeason} -> #${currentRankedSeason})`,
+        });
+        acc.profile.scoreLedger = mergePlayerScoreLedgerEntries(
+          [acc.profile.scoreLedger, [entry]],
+          80,
+        );
+      } catch {
+        /* ignore */
+      }
+    }
   } else {
     acc.profile.rankedSeasonId = currentRankedSeason;
 
@@ -2746,6 +3035,9 @@ function buildAccountFromPlayFabPayload(
     unlockedMedals: Array.isArray(parsedProfile.unlockedMedals)
       ? parsedProfile.unlockedMedals
       : [],
+    scoreLedger: Array.isArray(parsedProfile.scoreLedger)
+      ? parsedProfile.scoreLedger
+      : [],
     badges: Array.isArray(parsedProfile.badges) ? parsedProfile.badges : [],
     careerPoints: parsedProfile.careerPoints ?? 0,
     pointsBalance: parsedProfile.pointsBalance ?? 0,
@@ -3070,6 +3362,42 @@ async function reconcileAccountWithCloudRoster(
       account.profile.tournamentMedals = mergeTournamentMedalsList(
         account.profile.tournamentMedals,
         rProf.tournamentMedals,
+      );
+    }
+    if (Array.isArray(rProf.scoreLedger) && rProf.scoreLedger.length > 0) {
+      account.profile.scoreLedger = mergePlayerScoreLedgerEntries(
+        [account.profile.scoreLedger, rProf.scoreLedger],
+        80,
+      );
+    }
+    // Reconcilia pontuação e temporada da Ranqueada com o Roster na nuvem (evita divergência UserData vs Roster)
+    const rosterRankedSeason = rProf.rankedSeasonId ?? 1;
+    const localRankedSeason = account.profile.rankedSeasonId ?? 1;
+    if (rosterRankedSeason > localRankedSeason) {
+      const nextPts = typeof rProf.tournamentPoints === "number" ? Math.max(0, Math.floor(rProf.tournamentPoints)) : 0;
+      account.profile.rankedSeasonId = rosterRankedSeason;
+      account.profile.tournamentPoints = nextPts;
+      account.profile.bestTournamentPoints = Math.max(
+        nextPts,
+        typeof rProf.bestTournamentPoints === "number" ? Math.max(0, Math.floor(rProf.bestTournamentPoints)) : 0,
+      );
+      account.profile.tournamentRankId = getTournamentRank(nextPts).currentRank.id;
+    } else if (rosterRankedSeason === localRankedSeason) {
+      const rTourPts =
+        typeof rProf.tournamentPoints === "number" ? Math.max(0, Math.floor(rProf.tournamentPoints)) : null;
+      const rBestTourPts =
+        typeof rProf.bestTournamentPoints === "number"
+          ? Math.max(0, Math.floor(rProf.bestTournamentPoints))
+          : 0;
+      const curTourPts = Math.max(0, Math.floor(account.profile.tournamentPoints ?? 0));
+      if (rTourPts !== null && (rosterTs > udTs || rTourPts > curTourPts)) {
+        account.profile.tournamentPoints = rTourPts;
+        account.profile.tournamentRankId = getTournamentRank(rTourPts).currentRank.id;
+      }
+      account.profile.bestTournamentPoints = Math.max(
+        account.profile.bestTournamentPoints ?? 0,
+        rBestTourPts,
+        account.profile.tournamentPoints ?? 0,
       );
     }
     if (Array.isArray(rProf.activeDates)) {
@@ -4034,6 +4362,10 @@ async function pushProfileToPlayFab(
           ...(p.coinRewardedMedalIds ? { coinRewardedMedalIds: p.coinRewardedMedalIds } : {}),
           achievedLevelsPoints: p.achievedLevelsPoints ?? [],
           achievedTournamentTiers: p.achievedTournamentTiers ?? [],
+          scoreLedger: mergePlayerScoreLedgerEntries(
+            [p.scoreLedger, getPlayerRawLedgerEntries(p.id || p.nickNormalized || p.nick, 80)],
+            80,
+          ),
           eventProgress: p.eventProgress,
           isAdmin: p.isAdmin,
           seasonId: p.seasonId,
@@ -4345,7 +4677,9 @@ export async function syncStudentRosterFromPlayFab(
     } // end if (!isLightweight) for 0 & 0b
 
     // 0c. Consulta o grupo oficial da temporada de ranqueada (TOURNAMENT_SEASON_X) para paridade imediata entre ranking e perfil
+    // Prioriza chaves individuais `rnk_<slug>` sobre a chave monolítica legada `Standings`
     const tourStandingsBySlug = new Map<string, number>();
+    const tourAuthoritativeSlugs = new Set<string>();
     try {
       const tourSeasonGroupId = `TOURNAMENT_SEASON_${cfg.rankedSeasonId ?? 1}`;
       const tourRes = await callPlayFabClient<{ Data?: Record<string, { Value: string }> }>(
@@ -4353,7 +4687,8 @@ export async function syncStudentRosterFromPlayFab(
         { SharedGroupId: tourSeasonGroupId },
         ticket,
       );
-      const standingsVal = tourRes.data?.Data?.Standings?.Value;
+      const groupData = tourRes.data?.Data;
+      const standingsVal = groupData?.Standings?.Value;
       if (standingsVal) {
         const parsedStandings = JSON.parse(standingsVal) as Record<
           string,
@@ -4372,6 +4707,36 @@ export async function syncStudentRosterFromPlayFab(
               const pId = rec.playerId.toLowerCase().trim();
               tourStandingsBySlug.set(pId, Math.max(tourStandingsBySlug.get(pId) ?? 0, pts));
             }
+          }
+        }
+      }
+      if (groupData) {
+        for (const [key, item] of Object.entries(groupData)) {
+          if (!key.startsWith("rnk_") || !item?.Value) continue;
+          try {
+            const rec = JSON.parse(item.Value) as {
+              nick?: string;
+              playerId?: string;
+              tournamentPoints?: number;
+            };
+            const pts = typeof rec.tournamentPoints === "number" ? Math.max(0, rec.tournamentPoints) : 0;
+            const slugKey = key.slice(4).toLowerCase().trim();
+            if (slugKey) {
+              tourStandingsBySlug.set(slugKey, pts);
+              tourAuthoritativeSlugs.add(slugKey);
+            }
+            if (rec.nick) {
+              const s = nickSlug(rec.nick);
+              tourStandingsBySlug.set(s, pts);
+              tourAuthoritativeSlugs.add(s);
+            }
+            if (rec.playerId) {
+              const pId = rec.playerId.toLowerCase().trim();
+              tourStandingsBySlug.set(pId, pts);
+              tourAuthoritativeSlugs.add(pId);
+            }
+          } catch {
+            /* ignore malformed per-player ranked key */
           }
         }
       }
@@ -4539,28 +4904,59 @@ export async function syncStudentRosterFromPlayFab(
             (existing?.profile as any)?.totalMatches ?? 0,
           );
 
+          // Considera XP legítimo de Rotina Diária/Semanal, Baús, Códigos e Correio para evitar falsos rebaixamentos de nível
+          const calcRoutineXpAllowance = (prof?: Partial<PlayerProfile> | null): number => {
+            if (!prof) return 0;
+            return (
+              Math.max(0, Math.floor(prof.dailyCheckInCount ?? 0)) * 120 +
+              Math.max(
+                Math.floor(prof.dailyMissionsCompleted ?? 0),
+                Array.isArray(prof.dailyMissionProgress?.claimedIds)
+                  ? prof.dailyMissionProgress!.claimedIds.length
+                  : 0,
+              ) *
+                45 +
+              Math.max(
+                Math.floor(prof.weeklyMissionsCompleted ?? 0),
+                Array.isArray(prof.weeklyMissionProgress?.claimedIds)
+                  ? prof.weeklyMissionProgress!.claimedIds.length
+                  : 0,
+              ) *
+                150 +
+              Math.max(0, Math.floor(prof.chestsOpenedTotal ?? 0)) * 300 +
+              (Array.isArray(prof.claimedPromoCodeIds) ? prof.claimedPromoCodeIds.length : 0) * 300 +
+              (Array.isArray(prof.claimedInboxRewardIds) ? prof.claimedInboxRewardIds.length : 0) * 200
+            );
+          };
+          const routineAllowance = Math.max(
+            calcRoutineXpAllowance(parsed),
+            calcRoutineXpAllowance(existing?.profile),
+            calcRoutineXpAllowance(udProf),
+          );
+          const rosterXpCeiling = Math.max(500, existingMatches * 50) + routineAllowance;
+
           // Validação e detecção universal de corrupção ou inflação de XP/níveis (inclusive vinda da nuvem parsed):
           const isCorruptedParsed =
             isStudent &&
-            (((parsed.xp ?? 0) > 8000 && existingMatches < 30) ||
-              ((parsed.xp ?? 0) > Math.max(400, existingMatches * 50)) ||
+            (((parsed.xp ?? 0) > 8000 + routineAllowance && existingMatches < 30) ||
+              (parsed.xp ?? 0) > rosterXpCeiling ||
               ((parsed.level ?? 1) >= 5 && existingMatches < 15));
 
           const isCorruptedExisting =
             isStudent &&
-            (((existing?.profile.xp ?? 0) > 8000 && existingMatches < 30) ||
-              ((existing?.profile.xp ?? 0) > Math.max(400, existingMatches * 50)) ||
+            (((existing?.profile.xp ?? 0) > 8000 + routineAllowance && existingMatches < 30) ||
+              (existing?.profile.xp ?? 0) > rosterXpCeiling ||
               ((existing?.profile.level ?? 1) >= 5 && existingMatches < 15));
 
           const isCorruptedUd =
             isStudent &&
-            (((udProf?.xp ?? 0) > 8000 && existingMatches < 30) ||
-              ((udProf?.xp ?? 0) > Math.max(400, existingMatches * 50)) ||
+            (((udProf?.xp ?? 0) > 8000 + routineAllowance && existingMatches < 30) ||
+              (udProf?.xp ?? 0) > rosterXpCeiling ||
               ((udProf?.level ?? 1) >= 5 && existingMatches < 15));
 
           const isCorruptedLb =
             isStudent &&
-            ((lbXp > 8000 && existingMatches < 30) || lbXp > Math.max(400, existingMatches * 50));
+            ((lbXp > 8000 + routineAllowance && existingMatches < 30) || lbXp > rosterXpCeiling);
           const validLbXp = isCorruptedLb ? 0 : lbXp;
 
           if (isCorruptedParsed || isCorruptedExisting || isCorruptedUd || isCorruptedLb) {
@@ -4885,19 +5281,39 @@ export async function syncStudentRosterFromPlayFab(
               udProf?.dailyTournamentXp ?? 0,
             ),
             tournamentPoints: (() => {
+              const idLower = parsed.id?.toLowerCase().trim() ?? "";
+              const pfLower = parsed.playfabId?.toLowerCase().trim() ?? "";
+              const nickLower = parsed.nick?.toLowerCase().trim() ?? "";
+              const hasAuthoritativeTourKey =
+                tourAuthoritativeSlugs.has(slug) ||
+                (idLower && tourAuthoritativeSlugs.has(idLower)) ||
+                (nickLower && tourAuthoritativeSlugs.has(nickSlug(nickLower)));
               const cloudTourPts = Math.max(
                 tourStandingsBySlug.get(slug) ?? 0,
-                tourStandingsBySlug.get(parsed.id?.toLowerCase().trim() ?? "") ?? 0,
-                tourStandingsBySlug.get(parsed.playfabId?.toLowerCase().trim() ?? "") ?? 0,
-                tourStandingsBySlug.get(parsed.nick?.toLowerCase().trim() ?? "") ?? 0,
+                tourStandingsBySlug.get(idLower) ?? 0,
+                tourStandingsBySlug.get(pfLower) ?? 0,
+                tourStandingsBySlug.get(nickLower) ?? 0,
               );
-              const tourRec = getTournamentStoreRecord(parsed.id, slug) || (parsed.playfabId ? getTournamentStoreRecord(parsed.playfabId, slug) : null);
               const effLevel = Math.max(
                 Number(parsed.level ?? 0),
                 Number(existing?.profile.level ?? 0),
                 Number(udProf?.level ?? 0),
                 1,
               );
+              const isAccAdmin = Boolean(parsed.isAdmin || existing?.profile.isAdmin || udProf?.isAdmin);
+              if (hasAuthoritativeTourKey) {
+                const authPts = resolveCanonicalTournamentPoints({
+                  level: effLevel,
+                  isAdmin: isAccAdmin,
+                  tournamentPoints: cloudTourPts,
+                  bestTournamentPoints: cloudTourPts,
+                });
+                if (authPts !== (parsed.tournamentPoints ?? 0)) {
+                  needsCloudSanitize.add(slug);
+                }
+                return authPts;
+              }
+              const tourRec = getTournamentStoreRecord(parsed.id, slug) || (parsed.playfabId ? getTournamentStoreRecord(parsed.playfabId, slug) : null);
               const maxProfileTourPts = Math.max(
                 parsed.tournamentPoints ?? 0,
                 existing?.profile.tournamentPoints ?? 0,
@@ -4905,7 +5321,7 @@ export async function syncStudentRosterFromPlayFab(
               );
               const finalPts = resolveCanonicalTournamentPoints({
                 level: effLevel,
-                isAdmin: Boolean(parsed.isAdmin || existing?.profile.isAdmin || udProf?.isAdmin),
+                isAdmin: isAccAdmin,
                 tournamentPoints: Math.max(cloudTourPts, maxProfileTourPts),
                 bestTournamentPoints: Math.max(
                   parsed.bestTournamentPoints ?? 0,
@@ -4942,22 +5358,39 @@ export async function syncStudentRosterFromPlayFab(
               );
             })(),
             tournamentRankId: (() => {
+              const idLower = parsed.id?.toLowerCase().trim() ?? "";
+              const pfLower = parsed.playfabId?.toLowerCase().trim() ?? "";
+              const nickLower = parsed.nick?.toLowerCase().trim() ?? "";
+              const hasAuthoritativeTourKey =
+                tourAuthoritativeSlugs.has(slug) ||
+                (idLower && tourAuthoritativeSlugs.has(idLower)) ||
+                (nickLower && tourAuthoritativeSlugs.has(nickSlug(nickLower)));
               const cloudTourPts = Math.max(
                 tourStandingsBySlug.get(slug) ?? 0,
-                tourStandingsBySlug.get(parsed.id?.toLowerCase().trim() ?? "") ?? 0,
-                tourStandingsBySlug.get(parsed.playfabId?.toLowerCase().trim() ?? "") ?? 0,
-                tourStandingsBySlug.get(parsed.nick?.toLowerCase().trim() ?? "") ?? 0,
+                tourStandingsBySlug.get(idLower) ?? 0,
+                tourStandingsBySlug.get(pfLower) ?? 0,
+                tourStandingsBySlug.get(nickLower) ?? 0,
               );
-              const tourRec = getTournamentStoreRecord(parsed.id, slug) || (parsed.playfabId ? getTournamentStoreRecord(parsed.playfabId, slug) : null);
               const effLevel = Math.max(
                 Number(parsed.level ?? 0),
                 Number(existing?.profile.level ?? 0),
                 Number(udProf?.level ?? 0),
                 1,
               );
+              const isAccAdmin = Boolean(parsed.isAdmin || existing?.profile.isAdmin || udProf?.isAdmin);
+              if (hasAuthoritativeTourKey) {
+                const authPts = resolveCanonicalTournamentPoints({
+                  level: effLevel,
+                  isAdmin: isAccAdmin,
+                  tournamentPoints: cloudTourPts,
+                  bestTournamentPoints: cloudTourPts,
+                });
+                return getTournamentRank(authPts).currentRank.id;
+              }
+              const tourRec = getTournamentStoreRecord(parsed.id, slug) || (parsed.playfabId ? getTournamentStoreRecord(parsed.playfabId, slug) : null);
               const curPts = resolveCanonicalTournamentPoints({
                 level: effLevel,
-                isAdmin: Boolean(parsed.isAdmin || existing?.profile.isAdmin || udProf?.isAdmin),
+                isAdmin: isAccAdmin,
                 tournamentPoints: Math.max(
                   cloudTourPts,
                   parsed.tournamentPoints ?? 0,
@@ -4985,6 +5418,15 @@ export async function syncStudentRosterFromPlayFab(
               udProf?.tournamentWeekKey ??
               getCurrentWeekKey(),
             unlockedMedals: Array.from(medalMap.values()),
+            scoreLedger: mergePlayerScoreLedgerEntries(
+              [
+                parsed.scoreLedger,
+                existing?.profile.scoreLedger,
+                udProf?.scoreLedger,
+                getPlayerRawLedgerEntries(parsed.id || slug, 80),
+              ],
+              80,
+            ),
             badges: Array.from(badgeMap.values()),
             eventProgress:
               parsed.eventProgress ?? existing?.profile.eventProgress ?? udProf?.eventProgress,
@@ -8305,6 +8747,21 @@ export async function deductPaidTournamentPoints(
   }
 
   const newPoints = currentPoints - safeCost;
+  let paidLedgerEntry: ScoreLedgerEntry | null = null;
+  try {
+    paidLedgerEntry = recordScoreLedgerEntry({
+      playerId: acc.profile.id || acc.profile.nickNormalized || acc.profile.nick,
+      playerNick: acc.profile.nick,
+      type: "tournament_pts",
+      source: "torneio_semanal",
+      amount: -safeCost,
+      balanceAfter: newPoints,
+      reason: `Entrada Extra Paga na Ranqueada (-${safeCost} pts)`,
+      metadata: { mode: "torneio_semanal" },
+    });
+  } catch {
+    /* ignore */
+  }
   const nextAcc: StoredAccount = {
     ...acc,
     profile: {
@@ -8313,6 +8770,10 @@ export async function deductPaidTournamentPoints(
       tournamentRankId: getTournamentRank(newPoints).currentRank.id,
       dailyXpDate: todayKey,
       dailyTournamentEntries: usedToday,
+      scoreLedger: mergePlayerScoreLedgerEntries(
+        [acc.profile.scoreLedger, paidLedgerEntry ? [paidLedgerEntry] : []],
+        80,
+      ),
     },
     updatedAt: new Date().toISOString(),
   };
@@ -8354,6 +8815,23 @@ export async function deductPaidTournamentPoints(
   saveRegistry(freshReg);
   invalidatePioneersCache();
   deductTournamentRecordPoints(nextAcc.profile.nickNormalized || nextAcc.profile.id, newPoints, nextAcc.profile.nick);
+
+  // Opcional: notifica CloudScript autoritativo `SpendRankedPaidEntry` se publicado no PlayFab
+  if (isPlayFabConfigured() && session?.sessionTicket && !session.sessionTicket.startsWith("admin-")) {
+    void callPlayFabClient(
+      "ExecuteCloudScript",
+      {
+        FunctionName: "SpendRankedPaidEntry",
+        FunctionParameter: {
+          seasonId: loadAdminConfig().rankedSeasonId ?? 1,
+          cost: safeCost,
+          newPoints,
+        },
+        GeneratePlayStreamEvent: false,
+      },
+      session.sessionTicket,
+    ).catch(() => {});
+  }
 
   return { ok: true, success: true, newPoints };
 }
@@ -9755,24 +10233,39 @@ export async function runGlobalStudentsIntegrityAudit(
       }
     }
 
-    // 2. Trava de Torneio Ranqueado para Alunos Nível < 3 ou sem jogos ranqueados
-    const tourPlays = effectiveStats
-      .filter((s) => s.mode === "torneio_semanal")
-      .reduce((sum, s) => sum + (s.plays ?? 0), 0);
+    // 2. Trava de Torneio Ranqueado EXCLUSIVAMENTE para Alunos abaixo do Nível 3
+    // IMPORTANTE: Nunca zerar pontos de alunos Nível 3+ apenas por ausência de `mode === "torneio_semanal"` em `stats`,
+    // pois partidas antigas ou sincronizações parciais de stats não devem destruir a pontuação ranqueada legítima.
     const isLevelEligibleForTournament = (p.level ?? 1) >= 3;
 
-    if (!isLevelEligibleForTournament || tourPlays === 0) {
+    if (!isLevelEligibleForTournament) {
       if (
         (p.tournamentPoints ?? 0) > 0 ||
         (p.bestTournamentPoints ?? 0) > 0 ||
         (p.tournamentRankId && p.tournamentRankId !== "bronze_1")
       ) {
+        const prevTourPts = Math.max(0, Math.floor(p.tournamentPoints ?? 0));
         p.tournamentPoints = 0;
         p.bestTournamentPoints = 0;
         p.tournamentRankId = "bronze_1";
         studentCorrections.push(
-          "Pontuação e ranking do Torneio Semanal resetados (Bronze I / 0 pts) por critério de elegibilidade",
+          `Pontuação e ranking do Torneio Semanal resetados (${prevTourPts} -> 0 pts / Bronze I) por Nível < 3`,
         );
+        if (prevTourPts > 0) {
+          try {
+            recordScoreLedgerEntry({
+              playerId: p.id || p.nickNormalized || p.nick,
+              playerNick: p.nick,
+              type: "tournament_pts",
+              source: "sanitizacao",
+              amount: -prevTourPts,
+              balanceAfter: 0,
+              reason: `Sanitização de Integridade: Nível ${p.level ?? 1} abaixo do mínimo (Nível 3) para a Ranqueada`,
+            });
+          } catch {
+            /* ignore */
+          }
+        }
         tournamentResetCount++;
       }
     }
@@ -9848,19 +10341,14 @@ export async function runGlobalStudentsIntegrityAudit(
         corrections: studentCorrections,
       });
 
-      cloudRosterUpdates[getStudentRosterCloudKey(p)] = JSON.stringify({
-        ...p,
-        stats: effectiveStats,
-        updatedAt: nowIso,
-      });
-
-      if (!skipCloudSync) {
-        try {
-          await pushProfileToPlayFab(updatedAcc);
-        } catch (err) {
-          console.warn(`[IntegrityAudit] Erro ao sincronizar ${p.nick}:`, err);
-        }
-      }
+      cloudRosterUpdates[getStudentRosterCloudKey(p)] = buildStudentRosterCloudEntry(
+        updatedAcc,
+        loadAdminConfig(),
+      );
+      // NOTA DE SEGURANÇA: Não chamar `pushProfileToPlayFab(updatedAcc)` no loop global,
+      // pois `UpdateUserData` usaria o `sessionTicket` da conta atualmente logada no navegador do ADM
+      // (podendo sobrescrever o UserData do próprio ADM/conta de teste com dados de outro aluno).
+      // A publicação em lote é enviada diretamente para o SharedGroup `ROSTER_SHARED_GROUP_ID` abaixo.
     }
   }
 
@@ -9900,6 +10388,379 @@ export async function runGlobalStudentsIntegrityAudit(
     winsCorrectedCount,
     tournamentResetCount,
     medalsRevokedCount,
+    details,
+  };
+}
+
+export interface RankedRecoveryEvaluation {
+  eligible: boolean;
+  currentPoints: number;
+  targetPoints: number;
+  delta: number;
+  sourceLabel: string;
+  isFloorEstimate: boolean;
+}
+
+export interface RankedPointsRecoveryResult {
+  seasonId: number;
+  evaluatedStudentsCount: number;
+  recoveredStudentsCount: number;
+  totalPointsRestored: number;
+  details: Array<{
+    id: string;
+    nick: string;
+    fullName: string;
+    school: string;
+    previousPoints: number;
+    restoredPoints: number;
+    restoredRankName: string;
+    sourceLabel: string;
+    isFloorEstimate: boolean;
+  }>;
+}
+
+const TIER_MIN_POINTS_FOR_RECOVERY: Record<string, number> = {
+  prata: 91,
+  ouro: 241,
+  platina: 451,
+  diamante: 681,
+  mestre: 850,
+};
+
+/**
+ * Avaliador puro (browser-safe) que calcula a maior pontuação ranqueada legítima recuperável
+ * para um jogador elegível (Nível 3+ na temporada corrente), cruzando:
+ * 1) Snapshot preservado em `TOURNAMENT_SEASON_N` (exata);
+ * 2) `UserData` individual no PlayFab (exata);
+ * 3) `bestTournamentPoints` no Roster quando `tournamentPoints === 0` sem gasto pago (exata);
+ * 4) Provas irreversíveis (marcos `claimedRankedMilestones` da temporada atual, medalhas `tour_master_*` e `achievedTournamentTiers`).
+ */
+export function computeRecoverableRankedPoints(args: {
+  profile: PlayerProfile;
+  seasonId: number;
+  cloudStandingsPoints?: number | null;
+  userDataPoints?: number | null;
+  userDataBestPoints?: number | null;
+}): RankedRecoveryEvaluation {
+  const { profile, seasonId } = args;
+  const currentPoints = Math.max(0, Math.floor(profile.tournamentPoints ?? 0));
+  const isEligibleLevel = Boolean(profile.isAdmin || (profile.level ?? 1) >= 3);
+  const playerSeason = profile.rankedSeasonId ?? seasonId;
+
+  if (!isEligibleLevel || playerSeason !== seasonId) {
+    return {
+      eligible: false,
+      currentPoints,
+      targetPoints: currentPoints,
+      delta: 0,
+      sourceLabel: "",
+      isFloorEstimate: false,
+    };
+  }
+
+  let bestTarget = currentPoints;
+  let bestSource = "";
+  let isFloorEstimate = false;
+
+  const consider = (pts: number, label: string, floor: boolean) => {
+    const clean = Math.max(0, Math.floor(pts));
+    if (clean > bestTarget) {
+      bestTarget = clean;
+      bestSource = label;
+      isFloorEstimate = floor;
+    }
+  };
+
+  // 1. Snapshot preservado em TOURNAMENT_SEASON_N (exata)
+  if (typeof args.cloudStandingsPoints === "number" && args.cloudStandingsPoints > 0) {
+    consider(args.cloudStandingsPoints, `Snapshot TOURNAMENT_SEASON_${seasonId}`, false);
+  }
+
+  // 2. UserData individual no PlayFab (exata)
+  if (typeof args.userDataPoints === "number" && args.userDataPoints > 0) {
+    consider(args.userDataPoints, "UserData Individual PlayFab", false);
+  }
+  if (
+    currentPoints === 0 &&
+    typeof args.userDataBestPoints === "number" &&
+    args.userDataBestPoints > 0
+  ) {
+    consider(args.userDataBestPoints, "Pico UserData Individual PlayFab", false);
+  }
+
+  // 3. bestTournamentPoints no Roster quando zerado sem entrada paga
+  const paidSpentToday = (profile.dailyTournamentEntries ?? 0) > TOURNAMENT_DAILY_FREE_ENTRIES;
+  if (
+    currentPoints === 0 &&
+    !paidSpentToday &&
+    typeof profile.bestTournamentPoints === "number" &&
+    profile.bestTournamentPoints > 0
+  ) {
+    consider(profile.bestTournamentPoints, "Histórico bestTournamentPoints do Roster", false);
+  }
+
+  // 4. Provas irreversíveis: marcos resgatados da temporada atual (`S<seasonId>:<rankId>`)
+  const milestonePrefix = `S${seasonId}:`;
+  if (Array.isArray(profile.claimedRankedMilestones)) {
+    for (const key of profile.claimedRankedMilestones) {
+      if (typeof key !== "string" || !key.startsWith(milestonePrefix)) continue;
+      const rankId = key.slice(milestonePrefix.length);
+      const rankDef = TOURNAMENT_RANKS.find((r) => r.id === rankId);
+      if (rankDef && rankDef.minPoints > 0) {
+        consider(rankDef.minPoints, `Marco Resgatado (${rankDef.name})`, true);
+      }
+    }
+  }
+
+  // 5. Medalhas de maestria `tour_master_*` e `achievedTournamentTiers` (válidos como piso na Temporada #1)
+  if (seasonId === 1) {
+    if (Array.isArray(profile.unlockedMedals)) {
+      const medalFloorById = new Map<string, { title: string; minPoints: number }>();
+      for (const info of Object.values(RANKED_MASTERY_MEDAL_BY_RANK)) {
+        if (info) medalFloorById.set(info.medalId, { title: info.title, minPoints: info.minPoints });
+      }
+      for (const m of profile.unlockedMedals) {
+        const mId = typeof m === "string" ? m : (m?.medalId ?? (m as any)?.id ?? "");
+        const info = mId ? medalFloorById.get(mId) : undefined;
+        if (info && info.minPoints > 0) {
+          consider(info.minPoints, `Medalha de Maestria (${info.title})`, true);
+        }
+      }
+    }
+    if (Array.isArray(profile.achievedTournamentTiers)) {
+      for (const tier of profile.achievedTournamentTiers) {
+        const floor = TIER_MIN_POINTS_FOR_RECOVERY[String(tier || "").toLowerCase()];
+        if (floor && floor > 0) {
+          consider(floor, `Liga Alcançada (${String(tier).toUpperCase()})`, true);
+        }
+      }
+    }
+  }
+
+  return {
+    eligible: true,
+    currentPoints,
+    targetPoints: bestTarget,
+    delta: Math.max(0, bestTarget - currentPoints),
+    sourceLabel: bestSource,
+    isFloorEstimate,
+  };
+}
+
+/**
+ * Executa a recuperação automática e idempotente de pontos ranqueados perdidos a partir
+ * das evidências preservadas no servidor PlayFab (`TOURNAMENT_SEASON_N`, `UserData` individual,
+ * `SEMED_STUDENT_ROSTER_V1` e marcos/medalhas comprovados), registrando toda restauração no Extrato.
+ */
+export async function recoverLostRankedPointsFromCloud(options?: {
+  skipCloudSync?: boolean;
+}): Promise<RankedPointsRecoveryResult> {
+  const skipCloudSync = options?.skipCloudSync ?? false;
+  const cfg = loadAdminConfig();
+  const seasonId = cfg.rankedSeasonId ?? 1;
+  const reg = loadRegistry();
+  const keys = Object.keys(reg);
+
+  const cloudStandingsBySlug = new Map<string, number>();
+  const userDataBySlug = new Map<string, { tournamentPoints?: number; bestTournamentPoints?: number }>();
+
+  if (!skipCloudSync && isPlayFabConfigured()) {
+    const ticket = (await getAdminPlayFabTicket()) ?? (await getViewerPlayFabTicket()) ?? loadStoredSession()?.sessionTicket;
+    if (ticket && !ticket.startsWith("admin-")) {
+      // 1. Lê TOURNAMENT_SEASON_N (chaves individuais `rnk_*` e legado `Standings`)
+      try {
+        const tourRes = await callPlayFabClient<{ Data?: Record<string, { Value: string }> }>(
+          "GetSharedGroupData",
+          { SharedGroupId: `TOURNAMENT_SEASON_${seasonId}` },
+          ticket,
+        );
+        const parsedCloud = parseTournamentSharedGroupRecords(tourRes.data?.Data);
+        for (const [canonical, rec] of Object.entries(parsedCloud.records)) {
+          const pts = typeof rec.tournamentPoints === "number" ? Math.max(0, rec.tournamentPoints) : 0;
+          if (pts > 0) {
+            cloudStandingsBySlug.set(canonical, Math.max(cloudStandingsBySlug.get(canonical) ?? 0, pts));
+            if (rec.nick) {
+              const s = nickSlug(rec.nick);
+              cloudStandingsBySlug.set(s, Math.max(cloudStandingsBySlug.get(s) ?? 0, pts));
+            }
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+
+      // 2. Consulta UserData público individual de contas elegíveis (Nível 3+) para recuperar pontos preservados
+      const eligibleWithPf = keys
+        .map((k) => ({ key: k, acc: reg[k] }))
+        .filter(
+          ({ acc }) =>
+            acc?.profile &&
+            !acc.profile.isAdmin &&
+            !isSpecialAdminAccount(acc.profile) &&
+            (acc.profile.level ?? 1) >= 3 &&
+            Boolean(acc.profile.playfabId),
+        );
+
+      const BATCH = 6;
+      for (let i = 0; i < eligibleWithPf.length; i += BATCH) {
+        const chunk = eligibleWithPf.slice(i, i + BATCH);
+        const resList = await Promise.allSettled(
+          chunk.map(async ({ acc }) => {
+            const udRes = await callPlayFabClient<{ Data?: Record<string, { Value?: string }> }>(
+              "GetUserData",
+              { PlayFabId: acc.profile.playfabId!, Keys: ["PlayerProfile"] },
+              ticket,
+            );
+            const raw = udRes.data?.Data?.PlayerProfile?.Value;
+            if (!raw) return null;
+            const parsed = JSON.parse(raw) as Partial<PlayerProfile>;
+            return {
+              slug: acc.profile.nickNormalized || nickSlug(acc.profile.nick),
+              tournamentPoints: parsed.tournamentPoints,
+              bestTournamentPoints: parsed.bestTournamentPoints,
+            };
+          }),
+        );
+        for (const r of resList) {
+          if (r.status === "fulfilled" && r.value) {
+            userDataBySlug.set(r.value.slug, {
+              tournamentPoints: r.value.tournamentPoints,
+              bestTournamentPoints: r.value.bestTournamentPoints,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  let evaluatedStudentsCount = 0;
+  let recoveredStudentsCount = 0;
+  let totalPointsRestored = 0;
+  const details: RankedPointsRecoveryResult["details"] = [];
+  const cloudRosterUpdates: Record<string, string> = {};
+  const recordsToPushToTournament: TournamentPlayerRecord[] = [];
+  const nowDate = getAuthoritativeNow();
+  const nowIso = nowDate.toISOString();
+
+  for (const key of keys) {
+    const acc = reg[key];
+    if (!acc || !acc.profile || acc.profile.isAdmin || isSpecialAdminAccount(acc.profile)) {
+      continue;
+    }
+    evaluatedStudentsCount++;
+
+    const p = { ...acc.profile };
+    const slug = p.nickNormalized || nickSlug(p.nick || p.id);
+    const udInfo = userDataBySlug.get(slug);
+    const cloudPts = Math.max(
+      cloudStandingsBySlug.get(slug) ?? 0,
+      cloudStandingsBySlug.get(nickSlug(p.nick)) ?? 0,
+      cloudStandingsBySlug.get((p.id || "").toLowerCase().trim()) ?? 0,
+    );
+
+    const evalRes = computeRecoverableRankedPoints({
+      profile: p,
+      seasonId,
+      cloudStandingsPoints: cloudPts > 0 ? cloudPts : null,
+      userDataPoints: udInfo?.tournamentPoints ?? null,
+      userDataBestPoints: udInfo?.bestTournamentPoints ?? null,
+    });
+
+    if (!evalRes.eligible || evalRes.delta <= 0) continue;
+
+    const restoredRank = getTournamentRank(evalRes.targetPoints).currentRank;
+    p.tournamentPoints = evalRes.targetPoints;
+    p.bestTournamentPoints = Math.max(p.bestTournamentPoints ?? 0, evalRes.targetPoints);
+    p.tournamentRankId = restoredRank.id;
+    p.rankedSeasonId = seasonId;
+
+    // Registro determinístico e idempotente no Extrato de Auditoria
+    let ledgerEntry: ScoreLedgerEntry | null = null;
+    try {
+      ledgerEntry = recordScoreLedgerEntry({
+        id: `rec_rnk_s${seasonId}_${slug}_${evalRes.targetPoints}`,
+        playerId: p.id || slug,
+        playerNick: p.nick,
+        type: "tournament_pts",
+        source: "reconciliacao",
+        amount: evalRes.delta,
+        balanceAfter: evalRes.targetPoints,
+        reason: `Recuperação Automática Ranqueada: ${evalRes.sourceLabel} (${evalRes.currentPoints} -> ${evalRes.targetPoints} pts • ${restoredRank.name})`,
+        metadata: { mode: "torneio_semanal" },
+      });
+    } catch {
+      /* ignore */
+    }
+    if (ledgerEntry) {
+      p.scoreLedger = mergePlayerScoreLedgerEntries([p.scoreLedger, [ledgerEntry]], 80);
+    }
+
+    const updatedAcc: StoredAccount = {
+      ...acc,
+      profile: p,
+      updatedAt: nowIso,
+    };
+    reg[key] = updatedAcc;
+
+    recoveredStudentsCount++;
+    totalPointsRestored += evalRes.delta;
+    details.push({
+      id: p.id,
+      nick: p.nick,
+      fullName: p.full_name || p.nick,
+      school: p.school,
+      previousPoints: evalRes.currentPoints,
+      restoredPoints: evalRes.targetPoints,
+      restoredRankName: restoredRank.name,
+      sourceLabel: evalRes.sourceLabel,
+      isFloorEstimate: evalRes.isFloorEstimate,
+    });
+
+    cloudRosterUpdates[getStudentRosterCloudKey(p)] = buildStudentRosterCloudEntry(updatedAcc, cfg);
+
+    const pStage = stageForPlayer(p.school, p.birthdate, nowDate, p.ageStage);
+    const existingRec = getTournamentStoreRecord(p.id, p.nick);
+    recordsToPushToTournament.push({
+      playerId: slug,
+      nick: p.nick,
+      fullName: p.full_name,
+      school: p.school,
+      birthdate: p.birthdate,
+      age: existingRec?.age ?? (p.birthdate ? ageFrom(p.birthdate, nowDate) : pStage.minAge),
+      stage: pStage.id,
+      level: p.level,
+      bestScore: Math.max(existingRec?.bestScore ?? 0, evalRes.targetPoints),
+      totalEntries: Math.max(existingRec?.totalEntries ?? 0, p.dailyTournamentEntries ?? 1),
+      tournamentPoints: evalRes.targetPoints,
+      dailyWinsCount: existingRec?.dailyWinsCount ?? 0,
+      dailyMatchesCount: existingRec?.dailyMatchesCount ?? 0,
+      dailyDateKey: existingRec?.dailyDateKey,
+      dailyBonusAwarded: existingRec?.dailyBonusAwarded ?? false,
+      highestRankId: restoredRank.id,
+      activeTop5Since: existingRec?.activeTop5Since ?? null,
+      accumulatedTop5Ms: existingRec?.accumulatedTop5Ms ?? 0,
+      updatedAt: nowDate.getTime(),
+    });
+  }
+
+  if (recoveredStudentsCount > 0) {
+    saveRegistry(reg);
+    invalidatePioneersCache();
+
+    for (const rec of recordsToPushToTournament) {
+      await upsertTournamentRecordForPlayer(rec, { syncCloud: !skipCloudSync, seasonId });
+    }
+
+    if (!skipCloudSync && isPlayFabConfigured() && Object.keys(cloudRosterUpdates).length > 0) {
+      await pushRosterUpdatesInBatches(cloudRosterUpdates);
+    }
+  }
+
+  return {
+    seasonId,
+    evaluatedStudentsCount,
+    recoveredStudentsCount,
+    totalPointsRestored,
     details,
   };
 }
@@ -10288,6 +11149,10 @@ function buildStudentRosterCloudEntry(
     lastDailyFirstGamePointsDate: p.lastDailyFirstGamePointsDate,
     achievedLevelsPoints: p.achievedLevelsPoints ?? [],
     achievedTournamentTiers: p.achievedTournamentTiers ?? [],
+    scoreLedger: mergePlayerScoreLedgerEntries(
+      [p.scoreLedger, getPlayerRawLedgerEntries(p.id || p.nickNormalized || p.nick, 60)],
+      60,
+    ),
     eventProgress: p.eventProgress,
     stats: acc.stats ?? [],
     deletedAt: p.deletedAt,

@@ -48,6 +48,7 @@ import {
   isPlayFabConfigured,
   grantSpecialRobotMedal,
   grantSpaceQuestAuraMedal,
+  type PushAdminConfigOptions,
   type SpaceQuestMedalId,
   type GameStatRow,
   type PlayerProfile,
@@ -120,7 +121,7 @@ interface AuthValue {
   awardSpaceQuestMedal: (
     medalId: SpaceQuestMedalId,
   ) => Promise<{ success: boolean; medal?: MedalDefinition; profile?: PlayerProfile }>;
-  updateAdminConfig: (next: PlatformAdminConfig) => Promise<void>;
+  updateAdminConfig: (next: PlatformAdminConfig, options?: PushAdminConfigOptions) => Promise<void>;
   triggerReset: (options: {
     clearXp: boolean;
     newSeasonName?: string;
@@ -461,10 +462,13 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
       [],
     );
 
-    const updateAdminConfig = useCallback(async (next: PlatformAdminConfig) => {
-    const saved = await pushAdminConfigToPlayFab(next);
-    setAdminConfig(saved);
-  }, []);
+    const updateAdminConfig = useCallback(
+      async (next: PlatformAdminConfig, options?: PushAdminConfigOptions) => {
+        const saved = await pushAdminConfigToPlayFab(next, options);
+        setAdminConfig(saved);
+      },
+      [],
+    );
 
   const triggerReset = useCallback(
     async (options: { clearXp: boolean; newSeasonName?: string; reason?: string }) => {

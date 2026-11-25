@@ -87,9 +87,11 @@ import { getLatestProfileActivityMs } from "@/lib/presence";
 import { TournamentRankBadge } from "./TournamentRankBadge";
 import { StudentNameDisplay } from "./StudentNameDisplay";
 import {
+  getTournamentRank,
   getTournamentStoreRecord,
   resolveCanonicalTournamentPoints,
   syncWeeklyTournamentWithPlayFab,
+  upsertTournamentRecordForPlayer,
 } from "@/lib/weekly-tournament";
 
 interface Props {
@@ -150,7 +152,7 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
 
   // Estados para ajuste manual de pontuação pelo Administrador
   const [isAdjustmentOpen, setIsAdjustmentOpen] = useState(false);
-  const [adjType, setAdjType] = useState<"xp" | "career_points">("xp");
+  const [adjType, setAdjType] = useState<"xp" | "career_points" | "tournament_pts">("xp");
   const [adjAmount, setAdjAmount] = useState<number>(50);
   const [adjReason, setAdjReason] = useState<string>("");
   const [adjSaving, setAdjSaving] = useState(false);
@@ -270,31 +272,75 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
     setAdjSaving(true);
     try {
       const targetId = profile.nickNormalized || profile.id || profile.nick;
+      const pIdForLedger = profile.id || profile.nickNormalized || profile.nick;
+      const prevTourPts = Math.max(0, Math.floor(profile.tournamentPoints ?? 0));
+      const computedNextTourPts = Math.max(0, prevTourPts + adjAmount);
+      const ledgerEntry = recordScoreLedgerEntry({
+        playerId: pIdForLedger,
+        playerNick: profile.nick,
+        type: adjType,
+        source: "ajuste_adm",
+        amount: adjAmount,
+        balanceAfter:
+          adjType === "xp"
+            ? Math.max(0, (profile.xp ?? 0) + adjAmount)
+            : adjType === "tournament_pts"
+              ? computedNextTourPts
+              : Math.max(0, (profile.pointsBalance ?? 0) + adjAmount),
+        reason: `Ajuste ADM: ${adjReason.trim()}`,
+        metadata: { adminUser: auth.profile?.nick || "ADM" },
+      });
+
       const adjRes = await adjustStudentProfileByAdmin(targetId, (p) => {
         if (adjType === "xp") {
           p.xp = Math.max(0, (p.xp ?? 0) + adjAmount);
           p.seasonXp = Math.max(0, (p.seasonXp ?? 0) + adjAmount);
+        } else if (adjType === "tournament_pts") {
+          const nextPts = Math.max(0, Math.floor((p.tournamentPoints ?? 0) + adjAmount));
+          p.tournamentPoints = nextPts;
+          p.bestTournamentPoints = Math.max(p.bestTournamentPoints ?? 0, nextPts);
+          p.tournamentRankId = getTournamentRank(nextPts).currentRank.id;
         } else {
           p.careerPoints = Math.max(0, (p.careerPoints ?? 0) + adjAmount);
           p.pointsBalance = Math.max(0, (p.pointsBalance ?? 0) + adjAmount);
         }
+        p.scoreLedger = [...(p.scoreLedger ?? []).filter((e) => e.id !== ledgerEntry.id), ledgerEntry].slice(-80);
         return p;
       });
       if (!adjRes.profile) {
         alert(adjRes.error ?? "Não foi possível aplicar o ajuste neste aluno.");
         return;
       }
-      const pId = adjRes.profile.id || adjRes.profile.nickNormalized || adjRes.profile.nick;
-      recordScoreLedgerEntry({
-        playerId: pId,
-        playerNick: adjRes.profile.nick,
-        type: adjType,
-        source: "ajuste_adm",
-        amount: adjAmount,
-        balanceAfter: adjType === "xp" ? adjRes.profile.xp : adjRes.profile.pointsBalance,
-        reason: `Ajuste ADM: ${adjReason.trim()}`,
-        metadata: { adminUser: auth.profile?.nick || "ADM" },
-      });
+
+      // Sincroniza também a chave individual `rnk_<slug>` no TOURNAMENT_SEASON_N quando o ajuste for na Ranqueada
+      if (adjType === "tournament_pts") {
+        const up = adjRes.profile;
+        const pts = Math.max(0, Math.floor(up.tournamentPoints ?? 0));
+        const st = stageForPlayer(up.school, up.birthdate, new Date(), up.ageStage);
+        const existingRec = getTournamentStoreRecord(up.id, up.nick);
+        await upsertTournamentRecordForPlayer({
+          playerId: up.nickNormalized || up.id,
+          nick: up.nick,
+          fullName: up.full_name,
+          school: up.school,
+          birthdate: up.birthdate,
+          age: existingRec?.age ?? st.minAge,
+          stage: st.id,
+          level: up.level,
+          bestScore: Math.max(existingRec?.bestScore ?? 0, pts),
+          totalEntries: Math.max(existingRec?.totalEntries ?? 0, up.dailyTournamentEntries ?? 1),
+          tournamentPoints: pts,
+          dailyWinsCount: existingRec?.dailyWinsCount ?? 0,
+          dailyMatchesCount: existingRec?.dailyMatchesCount ?? 0,
+          dailyDateKey: existingRec?.dailyDateKey,
+          dailyBonusAwarded: existingRec?.dailyBonusAwarded ?? false,
+          highestRankId: getTournamentRank(pts).currentRank.id,
+          activeTop5Since: existingRec?.activeTop5Since ?? null,
+          accumulatedTop5Ms: existingRec?.accumulatedTop5Ms ?? 0,
+          updatedAt: Date.now(),
+        });
+      }
+
       setProfile(adjRes.profile);
       setLedgerVersion((v) => v + 1);
       setIsAdjustmentOpen(false);
@@ -616,7 +662,7 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
 
               {/* Resumo Consolidado de Origens */}
               {ledgerBreakdown && (
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center text-xs">
                   <div className="rounded-xl border bg-secondary/30 p-2">
                     <span className="block text-[10px] font-bold text-muted-foreground">XP em Partidas</span>
                     <span className="font-mono text-sm font-extrabold text-primary">
@@ -635,8 +681,17 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                       +{ledgerBreakdown.totalCareerPoints} pts
                     </span>
                   </div>
+                  <div className="rounded-xl border bg-amber-500/10 border-amber-500/30 p-2">
+                    <span className="block text-[10px] font-bold text-amber-700 dark:text-amber-300">Ranqueada</span>
+                    <span className="font-mono text-sm font-extrabold text-amber-600 dark:text-amber-400">
+                      {ledgerBreakdown.totalTournamentPoints >= 0
+                        ? `+${ledgerBreakdown.totalTournamentPoints}`
+                        : ledgerBreakdown.totalTournamentPoints}{" "}
+                      pts
+                    </span>
+                  </div>
                   <div className="rounded-xl border bg-secondary/30 p-2">
-                    <span className="block text-[10px] font-bold text-muted-foreground">Transações Registradas</span>
+                    <span className="block text-[10px] font-bold text-muted-foreground">Transações</span>
                     <span className="font-mono text-sm font-extrabold text-foreground">
                       {ledgerBreakdown.transactionsCount} registros
                     </span>
@@ -709,6 +764,7 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                       >
                         <option value="xp">⚡ Experiência (XP)</option>
                         <option value="career_points">⭐ Pontos de Carreira</option>
+                        <option value="tournament_pts">🏆 Pontos de Ranqueada</option>
                       </select>
                     </div>
                     <div>
