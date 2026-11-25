@@ -409,4 +409,48 @@ describe("Sanitização da Ranqueada, Chaves Isoladas, Extrato na Nuvem e Recupe
     assert.equal(merged[0].id, "tx_a");
     assert.equal(merged[1].id, "tx_b");
   });
+
+  it("runGlobalStudentsIntegrityAudit é idempotente e não entra em loop com partidas x1_online", async () => {
+    const reg = loadRegistry();
+    const x1Student = createStudentProfile({
+      id: "stu_x1_loop",
+      nick: "X1Loop",
+      nickNormalized: "x1loop",
+      level: 5,
+      xp: 2500,
+      matchesPlayed: 55,
+      wins: 50,
+      x1Matches: 0,
+      distinctGamesPlayed: 2,
+      stats: [
+        { game_id: "logica", mode: "padrao", plays: 30, wins: 28, best_score: 120, best_level: 3 },
+        { game_id: "rpg", mode: "padrao", plays: 25, wins: 22, best_score: 140, best_level: 3 },
+        { game_id: "logica", mode: "x1_online", plays: 12, wins: 12, best_score: 100, best_level: 1 },
+      ],
+    });
+    reg["x1loop"] = {
+      profile: x1Student,
+      passwordHash: "hash",
+      unlocked: [],
+      stats: x1Student.stats!,
+      updatedAt: new Date().toISOString(),
+    };
+    saveRegistry(reg);
+
+    try {
+      const first = await runGlobalStudentsIntegrityAudit({ skipCloudSync: true });
+      const afterFirst = loadRegistry()["x1loop"].profile;
+      assert.equal(afterFirst.matchesPlayed, 55, "Partidas regulares devem excluir x1_online");
+      assert.equal(afterFirst.wins, 50);
+      assert.equal(afterFirst.x1Matches, 12, "x1Matches deve ser restaurado a partir de stats x1_online");
+      assert.ok(first.updatedStudentsCount >= 1);
+
+      const second = await runGlobalStudentsIntegrityAudit({ skipCloudSync: true });
+      assert.equal(second.updatedStudentsCount, 0, "Segunda execução consecutiva deve ser 100% idempotente");
+    } finally {
+      const cleanup = loadRegistry();
+      delete cleanup["x1loop"];
+      saveRegistry(cleanup);
+    }
+  });
 });

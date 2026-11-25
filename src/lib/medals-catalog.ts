@@ -2099,8 +2099,7 @@ export function aggregateStatsByGame(
       (row.wins ?? 0) > 0 ||
       (row.flawless_wins ?? 0) >= 1 ||
       (row.best_score ?? 0) >= 20 ||
-      (row.best_level ?? 1) >= 2 ||
-      playsToAdd >= 2;
+      (row.best_level ?? 1) >= 2;
     const winsToAdd = Math.max(0, row.wins ?? 0, hasWinProgress ? 1 : 0);
     const flawlessToAdd = Math.max(0, row.flawless_wins ?? 0);
 
@@ -2344,7 +2343,7 @@ export function getDistinctGamesPlayed(
       inferredFromHistory = 3;
     } else if ((pXp >= 250 && pWins >= 2) || pWins >= 5 || pMatches >= 5) {
       inferredFromHistory = 2;
-    } else if (pXp > 0 || pWins > 0 || pMatches > 0) {
+    } else if (pWins > 0 || pMatches > 0) {
       inferredFromHistory = 1;
     }
   }
@@ -2433,7 +2432,7 @@ export function getEffectivePlayerProgression(
         statsPlaysSum,
         wins,
         distinctGames,
-        xp >= 354 && wins >= 2 ? 5 : xp >= 100 && wins >= 1 ? 2 : xp > 0 ? 1 : 0,
+        xp >= 354 && wins >= 2 ? 5 : xp >= 100 && wins >= 1 ? 2 : 0,
       );
 
   const syncedStage = syncLevelStageProgress({

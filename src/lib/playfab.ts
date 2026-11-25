@@ -2633,8 +2633,7 @@ export function ensurePlayerSeasonAligned(
           (s.wins ?? 0) > 0 ||
           (s.flawless_wins ?? 0) >= 1 ||
           cleanBestScore >= 20 ||
-          (s.best_level ?? 1) >= 2 ||
-          plays >= 2;
+          (s.best_level ?? 1) >= 2;
         return {
           ...s,
           best_score: cleanBestScore,
@@ -2642,6 +2641,12 @@ export function ensurePlayerSeasonAligned(
           wins: Math.max(0, s.wins ?? 0, hasWinEvidence ? 1 : 0),
         };
       });
+    const x1PlaysFromStats = acc.stats
+      .filter((s) => s.mode === "x1_online")
+      .reduce((sum, s) => sum + Math.max(0, s.plays ?? 0), 0);
+    if (x1PlaysFromStats > (acc.profile.x1Matches ?? 0)) {
+      acc.profile.x1Matches = x1PlaysFromStats;
+    }
   }
 
   const statsMap = aggregateStatsByGame(acc.stats, cfg.enabledGames);
@@ -2664,7 +2669,7 @@ export function ensurePlayerSeasonAligned(
   acc.profile.level = effProg.level;
   acc.profile.levelStageProgress = effProg.stageProgress;
 
-  // Sanitiza inflação indevida de XP em contas de alunos regulares (levando em conta XP legítimo da Rotina Diária/Semanal, Baús e Códigos)
+  // Sanitiza inflação indevida de XP em contas de alunos regulares (levando em conta XP legítimo da Rotina Diária/Semanal, Baús, Códigos e Medalhas)
   const routineAndChestXpAllowance =
     Math.max(0, Math.floor(acc.profile.dailyCheckInCount ?? 0)) * 120 +
     Math.max(
@@ -2685,7 +2690,8 @@ export function ensurePlayerSeasonAligned(
     (Array.isArray(acc.profile.claimedPromoCodeIds) ? acc.profile.claimedPromoCodeIds.length : 0) *
       300 +
     (Array.isArray(acc.profile.claimedInboxRewardIds) ? acc.profile.claimedInboxRewardIds.length : 0) *
-      200;
+      200 +
+    (Array.isArray(acc.profile.unlockedMedals) ? acc.profile.unlockedMedals.length : 0) * 60;
 
   const legitimateXpCeiling = Math.max(500, totalMatchesCount * 50) + routineAndChestXpAllowance;
   const isCorruptedStudentXp =
@@ -3686,6 +3692,70 @@ async function reconcileAccountWithCloudRoster(
           Math.max(0, (account.profile.careerPoints ?? 0) - mergedPointsSpent),
         ),
       );
+    }
+
+    // Reconcilia estatísticas detalhadas (stats) e contadores de partidas/vitórias com o Roster
+    // Protege contra perda de progresso quando o UserData individual ficou congelado por expiração de SessionTicket.
+    const rStats = (rProf as { stats?: GameStatRow[] }).stats;
+    if (Array.isArray(rStats) && rStats.length > 0) {
+      const mergedStatsMap = new Map<string, GameStatRow>();
+      for (const st of [...(account.stats ?? []), ...rStats]) {
+        if (!st || !st.game_id) continue;
+        const cleanBest = sanitizeGameBestScore(st.game_id, st.best_score);
+        const sKey = `${st.game_id}__${st.mode || "padrao"}`;
+        const cur = mergedStatsMap.get(sKey);
+        if (!cur) {
+          mergedStatsMap.set(sKey, { ...st, best_score: cleanBest });
+        } else {
+          mergedStatsMap.set(sKey, {
+            ...cur,
+            plays: Math.max(cur.plays ?? 0, st.plays ?? 0),
+            wins: Math.max(cur.wins ?? 0, st.wins ?? 0),
+            flawless_wins: Math.max(cur.flawless_wins ?? 0, st.flawless_wins ?? 0),
+            best_score: Math.max(sanitizeGameBestScore(st.game_id, cur.best_score), cleanBest),
+            best_level: Math.max(cur.best_level ?? 1, st.best_level ?? 1),
+            last_played_at:
+              (st.last_played_at || "") > (cur.last_played_at || "")
+                ? st.last_played_at
+                : cur.last_played_at,
+          });
+        }
+      }
+      account.stats = Array.from(mergedStatsMap.values());
+      account.profile.stats = account.stats;
+    }
+
+    const rMatches = Math.max(rProf.matchesPlayed ?? 0, (rProf as any).totalMatches ?? 0);
+    const lMatches = Math.max(account.profile.matchesPlayed ?? 0, account.profile.totalMatches ?? 0);
+    if (rMatches > lMatches) {
+      account.profile.matchesPlayed = rMatches;
+      account.profile.totalMatches = rMatches;
+    }
+    if ((rProf.wins ?? 0) > (account.profile.wins ?? 0)) {
+      account.profile.wins = rProf.wins ?? account.profile.wins;
+    }
+    if ((rProf.distinctGamesPlayed ?? 0) > (account.profile.distinctGamesPlayed ?? 0)) {
+      account.profile.distinctGamesPlayed = rProf.distinctGamesPlayed;
+    }
+    account.profile.x1Matches = Math.max(account.profile.x1Matches ?? 0, rProf.x1Matches ?? 0);
+    account.profile.x1Wins = Math.max(account.profile.x1Wins ?? 0, rProf.x1Wins ?? 0);
+    account.profile.x1Losses = Math.max(account.profile.x1Losses ?? 0, rProf.x1Losses ?? 0);
+    account.profile.x1Draws = Math.max(account.profile.x1Draws ?? 0, rProf.x1Draws ?? 0);
+    account.profile.x1BestWinStreak = Math.max(
+      account.profile.x1BestWinStreak ?? 0,
+      rProf.x1BestWinStreak ?? 0,
+    );
+    if (rProf.levelStageProgress) {
+      const localStg = account.profile.levelStageProgress;
+      const rStg = rProf.levelStageProgress;
+      if (
+        !localStg ||
+        (rStg.forLevel ?? 1) > (localStg.forLevel ?? 1) ||
+        ((rStg.forLevel ?? 1) === (localStg.forLevel ?? 1) &&
+          (rStg.matches ?? 0) > (localStg.matches ?? 0))
+      ) {
+        account.profile.levelStageProgress = rStg;
+      }
     }
   } catch {
     /* ignore optional roster merge on signIn / recovery */
@@ -5174,7 +5244,8 @@ export async function syncStudentRosterFromPlayFab(
                 150 +
               Math.max(0, Math.floor(prof.chestsOpenedTotal ?? 0)) * 300 +
               (Array.isArray(prof.claimedPromoCodeIds) ? prof.claimedPromoCodeIds.length : 0) * 300 +
-              (Array.isArray(prof.claimedInboxRewardIds) ? prof.claimedInboxRewardIds.length : 0) * 200
+              (Array.isArray(prof.claimedInboxRewardIds) ? prof.claimedInboxRewardIds.length : 0) * 200 +
+              (Array.isArray(prof.unlockedMedals) ? prof.unlockedMedals.length : 0) * 60
             );
           };
           const routineAllowance = Math.max(
@@ -7280,8 +7351,9 @@ export async function playfabRecordMatch(args: {
 
   const nextXp = acc.profile.xp + earnedXp;
   const nextSeasonXp = (acc.profile.seasonXp ?? 0) + earnedXp;
-  const nextWins = (acc.profile.wins ?? 0) + (won ? 1 : 0);
-  const nextMatches = (acc.profile.matchesPlayed ?? 0) + 1;
+  const isX1Match = mode === "x1_online";
+  const nextWins = isX1Match ? (acc.profile.wins ?? 0) : (acc.profile.wins ?? 0) + (won ? 1 : 0);
+  const nextMatches = isX1Match ? (acc.profile.matchesPlayed ?? 0) : (acc.profile.matchesPlayed ?? 0) + 1;
   const distinctGames = getDistinctGamesPlayed(
     acc.profile,
     acc.stats,
@@ -10446,6 +10518,9 @@ export async function runGlobalStudentsIntegrityAudit(
   options?: { skipCloudSync?: boolean },
 ): Promise<StudentsIntegrityAuditResult> {
   const skipCloudSync = options?.skipCloudSync ?? false;
+  const cfg = loadAdminConfig();
+  const enabledSet = getEnabledGameIdsSet(cfg.enabledGames);
+  const maxAvailableGames = Math.max(1, enabledSet.size);
   const reg = loadRegistry();
   const keys = Object.keys(reg);
   const total = keys.length;
@@ -10456,6 +10531,7 @@ export async function runGlobalStudentsIntegrityAudit(
   let medalsRevokedCount = 0;
   const details: StudentsIntegrityAuditResult["details"] = [];
   const cloudRosterUpdates: Record<string, string> = {};
+  const resetTournamentSlugs: Array<{ slug: string; id: string; nick: string }> = [];
   const nowIso = new Date().toISOString();
 
   for (const key of keys) {
@@ -10472,28 +10548,24 @@ export async function runGlobalStudentsIntegrityAudit(
           ? [...p.stats]
           : [];
 
-    const statsMap = aggregateStatsByGame(effectiveStats);
+    // Fonte da verdade idêntica a getEffectivePlayerProgression (exclui x1_online e jogos desabilitados)
+    const statsMap = aggregateStatsByGame(effectiveStats, cfg.enabledGames);
     const aggregatedRows = Array.from(statsMap.values()).filter((s) => (s.plays ?? 0) > 0);
-    const realPlaysSum = Math.max(
-      aggregatedRows.reduce((sum, s) => sum + Math.max(0, s.plays ?? 0), 0),
-      effectiveStats.reduce((sum, s) => sum + Math.max(0, s?.plays ?? 0), 0),
-    );
-    const realWinsSum = Math.max(
-      aggregatedRows.reduce((sum, s) => sum + Math.max(0, s.wins ?? 0), 0),
-      effectiveStats.reduce((sum, s) => sum + Math.max(0, s?.wins ?? 0), 0),
-    );
-    const distinctGamesCount = Math.max(
-      aggregatedRows.length,
-      new Set(effectiveStats.filter((s) => (s?.plays ?? 0) > 0).map((s) => s.game_id)).size,
-    );
+    const realPlaysSum = aggregatedRows.reduce((sum, s) => sum + Math.max(0, s.plays ?? 0), 0);
+    const realWinsSum = aggregatedRows.reduce((sum, s) => sum + Math.max(0, s.wins ?? 0), 0);
+    const distinctGamesCount = aggregatedRows.length;
+    const x1PlaysSum = effectiveStats
+      .filter((s) => s?.mode === "x1_online")
+      .reduce((sum, s) => sum + Math.max(0, s?.plays ?? 0), 0);
 
     const studentCorrections: string[] = [];
 
-    // 1. Alinhamento de partidas e vitórias com base no histórico real comprovado
+    // 1. Alinhamento de partidas e vitórias com base no histórico real comprovado (sem x1_online)
     if (aggregatedRows.length > 0) {
       if ((p.matchesPlayed ?? 0) !== realPlaysSum) {
         studentCorrections.push(`Partidas corrigidas: ${p.matchesPlayed ?? 0} -> ${realPlaysSum}`);
         p.matchesPlayed = realPlaysSum;
+        p.totalMatches = realPlaysSum;
         matchesCorrectedCount++;
       }
       if ((p.wins ?? 0) !== realWinsSum) {
@@ -10504,6 +10576,10 @@ export async function runGlobalStudentsIntegrityAudit(
       if ((p.distinctGamesPlayed ?? 0) !== distinctGamesCount) {
         p.distinctGamesPlayed = distinctGamesCount;
       }
+    }
+    if (x1PlaysSum > (p.x1Matches ?? 0)) {
+      studentCorrections.push(`Duelos X1 restaurados: ${p.x1Matches ?? 0} -> ${x1PlaysSum}`);
+      p.x1Matches = x1PlaysSum;
     }
 
     // 2. Trava de Torneio Ranqueado EXCLUSIVAMENTE para Alunos abaixo do Nível 3
@@ -10521,6 +10597,11 @@ export async function runGlobalStudentsIntegrityAudit(
         p.tournamentPoints = 0;
         p.bestTournamentPoints = 0;
         p.tournamentRankId = "bronze_1";
+        resetTournamentSlugs.push({
+          slug: p.nickNormalized || nickSlug(p.nick),
+          id: p.id,
+          nick: p.nick,
+        });
         studentCorrections.push(
           `Pontuação e ranking do Torneio Semanal resetados (${prevTourPts} -> 0 pts / Bronze I) por Nível < 3`,
         );
@@ -10583,6 +10664,7 @@ export async function runGlobalStudentsIntegrityAudit(
       playedGameIds: aggregatedRows.map((r) => r.game_id),
       currentLevel: p.level,
       existingStage: p.levelStageProgress ?? null,
+      maxAvailableGames,
     });
 
     if (p.level !== syncedStage.level) {
@@ -10616,7 +10698,7 @@ export async function runGlobalStudentsIntegrityAudit(
 
       cloudRosterUpdates[getStudentRosterCloudKey(p)] = buildStudentRosterCloudEntry(
         updatedAcc,
-        loadAdminConfig(),
+        cfg,
       );
       // NOTA DE SEGURANÇA: Não chamar `pushProfileToPlayFab(updatedAcc)` no loop global,
       // pois `UpdateUserData` usaria o `sessionTicket` da conta atualmente logada no navegador do ADM
@@ -10627,18 +10709,21 @@ export async function runGlobalStudentsIntegrityAudit(
 
   if (updatedStudentsCount > 0) {
     saveRegistry(reg);
-  invalidatePioneersCache();
+    invalidatePioneersCache();
   }
 
   // Envia as atualizações em lote para a nuvem PlayFab se houver alterações
-  if (!skipCloudSync && isPlayFabConfigured() && Object.keys(cloudRosterUpdates).length > 0) {
+  if (!skipCloudSync && isPlayFabConfigured() && (Object.keys(cloudRosterUpdates).length > 0 || resetTournamentSlugs.length > 0)) {
     try {
-      const ticket = (await getAdminPlayFabTicket()) ?? loadStoredSession()?.sessionTicket;
+      const ticket =
+        (await getViewerPlayFabTicket()) ??
+        (await getAdminPlayFabTicket()) ??
+        loadStoredSession()?.sessionTicket;
       if (ticket) {
         const entries = Object.entries(cloudRosterUpdates);
         for (let i = 0; i < entries.length; i += 10) {
           const chunk = Object.fromEntries(entries.slice(i, i + 10));
-          await callPlayFabClient(
+          const batchRes = await callPlayFabClient(
             "UpdateSharedGroupData",
             {
               SharedGroupId: ROSTER_SHARED_GROUP_ID,
@@ -10647,6 +10732,70 @@ export async function runGlobalStudentsIntegrityAudit(
             },
             ticket,
           );
+          if (batchRes.error) {
+            console.warn("[IntegrityAudit] Erro ao publicar lote no Roster:", batchRes.error);
+          }
+        }
+
+        // Também remove/zera da Ranqueada na nuvem (TOURNAMENT_SEASON_N) qualquer aluno < Nível 3 resetado
+        if (resetTournamentSlugs.length > 0) {
+          const tourSeasonGroupId = `TOURNAMENT_SEASON_${cfg.rankedSeasonId ?? 1}`;
+          const tourRes = await callPlayFabClient<{ Data?: Record<string, { Value: string }> }>(
+            "GetSharedGroupData",
+            { SharedGroupId: tourSeasonGroupId },
+            ticket,
+          );
+          const groupData = tourRes.data?.Data;
+          if (groupData) {
+            const keysToRemove: string[] = [];
+            const dataUpdates: Record<string, string> = {};
+            const targetSlugs = new Set(resetTournamentSlugs.map((x) => x.slug.toLowerCase()));
+            const targetIds = new Set(resetTournamentSlugs.map((x) => x.id.toLowerCase()));
+
+            for (const sl of targetSlugs) {
+              const rnkKey = `rnk_${sl}`;
+              if (groupData[rnkKey]) keysToRemove.push(rnkKey);
+            }
+            if (groupData.Standings?.Value) {
+              try {
+                const parsedStandings = JSON.parse(groupData.Standings.Value) as Record<
+                  string,
+                  { nick?: string; playerId?: string }
+                >;
+                let standingsChanged = false;
+                for (const [sKey, sVal] of Object.entries(parsedStandings)) {
+                  const sKeyLow = sKey.toLowerCase();
+                  const sNickSlug = sVal?.nick ? nickSlug(sVal.nick) : "";
+                  const sPlayerId = sVal?.playerId ? sVal.playerId.toLowerCase() : "";
+                  if (
+                    targetSlugs.has(sKeyLow) ||
+                    targetIds.has(sKeyLow) ||
+                    (sNickSlug && targetSlugs.has(sNickSlug)) ||
+                    (sPlayerId && (targetIds.has(sPlayerId) || targetSlugs.has(sPlayerId)))
+                  ) {
+                    delete parsedStandings[sKey];
+                    standingsChanged = true;
+                  }
+                }
+                if (standingsChanged) {
+                  dataUpdates.Standings = JSON.stringify(parsedStandings);
+                }
+              } catch {
+                /* ignore malformed Standings */
+              }
+            }
+            if (keysToRemove.length > 0 || Object.keys(dataUpdates).length > 0) {
+              await callPlayFabClient(
+                "UpdateSharedGroupData",
+                {
+                  SharedGroupId: tourSeasonGroupId,
+                  ...(Object.keys(dataUpdates).length > 0 ? { Data: dataUpdates } : {}),
+                  ...(keysToRemove.length > 0 ? { KeysToRemove: keysToRemove } : {}),
+                },
+                ticket,
+              );
+            }
+          }
         }
       }
     } catch (err) {

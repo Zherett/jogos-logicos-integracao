@@ -2538,4 +2538,19 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
     assert.ok(awarded.includes("cards_total_50"));
     assert.ok(!awarded.includes("cards_total_100"));
   });
+
+  it("não inventa 1 partida fantasma por XP de check-in nem vitória sintética por plays >= 2", () => {
+    const prog = getEffectivePlayerProgression(
+      { xp: 10, seasonXp: 10, matchesPlayed: 0, wins: 0, level: 1 },
+      [],
+    );
+    assert.equal(prog.matchesPlayed, 0);
+    assert.equal(prog.wins, 0);
+
+    const agg = aggregateStatsByGame([
+      { game_id: "logica", mode: "padrao", plays: 2, wins: 0, best_score: 0, best_level: 1 },
+    ]);
+    assert.equal(agg.get("logica")?.plays, 2);
+    assert.equal(agg.get("logica")?.wins, 0);
+  });
 });
