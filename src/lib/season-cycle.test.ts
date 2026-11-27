@@ -1,5 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { getCoariTimeParts } from "./official-time.ts";
 import {
   computeMonthlyTournamentDates,
   computeMonthlyTournamentDatesForYearMonth,
@@ -40,11 +41,12 @@ describe("Gestão de Ciclos de Temporada (season-cycle)", () => {
   });
 
   it("estende o prazo da temporada mantendo 23:59:59 e empurrando a data final", () => {
-    const currentEnd = new Date("2026-11-14T23:59:59.999Z");
+    const currentEnd = new Date("2026-11-14T23:59:59.999-04:00");
     const extendedEnd = extendSeasonDate(currentEnd, 7);
 
-    assert.equal(extendedEnd.getHours(), 23);
-    assert.equal(extendedEnd.getMinutes(), 59);
+    const coariParts = getCoariTimeParts(extendedEnd.getTime());
+    assert.equal(coariParts.hour, 23);
+    assert.equal(coariParts.minute, 59);
     const addedDays = Math.round((extendedEnd.getTime() - currentEnd.getTime()) / (24 * 60 * 60 * 1000));
     assert.equal(addedDays, 7);
   });

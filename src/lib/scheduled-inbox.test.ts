@@ -1,5 +1,6 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
+import { getCoariTimeParts } from "./official-time.ts";
 import {
   clearMemoryScheduledRules,
   isRuleDue,
@@ -64,17 +65,17 @@ describe("Sistema de Mensagens Programadas e Recorrentes (scheduled-inbox)", () 
       createdAt: new Date().toISOString(),
     };
 
-    // Cenário 1: Sábado às 07:30 (ainda não deu o horário)
-    const sabadoCedo = new Date(2026, 10, 7, 7, 30); // 07/11/2026 é Sábado
-    assert.equal(sabadoCedo.getDay(), 6);
+    // Cenário 1: Sábado às 07:30 em Coari (ainda não deu o horário)
+    const sabadoCedo = new Date("2026-11-07T07:30:00-04:00"); // 07/11/2026 é Sábado
+    assert.equal(getCoariTimeParts(sabadoCedo.getTime()).dayOfWeek, 6);
     assert.equal(isRuleDue(rule, sabadoCedo), false);
 
-    // Cenário 2: Sexta-feira às 09:00 (dia errado)
-    const sexta = new Date(2026, 10, 6, 9, 0); // 06/11/2026 é Sexta
+    // Cenário 2: Sexta-feira às 09:00 em Coari (dia errado)
+    const sexta = new Date("2026-11-06T09:00:00-04:00"); // 06/11/2026 é Sexta
     assert.equal(isRuleDue(rule, sexta), false);
 
-    // Cenário 3: Sábado às 08:05 (horário atingido)
-    const sabadoNaHora = new Date(2026, 10, 7, 8, 5);
+    // Cenário 3: Sábado às 08:05 em Coari (horário atingido)
+    const sabadoNaHora = new Date("2026-11-07T08:05:00-04:00");
     assert.equal(isRuleDue(rule, sabadoNaHora), true);
   });
 
@@ -91,7 +92,7 @@ describe("Sistema de Mensagens Programadas e Recorrentes (scheduled-inbox)", () 
       createdAt: new Date().toISOString(),
     };
 
-    const sabado8h = new Date(2026, 10, 7, 8, 0);
+    const sabado8h = new Date("2026-11-07T08:00:00-04:00");
     assert.equal(isRuleDue(rule, sabado8h), true);
 
     // Dispara a regra no sábado
@@ -100,11 +101,11 @@ describe("Sistema de Mensagens Programadas e Recorrentes (scheduled-inbox)", () 
     assert.ok(updatedRule.lastTriggeredCycleKey);
 
     // Tentativa de disparar novamente no mesmo sábado às 10:00
-    const sabado10h = new Date(2026, 10, 7, 10, 0);
+    const sabado10h = new Date("2026-11-07T10:00:00-04:00");
     assert.equal(isRuleDue(updatedRule, sabado10h), false);
 
-    // No PRÓXIMO sábado (14/11/2026), deve estar apta novamente!
-    const proximoSabado = new Date(2026, 10, 14, 8, 0);
+    // No PRÓXIMO sábado (14/11/2026 às 08:00 Coari), deve estar apta novamente!
+    const proximoSabado = new Date("2026-11-14T08:00:00-04:00");
     assert.equal(isRuleDue(updatedRule, proximoSabado), true);
   });
 
@@ -169,14 +170,15 @@ describe("Sistema de Mensagens Programadas e Recorrentes (scheduled-inbox)", () 
       createdAt: new Date().toISOString(),
     };
 
-    // Se hoje for Sábado 07/11/2026 às 10:00, a próxima segunda é dia 09/11/2026 às 07:30
-    const sabado = new Date(2026, 10, 7, 10, 0);
+    // Se hoje for Sábado 07/11/2026 às 10:00 Coari, a próxima segunda é dia 09/11/2026 às 07:30 Coari
+    const sabado = new Date("2026-11-07T10:00:00-04:00");
     const nextRun = computeNextRunDate(rule, sabado);
     assert.ok(nextRun);
-    assert.equal(nextRun.getDay(), 1); // Segunda
-    assert.equal(nextRun.getDate(), 9); // Dia 9
-    assert.equal(nextRun.getHours(), 7);
-    assert.equal(nextRun.getMinutes(), 30);
+    const nextCoari = getCoariTimeParts(nextRun.getTime());
+    assert.equal(nextCoari.dayOfWeek, 1); // Segunda
+    assert.equal(nextCoari.day, 9); // Dia 9
+    assert.equal(nextCoari.hour, 7);
+    assert.equal(nextCoari.minute, 30);
   });
 
   it("suporta regra de disparo pontual (once) e a desativa após o envio", () => {
@@ -192,7 +194,7 @@ describe("Sistema de Mensagens Programadas e Recorrentes (scheduled-inbox)", () 
       createdAt: new Date().toISOString(),
     };
 
-    const diaFeriado = new Date(2026, 10, 20, 14, 0);
+    const diaFeriado = new Date("2026-11-20T14:00:00-04:00");
     assert.equal(isRuleDue(rule, diaFeriado), true);
 
     const { updatedRule } = triggerScheduledRule(rule, diaFeriado);

@@ -25,8 +25,8 @@ function makePlayer(overrides: Partial<PlayerProfile>): PlayerProfile {
 
 describe("Jornal Dinâmico (newspaper)", () => {
   it("vira a edição diariamente exatamente às 07h00 da manhã", () => {
-    const before07 = new Date(2026, 10, 17, 6, 59, 0);
-    const at07 = new Date(2026, 10, 17, 7, 0, 0);
+    const before07 = new Date("2026-11-17T06:59:00-04:00");
+    const at07 = new Date("2026-11-17T07:00:00-04:00");
 
     assert.equal(getNewspaperEditionKey(before07), "2026-11-16");
     assert.equal(getNewspaperEditionKey(at07), "2026-11-17");

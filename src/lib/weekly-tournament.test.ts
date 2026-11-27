@@ -69,9 +69,9 @@ describe("Torneio Semanal Ranqueado (Nível 3+) e Regras da Arena X1 (Nível 5+,
     assert.equal(resolveWeeklyTournamentGame(100, "rpg"), "rpg");
 
     // Sábado e Domingo às 23:59 pertencem à mesma semana; Segunda 00:00 inicia nova semana
-    const saturday = new Date("2026-10-31T14:00:00");
-    const sundayNight = new Date("2026-11-01T23:59:00");
-    const mondayMorning = new Date("2026-11-02T00:01:00");
+    const saturday = new Date("2026-10-31T14:00:00-04:00");
+    const sundayNight = new Date("2026-11-01T23:59:00-04:00");
+    const mondayMorning = new Date("2026-11-02T00:01:00-04:00");
     assert.equal(getWeekInfo(saturday).weekKey, getWeekInfo(sundayNight).weekKey);
     assert.notEqual(getWeekInfo(sundayNight).weekKey, getWeekInfo(mondayMorning).weekKey);
   });

@@ -70,8 +70,8 @@ describe("Sistema de Missões Semanais (4 Missões + Faixas de Nível + Ciclo Se
   });
 
   it("alterna a semana corretamente no fechamento de domingo 23:59 para segunda-feira 00:00", () => {
-    const sundayNight = new Date(2026, 10, 22, 23, 59, 0); // Domingo 22/11/2026 23:59
-    const mondayMorning = new Date(2026, 10, 23, 0, 0, 0); // Segunda 23/11/2026 00:00
+    const sundayNight = new Date("2026-11-22T23:59:00-04:00"); // Domingo 22/11/2026 23:59 Coari
+    const mondayMorning = new Date("2026-11-23T00:00:00-04:00"); // Segunda 23/11/2026 00:00 Coari
 
     const mSunday = generateWeeklyMissions({ profile: { id: "p1", level: 5 }, now: sundayNight });
     const mMonday = generateWeeklyMissions({ profile: { id: "p1", level: 5 }, now: mondayMorning });
