@@ -21,6 +21,7 @@ import {
   randomBoard, coordLabel, makeQuestionForLevel,
 } from "@/lib/robogrid";
 import { playTone } from "@/lib/sound";
+import { useSafeTimeouts } from "@/lib/use-safe-timeouts";
 
 const DURATION = 120;
 const LEVEL_UP_STREAK = 4;
@@ -55,11 +56,14 @@ export function RoboGridGame({ onExit, onStatsChange, isRanked }: Props) {
   const [feedback, setFeedback] = useState<"correct" | "wrong" | null>(null);
   const [highlight, setHighlight] = useState<Coord | null>(null);
   const [showLevelUp, setShowLevelUp] = useState<number | null>(null);
+  const [pickedRobotIdx, setPickedRobotIdx] = useState<number | null>(null);
   const lockRef = useRef(false);
+  const { schedule, clearAll } = useSafeTimeouts();
 
   const score = Math.max(0, correct * POINTS_CORRECT - wrong * POINTS_WRONG);
 
   const clock = useRoundClock(DURATION, running, () => {
+    clearAll();
     setRunning(false);
     setFinished(true);
   });
@@ -84,10 +88,15 @@ export function RoboGridGame({ onExit, onStatsChange, isRanked }: Props) {
   }, [finished]);
 
   function startGame() {
+    clearAll();
+    lockRef.current = false;
     setRunId((r) => r + 1);
     team.begin(teamConfig);
     setCorrect(0); setWrong(0); setLevel(1); setStreak(0);
     setFinished(false);
+    setFeedback(null);
+    setShowLevelUp(null);
+    setPickedRobotIdx(null);
     const b = randomBoard();
     setBoard(b);
     setQuestion(makeQuestionForLevel(1, b));
@@ -97,11 +106,21 @@ export function RoboGridGame({ onExit, onStatsChange, isRanked }: Props) {
   }
 
   function replayWithCountdown() {
+    clearAll();
+    lockRef.current = false;
+    setFeedback(null);
+    setShowLevelUp(null);
+    setPickedRobotIdx(null);
     team.advance();
     setFinished(false); setRunning(false); setPhase("countdown");
   }
 
   function backToSetup() {
+    clearAll();
+    lockRef.current = false;
+    setFeedback(null);
+    setShowLevelUp(null);
+    setPickedRobotIdx(null);
     setRunning(false); setFinished(false); setPhase("setup");
   }
 
@@ -113,13 +132,14 @@ export function RoboGridGame({ onExit, onStatsChange, isRanked }: Props) {
     setQuestion(makeQuestionForLevel(lvl, b));
     setHighlight(null);
     setFeedback(null);
+    setPickedRobotIdx(null);
   }
 
   function resolve(ok: boolean, revealCoord?: Coord) {
     setFeedback(ok ? "correct" : "wrong");
     if (ok) {
       beep(660, 0.1, "triangle");
-      window.setTimeout(() => beep(990, 0.16, "triangle"), 90);
+      schedule(() => beep(990, 0.16, "triangle"), 90);
       setCorrect((c) => c + 1);
       if (bonusOn) clock.addBonus();
       const next = streak + 1;
@@ -129,7 +149,7 @@ export function RoboGridGame({ onExit, onStatsChange, isRanked }: Props) {
         setLevel(nl);
         setStreak(0);
         setShowLevelUp(nl);
-        setTimeout(() => {
+        schedule(() => {
           setShowLevelUp(null);
           nextRound(nl);
           lockRef.current = false;
@@ -143,7 +163,7 @@ export function RoboGridGame({ onExit, onStatsChange, isRanked }: Props) {
       setStreak(0);
       if (revealCoord) setHighlight(revealCoord);
     }
-    setTimeout(() => {
+    schedule(() => {
       nextRound(level);
       lockRef.current = false;
     }, ok ? 700 : 1000);
@@ -175,6 +195,7 @@ export function RoboGridGame({ onExit, onStatsChange, isRanked }: Props) {
     if (question.kind !== "robot") return;
     if (lockRef.current) return;
     lockRef.current = true;
+    setPickedRobotIdx(idx);
     const ok = idx === question.correctIndex;
     setHighlight(question.answer);
     resolve(ok, question.answer);
@@ -233,6 +254,7 @@ export function RoboGridGame({ onExit, onStatsChange, isRanked }: Props) {
         <GameTopBar title="RoboGrid" onExit={onExit} sessionActive={team.activeSession} onFinishSession={sessionEnd.request} />
         <ResultPanel
           gameId="robogrid"
+          mode={lastMatch?.mode ?? (isRanked ? "torneio_semanal" : undefined)}
           isTeam={team.activeSession}
           score={score} correct={correct} wrong={wrong} level={level}
           onReplay={replayWithCountdown} onMenu={onExit} onChangeSettings={backToSetup}
@@ -307,7 +329,7 @@ export function RoboGridGame({ onExit, onStatsChange, isRanked }: Props) {
           <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-2">
             {q.options.map((opt, i) => {
               const isCorrect = feedback && i === q.correctIndex;
-              const isWrong = feedback === "wrong" && highlight && !isCorrect && opt.col === highlight.col && opt.row === highlight.row;
+              const isWrong = feedback === "wrong" && pickedRobotIdx === i && !isCorrect;
               const cls = isCorrect
                 ? "bg-success text-success-foreground border-success"
                 : isWrong

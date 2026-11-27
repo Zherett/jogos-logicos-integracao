@@ -22,28 +22,34 @@ export function TeamSetup({ value, onChange, locked }: Props) {
   const [customNames, setCustomNames] = useState<string[]>(["EQUIPE 1", "EQUIPE 2"]);
 
   function pickNormal() {
+    if (locked) return;
     onChange({ mode: "normal", teams: [], order: value.order });
   }
   function pickTeams(kind: "padrao" | "custom", names?: string[]) {
+    if (locked) return;
     setPreset(kind);
     const list = kind === "padrao" ? DEFAULT_TEAMS : (names ?? customNames);
     onChange({ mode: "equipes", teams: list.map(sanitizeTeamName), order: value.order });
   }
   function setOrderMode(order: TeamOrderMode) {
+    if (locked) return;
     onChange({ ...value, order });
   }
   function setCount(n: number) {
+    if (locked) return;
     const next = Array.from({ length: n }, (_, i) => customNames[i] ?? `EQUIPE ${i + 1}`);
     setCustomNames(next);
     pickTeams("custom", next);
   }
   function setName(i: number, name: string) {
+    if (locked) return;
     const next = [...customNames];
     next[i] = name.slice(0, TEAM_NAME_MAX);
     setCustomNames(next);
     onChange({ mode: "equipes", teams: next.map(sanitizeTeamName), order: value.order });
   }
   function move(i: number, dir: -1 | 1) {
+    if (locked) return;
     const j = i + dir;
     if (j < 0 || j >= value.teams.length) return;
     const next = [...value.teams];
@@ -56,13 +62,13 @@ export function TeamSetup({ value, onChange, locked }: Props) {
   return (
     <div className="rounded-2xl border bg-secondary/30 p-4">
       <div className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-3 text-center">
-        Modo de jogo
+        Modo de jogo {locked ? "• 🔒 Travado na sessão ativa" : ""}
       </div>
       <div className="grid grid-cols-2 gap-2">
-        <OptionChip active={!isTeams} onClick={pickNormal}>
+        <OptionChip active={!isTeams} onClick={pickNormal} disabled={locked}>
           <span className="inline-flex items-center gap-2"><User className="h-4 w-4" /> Normal</span>
         </OptionChip>
-        <OptionChip active={isTeams} onClick={() => pickTeams(preset)}>
+        <OptionChip active={isTeams} onClick={() => pickTeams(preset)} disabled={locked}>
           <span className="inline-flex items-center gap-2"><Users className="h-4 w-4" /> Equipes</span>
         </OptionChip>
       </div>
@@ -70,10 +76,10 @@ export function TeamSetup({ value, onChange, locked }: Props) {
       {isTeams && (
         <div className="mt-4 space-y-3">
           <div className="grid grid-cols-2 gap-2">
-            <OptionChip active={preset === "padrao"} onClick={() => pickTeams("padrao")}>
+            <OptionChip active={preset === "padrao"} onClick={() => pickTeams("padrao")} disabled={locked}>
               Equipe padrão
             </OptionChip>
-            <OptionChip active={preset === "custom"} onClick={() => pickTeams("custom")}>
+            <OptionChip active={preset === "custom"} onClick={() => pickTeams("custom")} disabled={locked}>
               Personalizada
             </OptionChip>
           </div>
@@ -93,7 +99,7 @@ export function TeamSetup({ value, onChange, locked }: Props) {
               </div>
               <div className="grid grid-cols-4 gap-2">
                 {[2, 3, 4, 5].map((n) => (
-                  <OptionChip key={n} active={customNames.length === n} onClick={() => setCount(n)}>
+                  <OptionChip key={n} active={customNames.length === n} onClick={() => setCount(n)} disabled={locked}>
                     {n}
                   </OptionChip>
                 ))}
@@ -104,9 +110,10 @@ export function TeamSetup({ value, onChange, locked }: Props) {
                     key={i}
                     value={n}
                     maxLength={TEAM_NAME_MAX}
+                    disabled={locked}
                     onChange={(e) => setName(i, e.target.value)}
                     placeholder={`Equipe ${i + 1}`}
-                    className="rounded-xl border-2 bg-card px-3 py-2 font-display font-bold outline-none focus:border-primary"
+                    className="rounded-xl border-2 bg-card px-3 py-2 font-display font-bold outline-none focus:border-primary disabled:opacity-50"
                   />
                 ))}
               </div>
@@ -121,10 +128,10 @@ export function TeamSetup({ value, onChange, locked }: Props) {
               Ordem das equipes
             </div>
             <div className="grid grid-cols-2 gap-2">
-              <OptionChip active={value.order === "aleatoria"} onClick={() => setOrderMode("aleatoria")}>
+              <OptionChip active={value.order === "aleatoria"} onClick={() => setOrderMode("aleatoria")} disabled={locked}>
                 <span className="inline-flex items-center gap-2"><Shuffle className="h-4 w-4" /> Aleatória</span>
               </OptionChip>
-              <OptionChip active={value.order === "manual"} onClick={() => setOrderMode("manual")}>
+              <OptionChip active={value.order === "manual"} onClick={() => setOrderMode("manual")} disabled={locked}>
                 <span className="inline-flex items-center gap-2"><ListOrdered className="h-4 w-4" /> Criar ordem</span>
               </OptionChip>
             </div>
@@ -146,7 +153,7 @@ export function TeamSetup({ value, onChange, locked }: Props) {
                     <button
                       type="button"
                       onClick={() => move(i, -1)}
-                      disabled={i === 0}
+                      disabled={locked || i === 0}
                       className="grid h-7 w-7 place-items-center rounded-lg border bg-background disabled:opacity-30"
                       aria-label="Subir"
                     >
@@ -155,7 +162,7 @@ export function TeamSetup({ value, onChange, locked }: Props) {
                     <button
                       type="button"
                       onClick={() => move(i, 1)}
-                      disabled={i === value.teams.length - 1}
+                      disabled={locked || i === value.teams.length - 1}
                       className="grid h-7 w-7 place-items-center rounded-lg border bg-background disabled:opacity-30"
                       aria-label="Descer"
                     >

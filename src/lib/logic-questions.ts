@@ -21,7 +21,8 @@ const pick = <T,>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
 
 function maybeFlip(actual: number): { shown: number; truth: boolean } {
   if (Math.random() < 0.5) return { shown: actual, truth: true };
-  const delta = pick([-3, -2, -1, 1, 2, 3]);
+  const deltas = [-3, -2, -1, 1, 2, 3].filter((d) => actual < 0 || actual + d >= 0);
+  const delta = pick(deltas.length > 0 ? deltas : [1, 2, 3]);
   return { shown: actual + delta, truth: false };
 }
 
@@ -107,7 +108,8 @@ function level3(ops: OpKind[]): Question {
     return { text: `${left.text} ${op} ${right.text}`, answer: value };
   }
   const l = arithOp(ops);
-  const target = l.value + pick([-2, -1, 0, 1, 2]);
+  const targetDeltas = [-2, -1, 0, 1, 2].filter((d) => l.value + d >= 0);
+  const target = l.value + pick(targetDeltas.length > 0 ? targetDeltas : [0, 1, 2]);
   const cmp = pick(["<", ">", "<=", ">=", "="] as const);
   let lv = false;
   switch (cmp) {
@@ -139,7 +141,8 @@ function level4(ops: OpKind[]): Question {
     return { text: `${l.text} ${op} ${r.text}`, answer: v };
   }
   const l = arithOp(ops);
-  const target = l.value + pick([-2, -1, 0, 0, 1, 2]);
+  const targetDeltas = [-2, -1, 0, 0, 1, 2].filter((d) => l.value + d >= 0);
+  const target = l.value + pick(targetDeltas.length > 0 ? targetDeltas : [0, 1, 2]);
   const leftCmp = pick(["<", ">", "<=", ">=", "="] as const);
   let lv = false;
   switch (leftCmp) {

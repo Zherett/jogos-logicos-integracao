@@ -2,7 +2,8 @@ import { GAME_NAMES, type GameId } from "./game-storage.ts";
 import type { AllGameRecords } from "./game-records.ts";
 import { getAllAvailableMedals, type MedalDefinition } from "./medals-catalog.ts";
 import type { MedalPioneer } from "./medal-pioneers.ts";
-import { isPioneerExcludedAccount, stageFromBirthdate } from "./player-profile.ts";
+import { isPioneerExcludedAccount, nickSlug, stageForPlayer } from "./player-profile.ts";
+import { COARI_OFFSET_MS, getOfficialNow } from "./official-time.ts";
 import type { PlayerProfile } from "./playfab.ts";
 
 export interface NewspaperPlayerRef {
@@ -35,14 +36,15 @@ export interface NewsArticle {
  * Retorna a chave da edição diária do jornal, com virada programada para as 07h00 da manhã.
  * Antes das 07h00 usa a edição do dia anterior; a partir das 07h00 já vale a edição do dia atual.
  */
-export function getNewspaperEditionKey(now = new Date()): string {
-  const d = new Date(now.getTime());
-  if (d.getHours() < 7) {
-    d.setDate(d.getDate() - 1);
+export function getNewspaperEditionKey(now = getOfficialNow()): string {
+  // Fuso horário oficial de Coari (UTC-4), virando diariamente às 07h00 Coari
+  const shifted = new Date(now.getTime() + COARI_OFFSET_MS);
+  if (shifted.getUTCHours() < 7) {
+    shifted.setUTCDate(shifted.getUTCDate() - 1);
   }
-  const yyyy = d.getFullYear();
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
+  const yyyy = shifted.getUTCFullYear();
+  const mm = String(shifted.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(shifted.getUTCDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
 }
 
@@ -56,10 +58,23 @@ function hashSeed(str: string): number {
 }
 
 function countMedals(p: PlayerProfile): number {
-  const unlocked = Array.isArray(p.unlockedMedals) ? p.unlockedMedals : [];
-  const baseCount = unlocked.reduce((sum, m) => sum + (m.count ?? 1), 0);
-  const tourCount = Array.isArray(p.tournamentMedals) ? p.tournamentMedals.length : 0;
-  return baseCount + tourCount;
+  const countsById = new Map<string, number>();
+  for (const m of Array.isArray(p.unlockedMedals) ? p.unlockedMedals : []) {
+    const rawId = typeof m === "string" ? m : m?.medalId;
+    if (!rawId || rawId.startsWith("projected_")) continue;
+    const count = typeof m === "object" && m ? Math.max(1, Math.floor(m.count ?? 1)) : 1;
+    countsById.set(rawId, Math.max(countsById.get(rawId) ?? 0, count));
+  }
+  for (const tm of Array.isArray(p.tournamentMedals) ? p.tournamentMedals : []) {
+    if (!tm || !tm.id || tm.id.startsWith("projected_")) continue;
+    const count = Math.max(1, Math.floor(tm.count ?? 1));
+    countsById.set(tm.id, Math.max(countsById.get(tm.id) ?? 0, count));
+  }
+  let total = 0;
+  for (const c of countsById.values()) {
+    total += c;
+  }
+  return total;
 }
 
 function toPlayerRef(p: PlayerProfile, metricLabel?: string): NewspaperPlayerRef {
@@ -123,7 +138,7 @@ export function generateNewspaperArticles(input: GenerateNewspaperInput): NewsAr
   const RECENT_WINDOW_MS = 72 * 60 * 60 * 1000;
 
   // 1. PLANTÃO: Medalhas raras/misteriosas desbloqueadas recentemente ou pioneiros
-  const rareRarities = new Set(["secreta", "lendaria", "diamante", "platina", "ouro"]);
+  const rareRarities = new Set(["heroi", "diamante", "platina", "ouro", "secreta", "lendaria"]);
   let latestRareUnlock: {
     player: PlayerProfile;
     medal: MedalDefinition;
@@ -134,10 +149,15 @@ export function generateNewspaperArticles(input: GenerateNewspaperInput): NewsAr
     for (const um of p.unlockedMedals ?? []) {
       const def = medalById.get(um.medalId);
       if (!def) continue;
-      const isSpecialRobot =
-        def.id === "m_rpg_carmesim" || def.id === "m_rpg_ametista" || def.id.startsWith("m_sq_");
-      if (!rareRarities.has(def.rarity) && !isSpecialRobot) continue;
+      const isSpecialMedal =
+        def.isSecret === true ||
+        def.id === "m_rpg_carmesim" ||
+        def.id === "m_rpg_ametista" ||
+        def.id.startsWith("sq_") ||
+        def.id.startsWith("m_sq_");
+      if (!rareRarities.has(def.rarity) && !isSpecialMedal) continue;
       const ts = um.unlockedAt ? new Date(um.unlockedAt).getTime() : 0;
+      if (!Number.isFinite(ts) || ts <= 0) continue;
       if (!latestRareUnlock || ts > latestRareUnlock.unlockedAtMs) {
         latestRareUnlock = { player: p, medal: def, unlockedAtMs: ts };
       }
@@ -145,8 +165,8 @@ export function generateNewspaperArticles(input: GenerateNewspaperInput): NewsAr
   }
 
   if (latestRareUnlock) {
-    const isFresh =
-      latestRareUnlock.unlockedAtMs > 0 && nowMs - latestRareUnlock.unlockedAtMs <= RECENT_WINDOW_MS;
+    const ageMs = nowMs - latestRareUnlock.unlockedAtMs;
+    const isFresh = ageMs >= 0 && ageMs <= RECENT_WINDOW_MS;
     const { player, medal } = latestRareUnlock;
     const isSecret =
       (medal.rarity as string) === "secreta" ||
@@ -186,25 +206,34 @@ export function generateNewspaperArticles(input: GenerateNewspaperInput): NewsAr
 
     for (const entry of Object.values(input.records)) {
       if (!entry || !entry.holders || entry.holders.length === 0) continue;
-      const latestHolder = entry.holders[entry.holders.length - 1];
-      const matched = eligible.find(
-        (p) => p.id === latestHolder.playerId || p.nickNormalized === latestHolder.playerId,
-      );
-      if (!matched) continue;
-      if (!newestRecord || latestHolder.achievedAt > newestRecord.achievedAt) {
-        newestRecord = {
-          gameId: entry.gameId,
-          stage: entry.stage,
-          score: entry.score,
-          holderNick: matched.nick,
-          holderSchool: matched.school,
-          holderId: matched.id,
-          achievedAt: latestHolder.achievedAt,
-        };
+      for (const holder of entry.holders) {
+        if (!holder) continue;
+        const matched = eligible.find(
+          (p) =>
+            p.id === holder.playerId ||
+            p.nickNormalized === holder.playerId ||
+            (holder.nick && nickSlug(p.nick) === nickSlug(holder.nick)),
+        );
+        if (!matched) continue;
+        const ageMs = nowMs - holder.achievedAt;
+        if (ageMs < 0 || ageMs > RECENT_WINDOW_MS) continue;
+        if (!newestRecord || holder.achievedAt > newestRecord.achievedAt) {
+          newestRecord = {
+            gameId: entry.gameId,
+            stage: entry.stage,
+            score: entry.score,
+            holderNick: matched.nick,
+            holderSchool: matched.school,
+            holderId: matched.id,
+            achievedAt: holder.achievedAt,
+          };
+        }
       }
     }
 
-    if (newestRecord && nowMs - newestRecord.achievedAt <= RECENT_WINDOW_MS) {
+    if (newestRecord) {
+      const recAge = nowMs - newestRecord.achievedAt;
+      if (recAge >= 0 && recAge <= RECENT_WINDOW_MS) {
       const holderProfile = eligible.find((p) => p.id === newestRecord!.holderId);
       if (holderProfile) {
         breakingArticles.push({
@@ -222,6 +251,7 @@ export function generateNewspaperArticles(input: GenerateNewspaperInput): NewsAr
             { label: "Escola", value: holderProfile.school || "Comunidade" },
           ],
         });
+      }
       }
     }
   }
@@ -340,28 +370,39 @@ export function generateNewspaperArticles(input: GenerateNewspaperInput): NewsAr
   }
 
   if (input.pioneers) {
-    const pioneerList = Object.values(input.pioneers).filter((p) => p && p.studentNick);
-    if (pioneerList.length > 0) {
-      const picked = pioneerList[seed % pioneerList.length];
+    const validPioneers: Array<{
+      picked: MedalPioneer;
+      holder: PlayerProfile;
+      medalDef: MedalDefinition;
+    }> = [];
+    for (const p of Object.values(input.pioneers)) {
+      if (!p || !p.studentNick) continue;
       const holder = eligible.find(
-        (p) => p.id === picked.studentId || p.nickNormalized === picked.studentId,
+        (el) =>
+          el.id === p.studentId ||
+          el.nickNormalized === p.studentId ||
+          nickSlug(el.nick) === nickSlug(p.studentNick),
       );
-      const medalDef = medalById.get(picked.medalId);
+      const medalDef = medalById.get(p.medalId);
       if (holder && medalDef) {
-        dailyPool.push({
-          id: `pioneer_${picked.medalId}_${editionKey}`,
-          kind: "destaque",
-          badge: "🥇 PIONEIRO DA REDE",
-          headline: `${holder.nick} foi o 1º a conquistar "${medalDef.title}"!`,
-          summary: `Marco pioneiro registrado na rede SEMED Coari (${stageFromBirthdate(holder.birthdate, now, holder.school).shortLabel}).`,
-          accentTone: "emerald",
-          featuredPlayer: toPlayerRef(holder),
-          metrics: [
-            { label: "Medalha", value: medalDef.title },
-            { label: "Escola", value: holder.school || "Comunidade" },
-          ],
-        });
+        validPioneers.push({ picked: p, holder, medalDef });
       }
+    }
+    if (validPioneers.length > 0) {
+      const { picked, holder, medalDef } = validPioneers[seed % validPioneers.length];
+      dailyPool.push({
+        id: `pioneer_${picked.medalId}_${editionKey}`,
+        kind: "destaque",
+        badge: "🥇 PIONEIRO DA REDE",
+        headline: `${holder.nick} foi o 1º a conquistar "${medalDef.title}"!`,
+        summary: `Marco pioneiro registrado na rede SEMED Coari (${stageForPlayer(holder.school, holder.birthdate, now, holder.ageStage, holder.grade).shortLabel}).`,
+        accentTone: "emerald",
+        featuredPlayer: toPlayerRef(holder),
+        metrics: [
+          { label: "Medalha", value: medalDef.title },
+          { label: "Escola", value: holder.school || "Comunidade" },
+        ],
+      });
     }
   }
 

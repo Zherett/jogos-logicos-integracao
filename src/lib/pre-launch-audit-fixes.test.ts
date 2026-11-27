@@ -61,11 +61,14 @@ import {
 import { saveSpecialEvents, type SpecialEvent } from "./custom-events.ts";
 import {
   __setPlayFabServerClockOffsetForTests,
+  executeActivitySeasonReset,
   ensurePlayerSeasonAligned,
   getAuthoritativeDateKey,
   getAuthoritativeNow,
+  loadRegistry,
   playfabRecordMatch,
   playfabSignUp,
+  saveRegistry,
   syncActiveProfileChangeToPlayFab,
   type PlayerProfile,
   type StoredAccount,
@@ -496,7 +499,8 @@ describe("Regressão da Auditoria Profunda Pré-Lançamento (Waves 1-4)", () => 
     const stu = makeStudent({ id: "promo_stu", coins: 10, lifetimeCoins: 10 });
     const claimRes = claimPromoCode(code, stu);
     assert.equal(claimRes.success, true);
-    assert.equal(claimRes.updatedProfile?.coins, 55);
+    assert.equal(claimRes.updatedProfile?.level, 3);
+    assert.equal(claimRes.updatedProfile?.coins, 75);
     assert.equal(claimRes.updatedProfile?.unopenedChests?.[DEFAULT_CHESTS[0].id], 2);
     assert.ok(claimRes.updatedProfile?.claimedPromoCodeIds?.includes(batch[0].cleanCode));
     assert.ok(batch[0].batchId);
@@ -597,6 +601,35 @@ describe("Regressão da Auditoria Profunda Pré-Lançamento (Waves 1-4)", () => 
     assert.equal(resConsecutive.ok, true);
     assert.equal(consecutiveProf.streakDays, 3);
     assert.equal(resConsecutive.medalCoinsAwarded, 5, "Dia 3 consecutivo concede medalha bronze (+5 moedas)");
+
+    // 4. SYNC-06: executeActivitySeasonReset converte saldo remanescente de pointsBalance em moedas preservando careerPoints
+    const prevReg = loadRegistry();
+    saveRegistry({
+      stu_conv: {
+        passwordHash: "mock_hash",
+        profile: makeStudent({
+          id: "stu_conv",
+          nick: "ConvStu",
+          nickNormalized: "convstu",
+          pointsBalance: 320,
+          careerPoints: 900,
+          coins: 40,
+          lifetimeCoins: 40,
+          peakCoins: 40,
+          coinsSpentTotal: 0,
+        }),
+        stats: [],
+        unlocked: [],
+        updatedAt: new Date().toISOString(),
+      },
+    });
+    executeActivitySeasonReset({ isBetaEnd: false, reason: "Teste SYNC-06" });
+    const afterReg = loadRegistry();
+    const convProf = afterReg["stu_conv"].profile;
+    assert.equal(convProf.pointsBalance, 0, "Saldo de pontos deve ser zerado na conversão");
+    assert.equal(convProf.coins, 360, "Saldo anterior (40) + 320 pontos convertidos = 360 moedas");
+    assert.equal(convProf.careerPoints, 900, "Hall da Fama (careerPoints) deve permanecer intacto");
+    saveRegistry(prevReg);
 
     saveAdminConfig(DEFAULT_ADMIN_CONFIG);
   });

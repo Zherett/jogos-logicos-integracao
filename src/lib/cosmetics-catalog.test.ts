@@ -10,6 +10,8 @@ import {
   DEFAULT_AVATAR_COLOR,
   DEFAULT_AVATAR_ID,
   ensureLevel5InitialLetterUnlock,
+  extractCustomAurasForStorage,
+  extractCustomAvatarsForStorage,
   getAvatarCategory,
   getInitialLetterAvatarIdForNick,
   getInitialLetterFromNick,
@@ -359,5 +361,61 @@ describe("Catálogo de Cosméticos e Regras da Loja", () => {
       null,
     );
     assert.deepEqual(mergedCounts, { [pack.id]: 5, other: 1 });
+  });
+
+  it("preserva avatar padrão em extractCustomAvatarsForStorage quando iconKey é alterado", () => {
+    const modified = DEFAULT_AVATARS.map((a) =>
+      a.id === "avatar_smile" ? { ...a, iconKey: "crown" as const } : a,
+    );
+    const extracted = extractCustomAvatarsForStorage(modified);
+    assert.equal(extracted.length, 1);
+    assert.equal(extracted[0]?.id, "avatar_smile");
+    assert.equal(extracted[0]?.iconKey, "crown");
+  });
+
+  it("preserva aura padrão em extractCustomAurasForStorage quando kind é alterado", () => {
+    const modified = DEFAULT_AURAS.map((a) =>
+      a.id === "aura_azul_static" ? { ...a, kind: "pulsing" as const } : a,
+    );
+    const extracted = extractCustomAurasForStorage(modified);
+    assert.equal(extracted.length, 1);
+    assert.equal(extracted[0]?.id, "aura_azul_static");
+    assert.equal(extracted[0]?.kind, "pulsing");
+  });
+
+  it("Bloco 1.3 (ECON-24): mergeWithDefaultAvatars/Auras ignora chaves undefined e extractCustomAvatarsForStorage detecta propriedades visuais", () => {
+    const mergedAvatars = mergeWithDefaultAvatars([
+      {
+        id: "avatar_bot",
+        name: "Robô Tunado",
+        priceCoins: 250,
+        iconKey: undefined,
+        imageUrl: undefined,
+      } as any,
+    ]);
+    const bot = mergedAvatars.find((a) => a.id === "avatar_bot")!;
+    assert.equal(bot.name, "Robô Tunado");
+    assert.equal(bot.iconKey, "bot");
+
+    const mergedAuras = mergeWithDefaultAuras([
+      {
+        id: "aura_azul_pulse",
+        name: "Aura Tunada",
+        kind: undefined,
+        secondaryColor: undefined,
+      } as any,
+    ]);
+    const aura = mergedAuras.find((a) => a.id === "aura_azul_pulse")!;
+    assert.equal(aura.name, "Aura Tunada");
+    assert.equal(aura.kind, "pulsing");
+
+    const baseAvatar = DEFAULT_AVATARS[0];
+    const modifiedLetter = [
+      { ...baseAvatar, letterVariant: "round" as const, letterChar: "Z" },
+    ];
+    const extracted = extractCustomAvatarsForStorage(modifiedLetter);
+    assert.equal(extracted.length, 1);
+    assert.equal(extracted[0]?.letterVariant, "round");
+    assert.equal(extracted[0]?.letterChar, "Z");
   });
 });

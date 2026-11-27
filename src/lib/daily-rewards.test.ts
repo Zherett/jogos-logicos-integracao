@@ -19,7 +19,8 @@ import {
   getDailyRewardClaimState,
   resolveDailyRewardsSchedule,
 } from "./daily-rewards.ts";
-import { evaluatePlayerMedals, getAllAvailableMedals } from "./medals-catalog.ts";
+import { evaluatePlayerMedals, getAllAvailableMedals, MEDAL_XP_REWARDS } from "./medals-catalog.ts";
+import { DAILY_LOGIN_POINTS, MEDAL_POINTS_REWARDS } from "./career-points.ts";
 
 describe("Sistema de Recompensa Diária Progressiva (Check-in Acumulativo + Ofensiva)", () => {
   it("contém exatamente 7 dias com escala progressiva correta de pontos e XP", () => {
@@ -322,5 +323,60 @@ describe("Sistema de Recompensa Diária Progressiva (Check-in Acumulativo + Ofen
     // Segunda execução é 100% idempotente
     const applied2 = applyRetroactiveDay1CheckIn(activeStudent, {}, { todayKey, daysWindow: 3 });
     assert.equal(applied2.eligible, false);
+  });
+
+  it("Bloco 1.3 (ECON-07): evita pagamento duplo de login+check-in e concede XP/pontos nas medalhas de marco com data Coari UTC-4", () => {
+    const todayKey = "2026-11-26";
+    // Dia 1 sem login prévio -> recebe 25 pts completos
+    const firstCheckInProfile: any = {
+      id: "daily_no_login",
+      nick: "DailyNoLogin",
+      careerPoints: 0,
+      pointsBalance: 0,
+      xp: 0,
+    };
+    const rNoLogin = claimDailyRewardForProfile(firstCheckInProfile, null, { todayKey });
+    assert.equal(rNoLogin.ok, true);
+    assert.equal(rNoLogin.pointsAwarded, 25);
+
+    // Dia 1 COM login já creditado hoje -> desconta DAILY_LOGIN_POINTS (25 - 25 = 0)
+    const afterLoginProfile: any = {
+      id: "daily_after_login",
+      nick: "DailyAfterLogin",
+      careerPoints: DAILY_LOGIN_POINTS,
+      pointsBalance: DAILY_LOGIN_POINTS,
+      lastDailyLoginPointsDate: todayKey,
+      xp: 0,
+    };
+    const rAfterLogin = claimDailyRewardForProfile(afterLoginProfile, null, { todayKey });
+    assert.equal(rAfterLogin.ok, true);
+    assert.equal(rAfterLogin.pointsAwarded, 0);
+    assert.equal(afterLoginProfile.careerPoints, DAILY_LOGIN_POINTS);
+
+    // Dia 3 com 3 dias seguidos -> concede medalha Marco Bronze com XP (5) + Pontos (10) e timestamp Coari UTC-4
+    // Instantâneo 2026-11-27T01:30:00Z = 2026-11-26 21:30 UTC-4 (Coari) -> mesmo dia 2026-11-26!
+    const streak3Profile: any = {
+      id: "daily_streak_3",
+      nick: "Streak3",
+      dailyCheckInCount: 2,
+      lastDailyRewardClaimDate: "2026-11-25",
+      lastDailyLoginPointsDate: todayKey,
+      activeDates: ["2026-11-24", "2026-11-25"],
+      xp: 0,
+      careerPoints: DAILY_LOGIN_POINTS,
+      pointsBalance: DAILY_LOGIN_POINTS,
+    };
+    const coariNight = new Date("2026-11-27T01:30:00.000Z");
+    const rDay3 = claimDailyRewardForProfile(streak3Profile, null, { todayKey, now: coariNight });
+    assert.equal(rDay3.ok, true);
+    assert.equal(rDay3.claimedDay, 3);
+    const tier3 = DAILY_REWARDS_SCHEDULE[2];
+    // Dia 3 = 40 + streakBonus(5 * 2 = 10) = 50, descontado 25 do login = 25, + 10 pontos da medalha bronze = 35
+    assert.equal(
+      rDay3.pointsAwarded,
+      40 + getStreakBonusPoints(3) - DAILY_LOGIN_POINTS + MEDAL_POINTS_REWARDS.bronze,
+    );
+    assert.equal(rDay3.xpAwarded, tier3.xp + MEDAL_XP_REWARDS.bronze);
+    assert.equal(streak3Profile.unlockedMedals?.[0]?.unlockedAt, coariNight.toISOString());
   });
 });

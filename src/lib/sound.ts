@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { safeLocalStorageSet } from "./storage-guard.ts";
 
 const MUTE_KEY = "desafios-logica-muted-v1";
 
@@ -20,7 +21,7 @@ export function setSoundMuted(muted: boolean) {
   memoryMuted = muted;
   if (typeof window !== "undefined") {
     try {
-      if (muted) window.localStorage.setItem(MUTE_KEY, "1");
+      if (muted) safeLocalStorageSet(MUTE_KEY, "1");
       else window.localStorage.removeItem(MUTE_KEY);
     } catch {
       /* ignore */

@@ -131,4 +131,24 @@ describe("Liberação Inicial de Jogos e Controle de Bloqueio com SEMED26", () =
     assert.equal(DEFAULT_ADMIN_CONFIG.activitySeasonEndAt, null);
     assert.equal(DEFAULT_ADMIN_CONFIG.rankedSeasonEndAt, null);
   });
+
+  it("SYNC-11: retorna clone profundo em loadAdminConfig para impedir mutação acidental de cache", () => {
+    const a = loadAdminConfig();
+    const b = loadAdminConfig();
+    assert.notEqual(a, b);
+    assert.notEqual(a.noticeSlides, b.noticeSlides);
+    assert.notEqual(a.gameCodes, b.gameCodes);
+    a.noticeSlides?.push({
+      id: "mut_test",
+      title: "Mutação",
+      message: "Não pode vazar",
+      badgeLabel: "TESTE",
+      type: "announcement",
+      durationSeconds: 5,
+      active: true,
+      createdAt: "2026-11-27T00:00:00.000Z",
+    });
+    const c = loadAdminConfig();
+    assert.equal(c.noticeSlides?.some((s) => s.id === "mut_test"), false);
+  });
 });

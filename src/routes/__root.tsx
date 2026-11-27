@@ -1,9 +1,9 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ErrorComponentProps } from "@tanstack/react-router";
 import {
+  HeadContent,
   Outlet,
   Link,
-  createRootRouteWithContext,
+  createRootRoute,
   useRouter,
 } from "@tanstack/react-router";
 import { PlayerAuthProvider } from "@/lib/player-auth";
@@ -75,20 +75,17 @@ function ErrorComponent({ error, reset }: ErrorComponentProps) {
   );
 }
 
-export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
+export const Route = createRootRoute({
   component: RootComponent,
   notFoundComponent: NotFoundComponent,
   errorComponent: ErrorComponent,
 });
 
 function RootComponent() {
-  const { queryClient } = Route.useRouteContext();
-
   return (
-    <QueryClientProvider client={queryClient}>
-      <PlayerAuthProvider>
-        <Outlet />
-      </PlayerAuthProvider>
-    </QueryClientProvider>
+    <PlayerAuthProvider>
+      <HeadContent />
+      <Outlet />
+    </PlayerAuthProvider>
   );
 }

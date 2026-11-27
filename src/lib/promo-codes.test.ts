@@ -1,6 +1,7 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import {
+  archiveOldClaimedPromoCodes,
   generateSingleCode,
   generatePromoCodesBatch,
   inspectPromoCode,
@@ -15,6 +16,9 @@ import {
   mergePromoCatalogs,
   type PromoCodePattern,
 } from "./promo-codes.ts";
+import { getPlayerScoreLedger } from "./score-history-ledger.ts";
+import { DEFAULT_AVATARS } from "./cosmetics-catalog.ts";
+import { calculateDuplicateCosmeticCompensation } from "./chests-catalog.ts";
 
 describe("Sistema de Códigos Promocionais e QR Codes (promo-codes)", () => {
   beforeEach(() => {
@@ -161,16 +165,19 @@ describe("Sistema de Códigos Promocionais e QR Codes (promo-codes)", () => {
     assert.equal(claimAgain.errorMessage, "Código inválido ou já resgatado.");
   });
 
-  it("trava de acesso restringe a função de resgate exclusivamente aos usuários de teste Zheret e Lord", () => {
-    const alunoComum = { nick: "marcos_silva" } as any;
-    const alunoBanana = { nick: "banana123" } as any;
-    const testerZheret = { nick: "Zheret" } as any;
-    const testerLord = { nick: "LORD" } as any;
+  it("libera a função de resgate para todos os alunos autenticados e bloqueia sessões nulas", () => {
+    const alunoComum = { id: "stu_marcos", nick: "marcos_silva" } as any;
+    const alunoBanana = { id: "stu_banana", nick: "banana123" } as any;
+    const testerZheret = { id: "stu_zheret", nick: "Zheret" } as any;
+    const adminSemId = { isAdmin: true } as any;
+    const vazio = {} as any;
 
-    assert.equal(canAccessPromoCodeRedeem(alunoComum), false, "Aluno comum não pode ver o resgate");
-    assert.equal(canAccessPromoCodeRedeem(alunoBanana), false, "Banana123 não pode ver o resgate");
+    assert.equal(canAccessPromoCodeRedeem(null), false, "Sem perfil não pode acessar");
+    assert.equal(canAccessPromoCodeRedeem(vazio), false, "Perfil vazio sem id/nick não pode acessar");
+    assert.equal(canAccessPromoCodeRedeem(alunoComum), true, "Aluno comum autenticado deve ter acesso liberado");
+    assert.equal(canAccessPromoCodeRedeem(alunoBanana), true, "Qualquer aluno autenticado deve ter acesso liberado");
     assert.equal(canAccessPromoCodeRedeem(testerZheret), true, "Zheret deve ter acesso liberado");
-    assert.equal(canAccessPromoCodeRedeem(testerLord), true, "Lord deve ter acesso liberado");
+    assert.equal(canAccessPromoCodeRedeem(adminSemId), true, "Admin deve ter acesso liberado");
   });
 
   it("respeita a trava de lote: impede múltiplos resgates quando allowMultiplePerStudent for false", () => {
@@ -276,5 +283,87 @@ describe("Sistema de Códigos Promocionais e QR Codes (promo-codes)", () => {
     const kept = merged.find((c) => c.cleanCode === "TEST2222BBBB");
     assert.ok(kept);
     assert.equal(kept.hiddenForAdmin, true, "Soft delete local (hiddenForAdmin) deve ser preservado no merge");
+  });
+
+  it("Bloco 1.3 (ECON-08/ECON-10/ECON-21): preserva pendingCloudSync >15s, valida perfil no inspect, não duplica ledger, aceita avatarPieceId e compensa cosmético", () => {
+    const oldCreated = new Date(Date.now() - 60_000).toISOString();
+    const pendingItem = {
+      id: "promo_pending_1",
+      code: "TEST-3333-CCCC",
+      cleanCode: "TEST3333CCCC",
+      pattern: "padrao_1" as const,
+      batchId: "b_pend",
+      batchName: "Lote Lento",
+      status: "active" as const,
+      rewards: { xp: 10, points: 5 },
+      createdAt: oldCreated,
+      createdBy: "admin",
+      pendingCloudSync: true,
+    };
+    const staleWithoutFlag = { ...pendingItem, id: "promo_stale", code: "TEST-4444-DDDD", cleanCode: "TEST4444DDDD", pendingCloudSync: false };
+    const merged = mergePromoCatalogs([], [pendingItem, staleWithoutFlag], new Set(), Date.now());
+    assert.equal(merged.some((c) => c.cleanCode === "TEST3333CCCC"), true, "pendingCloudSync preserva após >15s");
+    assert.equal(merged.some((c) => c.cleanCode === "TEST4444DDDD"), false, "Sem pendingCloudSync e >15s deve expirar");
+
+    const paidAvatar = DEFAULT_AVATARS.find((a) => a.priceCoins > 0)!;
+    const batch = generatePromoCodesBatch({
+      count: 2,
+      pattern: "padrao_1",
+      allowMultiplePerStudent: false,
+      batchName: "Lote Cosmético",
+      createdBy: "adm",
+      rewards: { xp: 0, points: 60, avatarPieceId: paidAvatar.id },
+    });
+
+    const pId = `stu_promo_cosm_${Date.now()}`;
+    const student: any = {
+      id: pId,
+      nick: "PromoCosm",
+      nickNormalized: "promocosm",
+      xp: 0,
+      careerPoints: 0,
+      pointsBalance: 0,
+      coins: 0,
+      unlockedAvatars: [paidAvatar.id],
+    };
+
+    const claim = claimPromoCode(batch[0].code, student);
+    assert.equal(claim.success, true);
+    assert.equal(student.careerPoints, 60);
+    assert.equal(student.coins, calculateDuplicateCosmeticCompensation(paidAvatar.priceCoins));
+
+    // Não deve haver lançamento duplicado de pontos no ledger
+    const ptsEntries = getPlayerScoreLedger(pId, { type: "career_points" });
+    assert.equal(ptsEntries.length, 1);
+    assert.equal(ptsEntries[0].source, "codigo_promocional");
+    assert.equal(ptsEntries[0].amount, 60);
+
+    // Inspect cross-device rejeita mesmo se perfil já tiver código/lote no histórico
+    const inspectCode = inspectPromoCode(batch[0].code, student.id, student);
+    assert.equal(inspectCode.valid, false);
+    assert.equal(inspectCode.status, "already_claimed");
+    const inspectBatch = inspectPromoCode(batch[1].code, student.id, {
+      claimedPromoCodeIds: [],
+      claimedPromoBatchIds: [batch[1].batchId!],
+    });
+    assert.equal(inspectBatch.valid, false);
+    assert.equal(inspectBatch.status, "already_claimed");
+  });
+
+  it("QUOTA-02: archiveOldClaimedPromoCodes remove apenas códigos resgatados/ocultos > 90 dias preservando ativos", () => {
+    const nowMs = Date.UTC(2026, 10, 27, 12, 0, 0);
+    const oldIso = new Date(nowMs - 100 * 86_400_000).toISOString();
+    const recentIso = new Date(nowMs - 10 * 86_400_000).toISOString();
+
+    const sample = [
+      { id: "1", code: "A1", cleanCode: "A1", status: "active" as const, createdAt: oldIso },
+      { id: "2", code: "C_OLD", cleanCode: "COLD", status: "claimed" as const, createdAt: oldIso, claimedAt: oldIso },
+      { id: "3", code: "C_NEW", cleanCode: "CNEW", status: "claimed" as const, createdAt: recentIso, claimedAt: recentIso },
+      { id: "4", code: "H_OLD", cleanCode: "HOLD", status: "active" as const, hiddenForAdmin: true, createdAt: oldIso },
+    ] as any[];
+
+    const res = archiveOldClaimedPromoCodes(sample, { maxAgeDays: 90, nowMs });
+    assert.equal(res.archivedCount, 2);
+    assert.deepEqual(res.remaining.map((c) => c.id), ["1", "3"]);
   });
 });

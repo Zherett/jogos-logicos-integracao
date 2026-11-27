@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import {
   ShieldCheck,
@@ -80,6 +80,7 @@ import {
   type PlatformAdminConfig,
   type PlatformNoticeSlide,
 } from "@/lib/game-codes";
+import type { MergeAdminConfigWriteOptions } from "@/lib/admin-config-guard";
 import { usePlayerAuth } from "@/lib/player-auth";
 import {
   levelProgress,
@@ -93,9 +94,6 @@ import {
   getTrashPlayers,
   restoreRankedSeasonToOne,
   moveStudentToTrash,
-  restoreStudentFromTrash,
-  permanentlyDeleteStudent,
-  emptyStudentTrash,
   getLastAdminCloudSyncError,
   getPlayFabTitleId,
   grantPlayerMedalManually,
@@ -204,6 +202,11 @@ const AdminSystemBackupHealthCard = lazy(() =>
     default: m.AdminSystemBackupHealthCard,
   })),
 );
+const AdminTrashTab = lazy(() =>
+  import("./AdminTrashTab").then((m) => ({
+    default: m.AdminTrashTab,
+  })),
+);
 import {
   AGE_STAGES,
   getTournamentRank,
@@ -270,7 +273,26 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
   const [pinInput, setPinInput] = useState("");
   const [pinError, setPinError] = useState<string | null>(null);
   const [tab, setTab] = useState<AdminTab>("jogos");
-  const [draft, setDraft] = useState<PlatformAdminConfig>(auth.adminConfig);
+  const [draft, setDraftState] = useState<PlatformAdminConfig>(auth.adminConfig);
+  const isDirtyRef = useRef(false);
+  const prevOpenRef = useRef(false);
+  const lastSyncedSigRef = useRef<string>("");
+
+  const setDraft: React.Dispatch<React.SetStateAction<PlatformAdminConfig>> = useCallback(
+    (next) => {
+      isDirtyRef.current = true;
+      setDraftState(next);
+    },
+    [],
+  );
+
+  const setDraftClean: React.Dispatch<React.SetStateAction<PlatformAdminConfig>> = useCallback(
+    (next) => {
+      isDirtyRef.current = false;
+      setDraftState(next);
+    },
+    [],
+  );
   const [copied, setCopied] = useState(false);
   const [savedMsg, setSavedMsg] = useState<string | null>(null);
   const [, setPresenceTick] = useState(0);
@@ -292,7 +314,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
       setAuditResult(res);
       await auth.refresh();
       const refreshedNotifs = await syncAdminMedalNotificationsFromPlayFab();
-      setDraft((prev) => ({ ...prev, adminMedalNotifications: refreshedNotifs }));
+      setDraftClean((prev) => ({ ...prev, adminMedalNotifications: refreshedNotifs }));
       const parts: string[] = [];
       if (res.medalsAwardedCount > 0) {
         parts.push(`+${res.medalsAwardedCount} medalha(s) retroatribuída(s)`);
@@ -305,7 +327,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
           ? `Varredura concluída: ${parts.join(" e ")} em ${res.updatedStudentsCount} aluno(s).`
           : `Varredura concluída: nenhum ajuste necessário nos ${res.auditedStudentsCount} alunos auditados.`;
       flashSaved(msg);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Erro na varredura de medalhas:", err);
       flashSaved("Erro ao processar varredura de medalhas.");
     } finally {
@@ -504,7 +526,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
 
   // Consolidação de partidas jogadas por jogo para a Lista de Jogos do ADM
   const gameStatsSummary = useMemo(() => {
-    const counts: Record<GameId, { totalPlays: number; admPlays: number }> = {} as any;
+    const counts = {} as Record<GameId, { totalPlays: number; admPlays: number }>;
     for (const gId of ALL_GAME_IDS) {
       counts[gId] = { totalPlays: 0, admPlays: 0 };
     }
@@ -571,9 +593,9 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
     );
   }, [draft.customMedals, activeLinkedMedalIds]);
 
-  // Sincronização inicial na nuvem apenas ao abrir o painel (evita disparar centenas de requisições ao salvar configs)
+  // Sincronização inicial na nuvem apenas ao abrir o painel autenticado como ADM (evita vazamento PII e escritas sem login)
   useEffect(() => {
-    if (!open) return;
+    if (!open || !auth.isAdmin) return;
     let active = true;
     setSyncingRoster(true);
     void syncPresenceFromPlayFab(true);
@@ -584,7 +606,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
         void syncPresenceFromUserData(getAllRegisteredPlayers(), { force: true });
         const notifs = await syncAdminMedalNotificationsFromPlayFab();
         if (!active) return;
-        setDraft((prev) => ({ ...prev, adminMedalNotifications: notifs }));
+        setDraftState((prev) => ({ ...prev, adminMedalNotifications: notifs }));
       })
       .catch((err) => {
         console.warn("Aviso ao sincronizar alunos e medalhas no painel ADM:", err);
@@ -600,15 +622,15 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
     return () => {
       active = false;
     };
-  }, [open]);
+  }, [open, auth.isAdmin]);
 
   useEffect(() => {
     setAdminStudentsVisibleLimit(24);
   }, [selectedAdminSchool, selectedAdminTurma]);
 
-  // Polling de presença e histórico X1 isolado (só re-renderiza o painel em abas que consomem presença/X1)
+  // Polling de presença e histórico X1 isolado (só roda quando o painel está autenticado como ADM)
   useEffect(() => {
-    if (!open) return;
+    if (!open || !auth.isAdmin) return;
     const isPresenceTab = tab === "turmas" || tab === "sistema";
     const isX1Tab = tab === "arena_x1" || tab === "turmas";
 
@@ -640,94 +662,109 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
       window.removeEventListener("desafios:x1-history-updated", onX1HistoryUpdated);
       window.clearInterval(presencePoll);
     };
-  }, [open, tab]);
+  }, [open, tab, auth.isAdmin]);
 
   // Sincroniza o draft quando auth.adminConfig chega do PlayFab após a abertura direta (#/admin)
   useEffect(() => {
-    if (!open) return;
+    if (!open || isDirtyRef.current) return;
     const remoteCardsCount = auth.adminConfig.cardsCatalog?.length ?? 0;
     const localCardsCount = draft.cardsCatalog?.length ?? 0;
     const remoteUpdated = auth.adminConfig.updatedAt ?? "";
     const localUpdated = draft.updatedAt ?? "";
     if ((localCardsCount === 0 && remoteCardsCount > 0) || remoteUpdated > localUpdated) {
-      setDraft(auth.adminConfig);
+      setDraftClean(auth.adminConfig);
     }
-  }, [open, auth.adminConfig, draft.cardsCatalog?.length, draft.updatedAt]);
+  }, [open, auth.adminConfig, draft.cardsCatalog?.length, draft.updatedAt, setDraftClean]);
 
   useEffect(() => {
-    if (!open) return;
-    setDraft(auth.adminConfig);
-    setSpecialEvents(loadSpecialEvents());
-    setRecurringEvents(loadRecurringEvents());
-    setX1History(loadX1MatchHistory());
-    setTurmaRequests(loadTurmaRequests());
-    refreshRoster();
-
-    setScheduleClearXp(auth.adminConfig.scheduledResetClearXp);
-    setAutoRenewSeason(auth.adminConfig.autoRenewSeason === true);
-    setSeasonDurationDays(auth.adminConfig.seasonDurationDays || 14);
-    setX1OpenInput(String(auth.adminConfig.x1OpenHour ?? 7));
-    setX1CloseInput(String(auth.adminConfig.x1CloseHour ?? 19));
-
-    // Initialize Activity Season states
-    setActivityDurationDays(auth.adminConfig.activitySeasonDurationDays || 60);
-    setActivitySeasonName(
-      auth.adminConfig.activitySeasonName ||
-        (auth.adminConfig.isBetaActive !== false
-          ? "Temporada 1 Beta • SEMED Coari"
-          : "Temporada 1 de Atividades • SEMED Coari"),
-    );
-    const actStart = auth.adminConfig.activitySeasonStartAt
-      ? new Date(auth.adminConfig.activitySeasonStartAt)
-      : new Date(2026, 10, 1, 0, 0, 0, 0);
-    setActivityStartInput(toDatetimeLocalString(actStart));
-    const actEnd = auth.adminConfig.activitySeasonEndAt
-      ? new Date(auth.adminConfig.activitySeasonEndAt)
-      : new Date(2026, 10, 15, 23, 59, 59, 999);
-    setActivityEndInput(toDatetimeLocalString(actEnd));
-
-    // Initialize Ranked Season states
-    setRankedDurationDays(auth.adminConfig.rankedSeasonDurationDays || 30);
-    setRankedCycleMode(auth.adminConfig.rankedSeasonCycleMode === "days" ? "days" : "monthly");
-    setRankedSeasonName(
-      auth.adminConfig.rankedSeasonName || "Temporada 1 Ranqueada • SEMED Coari",
-    );
-    const rnkStart = auth.adminConfig.rankedSeasonStartAt
-      ? new Date(auth.adminConfig.rankedSeasonStartAt)
-      : new Date(2026, 10, 1, 0, 0, 0, 0);
-    setRankedStartInput(toDatetimeLocalString(rnkStart));
-    const rnkEnd = auth.adminConfig.rankedSeasonEndAt
-      ? new Date(auth.adminConfig.rankedSeasonEndAt)
-      : new Date("2027-01-01T03:59:59.999Z");
-    setRankedEndInput(toDatetimeLocalString(rnkEnd));
-
-    const sStart = auth.adminConfig.seasonStartAt
-      ? new Date(auth.adminConfig.seasonStartAt)
-      : new Date(auth.adminConfig.lastResetAt || Date.now());
-    setSeasonStartInput(toDatetimeLocalString(sStart));
-
-    const targetEndStr = auth.adminConfig.seasonEndAt || auth.adminConfig.scheduledResetAt;
-    if (targetEndStr) {
-      const d = new Date(targetEndStr);
-      if (!Number.isNaN(d.getTime())) {
-        const localIso = toDatetimeLocalString(d);
-        setSeasonEndInput(localIso);
-        setScheduleInput(localIso);
-      }
-    } else {
-      const { end } = computeSeasonDates(sStart, auth.adminConfig.seasonDurationDays || 14);
-      const localEndIso = toDatetimeLocalString(end);
-      setSeasonEndInput(localEndIso);
-      setScheduleInput(localEndIso);
+    if (!open) {
+      prevOpenRef.current = false;
+      isDirtyRef.current = false;
+      return;
     }
-    setNextSeasonName(`Temporada ${auth.adminConfig.seasonId + 1} • SEMED Coari`);
-    setConfirmResetNow(false);
-    setConfirmBetaResetNow(false);
-    setConfirmActivityResetNow(false);
-    setConfirmRankedResetNow(false);
-    setSavedMsg(null);
+    const justOpened = !prevOpenRef.current;
+    prevOpenRef.current = true;
+    const remoteSig = `${auth.adminConfig.configRevision ?? 0}|${auth.adminConfig.updatedAt ?? ""}|${auth.adminConfig.lastResetAt ?? ""}`;
 
-    // Recuperação automática (1x por temporada) de pontos ranqueados perdidos a partir das provas do PlayFab
+    if (justOpened) {
+      setSpecialEvents(loadSpecialEvents());
+      setRecurringEvents(loadRecurringEvents());
+      setX1History(loadX1MatchHistory());
+      setTurmaRequests(loadTurmaRequests());
+      refreshRoster();
+      setConfirmResetNow(false);
+      setConfirmBetaResetNow(false);
+      setConfirmActivityResetNow(false);
+      setConfirmRankedResetNow(false);
+      setSavedMsg(null);
+    }
+
+    if (justOpened || (!isDirtyRef.current && remoteSig !== lastSyncedSigRef.current)) {
+      lastSyncedSigRef.current = remoteSig;
+      setDraftClean(auth.adminConfig);
+
+      setScheduleClearXp(auth.adminConfig.scheduledResetClearXp);
+      setAutoRenewSeason(auth.adminConfig.autoRenewSeason === true);
+      setSeasonDurationDays(auth.adminConfig.seasonDurationDays || 14);
+      setX1OpenInput(String(auth.adminConfig.x1OpenHour ?? 7));
+      setX1CloseInput(String(auth.adminConfig.x1CloseHour ?? 19));
+
+      // Initialize Activity Season states
+      setActivityDurationDays(auth.adminConfig.activitySeasonDurationDays || 60);
+      setActivitySeasonName(
+        auth.adminConfig.activitySeasonName ||
+          (auth.adminConfig.isBetaActive !== false
+            ? "Temporada 1 Beta • SEMED Coari"
+            : "Temporada 1 de Atividades • SEMED Coari"),
+      );
+      const actStart = auth.adminConfig.activitySeasonStartAt
+        ? new Date(auth.adminConfig.activitySeasonStartAt)
+        : new Date(2026, 10, 1, 0, 0, 0, 0);
+      setActivityStartInput(toDatetimeLocalString(actStart));
+      const actEnd = auth.adminConfig.activitySeasonEndAt
+        ? new Date(auth.adminConfig.activitySeasonEndAt)
+        : new Date(2026, 10, 15, 23, 59, 59, 999);
+      setActivityEndInput(toDatetimeLocalString(actEnd));
+
+      // Initialize Ranked Season states
+      setRankedDurationDays(auth.adminConfig.rankedSeasonDurationDays || 30);
+      setRankedCycleMode(auth.adminConfig.rankedSeasonCycleMode === "days" ? "days" : "monthly");
+      setRankedSeasonName(
+        auth.adminConfig.rankedSeasonName || "Temporada 1 Ranqueada • SEMED Coari",
+      );
+      const rnkStart = auth.adminConfig.rankedSeasonStartAt
+        ? new Date(auth.adminConfig.rankedSeasonStartAt)
+        : new Date(2026, 10, 1, 0, 0, 0, 0);
+      setRankedStartInput(toDatetimeLocalString(rnkStart));
+      const rnkEnd = auth.adminConfig.rankedSeasonEndAt
+        ? new Date(auth.adminConfig.rankedSeasonEndAt)
+        : new Date("2027-01-01T03:59:59.999Z");
+      setRankedEndInput(toDatetimeLocalString(rnkEnd));
+
+      const sStart = auth.adminConfig.seasonStartAt
+        ? new Date(auth.adminConfig.seasonStartAt)
+        : new Date(auth.adminConfig.lastResetAt || Date.now());
+      setSeasonStartInput(toDatetimeLocalString(sStart));
+
+      const targetEndStr = auth.adminConfig.seasonEndAt || auth.adminConfig.scheduledResetAt;
+      if (targetEndStr) {
+        const d = new Date(targetEndStr);
+        if (!Number.isNaN(d.getTime())) {
+          const localIso = toDatetimeLocalString(d);
+          setSeasonEndInput(localIso);
+          setScheduleInput(localIso);
+        }
+      } else {
+        const { end } = computeSeasonDates(sStart, auth.adminConfig.seasonDurationDays || 14);
+        const localEndIso = toDatetimeLocalString(end);
+        setSeasonEndInput(localEndIso);
+        setScheduleInput(localEndIso);
+      }
+      setNextSeasonName(`Temporada ${auth.adminConfig.seasonId + 1} • SEMED Coari`);
+    }
+
+    // Recuperação automática (1x por temporada) de pontos ranqueados perdidos a partir das provas do PlayFab (somente quando autenticado como ADM)
+    if (!auth.isAdmin) return;
     const seasonId = auth.adminConfig.rankedSeasonId ?? 1;
     const autoRecoveryKey = `desafios-ranked-recovery-s${seasonId}-v1`;
     if (typeof window !== "undefined" && !window.localStorage.getItem(autoRecoveryKey)) {
@@ -749,7 +786,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
         }
       })();
     }
-  }, [open, auth.adminConfig]);
+  }, [open, auth.adminConfig, auth.isAdmin]);
 
   async function handleRunRankedRecovery() {
     setRecoveringRanked(true);
@@ -768,8 +805,9 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
           `🏆 Varredura da Ranqueada concluída: nenhuma pontuação perdida pendente nas ${rec.evaluatedStudentsCount} contas.`,
         );
       }
-    } catch (err: any) {
-      flashSaved(`❌ Erro na recuperação da Ranqueada: ${err?.message || "Falha desconhecida"}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Falha desconhecida";
+      flashSaved(`❌ Erro na recuperação da Ranqueada: ${msg}`);
     } finally {
       setRecoveringRanked(false);
     }
@@ -813,8 +851,9 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
           : `🛡️ Auditoria global concluída: nenhum resíduo ou anomalia detectado nos ${res.auditedStudentsCount} alunos.`;
 
       flashSaved(summary);
-    } catch (err: any) {
-      flashSaved(`❌ Erro na auditoria preventiva: ${err?.message || "Falha desconhecida"}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Falha desconhecida";
+      flashSaved(`❌ Erro na auditoria preventiva: ${msg}`);
     } finally {
       setAuditingStudents(false);
     }
@@ -847,7 +886,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
   }
 
   async function saveGamesAndCodes() {
-    await auth.updateAdminConfig(draft);
+    await auth.updateAdminConfig(draft, { domain: "core" });
+    setDraftClean(draft);
     onConfigSaved?.();
     flashCloudResult("Jogos e códigos salvos com sucesso!");
   }
@@ -858,8 +898,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
       ...draft,
       tournamentGameOverride: gameId,
     };
-    setDraft(updated);
-    await auth.updateAdminConfig(updated);
+    setDraftClean(updated);
+    await auth.updateAdminConfig(updated, { domain: "core" });
     onConfigSaved?.();
     if (typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent("desafios:weekly-tournament-updated"));
@@ -877,8 +917,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
       ...draft,
       tournamentEnabled: enabled,
     };
-    setDraft(updated);
-    await auth.updateAdminConfig(updated);
+    setDraftClean(updated);
+    await auth.updateAdminConfig(updated, { domain: "core" });
     onConfigSaved?.();
     if (typeof window !== "undefined") {
       window.dispatchEvent(new CustomEvent("desafios:weekly-tournament-updated"));
@@ -894,8 +934,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
   async function handleToggleRequireCodeGate() {
     const nextState = !draft.requireCodeGate;
     const updated: PlatformAdminConfig = { ...draft, requireCodeGate: nextState };
-    setDraft(updated);
-    await auth.updateAdminConfig(updated);
+    setDraftClean(updated);
+    await auth.updateAdminConfig(updated, { domain: "core" });
     onConfigSaved?.();
     flashCloudResult(
       nextState
@@ -909,8 +949,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
       ...draft,
       enabledGames: { ...draft.enabledGames, [id]: nextVal },
     };
-    setDraft(updated);
-    await auth.updateAdminConfig(updated);
+    setDraftClean(updated);
+    await auth.updateAdminConfig(updated, { domain: "core" });
     onConfigSaved?.();
     flashCloudResult(
       nextVal
@@ -924,8 +964,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
       ...draft,
       adminOnlyGames: { ...(draft.adminOnlyGames ?? {}), [id]: nextVal },
     };
-    setDraft(updated);
-    await auth.updateAdminConfig(updated);
+    setDraftClean(updated);
+    await auth.updateAdminConfig(updated, { domain: "core" });
     onConfigSaved?.();
     flashCloudResult(
       nextVal
@@ -943,8 +983,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
         [id]: clamped,
       } as Record<GameId, number>,
     };
-    setDraft(updated);
-    await auth.updateAdminConfig(updated);
+    setDraftClean(updated);
+    await auth.updateAdminConfig(updated, { domain: "core" });
     onConfigSaved?.();
     flashCloudResult(`⭐ Nível exigido para "${GAME_NAMES[id]}": Nível ${clamped}+!`);
   }
@@ -967,8 +1007,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
       ...draft,
       x1AvailableGames: nextGames,
     };
-    setDraft(updated);
-    await auth.updateAdminConfig(updated);
+    setDraftClean(updated);
+    await auth.updateAdminConfig(updated, { domain: "x1" });
     onConfigSaved?.();
     flashCloudResult(
       isSelected
@@ -983,8 +1023,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
       ...draft,
       x1MinadoGridSize: safe,
     };
-    setDraft(updated);
-    await auth.updateAdminConfig(updated);
+    setDraftClean(updated);
+    await auth.updateAdminConfig(updated, { domain: "x1" });
     onConfigSaved?.();
     flashCloudResult(`💣 Tabuleiro do Campo Minado X1 definido para ${safe}×${safe}!`);
   }
@@ -998,25 +1038,47 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
       num = Math.max(0, Math.min(23, num));
       setX1OpenInput(String(num));
       const updated: PlatformAdminConfig = { ...draft, x1OpenHour: num };
-      setDraft(updated);
-      await auth.updateAdminConfig(updated);
+      setDraftClean(updated);
+      await auth.updateAdminConfig(updated, { domain: "x1" });
       onConfigSaved?.();
       flashCloudResult(`⏰ Horário de abertura da Arena X1 salvo: ${String(num).padStart(2, "0")}:00h!`);
     } else {
       num = Math.max(1, Math.min(24, num));
       setX1CloseInput(String(num));
       const updated: PlatformAdminConfig = { ...draft, x1CloseHour: num };
-      setDraft(updated);
-      await auth.updateAdminConfig(updated);
+      setDraftClean(updated);
+      await auth.updateAdminConfig(updated, { domain: "x1" });
       onConfigSaved?.();
       flashCloudResult(`⏰ Horário de fechamento da Arena X1 salvo: ${String(num).padStart(2, "0")}:00h!`);
     }
   }
 
+  async function handleSaveX1Settings() {
+    let openNum = parseInt(x1OpenInput, 10);
+    if (Number.isNaN(openNum)) openNum = draft.x1OpenHour ?? 0;
+    openNum = Math.max(0, Math.min(23, openNum));
+
+    let closeNum = parseInt(x1CloseInput, 10);
+    if (Number.isNaN(closeNum)) closeNum = draft.x1CloseHour ?? 23;
+    closeNum = Math.max(1, Math.min(24, closeNum));
+
+    setX1OpenInput(String(openNum));
+    setX1CloseInput(String(closeNum));
+    const updated: PlatformAdminConfig = {
+      ...draft,
+      x1OpenHour: openNum,
+      x1CloseHour: closeNum,
+    };
+    setDraftClean(updated);
+    await auth.updateAdminConfig(updated, { domain: "x1" });
+    onConfigSaved?.();
+    flashCloudResult("Configurações da Arena X1 salvas com sucesso!");
+  }
+
   async function handleToggleX1ForceOpen(val: boolean) {
     const updated: PlatformAdminConfig = { ...draft, x1ForceOpen: val };
-    setDraft(updated);
-    await auth.updateAdminConfig(updated);
+    setDraftClean(updated);
+    await auth.updateAdminConfig(updated, { domain: "x1" });
     onConfigSaved?.();
     flashCloudResult(
       val
@@ -1027,8 +1089,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
 
   async function handleToggleX1Enabled(val: boolean) {
     const updated: PlatformAdminConfig = { ...draft, x1Enabled: val };
-    setDraft(updated);
-    await auth.updateAdminConfig(updated);
+    setDraftClean(updated);
+    await auth.updateAdminConfig(updated, { domain: "x1" });
     onConfigSaved?.();
     flashCloudResult(
       val
@@ -1046,8 +1108,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
       adminOnlyGames: { ...DEFAULT_ADMIN_ONLY_GAMES },
       masterCode: DEFAULT_MASTER_CODE,
     };
-    setDraft(restored);
-    await auth.updateAdminConfig(restored);
+    setDraftClean(restored);
+    await auth.updateAdminConfig(restored, { domain: "core" });
     onConfigSaved?.();
     flashCloudResult("Códigos e jogos restaurados para o padrão com sucesso!");
   }
@@ -1112,8 +1174,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
       autoRenewSeason,
       scheduledResetClearXp: scheduleClearXp,
     };
-    setDraft(updated);
-    await auth.updateAdminConfig(updated);
+    setDraftClean(updated);
+    await auth.updateAdminConfig(updated, { domain: "season" });
     flashSaved(
       end
         ? `Configuração da Temporada salva! Término em ${end.toLocaleDateString("pt-BR")} às ${end.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}.`
@@ -1130,8 +1192,11 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
       scheduledResetAt: null,
       scheduledResetClearXp: false,
     };
-    setDraft(updated);
-    await auth.updateAdminConfig(updated);
+    setDraftClean(updated);
+    await auth.updateAdminConfig(updated, {
+      domain: "season",
+      clearFields: ["scheduledResetAt"],
+    });
     flashSaved("Agendamento de encerramento cancelado.");
   }
 
@@ -1178,8 +1243,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
       scheduledResetAt: end ? end.toISOString() : null,
       activitySeasonDurationDays: activityDurationDays,
     };
-    setDraft(updated);
-    await auth.updateAdminConfig(updated);
+    setDraftClean(updated);
+    await auth.updateAdminConfig(updated, { domain: "season" });
     const cloudErr = getLastAdminCloudSyncError();
     if (cloudErr) {
       flashSaved(`⚠️ Salvo localmente, mas falhou ao sincronizar com PlayFab: ${cloudErr}`);
@@ -1251,8 +1316,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
       rankedSeasonDurationDays: rankedDurationDays,
       rankedSeasonCycleMode: rankedCycleMode,
     };
-    setDraft(updated);
-    await auth.updateAdminConfig(updated);
+    setDraftClean(updated);
+    await auth.updateAdminConfig(updated, { domain: "season" });
     const cloudErr = getLastAdminCloudSyncError();
     if (cloudErr) {
       flashSaved(`⚠️ Salvo localmente, mas falhou ao sincronizar com PlayFab: ${cloudErr}`);
@@ -1263,7 +1328,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
 
   const restoreRankedSeasonOneAction = async () => {
     const restored = await restoreRankedSeasonToOne({ extendDays: 7 });
-    setDraft(restored);
+    setDraftClean(restored);
     setAutoRenewSeason(false);
     setRankedSeasonName(restored.rankedSeasonName || "Temporada 1 Ranqueada • SEMED Coari");
     if (restored.rankedSeasonStartAt) {
@@ -1288,7 +1353,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
       reason: "Encerramento do Torneio Mensal Ranqueado pelo Administrador",
     });
     const refreshed = loadAdminConfig();
-    setDraft(refreshed);
+    setDraftClean(refreshed);
     setRankedSeasonName(refreshed.rankedSeasonName || `Temporada ${refreshed.rankedSeasonId ?? 1} Ranqueada • SEMED Coari`);
     if (refreshed.rankedSeasonStartAt) {
       setRankedStartInput(toDatetimeLocalString(new Date(refreshed.rankedSeasonStartAt)));
@@ -1304,7 +1369,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
 
 
   async function saveSystemSettings() {
-    await auth.updateAdminConfig(draft);
+    await auth.updateAdminConfig(draft, { domain: "core" });
+    setDraftClean(draft);
     if (newAdminPin.trim().length >= 4) {
       setAdminPin(newAdminPin.trim());
       setNewAdminPin("");
@@ -1374,7 +1440,9 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
   }
 
   const players = useMemo(() => {
-    return open && auth.isAdmin && tab === "sistema" ? getAllRegisteredPlayers() : [];
+    return open && auth.isAdmin && (tab === "sistema" || tab === "medalhas")
+      ? getAllRegisteredPlayers()
+      : [];
   }, [open, auth.isAdmin, tab]);
   const pendingTurmaCount = useMemo(() => turmaRequests.filter((r) => r.status === "pendente").length, [turmaRequests]);
   const activeEventsCount = useMemo(
@@ -1691,8 +1759,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                     checked={draft.showCodeGateCardOnHome ?? false}
                     onCheckedChange={(v) => {
                       const updated = { ...draft, showCodeGateCardOnHome: v };
-                      setDraft(updated);
-                      void auth.updateAdminConfig(updated);
+                      setDraftClean(updated);
+                      void auth.updateAdminConfig(updated, { domain: "core" });
                       onConfigSaved?.();
                     }}
                   />
@@ -1820,8 +1888,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                                 ...draft,
                                 rankedMilestoneRewards: nextRewards,
                               };
-                              setDraft(nextCfg);
-                              await auth.updateAdminConfig(nextCfg);
+                              setDraftClean(nextCfg);
+                              await auth.updateAdminConfig(nextCfg, { domain: "core" });
                               onConfigSaved?.();
                               setSavedMsg(
                                 reward
@@ -2093,8 +2161,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                       checked={!(draft.x1ArenaClosed ?? false)}
                       onCheckedChange={async (aberta) => {
                         const updated = { ...draft, x1ArenaClosed: !aberta };
-                        setDraft(updated);
-                        await auth.updateAdminConfig(updated);
+                        setDraftClean(updated);
+                        await auth.updateAdminConfig(updated, { domain: "x1" });
                         onConfigSaved?.();
                         flashCloudResult(!aberta ? "⛔ Arena X1 fechada pela coordenação!" : "🟢 Arena X1 reaberta!");
                       }}
@@ -2109,7 +2177,10 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                         min={0}
                         max={23}
                         value={x1OpenInput}
-                        onChange={(e) => setX1OpenInput(e.target.value)}
+                        onChange={(e) => {
+                          isDirtyRef.current = true;
+                          setX1OpenInput(e.target.value);
+                        }}
                         onBlur={() => void handleSaveX1Hour("open", x1OpenInput)}
                         onKeyDown={(e) => {
                           if (e.key === "Enter") {
@@ -2127,7 +2198,10 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                         min={1}
                         max={24}
                         value={x1CloseInput}
-                        onChange={(e) => setX1CloseInput(e.target.value)}
+                        onChange={(e) => {
+                          isDirtyRef.current = true;
+                          setX1CloseInput(e.target.value);
+                        }}
                         onBlur={() => void handleSaveX1Hour("close", x1CloseInput)}
                         onKeyDown={(e) => {
                           if (e.key === "Enter") {
@@ -2227,11 +2301,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
 
                   <Button
                     type="button"
-                    onClick={async () => {
-                      await handleSaveX1Hour("open", x1OpenInput);
-                      await handleSaveX1Hour("close", x1CloseInput);
-                      await saveSystemSettings();
-                    }}
+                    onClick={() => void handleSaveX1Settings()}
                     className="w-full h-11 rounded-xl font-bold mt-2"
                   >
                     <Save className="mr-2 h-4 w-4" /> Salvar Configurações da Arena X1
@@ -2277,6 +2347,14 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                           variant="ghost"
                           size="sm"
                           onClick={() => {
+                            if (
+                              typeof window !== "undefined" &&
+                              !window.confirm(
+                                "Tem certeza que deseja limpar todo o histórico de confrontos da Arena X1? Esta ação não pode ser desfeita.",
+                              )
+                            ) {
+                              return;
+                            }
                             clearX1MatchHistory();
                             setX1History([]);
                             flashSaved("Histórico de confrontos limpo.");
@@ -2384,7 +2462,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                         type="button"
                         size="sm"
                         onClick={async () => {
-                          await auth.updateAdminConfig(draft);
+                          await auth.updateAdminConfig(draft, { domain: "core" });
+                          setDraftClean(draft);
                           onConfigSaved?.();
                           flashSaved("Configurações do Torneio salvas com sucesso!");
                         }}
@@ -2514,7 +2593,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                     onSave={async () => {
                       setSavingPodiumRewards(true);
                       try {
-                        await auth.updateAdminConfig(draft);
+                        await auth.updateAdminConfig(draft, { domain: "core" });
+                        setDraftClean(draft);
                         onConfigSaved?.();
                         const cloudErr = getLastAdminCloudSyncError();
                         flashSaved(
@@ -2794,8 +2874,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                         checked={Boolean(draft.pauseNoticeBoard)}
                         onCheckedChange={async (checked) => {
                           const nextCfg = { ...draft, pauseNoticeBoard: checked };
-                          setDraft(nextCfg);
-                          await auth.updateAdminConfig(nextCfg);
+                          setDraftClean(nextCfg);
+                          await auth.updateAdminConfig(nextCfg, { domain: "notices" });
                           onConfigSaved?.();
                           flashSaved(
                             checked
@@ -2819,8 +2899,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                         checked={Boolean(draft.hideAllDefaultNotices)}
                         onCheckedChange={async (checked) => {
                           const nextCfg = { ...draft, hideAllDefaultNotices: checked };
-                          setDraft(nextCfg);
-                          await auth.updateAdminConfig(nextCfg);
+                          setDraftClean(nextCfg);
+                          await auth.updateAdminConfig(nextCfg, { domain: "notices" });
                           onConfigSaved?.();
                           flashSaved(
                             checked
@@ -2902,8 +2982,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                                   [notice.id]: !isIndividuallyActive,
                                 };
                                 const nextCfg = { ...draft, enabledDefaultNotices: nextMap };
-                                setDraft(nextCfg);
-                                await auth.updateAdminConfig(nextCfg);
+                                setDraftClean(nextCfg);
+                                await auth.updateAdminConfig(nextCfg, { domain: "notices" });
                                 onConfigSaved?.();
                                 flashSaved(
                                   !isIndividuallyActive
@@ -3087,8 +3167,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                         };
                         const nextSlides = [...(draft.noticeSlides || []), slide];
                         const nextCfg: PlatformAdminConfig = { ...draft, noticeSlides: nextSlides };
-                        setDraft(nextCfg);
-                        await auth.updateAdminConfig(nextCfg);
+                        setDraftClean(nextCfg);
+                        await auth.updateAdminConfig(nextCfg, { domain: "notices" });
                         onConfigSaved?.();
                         setNewNoticeTitle("");
                         setNewNoticeMsg("");
@@ -3164,17 +3244,26 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                               <span className="text-[10px] font-bold text-muted-foreground">Tempo:</span>
                               <input
                                 type="number"
-                                min={2}
-                                max={120}
+                                min={3}
+                                max={60}
                                 value={slide.durationSeconds ?? 7}
-                                onChange={async (e) => {
-                                  const val = Math.max(2, Math.min(120, Number(e.target.value) || 7));
+                                onChange={(e) => {
+                                  const raw = Number(e.target.value);
+                                  const nextVal = Number.isFinite(raw) ? raw : 7;
                                   const next = (draft.noticeSlides || []).map((s) =>
-                                    s.id === slide.id ? { ...s, durationSeconds: val } : s
+                                    s.id === slide.id ? { ...s, durationSeconds: nextVal } : s
                                   );
                                   const nextCfg: PlatformAdminConfig = { ...draft, noticeSlides: next };
                                   setDraft(nextCfg);
-                                  await auth.updateAdminConfig(nextCfg);
+                                }}
+                                onBlur={async (e) => {
+                                  const clamped = Math.max(3, Math.min(60, Math.round(Number(e.target.value) || 7)));
+                                  const next = (draft.noticeSlides || []).map((s) =>
+                                    s.id === slide.id ? { ...s, durationSeconds: clamped } : s
+                                  );
+                                  const nextCfg: PlatformAdminConfig = { ...draft, noticeSlides: next };
+                                  setDraftClean(nextCfg);
+                                  await auth.updateAdminConfig(nextCfg, { domain: "notices" });
                                   onConfigSaved?.();
                                 }}
                                 className="h-6 w-12 rounded border bg-background px-1 text-[11px] font-mono font-bold text-center"
@@ -3191,8 +3280,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                                   s.id === slide.id ? { ...s, active: !s.active } : s
                                 );
                                 const nextCfg: PlatformAdminConfig = { ...draft, noticeSlides: next };
-                                setDraft(nextCfg);
-                                await auth.updateAdminConfig(nextCfg);
+                                setDraftClean(nextCfg);
+                                await auth.updateAdminConfig(nextCfg, { domain: "notices" });
                                 onConfigSaved?.();
                                 flashSaved(
                                   slide.active
@@ -3209,10 +3298,21 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                               variant="ghost"
                               size="sm"
                               onClick={async () => {
+                                if (
+                                  typeof window !== "undefined" &&
+                                  !window.confirm(
+                                    `Excluir o aviso "${slide.title || "Sem título"}" permanentemente?`,
+                                  )
+                                ) {
+                                  return;
+                                }
                                 const next = (draft.noticeSlides || []).filter((s) => s.id !== slide.id);
                                 const nextCfg: PlatformAdminConfig = { ...draft, noticeSlides: next };
-                                setDraft(nextCfg);
-                                await auth.updateAdminConfig(nextCfg);
+                                setDraftClean(nextCfg);
+                                await auth.updateAdminConfig(nextCfg, {
+                                  domain: "notices",
+                                  ...(next.length === 0 ? { allowEmptyCollections: ["noticeSlides"] } : {}),
+                                });
                                 onConfigSaved?.();
                                 flashSaved("🗑️ Aviso excluído e sincronizado com o PlayFab!");
                               }}
@@ -3233,7 +3333,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                   <Button
                     type="button"
                     onClick={async () => {
-                      await auth.updateAdminConfig(draft);
+                      await auth.updateAdminConfig(draft, { domain: "notices" });
+                      setDraftClean(draft);
                       onConfigSaved?.();
                       flashSaved(
                         isPlayFabConfigured()
@@ -3681,8 +3782,16 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                               return (
                                 <div
                                   key={st.id}
+                                  role="button"
+                                  tabIndex={0}
                                   onClick={() => setInspectStudentId(st.id)}
-                                  className="flex items-center justify-between gap-3 rounded-2xl border bg-card p-3.5 cursor-pointer hover:border-primary/50 transition-all hover:scale-[1.01]"
+                                  onKeyDown={(e) => {
+                                    if (e.key === "Enter" || e.key === " ") {
+                                      e.preventDefault();
+                                      setInspectStudentId(st.id);
+                                    }
+                                  }}
+                                  className="flex items-center justify-between gap-3 rounded-2xl border bg-card p-3.5 cursor-pointer hover:border-primary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary transition-all hover:scale-[1.01]"
                                   title="Clique para inspecionar perfil, requisitos pendentes de nível e medalhas deste aluno"
                                 >
                                   <div className="min-w-0">
@@ -4671,8 +4780,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                             read: true,
                           }));
                           const updated = { ...draft, adminMedalNotifications: cleared };
-                          setDraft(updated);
-                          await auth.updateAdminConfig(updated);
+                          setDraftClean(updated);
+                          await auth.updateAdminConfig(updated, { domain: "medals" });
                           flashSaved("Mensagens marcadas como lidas.");
                         }}
                         className="text-[11px] h-7"
@@ -5005,8 +5114,8 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                           };
                           const updatedCustoms = [...(draft.customMedals ?? []), newMedal];
                           const updatedConfig = { ...draft, customMedals: updatedCustoms };
-                          setDraft(updatedConfig);
-                          await auth.updateAdminConfig(updatedConfig);
+                          setDraftClean(updatedConfig);
+                          await auth.updateAdminConfig(updatedConfig, { domain: "medals" });
                           setNewMedalTitle("");
                           setNewMedalDesc("");
                           setIsCreatingMedal(false);
@@ -5182,8 +5291,11 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                                       onClick={async () => {
                                         const filtered = (draft.customMedals ?? []).filter((cm) => cm.id !== m.id);
                                         const updated = { ...draft, customMedals: filtered };
-                                        setDraft(updated);
-                                        await auth.updateAdminConfig(updated);
+                                        setDraftClean(updated);
+                                        await auth.updateAdminConfig(updated, {
+                                          domain: "medals",
+                                          ...(filtered.length === 0 ? { allowEmptyCollections: ["customMedals"] } : {}),
+                                        });
                                         flashSaved(`Medalha "${m.title}" excluída.`);
                                       }}
                                       className="h-7 w-7 p-0 text-destructive"
@@ -5397,8 +5509,16 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                         return (
                           <div
                             key={p.id}
+                            role="button"
+                            tabIndex={0}
                             onClick={() => setInspectStudentId(p.id)}
-                            className="flex items-center justify-between rounded-xl border bg-background px-3 py-2 text-xs cursor-pointer hover:border-primary/50 transition-colors"
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                setInspectStudentId(p.id);
+                              }
+                            }}
+                            className="flex items-center justify-between rounded-xl border bg-background px-3 py-2 text-xs cursor-pointer hover:border-primary/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary transition-colors"
                             title="Clique para inspecionar perfil e requisitos de nível deste aluno"
                           >
                             <div className="min-w-0">
@@ -5470,150 +5590,20 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
 
             {/* TAB LIXEIRA: GERENCIAMENTO DE PERFIS EXCLUÍDOS / RETENÇÃO DE 7 DIAS */}
             {tab === "lixeira" && (
-              <div className="space-y-4">
-                <div className="rounded-2xl border border-destructive/30 bg-destructive/5 p-4 space-y-3">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2 font-display text-base font-extrabold text-destructive">
-                        <Trash2 className="h-5 w-5" /> Lixeira de Perfis de Alunos ({trashPlayers.length})
-                      </div>
-                      <p className="text-xs text-muted-foreground leading-relaxed max-w-xl">
-                        Os perfis nesta lixeira estão <b>invisíveis</b> em todos os rankings, recordes e modos de jogo. Eles serão <b>excluídos definitivamente de forma automática após 7 dias</b> da data de exclusão. Você pode recuperá-los ou excluí-los permanentemente a qualquer momento.
-                      </p>
-                    </div>
-
-                    <Button
-                      type="button"
-                      variant="destructive"
-                      size="sm"
-                      disabled={trashPlayers.length === 0}
-                      onClick={async () => {
-                        if (
-                          confirm(
-                            `Tem certeza de que deseja esvaziar a lixeira e apagar DEFINITIVAMENTE todos os ${trashPlayers.length} aluno(s)? Esta ação é irreversível!`,
-                          )
-                        ) {
-                          const res = await emptyStudentTrash();
-                          flashSaved(
-                            `Lixeira esvaziada: ${res.count} perfil(is) excluído(s) permanentemente.`,
-                          );
-                          refreshRoster();
-                          void syncStudentRosterFromPlayFab().then(() => refreshRoster());
-                        }
-                      }}
-                      className="rounded-xl font-bold text-xs"
-                    >
-                      <Trash2 className="h-3.5 w-3.5 mr-1" />
-                      Esvaziar Lixeira
-                    </Button>
+              <Suspense
+                fallback={
+                  <div className="p-6 text-center text-xs text-muted-foreground">
+                    Carregando Lixeira de Perfis...
                   </div>
-                </div>
-
-                {trashPlayers.length === 0 ? (
-                  <div className="rounded-2xl border border-dashed p-8 text-center space-y-2">
-                    <Trash2 className="mx-auto h-8 w-8 text-muted-foreground/40" />
-                    <p className="font-bold text-sm text-foreground">A lixeira está vazia</p>
-                    <p className="text-xs text-muted-foreground">
-                      Nenhum perfil de aluno foi movido para a lixeira nos últimos 7 dias.
-                    </p>
-                  </div>
-                ) : (
-                  <div className="space-y-2.5">
-                    {trashPlayers.map((st) => {
-                      const msLeft = st.deleteScheduledPermanentAt
-                        ? new Date(st.deleteScheduledPermanentAt).getTime() - Date.now()
-                        : 0;
-                      const daysLeft = Math.max(0, Math.ceil(msLeft / (1000 * 60 * 60 * 24)));
-                      const delDateStr = st.deletedAt
-                        ? new Date(st.deletedAt).toLocaleString("pt-BR", {
-                            day: "2-digit",
-                            month: "2-digit",
-                            year: "numeric",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })
-                        : "Data desconhecida";
-
-                      return (
-                        <div
-                          key={st.id}
-                          className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-card p-3.5 shadow-xs transition-all hover:border-destructive/40"
-                        >
-                          <div
-                            className="min-w-0 cursor-pointer flex-1"
-                            onClick={() => setInspectStudentId(st.id)}
-                            title="Clique para inspecionar os detalhes deste perfil"
-                          >
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="font-display text-sm font-black text-foreground">
-                                {st.nick}
-                              </span>
-                              <span className="text-xs text-muted-foreground truncate">
-                                ({st.full_name})
-                              </span>
-                              <span className="rounded-full bg-destructive/15 border border-destructive/30 px-2 py-0.5 font-mono text-[10px] font-black text-destructive">
-                                {daysLeft <= 0 ? "Expira hoje" : `Expira em ${daysLeft} dia(s)`}
-                              </span>
-                            </div>
-
-                            <div className="text-[11px] text-muted-foreground mt-1 flex items-center gap-1.5 flex-wrap">
-                              <span>{st.school}</span>
-                              {st.grade && <span>• {st.grade}</span>}
-                              {st.turma && <span>Turma {st.turma}</span>}
-                              <span>• Nv. {st.level} ({st.xp} XP)</span>
-                              <span className="text-destructive font-medium">• Excluído em: {delDateStr}</span>
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-2 shrink-0">
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              onClick={async () => {
-                                const res = await restoreStudentFromTrash(st.id);
-                                if (res.success) {
-                                  flashSaved(`Perfil de "${st.nick}" recuperado com sucesso!`);
-                                  refreshRoster();
-                                  void syncStudentRosterFromPlayFab().then(() => refreshRoster());
-                                }
-                              }}
-                              className="rounded-xl border-emerald-500/40 text-emerald-600 hover:bg-emerald-500/10 font-bold text-xs h-8"
-                            >
-                              <RotateCcw className="h-3.5 w-3.5 mr-1" />
-                              Recuperar
-                            </Button>
-
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="ghost"
-                              onClick={async () => {
-                                if (
-                                  confirm(
-                                    `Deseja apagar DEFINITIVAMENTE o perfil de "${st.nick}" agora? Esta ação não pode ser desfeita.`,
-                                  )
-                                ) {
-                                  const res = await permanentlyDeleteStudent(st.id);
-                                  if (res.success) {
-                                    flashSaved(`Perfil de "${st.nick}" excluído permanentemente.`);
-                                    refreshRoster();
-                                    void syncStudentRosterFromPlayFab().then(() => refreshRoster());
-                                  }
-                                }
-                              }}
-                              className="h-8 w-8 p-0 text-destructive hover:bg-destructive/10 rounded-xl"
-                              title="Excluir permanentemente agora"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
+                }
+              >
+                <AdminTrashTab
+                  trashPlayers={trashPlayers}
+                  onInspectStudent={(id) => setInspectStudentId(id)}
+                  onRefreshRoster={refreshRoster}
+                  onFeedback={(msg) => flashSaved(msg)}
+                />
+              </Suspense>
             )}
 
             {/* TAB CÓDIGOS PROMOCIONAIS: GERADOR E GESTÃO DE LOTES COM PADRÕES DE MÁSCARA */}
@@ -5630,6 +5620,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                       domain: opts?.allowCardsCatalogWrite ? "cards" : "packs",
                       ...opts,
                     });
+                    setDraftClean(nextCfg);
                     onConfigSaved?.();
                     flashSaved("Catálogo de Cartas e Pacotes salvo!");
                   }}
@@ -5645,7 +5636,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                   cardPacks={draft.cardPacks}
                   onSaveChests={async (nextChests) => {
                     const nextCfg = { ...draft, chestsCatalog: nextChests };
-                    setDraft(nextCfg);
+                    setDraftClean(nextCfg);
                     await auth.updateAdminConfig(nextCfg, { domain: "chests" });
                     onConfigSaved?.();
                   }}
@@ -5663,9 +5654,9 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                   students={registeredStudents}
                   syncingStudents={syncingRoster}
                   onSyncStudents={handleRefreshRoster}
-                  onSaveConfig={async (nextCfg) => {
-                    setDraft(nextCfg);
-                    await auth.updateAdminConfig(nextCfg, { domain: "cosmetics" });
+                  onSaveConfig={async (nextCfg, opts?: MergeAdminConfigWriteOptions) => {
+                    setDraftClean(nextCfg);
+                    await auth.updateAdminConfig(nextCfg, { domain: "cosmetics", ...opts });
                     onConfigSaved?.();
                   }}
                   onShowFeedback={(msg) => flashSaved(msg)}
@@ -5680,7 +5671,7 @@ export function AdminPanelDialog({ open, onOpenChange, onConfigSaved, fullPageMo
                   draft={draft}
                   setDraft={setDraft}
                   onSaveConfig={async (nextCfg) => {
-                    setDraft(nextCfg);
+                    setDraftClean(nextCfg);
                     await auth.updateAdminConfig(nextCfg, { domain: "routine" });
                     onConfigSaved?.();
                   }}

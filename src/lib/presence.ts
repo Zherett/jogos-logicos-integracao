@@ -3,7 +3,20 @@
 
 import { useEffect, useState } from "react";
 import { nickSlug } from "./player-profile.ts";
+import { safeLocalStorageSet } from "./storage-guard.ts";
 import { GAME_NAMES, type GameId } from "./game-storage.ts";
+import {
+  getOfficialClockOffsetMs,
+  hasOfficialClockSync,
+  syncOfficialClock,
+} from "./official-time.ts";
+import {
+  computeRateLimitBackoffMs,
+  getResponseHeaderSafe,
+  MAX_RATE_LIMIT_RETRIES,
+  shouldRetryEndpointOnRateLimit,
+  waitRateLimitDelay,
+} from "./rate-limit.ts";
 import {
   clearCachedAdminPlayFabTicket,
   clearExpiredStoredSessionTicket,
@@ -158,27 +171,37 @@ export function formatPresenceTimeAgo(
     return diffMin === 1 ? "Online há 1 minuto" : `Online há ${diffMin} minutos`;
   }
 
+const COARI_TZ_OFFSET_MS = -4 * 60 * 60 * 1000;
+
   if (diffHours < 24) {
     return diffHours === 1 ? "Online há 1 hora" : `Online há ${diffHours} horas`;
   }
 
-  const refDate = new Date(refTime);
-  const yesterday = new Date(now);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const isYesterday =
-    refDate.getDate() === yesterday.getDate() &&
-    refDate.getMonth() === yesterday.getMonth() &&
-    refDate.getFullYear() === yesterday.getFullYear();
+  // Compara dias de calendário no fuso oficial Coari (UTC-4) para nunca rotular anteontem (< 48h) como "ontem"
+  const coariRef = new Date(refTime + COARI_TZ_OFFSET_MS);
+  const coariNow = new Date(now + COARI_TZ_OFFSET_MS);
+  const refDayMs = Date.UTC(
+    coariRef.getUTCFullYear(),
+    coariRef.getUTCMonth(),
+    coariRef.getUTCDate(),
+  );
+  const nowDayMs = Date.UTC(
+    coariNow.getUTCFullYear(),
+    coariNow.getUTCMonth(),
+    coariNow.getUTCDate(),
+  );
+  const diffCalendarDays = Math.round((nowDayMs - refDayMs) / 86_400_000);
 
-  const hh = String(refDate.getHours()).padStart(2, "0");
-  const mm = String(refDate.getMinutes()).padStart(2, "0");
+  const hh = String(coariRef.getUTCHours()).padStart(2, "0");
+  const mm = String(coariRef.getUTCMinutes()).padStart(2, "0");
 
-  if (isYesterday || diffHours < 48) {
+  if (diffCalendarDays === 1) {
     return `Online ontem às ${hh}:${mm}`;
   }
 
-  if (diffDays >= 2 && diffDays < 7) {
-    return `Online há ${diffDays} dias`;
+  const displayDays = diffDays >= 2 ? diffDays : diffCalendarDays;
+  if (displayDays >= 2 && displayDays < 7) {
+    return `Online há ${displayDays} dias`;
   }
 
   return "Ausente há mais de 1 semana";
@@ -233,7 +256,7 @@ export function setPlayerCurrentActivity(
 
   if (typeof window !== "undefined") {
     try {
-      localStorage.setItem(ACTIVITY_STORAGE_KEY, JSON.stringify(currentLocalActivity));
+      safeLocalStorageSet(ACTIVITY_STORAGE_KEY, JSON.stringify(currentLocalActivity));
       window.dispatchEvent(
         new CustomEvent(ACTIVITY_CHANGED_EVENT, { detail: currentLocalActivity })
       );
@@ -493,7 +516,7 @@ export function savePresenceStore(store: PresenceStore): void {
     cachedPresenceRaw = serialized;
     cachedPresenceStore = store;
     cachedPresenceIndexMap = buildPresenceIndexMap(store);
-    localStorage.setItem(PRESENCE_STORAGE_KEY, serialized);
+    safeLocalStorageSet(PRESENCE_STORAGE_KEY, serialized);
     window.dispatchEvent(new CustomEvent(PRESENCE_UPDATED_EVENT));
   } catch {
     // ignore
@@ -509,7 +532,7 @@ export function recordLocalUserActivity(now = Date.now()): void {
   lastLocalActivityTimestamp = now;
   if (typeof window !== "undefined") {
     try {
-      localStorage.setItem(LOCAL_LAST_ACTIVE_KEY, String(now));
+      safeLocalStorageSet(LOCAL_LAST_ACTIVE_KEY, String(now));
     } catch {
       // ignore
     }
@@ -536,6 +559,71 @@ export function getLocalUserLastActiveAt(): number {
 /**
  * Atualiza o pulso de presenca de um jogador
  */
+function getCanonicalPresenceStoreKey(
+  playerId?: string | null,
+  slug?: string | null,
+  playfabId?: string | null,
+): string {
+  const cleanSlug = (slug || "").trim().toLowerCase();
+  if (cleanSlug) return cleanSlug;
+  const cleanId = (playerId || "").trim().toLowerCase();
+  if (cleanId) return cleanId.startsWith("pf_local_") ? cleanId.slice(9) : cleanId.replace(/^pf_/, "");
+  return (playfabId || "").trim().toLowerCase() || "unknown";
+}
+
+function findExistingPresenceRecord(
+  store: PresenceStore,
+  playerId?: string | null,
+  slug?: string | null,
+  playfabId?: string | null,
+): PlayerPresenceRecord | undefined {
+  const canonicalKey = getCanonicalPresenceStoreKey(playerId, slug, playfabId);
+  const candidates = [
+    canonicalKey,
+    playerId,
+    playerId?.toLowerCase(),
+    slug,
+    slug ? `pf_${slug}` : undefined,
+    playfabId,
+  ];
+  let best: PlayerPresenceRecord | undefined;
+  let bestTs = -1;
+  for (const key of candidates) {
+    if (!key) continue;
+    const item = store.players[key];
+    if (!item) continue;
+    const ts = Math.max(item.lastSeenAt || 0, item.lastActiveAt || 0);
+    if (!best || ts > bestTs) {
+      best = item;
+      bestTs = ts;
+    }
+  }
+  return best;
+}
+
+function writeCanonicalPresenceRecord(store: PresenceStore, record: PlayerPresenceRecord): void {
+  const slug =
+    record.nickNormalized ||
+    (record.nick ? nickSlug(record.nick) : undefined);
+  const canonicalKey = getCanonicalPresenceStoreKey(record.playerId, slug, record.playfabId);
+  store.players[canonicalKey] = record;
+
+  // Remove cópias redundantes do mesmo jogador criadas em formatos legados (elimina amplificação 4x)
+  const aliasKeys = [
+    record.playerId,
+    record.playerId?.toLowerCase(),
+    slug,
+    slug ? `pf_${slug}` : undefined,
+    record.playfabId,
+    record.playfabId?.toLowerCase(),
+  ];
+  for (const alias of aliasKeys) {
+    if (alias && alias !== canonicalKey && store.players[alias]) {
+      delete store.players[alias];
+    }
+  }
+}
+
 export function recordPlayerHeartbeat(
   playerId: string,
   data?: {
@@ -552,13 +640,16 @@ export function recordPlayerHeartbeat(
   if (!playerId) return null;
   const store = loadPresenceStore();
   const now = Date.now();
-  const existing = store.players[playerId];
+  const initialSlug =
+    data?.nickNormalized ||
+    (data?.nick ? nickSlug(data.nick) : undefined);
+  const existing = findExistingPresenceRecord(store, playerId, initialSlug, data?.playfabId);
 
   const lastSeenAt = data?.disconnected ? 0 : (data?.lastSeenAt ?? now);
   const lastActiveAt = data?.lastActiveAt ?? existing?.lastActiveAt ?? lastSeenAt;
   const resolvedNick = data?.nick ?? existing?.nick;
   const resolvedSlug =
-    data?.nickNormalized ||
+    initialSlug ||
     (resolvedNick ? nickSlug(resolvedNick) : existing?.nickNormalized);
   const idleMs =
     typeof data?.idleMs === "number"
@@ -593,14 +684,7 @@ export function recordPlayerHeartbeat(
     activity,
   };
 
-  store.players[playerId] = record;
-  if (resolvedSlug) {
-    store.players[resolvedSlug] = record;
-    store.players[`pf_${resolvedSlug}`] = record;
-  }
-  if (record.playfabId) {
-    store.players[record.playfabId] = record;
-  }
+  writeCanonicalPresenceRecord(store, record);
 
   savePresenceStore(store);
   return record;
@@ -616,33 +700,54 @@ let inFlightUserDataPresenceSync: Promise<void> | null = null;
 let lastUserDataPresenceSyncAt = 0;
 let lastPresenceCloudSyncAt = 0;
 let inFlightPresenceSync: Promise<void> | null = null;
-let serverClockOffsetMs: number | null = null;
-let lastServerClockSyncAt = 0;
 
 /**
- * Obtém o horário oficial UTC do PlayFab (GetTime) para calibrar a diferença
- * de relógio entre o dispositivo do usuário e o servidor, garantindo precisão em LastUpdated.
+ * Obtém o horário oficial UTC do PlayFab (GetTime) via serviço único de relógio,
+ * calibrando a diferença entre dispositivo e servidor sem chamadas redundantes.
  */
 export async function syncServerClockOffset(): Promise<number> {
-  const now = Date.now();
-  if (serverClockOffsetMs !== null && now - lastServerClockSyncAt < 5 * 60 * 1000) {
-    return serverClockOffsetMs;
+  await syncOfficialClock(
+    async () => {
+      const res = await callPresencePlayFab("GetTime", {});
+      const timeStr = (res?.data as { Time?: string } | undefined)?.Time;
+      return timeStr ?? null;
+    },
+    { ttlMs: 5 * 60 * 1000 },
+  );
+  return getOfficialClockOffsetMs();
+}
+
+const viewerTicketByStorage = new WeakMap<object, string>();
+
+function rememberViewerTicket(ticket: string | null | undefined): string | null {
+  if (ticket && typeof window !== "undefined" && window.localStorage) {
+    viewerTicketByStorage.set(window.localStorage, ticket);
   }
-  try {
-    const res = await callPresencePlayFab("GetTime", {});
-    const timeStr = (res?.data as { Time?: string } | undefined)?.Time;
-    if (timeStr) {
-      const serverMs = Date.parse(timeStr);
-      if (!Number.isNaN(serverMs)) {
-        serverClockOffsetMs = serverMs - Date.now();
-        lastServerClockSyncAt = Date.now();
-        return serverClockOffsetMs;
-      }
+  return ticket ?? null;
+}
+
+function readCachedPresenceTicketSync(preferViewer: boolean): string | null {
+  if (typeof window === "undefined") return null;
+  const parseTicket = (key: string): string | null => {
+    try {
+      const raw = window.localStorage.getItem(key);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as { ticket?: string; at?: number };
+      if (!parsed?.ticket) return null;
+      if (typeof parsed.at === "number" && Date.now() - parsed.at >= 20 * 3_600_000) return null;
+      return parsed.ticket;
+    } catch {
+      return null;
     }
-  } catch {
-    // fallback
+  };
+  const memViewer = window.localStorage ? (viewerTicketByStorage.get(window.localStorage) ?? null) : null;
+  const viewerTicket = parseTicket("desafios-playfab-viewer-ticket-v1") ?? memViewer;
+  const adminTicket = parseTicket("desafios-playfab-admin-ticket-v1");
+  const sessionTicket = loadStoredSession()?.sessionTicket ?? null;
+  if (preferViewer) {
+    return viewerTicket ?? adminTicket ?? (sessionTicket && !sessionTicket.startsWith("admin-") ? sessionTicket : null);
   }
-  return serverClockOffsetMs ?? 0;
+  return adminTicket ?? viewerTicket ?? (sessionTicket && !sessionTicket.startsWith("admin-") ? sessionTicket : null);
 }
 
 async function callPresencePlayFab(
@@ -656,21 +761,42 @@ async function callPresencePlayFab(
   const titleId = getPlayFabTitleId();
   if (!titleId) return null;
   const session = loadStoredSession();
-  const rawTicket = overrideTicket ?? (await getAdminPlayFabTicket()) ?? session?.sessionTicket;
-  const ticket = rawTicket?.startsWith("admin-") ? (await getViewerPlayFabTicket()) : rawTicket;
+  const ticket = keepalive
+    ? (overrideTicket ?? readCachedPresenceTicketSync(preferViewerTicketForSharedGroup) ?? (session?.sessionTicket && !session.sessionTicket.startsWith("admin-") ? session.sessionTicket : null))
+    : await (async () => {
+        const rawTicket = overrideTicket ?? (await getAdminPlayFabTicket()) ?? session?.sessionTicket;
+        return rawTicket?.startsWith("admin-") ? rememberViewerTicket(await getViewerPlayFabTicket()) : rawTicket;
+      })();
   if (!ticket) return null;
 
   try {
-    const res = await fetch(`https://${titleId}.playfabapi.com/Client/${endpoint}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Authorization": ticket,
-      },
-      body: JSON.stringify({ TitleId: titleId, ...body }),
-      keepalive,
-    });
-    const serverDate = res.headers.get("date");
+    const url = `https://${titleId}.playfabapi.com/Client/${endpoint}`;
+    const payloadStr = JSON.stringify({ TitleId: titleId, ...body });
+    const maxAttempts =
+      keepalive || !shouldRetryEndpointOnRateLimit(endpoint)
+        ? 1
+        : MAX_RATE_LIMIT_RETRIES + 1;
+    let res: Response | null = null;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Authorization": ticket,
+        },
+        body: payloadStr,
+        keepalive,
+      });
+      if (!keepalive && res.status === 429 && attempt + 1 < maxAttempts) {
+        await waitRateLimitDelay(
+          computeRateLimitBackoffMs(attempt, getResponseHeaderSafe(res, "Retry-After")),
+        );
+        continue;
+      }
+      break;
+    }
+    if (!res) return null;
+    const serverDate = getResponseHeaderSafe(res, "date");
     const json = (await res.json()) as {
       data?: Record<string, unknown>;
       error?: string;
@@ -694,7 +820,7 @@ async function callPresencePlayFab(
     if (isExpiredTicket) {
       clearCachedAdminPlayFabTicket();
       clearExpiredStoredSessionTicket(ticket);
-      if (!overrideTicket && canRetry) {
+      if (!overrideTicket && canRetry && !keepalive) {
         return callPresencePlayFab(endpoint, body, false, undefined, keepalive);
       }
       return null;
@@ -740,20 +866,21 @@ export async function pushPresenceToPlayFab(record: PlayerPresenceRecord): Promi
 
     const isExit = Boolean(record.disconnected);
 
-    // 1. Grava no UserData público da própria conta logada (se o sessionTicket do aluno estiver válido)
+    // 1. Grava no UserData público da própria conta logada (ticket já em memória, zero await antes do fetch)
     const ownTicket = loadStoredSession()?.sessionTicket;
-    if (ownTicket && !ownTicket.startsWith("admin-")) {
-      void callPresencePlayFab(
-        "UpdateUserData",
-        {
-          Data: { PresenceHeartbeat: payloadStr },
-          Permission: "Public",
-        },
-        false,
-        ownTicket,
-        isExit,
-      );
-    }
+    const userDataPromise =
+      ownTicket && !ownTicket.startsWith("admin-")
+        ? callPresencePlayFab(
+            "UpdateUserData",
+            {
+              Data: { PresenceHeartbeat: payloadStr },
+              Permission: "Public",
+            },
+            false,
+            ownTicket,
+            isExit,
+          )
+        : null;
 
     // 2. Grava no SharedGroup global SEMED_PRESENCE_V3 (onde a conta de serviço semedvisitante e o ADM são membros)
     const key = `pres_${slug || record.playerId}`;
@@ -763,7 +890,19 @@ export async function pushPresenceToPlayFab(record: PlayerPresenceRecord): Promi
       Permission: "Public",
     };
 
-    if (!presenceGroupCreated && !isExit) {
+    // Em eventos de saída (pagehide/beforeunload), dispara fetch(..., { keepalive: true }) imediatamente sem NENHUM await prévio
+    if (isExit) {
+      const syncSgTicket =
+        readCachedPresenceTicketSync(preferViewerTicketForSharedGroup) ??
+        (ownTicket && !ownTicket.startsWith("admin-") ? ownTicket : undefined);
+      const sgExitPromise = syncSgTicket
+        ? callPresencePlayFab("UpdateSharedGroupData", sgBody, false, syncSgTicket, true)
+        : null;
+      await Promise.allSettled([userDataPromise, sgExitPromise].filter(Boolean));
+      return;
+    }
+
+    if (!presenceGroupCreated) {
       const createRes = await callPresencePlayFab("CreateSharedGroup", {
         SharedGroupId: PRESENCE_SHARED_GROUP_ID,
       });
@@ -777,12 +916,12 @@ export async function pushPresenceToPlayFab(record: PlayerPresenceRecord): Promi
     }
 
     if (preferViewerTicketForSharedGroup) {
-      const viewerTicket = await getViewerPlayFabTicket();
+      const viewerTicket = rememberViewerTicket(await getViewerPlayFabTicket());
       if (viewerTicket) {
-        const directRes = await callPresencePlayFab("UpdateSharedGroupData", sgBody, false, viewerTicket, isExit);
+        const directRes = await callPresencePlayFab("UpdateSharedGroupData", sgBody, false, viewerTicket, false);
         if (directRes) return;
         await callPresencePlayFab("CreateSharedGroup", { SharedGroupId: PRESENCE_SHARED_GROUP_ID }, false, viewerTicket);
-        await callPresencePlayFab("UpdateSharedGroupData", sgBody, false, viewerTicket, isExit);
+        await callPresencePlayFab("UpdateSharedGroupData", sgBody, false, viewerTicket, false);
         return;
       }
     }
@@ -792,10 +931,10 @@ export async function pushPresenceToPlayFab(record: PlayerPresenceRecord): Promi
       sgBody,
       true,
       undefined,
-      isExit,
+      false,
     );
     if (!sgRes) {
-      const viewerTicket = await getViewerPlayFabTicket();
+      const viewerTicket = rememberViewerTicket(await getViewerPlayFabTicket());
       if (viewerTicket && viewerTicket !== ownTicket) {
         await callPresencePlayFab("CreateSharedGroup", { SharedGroupId: PRESENCE_SHARED_GROUP_ID }, false, viewerTicket);
         const retryRes = await callPresencePlayFab(
@@ -803,13 +942,14 @@ export async function pushPresenceToPlayFab(record: PlayerPresenceRecord): Promi
           sgBody,
           false,
           viewerTicket,
-          isExit,
+          false,
         );
         if (retryRes) {
           preferViewerTicketForSharedGroup = true;
         }
       }
     }
+    if (userDataPromise) await userDataPromise;
   } catch {
     /* ignore network issues */
   }
@@ -863,11 +1003,12 @@ function shouldKeepExistingPresence(
   return false;
 }
 
-/**
- * Incorpora um pulso de presença vindo do UserData público de um jogador ao cache local de presença.
- */
-export function applyRemotePresenceHeartbeat(rawJson: string, lastUpdated?: string): void {
-  if (typeof window === "undefined" || !rawJson) return;
+function mergeHeartbeatIntoStore(
+  store: { players: Record<string, PlayerPresenceRecord>; updatedAt: number },
+  rawJson: string,
+  lastUpdated?: string,
+): boolean {
+  if (!rawJson) return false;
   try {
     const remote = JSON.parse(rawJson) as Partial<PlayerPresenceRecord>;
 
@@ -876,7 +1017,7 @@ export function applyRemotePresenceHeartbeat(rawJson: string, lastUpdated?: stri
       const entryMs = Date.parse(lastUpdated);
       if (!Number.isNaN(entryMs)) {
         const nowMs = Date.now();
-        const ageMs = Math.max(0, nowMs + (serverClockOffsetMs ?? 0) - entryMs);
+        const ageMs = Math.max(0, nowMs + getOfficialClockOffsetMs() - entryMs);
         const idle =
           typeof remote.idleMs === "number" && remote.idleMs >= 0
             ? remote.idleMs
@@ -892,15 +1033,14 @@ export function applyRemotePresenceHeartbeat(rawJson: string, lastUpdated?: stri
         remote.idleMs = idle;
       }
     }
-    if (!remote.playerId && !remote.nickNormalized && !remote.nick) return;
+    if (!remote.playerId && !remote.nickNormalized && !remote.nick) return false;
     const slug =
       remote.nickNormalized ||
       (remote.nick ? nickSlug(remote.nick) : "");
     const pId = remote.playerId || (slug ? `pf_${slug}` : "");
-    if (!pId) return;
+    if (!pId) return false;
 
-    const store = loadPresenceStore();
-    const existing = store.players[pId] || (slug ? store.players[slug] : undefined);
+    const existing = findExistingPresenceRecord(store, pId, slug, remote.playfabId);
     const remoteSeen = remote.disconnected ? 0 : (typeof remote.lastSeenAt === "number" ? remote.lastSeenAt : 0);
     const remoteActive = typeof remote.lastActiveAt === "number" ? remote.lastActiveAt : remoteSeen;
 
@@ -912,7 +1052,7 @@ export function applyRemotePresenceHeartbeat(rawJson: string, lastUpdated?: stri
         activityUpdatedAt: remote.activity?.updatedAt,
       })
     ) {
-      return;
+      return false;
     }
 
     const rec: PlayerPresenceRecord = {
@@ -927,17 +1067,41 @@ export function applyRemotePresenceHeartbeat(rawJson: string, lastUpdated?: stri
       activity: remote.activity,
     };
 
-    store.players[pId] = rec;
-    if (slug) {
-      store.players[slug] = rec;
-      store.players[`pf_${slug}`] = rec;
-    }
-    if (remote.playfabId) {
-      store.players[remote.playfabId] = rec;
-    }
-    savePresenceStore(store);
+    writeCanonicalPresenceRecord(store, rec);
+    return true;
   } catch {
-    /* ignore malformed heartbeat */
+    return false;
+  }
+}
+
+/**
+ * Incorpora múltiplos pulsos de presença em uma única leitura e gravação no storage.
+ */
+export function applyRemotePresenceHeartbeatsBatch(
+  entries: Array<{ rawJson: string; lastUpdated?: string }>,
+): number {
+  if (typeof window === "undefined" || entries.length === 0) return 0;
+  const store = loadPresenceStore();
+  let applied = 0;
+  for (const item of entries) {
+    if (mergeHeartbeatIntoStore(store, item.rawJson, item.lastUpdated)) {
+      applied++;
+    }
+  }
+  if (applied > 0) {
+    savePresenceStore(store);
+  }
+  return applied;
+}
+
+/**
+ * Incorpora um pulso de presença vindo do UserData público de um jogador ao cache local de presença.
+ */
+export function applyRemotePresenceHeartbeat(rawJson: string, lastUpdated?: string): void {
+  if (typeof window === "undefined" || !rawJson) return;
+  const store = loadPresenceStore();
+  if (mergeHeartbeatIntoStore(store, rawJson, lastUpdated)) {
+    savePresenceStore(store);
   }
 }
 
@@ -980,9 +1144,8 @@ export async function syncPresenceFromUserData(
 
   inFlightUserDataPresenceSync = (async () => {
     try {
-      if (serverClockOffsetMs === null || Date.now() - lastServerClockSyncAt > 5 * 60 * 1000) {
-        await syncServerClockOffset();
-      }
+      await syncServerClockOffset();
+      const collected: Array<{ rawJson: string; lastUpdated?: string }> = [];
       let idx = 0;
       const worker = async () => {
         while (idx < batch.length) {
@@ -997,11 +1160,14 @@ export async function syncPresenceFromUserData(
               | undefined
           )?.Data?.PresenceHeartbeat;
           if (entry?.Value) {
-            applyRemotePresenceHeartbeat(entry.Value, entry.LastUpdated);
+            collected.push({ rawJson: entry.Value, lastUpdated: entry.LastUpdated });
           }
         }
       };
       await Promise.all(Array.from({ length: Math.min(concurrency, batch.length) }, worker));
+      if (collected.length > 0) {
+        applyRemotePresenceHeartbeatsBatch(collected);
+      }
     } finally {
       inFlightUserDataPresenceSync = null;
     }
@@ -1029,9 +1195,8 @@ export async function syncPresenceFromPlayFab(force = false): Promise<void> {
         presenceGroupCreated = true;
       }
 
-      const store = loadPresenceStore();
-      const shouldFetchLegacyV2 =
-        !legacyPresenceV2Loaded || Object.keys(store.players ?? {}).length === 0;
+      const initialStoreHasPlayers = Object.keys(loadPresenceStore().players ?? {}).length > 0;
+      const shouldFetchLegacyV2 = !legacyPresenceV2Loaded || !initialStoreHasPlayers;
 
       const [res, legacyV2Res] = await Promise.all([
         callPresencePlayFab("GetSharedGroupData", {
@@ -1079,12 +1244,14 @@ export async function syncPresenceFromPlayFab(force = false): Promise<void> {
       let changed = false;
 
       // Mantém calibração de horário com o servidor PlayFab (aguarda na primeira vez para não usar offset 0)
-      if (serverClockOffsetMs === null) {
+      if (!hasOfficialClockSync()) {
         await syncServerClockOffset();
-      } else if (syncNow - lastServerClockSyncAt > 5 * 60 * 1000) {
+      } else {
         void syncServerClockOffset();
       }
-      const curServerNow = syncNow + (serverClockOffsetMs ?? 0);
+      // Recarrega o store apenas APÓS os awaits de rede para nunca perder pulsos locais recentes (Lost Update)
+      const store = loadPresenceStore();
+      const curServerNow = syncNow + getOfficialClockOffsetMs();
 
       for (const [key, entry] of Object.entries(combinedData)) {
         if (!entry?.Value) continue;
@@ -1098,7 +1265,7 @@ export async function syncPresenceFromPlayFab(force = false): Promise<void> {
           const pId = remote.playerId || `pf_${slug}`;
 
           if (remote.disconnected || !remote.lastSeenAt || remote.lastSeenAt <= 0) {
-            const existingOff = store.players[pId] || (slug ? store.players[slug] : undefined);
+            const existingOff = findExistingPresenceRecord(store, pId, slug, remote.playfabId);
             let normalizedOffActive =
               remote.lastActiveAt && remote.lastActiveAt > 0
                 ? remote.lastActiveAt
@@ -1145,14 +1312,7 @@ export async function syncPresenceFromPlayFab(force = false): Promise<void> {
                 idleMs: 0,
                 disconnected: true,
               };
-              store.players[pId] = offRec;
-              if (slug) {
-                store.players[slug] = offRec;
-                store.players[`pf_${slug}`] = offRec;
-              }
-              if (remote.playfabId) {
-                store.players[remote.playfabId] = offRec;
-              }
+              writeCanonicalPresenceRecord(store, offRec);
               changed = true;
             }
             continue;
@@ -1181,13 +1341,13 @@ export async function syncPresenceFromPlayFab(force = false): Promise<void> {
             localSessionId &&
             (pId === localSessionId || slug === localSessionId)
           ) {
-            const cur = store.players[pId] || store.players[slug];
+            const cur = findExistingPresenceRecord(store, pId, slug, remote.playfabId);
             if (cur && cur.lastSeenAt >= normalizedSeenAt) {
               continue;
             }
           }
 
-          const existingRec = store.players[pId] || (slug ? store.players[slug] : undefined);
+          const existingRec = findExistingPresenceRecord(store, pId, slug, remote.playfabId);
           if (
             shouldKeepExistingPresence(existingRec, {
               disconnected: false,
@@ -1227,14 +1387,7 @@ export async function syncPresenceFromPlayFab(force = false): Promise<void> {
             activity: remote.activity,
           };
 
-          store.players[pId] = normalizedRec;
-          if (slug) {
-            store.players[slug] = normalizedRec;
-            store.players[`pf_${slug}`] = normalizedRec;
-          }
-          if (remote.playfabId) {
-            store.players[remote.playfabId] = normalizedRec;
-          }
+          writeCanonicalPresenceRecord(store, normalizedRec);
           changed = true;
         } catch {
           /* ignore malformed entry */
@@ -1614,8 +1767,10 @@ export function usePresenceTracker(player?: {
       }
     };
 
+    let cancelled = false;
     // Pulso periódico a cada 30 segundos (local + push na nuvem PlayFab, sem baixar toda a rede)
     const pulse = (disconnected = false) => {
+      if (cancelled && !disconnected) return;
       const now = Date.now();
 
       // Sessão Única Modelo A: Verifica se a conta foi acessada em outro aparelho (local e nuvem)
@@ -1626,7 +1781,11 @@ export function usePresenceTracker(player?: {
         }
         if (now - lastRemoteSessionCheckAt >= 20_000) {
           lastRemoteSessionCheckAt = now;
-          void validateActiveSessionRemote(playerId).then((valid) => {
+          const expectedId = playerId;
+          void validateActiveSessionRemote(expectedId).then((valid) => {
+            if (cancelled) return;
+            const currentSessionId = loadStoredSession()?.playerId;
+            if (currentSessionId && currentSessionId !== expectedId) return;
             if (!valid) {
               dispatchSessionTerminated(Date.now());
             }
@@ -1687,6 +1846,15 @@ export function usePresenceTracker(player?: {
       disconnectSent = true;
       pulse(true);
     };
+    const onPageShow = (event: PageTransitionEvent) => {
+      disconnectSent = false;
+      if (event.persisted) {
+        const now = Date.now();
+        lastRecordedActivity = now;
+        recordLocalUserActivity(now);
+        pulse(false);
+      }
+    };
 
     window.addEventListener("pointerdown", onUserInteraction, { passive: true });
     window.addEventListener("keydown", onUserInteraction, { passive: true });
@@ -1697,6 +1865,7 @@ export function usePresenceTracker(player?: {
     window.addEventListener(ACTIVITY_CHANGED_EVENT, onActivityChange);
     window.addEventListener("pagehide", onPageExit);
     window.addEventListener("beforeunload", onPageExit);
+    window.addEventListener("pageshow", onPageShow);
 
     pulse(false);
     const intervalId = setInterval(() => {
@@ -1705,6 +1874,7 @@ export function usePresenceTracker(player?: {
     }, 30000);
 
     return () => {
+      cancelled = true;
       window.removeEventListener("pointerdown", onUserInteraction);
       window.removeEventListener("keydown", onUserInteraction);
       window.removeEventListener("touchstart", onUserInteraction);
@@ -1714,6 +1884,7 @@ export function usePresenceTracker(player?: {
       window.removeEventListener(ACTIVITY_CHANGED_EVENT, onActivityChange);
       window.removeEventListener("pagehide", onPageExit);
       window.removeEventListener("beforeunload", onPageExit);
+      window.removeEventListener("pageshow", onPageShow);
       clearInterval(intervalId);
     };
   }, [player?.playerId, player?.playfabId, player?.nick, player?.nickNormalized]);

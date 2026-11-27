@@ -16,6 +16,7 @@ import { useSessionEnd } from "@/lib/use-session-end";
 import { NORMAL_CONFIG, type TeamConfig } from "@/lib/teams";
 import { useTeamSession } from "@/lib/use-team-session";
 import { playCorrect, playWrong } from "@/lib/sound";
+import { useSafeTimeouts } from "@/lib/use-safe-timeouts";
 
 const DURATION = 120;
 const LEVEL_UP_STREAK = 4;
@@ -53,11 +54,13 @@ export function CartesianGame({ onExit, onStatsChange, isRanked }: Props) {
   const [selected, setSelected] = useState<number | null>(null);
   const [showLevelUp, setShowLevelUp] = useState<number | null>(null);
   const lockRef = useRef(false);
+  const { schedule, clearAll } = useSafeTimeouts();
 
   // Score is always derived from hits/misses so errors are never lost (floored at 0).
   const score = Math.max(0, correct * POINTS_CORRECT - wrong * POINTS_WRONG);
 
   const clock = useRoundClock(DURATION, running, () => {
+    clearAll();
     setRunning(false);
     setFinished(true);
   });
@@ -82,9 +85,11 @@ export function CartesianGame({ onExit, onStatsChange, isRanked }: Props) {
   }, [finished]);
 
   function startGame() {
+    clearAll();
     setRunId((r) => r + 1);
     team.begin(teamConfig);
     lockRef.current = false;
+    setShowLevelUp(null);
     setCorrect(0); setWrong(0); setLevel(1); setStreak(0);
     setSelected(null); setFinished(false);
     setQuestion(generateCartQuestion(1, rangeForLevel(1)));
@@ -93,6 +98,9 @@ export function CartesianGame({ onExit, onStatsChange, isRanked }: Props) {
   }
 
   function replayWithCountdown() {
+    clearAll();
+    lockRef.current = false;
+    setShowLevelUp(null);
     team.advance();
     setFinished(false);
     setRunning(false);
@@ -100,6 +108,9 @@ export function CartesianGame({ onExit, onStatsChange, isRanked }: Props) {
   }
 
   function backToSetup() {
+    clearAll();
+    lockRef.current = false;
+    setShowLevelUp(null);
     setRunning(false); setFinished(false); setPhase("setup");
   }
 
@@ -125,17 +136,17 @@ export function CartesianGame({ onExit, onStatsChange, isRanked }: Props) {
         setLevel(nl);
         setStreak(0);
         setShowLevelUp(nl);
-        setTimeout(() => setShowLevelUp(null), 1100);
-        setTimeout(() => { nextQuestion(nl); lockRef.current = false; }, 700);
+        schedule(() => setShowLevelUp(null), 1100);
+        schedule(() => { nextQuestion(nl); lockRef.current = false; }, 700);
         return;
       }
       setStreak(next);
-      setTimeout(() => { nextQuestion(level); lockRef.current = false; }, 700);
+      schedule(() => { nextQuestion(level); lockRef.current = false; }, 700);
     } else {
       playWrong();
       setWrong((w) => w + 1);
       setStreak(0);
-      setTimeout(() => { nextQuestion(level); lockRef.current = false; }, 800);
+      schedule(() => { nextQuestion(level); lockRef.current = false; }, 800);
     }
   }
 
@@ -186,6 +197,7 @@ export function CartesianGame({ onExit, onStatsChange, isRanked }: Props) {
         <GameTopBar title="Plano Cartesiano" onExit={onExit} sessionActive={team.activeSession} onFinishSession={sessionEnd.request} />
         <ResultPanel
           gameId="cartesiano"
+          mode={lastMatch?.mode ?? (isRanked ? "torneio_semanal" : undefined)}
           isTeam={team.activeSession}
           score={score} correct={correct} wrong={wrong} level={level}
           onReplay={replayWithCountdown} onMenu={onExit} onChangeSettings={backToSetup}

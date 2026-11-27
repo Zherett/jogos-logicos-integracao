@@ -221,4 +221,31 @@ describe("Regras do Reset de Temporada e Economia de Moedas", () => {
     assert.equal(profile.coins, 850);
     assert.equal(profile.careerPoints, 2500); // ranking histórico preservado intacto!
   });
+
+  it("Bloco 1.1 (RANK-06): getSeasonProgress não mostra 'Última hora' a 1h45m nem '0 min' a 1h00m e extendSeasonDate usa Coari UTC-4", () => {
+    // End = 2026-11-30T23:59:59.000-04:00 (= 2026-12-01T03:59:59.000Z)
+    const startIso = "2026-11-01T04:00:00.000Z";
+    const endIso = "2026-12-01T03:59:59.000Z";
+    const endMs = new Date(endIso).getTime();
+
+    // 1h45m antes do fim
+    const prog1h45 = getSeasonProgress(startIso, endIso, endMs - (105 * 60 * 1000));
+    assert.ok(!prog1h45.formattedCountdown.includes("Última hora"));
+    assert.match(prog1h45.formattedCountdown, /1h e 45min/);
+
+    // 1h00m exata antes do fim
+    const prog1h00 = getSeasonProgress(startIso, endIso, endMs - (60 * 60 * 1000));
+    assert.ok(!prog1h00.formattedCountdown.includes("Última hora"));
+    assert.ok(!prog1h00.formattedCountdown.includes("0 min"));
+    assert.match(prog1h00.formattedCountdown, /1h/);
+
+    // 45m antes do fim (abaixo de 1h -> última hora)
+    const prog45m = getSeasonProgress(startIso, endIso, endMs - (45 * 60 * 1000));
+    assert.match(prog45m.formattedCountdown, /Última hora! Termina em 45 min/);
+
+    // extendSeasonDate com 30/11/2026 23:59:59 Coari UTC-4 + 7 dias -> 07/12/2026 23:59:59.999 Coari UTC-4
+    const extended = extendSeasonDate(new Date(endIso), 7);
+    assert.equal(formatOfficialCoariDate(extended), "07/12/2026");
+    assert.equal(extended.toISOString(), "2026-12-08T03:59:59.999Z");
+  });
 });

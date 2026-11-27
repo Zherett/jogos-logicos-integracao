@@ -1,11 +1,14 @@
 import type { GameId } from "./game-storage.ts";
-import { stageForPlayer, type AgeStageId } from "./player-profile.ts";
+import { nickSlug, stageForPlayer, type AgeStageId } from "./player-profile.ts";
+import { formatCoariDateBR, getOfficialNow } from "./official-time.ts";
+import { safeLocalStorageSet } from "./storage-guard.ts";
 import {
   acquireCanonicalConfigWriteTicket,
   getAdminPlayFabTicket,
   getPlayFabTitleId,
   getViewerPlayFabTicket,
   isBlockedRealPlayFabCallInTest,
+  isPlayFabConfigured,
   loadRegistry,
   loadStoredSession,
   sanitizeGameBestScore,
@@ -14,11 +17,24 @@ import {
 export const GAME_RECORDS_STORAGE_KEY = "desafios-game-records-v1";
 export const MAX_LEGIT_LOGIC_SCORE = 480;
 
+export const MAX_ALLOWED_RECORD_SCORE_BY_GAME: Record<GameId, number> = {
+  logica: 480,
+  porcentagem: 600,
+  completar: 600,
+  rpg: 1000,
+  formas: 1000,
+  memoria: 1000,
+  variaveis: 1000,
+  cartesiano: 1000,
+  minado: 1500,
+  robogrid: 1500,
+  spacequest: 2500,
+};
+
 export function isRecordScoreAllowed(gameId: GameId, score: number): boolean {
-  if (gameId === "logica" && score > MAX_LEGIT_LOGIC_SCORE) {
-    return false;
-  }
-  return true;
+  if (!Number.isFinite(score) || score <= 0) return false;
+  const maxAllowed = MAX_ALLOWED_RECORD_SCORE_BY_GAME[gameId] ?? 2500;
+  return score <= maxAllowed;
 }
 
 export function sanitizeRecordsStore(store: AllGameRecords): boolean {
@@ -100,7 +116,7 @@ export function loadGameRecords(): AllGameRecords {
     if (!raw) return {};
     const parsed = JSON.parse(raw) as AllGameRecords;
     if (sanitizeRecordsStore(parsed)) {
-      window.localStorage.setItem(GAME_RECORDS_STORAGE_KEY, JSON.stringify(parsed));
+      safeLocalStorageSet(GAME_RECORDS_STORAGE_KEY, JSON.stringify(parsed));
     }
     return parsed;
   } catch {
@@ -111,7 +127,7 @@ export function loadGameRecords(): AllGameRecords {
 export function saveGameRecords(records: AllGameRecords) {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(GAME_RECORDS_STORAGE_KEY, JSON.stringify(records));
+    safeLocalStorageSet(GAME_RECORDS_STORAGE_KEY, JSON.stringify(records));
     window.dispatchEvent(new CustomEvent("desafios:game-records-updated", { detail: records }));
   } catch {
     /* ignore storage quota errors */
@@ -141,7 +157,7 @@ export function evaluateStageGameRecordUpdate(
   isNewRecord: boolean;
   isTiedRecord: boolean;
 } {
-  const safeScore = Math.max(0, Math.floor(candidate.score));
+  const safeScore = Number.isFinite(candidate.score) ? Math.max(0, Math.floor(candidate.score)) : 0;
   const achievedAt = candidate.achievedAt ?? Date.now();
   const baseRecord: StageGameRecord = currentRecord ?? {
     gameId: candidate.gameId,
@@ -317,7 +333,11 @@ export function removePlayerFromGameRecords(
 
   if (changed) {
     saveGameRecords(store);
-    return seedRecordsFromRegistry();
+    const updated = seedRecordsFromRegistry();
+    if (!isBlockedRealPlayFabCallInTest() && isPlayFabConfigured()) {
+      void pushGameRecordsToPlayFab(updated);
+    }
+    return updated;
   }
   return store;
 }
@@ -333,7 +353,7 @@ export function seedRecordsFromRegistry(): AllGameRecords {
   for (const acc of Object.values(reg)) {
     if (!acc.profile || !acc.stats || acc.profile.deletedAt) continue;
     const p = acc.profile;
-    const stage = stageForPlayer(p.school, p.birthdate, new Date(), p.ageStage).id;
+    const stage = stageForPlayer(p.school, p.birthdate, getOfficialNow(), p.ageStage).id;
 
     for (const s of acc.stats) {
       if (!s.game_id || (s.best_score ?? 0) <= 0 || !isRecordScoreAllowed(s.game_id, s.best_score)) continue;
@@ -366,7 +386,55 @@ export function seedRecordsFromRegistry(): AllGameRecords {
 let ensuredGameRecordsGroup = false;
 let lastGameRecordsSyncAt = 0;
 let inFlightGameRecordsSync: Promise<AllGameRecords> | null = null;
+let syncedGameRecordsFromCloud = false;
 const GAME_RECORDS_SYNC_TTL_MS = 60_000;
+
+export function hasSyncedGameRecordsFromCloud(): boolean {
+  return syncedGameRecordsFromCloud;
+}
+
+export function markGameRecordsSyncedFromCloud(val: boolean): void {
+  syncedGameRecordsFromCloud = val;
+}
+
+async function pushGameRecordsToPlayFab(store: AllGameRecords): Promise<boolean> {
+  if (isBlockedRealPlayFabCallInTest() || !isPlayFabConfigured()) return false;
+  const titleId = getPlayFabTitleId();
+  const writeTicket = await acquireCanonicalConfigWriteTicket();
+  if (!titleId || !writeTicket) return false;
+  try {
+    const res = await fetch(`https://${titleId}.playfabapi.com/Client/UpdateSharedGroupData`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Authorization": writeTicket,
+      },
+      body: JSON.stringify({
+        TitleId: titleId,
+        SharedGroupId: "SEMED_GAME_RECORDS_V2",
+        Data: { Records: JSON.stringify(sanitizeGameRecordsForCloud(store)) },
+        Permission: "Public",
+      }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export function sanitizeGameRecordsForCloud(store: AllGameRecords): AllGameRecords {
+  const sanitized: AllGameRecords = {};
+  for (const [key, rec] of Object.entries(store)) {
+    if (!rec) continue;
+    sanitized[key] = {
+      ...rec,
+      holders: Array.isArray(rec.holders)
+        ? rec.holders.map(({ fullName: _omitFullName, ...holder }) => ({ ...holder }))
+        : [],
+    };
+  }
+  return sanitized;
+}
 
 /**
  * Synchronizes stage game records with PlayFab SharedGroupData so all players share records in real-time.
@@ -448,25 +516,39 @@ export async function syncGameRecordsWithPlayFab(
         } else if (locRec && locRec.score > remRec.score) {
           hasRemoteChanges = true;
         } else if (remRec.score === locRec.score) {
-          // Merge holders
+          // Merge holders por nickSlug para evitar duplicidade após migração pf_local_* -> playfabId
           const mergedMap = new Map<string, RecordHolder>();
-          for (const h of locRec.holders) mergedMap.set(h.playerId, h);
-          for (const h of remRec.holders) {
-            if (!mergedMap.has(h.playerId)) {
-              mergedMap.set(h.playerId, h);
-            } else {
-              const cur = mergedMap.get(h.playerId)!;
-              if (h.achievedAt < cur.achievedAt) {
-                mergedMap.set(h.playerId, h);
-              }
+          const insertHolder = (h: RecordHolder) => {
+            if (!h) return;
+            const hKey = nickSlug(h.nick || h.playerId) || h.playerId.toLowerCase();
+            const cur = mergedMap.get(hKey);
+            if (!cur || h.achievedAt < cur.achievedAt) {
+              mergedMap.set(hKey, h);
             }
-          }
+          };
+          for (const h of locRec.holders) insertHolder(h);
+          for (const h of remRec.holders) insertHolder(h);
+
           const sortedHolders = Array.from(mergedMap.values()).sort(
             (a, b) => a.achievedAt - b.achievedAt,
           );
-          if (sortedHolders.length !== locRec.holders.length) {
+          const holdersSig = (list: RecordHolder[]) =>
+            list
+              .map(
+                (h) =>
+                  `${nickSlug(h.nick || h.playerId) || h.playerId.toLowerCase()}:${h.achievedAt}`,
+              )
+              .sort()
+              .join("|");
+          const mergedSig = holdersSig(sortedHolders);
+          const locSig = holdersSig(locRec.holders);
+          const remSig = holdersSig(remRec.holders);
+          if (mergedSig !== locSig) {
             locRec.holders = sortedHolders;
             hasLocalChanges = true;
+          }
+          if (mergedSig !== remSig) {
+            locRec.holders = sortedHolders;
             hasRemoteChanges = true;
           }
         }
@@ -484,25 +566,11 @@ export async function syncGameRecordsWithPlayFab(
       saveGameRecords(store);
     }
 
-    // 3. Push merged records back to SharedGroupData ONLY if local had newer/higher records (usando ticket canônico)
+    // 3. Push merged records back to SharedGroupData ONLY if local had newer/higher/empate records
     if (hasRemoteChanges) {
-      const writeTicket = await acquireCanonicalConfigWriteTicket();
-      if (writeTicket) {
-        await fetch(`https://${titleId}.playfabapi.com/Client/UpdateSharedGroupData`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Authorization": writeTicket,
-          },
-          body: JSON.stringify({
-            TitleId: titleId,
-            SharedGroupId: groupId,
-            Data: { Records: JSON.stringify(store) },
-            Permission: "Public",
-          }),
-        });
-      }
+      await pushGameRecordsToPlayFab(store);
     }
+    syncedGameRecordsFromCloud = true;
     lastGameRecordsSyncAt = Date.now();
   } catch {
     /* ignore offline/network errors */
@@ -520,12 +588,8 @@ export async function syncGameRecordsWithPlayFab(
   return run();
 }
 
-/** Formats date in Brazilian format DD/MM/AAAA */
+/** Formats date in Brazilian format DD/MM/AAAA (fuso oficial Coari UTC-4) */
 export function formatRecordDateBR(epochMs: number): string {
   if (!epochMs || Number.isNaN(epochMs)) return "";
-  const d = new Date(epochMs);
-  const day = String(d.getDate()).padStart(2, "0");
-  const month = String(d.getMonth() + 1).padStart(2, "0");
-  const year = d.getFullYear();
-  return `${day}/${month}/${year}`;
+  return formatCoariDateBR(epochMs);
 }

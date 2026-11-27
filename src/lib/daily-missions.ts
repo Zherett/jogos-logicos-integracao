@@ -139,7 +139,21 @@ export function mergeDailyMissionProgress(
   const levelCandidates = [a.lockedLevel, b.lockedLevel].filter(
     (v): v is number => typeof v === "number" && v >= 1,
   );
-  const personalizedGameId = a.personalizedGameId ?? b.personalizedGameId;
+  const mergedClaimedIds = Array.from(new Set([...(a.claimedIds ?? []), ...(b.claimedIds ?? [])]));
+  let personalizedGameId: GameId | undefined;
+  if (a.personalizedGameId && b.personalizedGameId && a.personalizedGameId !== b.personalizedGameId) {
+    const claimedSet = new Set(mergedClaimedIds);
+    const aClaimed = claimedSet.has(`dm_${a.dateKey}_personal_${a.personalizedGameId}`);
+    const bClaimed = claimedSet.has(`dm_${a.dateKey}_personal_${b.personalizedGameId}`);
+    if (aClaimed !== bClaimed) {
+      personalizedGameId = aClaimed ? a.personalizedGameId : b.personalizedGameId;
+    } else {
+      personalizedGameId =
+        a.personalizedGameId < b.personalizedGameId ? a.personalizedGameId : b.personalizedGameId;
+    }
+  } else {
+    personalizedGameId = a.personalizedGameId ?? b.personalizedGameId;
+  }
   return {
     dateKey: a.dateKey,
     plays: Math.max(a.plays ?? 0, b.plays ?? 0),
@@ -148,7 +162,7 @@ export function mergeDailyMissionProgress(
     flawlessCount: Math.max(a.flawlessCount ?? 0, b.flawlessCount ?? 0),
     competitiveCount: Math.max(a.competitiveCount ?? 0, b.competitiveCount ?? 0),
     playsByGame,
-    claimedIds: Array.from(new Set([...(a.claimedIds ?? []), ...(b.claimedIds ?? [])])),
+    claimedIds: mergedClaimedIds,
     ...(levelCandidates.length > 0 ? { lockedLevel: Math.min(...levelCandidates) } : {}),
     ...(personalizedGameId ? { personalizedGameId } : {}),
   };
@@ -289,6 +303,9 @@ export function generateDailyMissions(args: {
       ? args.profile.dailyMissionProgress
       : null;
   const claimedSet = new Set<string>(progress?.claimedIds ?? []);
+  const claimedPersonalizedAny = Array.from(claimedSet).some((id) =>
+    id.startsWith(`dm_${dateKey}_personal_`),
+  );
 
   return buildDailyMissionsList({ ...args, dateKey }).map((m) => {
     const key = m.isPersonalized ? "personal" : m.id.split("_").pop() || "";
@@ -321,7 +338,7 @@ export function generateDailyMissions(args: {
       rewardPoints,
       rewardXp,
       rewardCoins,
-      claimed: claimedSet.has(m.id),
+      claimed: m.isPersonalized ? claimedSet.has(m.id) || claimedPersonalizedAny : claimedSet.has(m.id),
     };
   });
 }
@@ -402,7 +419,9 @@ export function claimDailyMissionForProfile(
   const coinsAwarded = Math.max(0, mission.rewardCoins ?? 0);
 
   if (pointsAwarded > 0) {
-    awardCareerPoints(profile, pointsAwarded, `Missão Diária: ${mission.title}`);
+    awardCareerPoints(profile, pointsAwarded, `Missão Diária: ${mission.title}`, 1, {
+      source: "missao_diaria",
+    });
   }
   if (xpAwarded > 0) {
     profile.xp = Math.max(0, (profile.xp ?? 0) + xpAwarded);

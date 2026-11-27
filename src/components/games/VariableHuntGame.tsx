@@ -34,6 +34,8 @@ import { SessionSummary } from "./SessionSummary";
 import { useSessionEnd } from "@/lib/use-session-end";
 import { NORMAL_CONFIG, type TeamConfig } from "@/lib/teams";
 import { playCorrect, playWrong } from "@/lib/sound";
+import { updateActiveGameLevel } from "@/lib/presence";
+import { useSafeTimeouts } from "@/lib/use-safe-timeouts";
 
 const DURATION = 120;
 const START_LIVES = 5;
@@ -93,15 +95,24 @@ export function VariableHuntGame({ onExit, onStatsChange, isRanked }: Props) {
   const [timeAtEnd, setTimeAtEnd] = useState(0);
   const prevSigRef = useRef<string | undefined>(undefined);
   const lockRef = useRef(false);
+  const { schedule: scheduleTimeout, clearAll: clearTimeouts } = useSafeTimeouts();
+
+  useEffect(() => {
+    if (running) {
+      updateActiveGameLevel(level);
+    }
+  }, [running, level]);
 
   const score = Math.max(0, correct * POINTS_CORRECT - wrong * POINTS_WRONG);
 
   const clock = useRoundClock(DURATION, running, () => {
+    clearTimeouts();
     setTimeAtEnd(0);
     endGame(0);
   });
 
   function endGame(remaining: number) {
+    clearTimeouts();
     setRunning(false);
     setTimeAtEnd(remaining);
     setFinished(true);
@@ -135,7 +146,9 @@ export function VariableHuntGame({ onExit, onStatsChange, isRanked }: Props) {
   }
 
   function startGame() {
+    clearTimeouts();
     lockRef.current = false;
+    setShowLevelUp(null);
     setRunId((r) => r + 1);
     team.begin(teamConfig);
     setCorrect(0); setWrong(0);
@@ -150,6 +163,9 @@ export function VariableHuntGame({ onExit, onStatsChange, isRanked }: Props) {
   }
 
   function replayWithCountdown() {
+    clearTimeouts();
+    lockRef.current = false;
+    setShowLevelUp(null);
     team.advance();
     setFinished(false);
     setRunning(false);
@@ -157,6 +173,9 @@ export function VariableHuntGame({ onExit, onStatsChange, isRanked }: Props) {
   }
 
   function backToSetup() {
+    clearTimeouts();
+    lockRef.current = false;
+    setShowLevelUp(null);
     setRunning(false);
     setFinished(false);
     setPhase("setup");
@@ -172,7 +191,7 @@ export function VariableHuntGame({ onExit, onStatsChange, isRanked }: Props) {
       color: ["#fbbf24", "#f472b6", "#60a5fa", "#34d399", "#a78bfa"][i % 5],
     }));
     setSparkles(items);
-    setTimeout(() => setSparkles([]), 900);
+    scheduleTimeout(() => setSparkles([]), 900);
   }
 
   function onClearSlot(slotRole: VarSlotRole) {
@@ -220,32 +239,36 @@ export function VariableHuntGame({ onExit, onStatsChange, isRanked }: Props) {
         setLevel(newLevel);
         setLevelHits(0);
         setShowLevelUp(newLevel);
-        setTimeout(() => {
+        scheduleTimeout(() => {
           setShowLevelUp(null);
           newQuestion(newLevel);
           lockRef.current = false;
         }, 1100);
       } else {
         setLevelHits(nextHits);
-        setTimeout(() => {
+        scheduleTimeout(() => {
           newQuestion(level);
           lockRef.current = false;
         }, 900);
       }
     } else {
+      lockRef.current = true;
       playWrong();
       setBoxState("wrong");
       setFilledSlots(nextFilled);
       setWrong((w) => w + 1);
       setStreak(0);
-      const nextLives = lives - 1;
+      const nextLives = Math.max(0, lives - 1);
       setLives(nextLives);
-      setTimeout(() => {
+      scheduleTimeout(() => {
         setBoxState("idle");
         setFilledSlots({});
+        if (nextLives > 0) {
+          lockRef.current = false;
+        }
       }, 600);
       if (nextLives <= 0) {
-        setTimeout(() => endGame(clock.time), 650);
+        scheduleTimeout(() => endGame(clock.time), 650);
       }
     }
   }
@@ -319,6 +342,7 @@ export function VariableHuntGame({ onExit, onStatsChange, isRanked }: Props) {
         <GameTopBar title="Caça às Variáveis" onExit={onExit} sessionActive={team.activeSession} onFinishSession={sessionEnd.request} />
         <ResultPanel
           gameId="variaveis"
+          mode={lastMatch?.mode ?? (isRanked ? "torneio_semanal" : undefined)}
           isTeam={team.activeSession}
           score={score} correct={correct} wrong={wrong} level={level}
           onReplay={replayWithCountdown} onMenu={onExit} onChangeSettings={backToSetup}
@@ -379,7 +403,7 @@ function HudBar({ time, score, wrong, level, lives, streak }: {
       <Stat
         icon={<Heart className="h-3.5 w-3.5 sm:h-5 sm:w-5" />}
         label="Vidas"
-        value={"♥".repeat(lives)}
+        value={"♥".repeat(Math.max(0, lives))}
         tone="destructive"
       />
       <Stat icon={<Flame className="h-3.5 w-3.5 sm:h-5 sm:w-5" />} label="Sequência" value={String(streak)} tone="accent" />
@@ -437,9 +461,10 @@ function PlayArea({
   const [activeId, setActiveId] = useState<string | null>(null);
   const [overSlot, setOverSlot] = useState<string | null>(null);
 
-  // Randomize ball colors + positions per question
+  // Randomize ball colors + positions per question (com índice único para suportar valores repetidos)
   const decorated = useMemo(
     () => question.options.map((v, i) => ({
+      idx: i,
       value: v,
       color: BALL_COLORS[(i + Math.floor(Math.random() * BALL_COLORS.length)) % BALL_COLORS.length],
       rot: (Math.random() - 0.5) * 12,
@@ -460,16 +485,35 @@ function PlayArea({
       if (idStr.startsWith("op:")) {
         onDropSlot(role, idStr.slice(3) as VarOpSymbol);
       } else if (idStr.startsWith("num:")) {
-        onDropSlot(role, Number(idStr.slice(4)));
+        const parts = idStr.split(":");
+        const val = Number(parts.length >= 3 ? parts[2] : parts[1]);
+        if (Number.isFinite(val)) {
+          onDropSlot(role, val);
+        }
       }
     }
     setActiveId(null);
     setOverSlot(null);
   }
 
-  const usedNumbers = new Set<number>(
-    Object.values(filledSlots).filter((v): v is number => typeof v === "number"),
-  );
+  // Oculta apenas a quantidade de bolinhas de cada valor já colocada nos slots (suporta respostas iguais)
+  const hiddenBallIndices = useMemo(() => {
+    const neededByValue = new Map<number, number>();
+    for (const v of Object.values(filledSlots)) {
+      if (typeof v === "number") {
+        neededByValue.set(v, (neededByValue.get(v) ?? 0) + 1);
+      }
+    }
+    const hidden = new Set<number>();
+    for (const b of decorated) {
+      const rem = neededByValue.get(b.value) ?? 0;
+      if (rem > 0) {
+        hidden.add(b.idx);
+        neededByValue.set(b.value, rem - 1);
+      }
+    }
+    return hidden;
+  }, [decorated, filledSlots]);
 
   return (
     <DndContext
@@ -566,12 +610,13 @@ function PlayArea({
           <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-6">
             {decorated.map((b) => (
               <Ball
-                key={b.value}
+                key={`${b.idx}-${b.value}`}
+                dragId={`num:${b.idx}:${b.value}`}
                 value={b.value}
                 color={b.color}
                 rot={b.rot}
                 offY={b.offY}
-                hidden={usedNumbers.has(b.value)}
+                hidden={hiddenBallIndices.has(b.idx)}
               />
             ))}
           </div>
@@ -579,16 +624,19 @@ function PlayArea({
       </div>
 
       <DragOverlay dropAnimation={{ duration: 220, easing: "cubic-bezier(.2,.9,.3,1.3)" }}>
-        {activeId !== null && activeId.startsWith("num:") && (
-          <BallVisual
-            value={Number(activeId.slice(4))}
-            color={
-              decorated.find((d) => d.value === Number(activeId.slice(4)))?.color
-              ?? BALL_COLORS[0]
-            }
-            dragging
-          />
-        )}
+        {activeId !== null && activeId.startsWith("num:") && (() => {
+          const parts = activeId.split(":");
+          const idx = Number(parts[1]);
+          const val = Number(parts.length >= 3 ? parts[2] : parts[1]);
+          const found = decorated.find((d) => d.idx === idx) ?? decorated.find((d) => d.value === val);
+          return (
+            <BallVisual
+              value={val}
+              color={found?.color ?? BALL_COLORS[0]}
+              dragging
+            />
+          );
+        })()}
         {activeId !== null && activeId.startsWith("op:") && (
           <OpBallVisual op={activeId.slice(3)} dragging />
         )}
@@ -684,10 +732,10 @@ function OpBallVisual({ op, dragging }: { op: string; dragging?: boolean }) {
   );
 }
 
-function Ball({ value, color, rot, offY, hidden }: {
-  value: number; color: string; rot: number; offY: number; hidden: boolean;
+function Ball({ dragId, value, color, rot, offY, hidden }: {
+  dragId: string; value: number; color: string; rot: number; offY: number; hidden: boolean;
 }) {
-  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: `num:${value}` });
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: dragId });
   return (
     <button
       ref={setNodeRef}

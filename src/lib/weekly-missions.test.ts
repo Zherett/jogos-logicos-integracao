@@ -4,9 +4,11 @@ import {
   claimWeeklyMissionForProfile,
   generateWeeklyMissions,
   getEligibleGamesForWeeklyMissions,
+  mergeWeeklyMissionProgress,
   recordMatchIntoWeeklyMissions,
   WEEKLY_MISSIONS_COUNT,
 } from "./weekly-missions.ts";
+import { getWeekInfo } from "./weekly-tournament.ts";
 
 describe("Sistema de Missões Semanais (4 Missões + Faixas de Nível + Ciclo Segunda-Domingo)", () => {
   it("gera exatamente 4 missões semanais para todas as faixas de nível", () => {
@@ -204,5 +206,57 @@ describe("Sistema de Missões Semanais (4 Missões + Faixas de Nível + Ciclo Se
 
     const claim = claimWeeklyMissionForProfile(prof, rankMission.id, { weekKey, weekIndex: 10 });
     assert.equal(claim.ok, true);
+  });
+
+  it("Bloco 1.3 (ECON-18): rastreia rankUpsEarned após reset de temporada, oculta ranqueada quando tournamentEnabled=false e mantém paridade contínua no Ano Novo", () => {
+    // 1. weekIndex avança de +1 exatamente na virada de anos ISO de 52 semanas (2025->2026 e 2026->2027)
+    const w52_2025 = getWeekInfo(new Date("2025-12-28T16:00:00.000Z")); // Dom 28/12/2025 (2025-W52)
+    const w01_2026 = getWeekInfo(new Date("2025-12-29T16:00:00.000Z")); // Seg 29/12/2025 (2026-W01)
+    assert.equal(w01_2026.weekIndex - w52_2025.weekIndex, 1);
+    const w52_2026 = getWeekInfo(new Date("2026-12-27T16:00:00.000Z")); // Dom 27/12/2026 (2026-W52)
+    const w53_next = getWeekInfo(new Date("2026-12-28T16:00:00.000Z")); // Seg 28/12/2026 (2026-W53)
+    assert.equal(w53_next.weekIndex - w52_2026.weekIndex, 1);
+
+    // 2. rankUpsEarned permite completar weekly_ranked_ranks mesmo após reset mensal reduzir startRankIndex -> maxRankIndex
+    const weekKey = "2026-W48";
+    let wProg = recordMatchIntoWeeklyMissions(null, {
+      gameId: "logica",
+      earnedXp: 10,
+      mode: "torneio_semanal",
+      playerLevel: 5,
+      tournamentRankIdBefore: "prata_1", // idx 3
+      tournamentRankIdAfter: "prata_2",  // idx 4 (+1)
+      weekKey,
+    });
+    // Temporada reseta na quarta-feira: jogador volta para Bronze I (0) e sobe 1 rank (0 -> 1)
+    wProg = recordMatchIntoWeeklyMissions(wProg, {
+      gameId: "logica",
+      earnedXp: 10,
+      mode: "torneio_semanal",
+      playerLevel: 5,
+      tournamentRankIdBefore: "bronze_1", // idx 0
+      tournamentRankIdAfter: "bronze_2",  // idx 1 (+1)
+      weekKey,
+    });
+    const merged = mergeWeeklyMissionProgress(wProg, null)!;
+    assert.equal(merged.rankUpsEarned, 2);
+    const missions = generateWeeklyMissions({
+      profile: { id: "p_rst", level: 5, tournamentRankId: "bronze_2", weeklyMissionProgress: merged },
+      weekKey,
+      weekIndex: 10,
+    });
+    const rankM = missions.find((m) => m.type === "weekly_ranked_ranks")!;
+    assert.equal(rankM.current, 2);
+    assert.equal(rankM.target, 2);
+
+    // 3. Quando tournamentEnabled === false, missão ranqueada não aparece para nível 4+
+    const noTourMissions = generateWeeklyMissions({
+      profile: { id: "p_no_tour", level: 7 },
+      adminConfig: { tournamentEnabled: false },
+      weekKey,
+      weekIndex: 10,
+    });
+    assert.equal(noTourMissions.length, 4);
+    assert.equal(noTourMissions.some((m) => m.type === "weekly_ranked_ranks" || m.type === "weekly_ranked_matches"), false);
   });
 });

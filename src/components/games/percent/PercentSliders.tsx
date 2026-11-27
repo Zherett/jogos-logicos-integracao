@@ -39,6 +39,7 @@ function SliderRow({
   result: boolean | null;
 }) {
   const trackRef = useRef<HTMLDivElement>(null);
+  const pointerDownRef = useRef<number | null>(null);
 
   function setFromClientX(clientX: number) {
     const el = trackRef.current;
@@ -51,14 +52,24 @@ function SliderRow({
 
   function handlePointerDown(e: React.PointerEvent) {
     if (disabled) return;
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    pointerDownRef.current = e.pointerId;
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
     setFromClientX(e.clientX);
   }
 
   function handlePointerMove(e: React.PointerEvent) {
-    if (disabled) return;
-    if (e.buttons === 0) return;
+    if (disabled || pointerDownRef.current !== e.pointerId) return;
     setFromClientX(e.clientX);
+  }
+
+  function releasePointer(e: React.PointerEvent) {
+    if (pointerDownRef.current === e.pointerId) {
+      pointerDownRef.current = null;
+    }
   }
 
   const ring =
@@ -89,12 +100,15 @@ function SliderRow({
           aria-valuenow={value}
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
+          onPointerUp={releasePointer}
+          onPointerCancel={releasePointer}
+          onLostPointerCapture={releasePointer}
           onKeyDown={(e) => {
             if (disabled) return;
             if (e.key === "ArrowRight") onChange(Math.min(100, value + STEP));
             if (e.key === "ArrowLeft") onChange(Math.max(0, value - STEP));
           }}
-          className={`relative h-10 w-full cursor-pointer rounded-2xl border-4 bg-muted/50 shadow-inner ${ring} ${
+          className={`relative h-10 w-full cursor-pointer touch-none rounded-2xl border-4 bg-muted/50 shadow-inner ${ring} ${
             disabled ? "opacity-70" : ""
           }`}
         >

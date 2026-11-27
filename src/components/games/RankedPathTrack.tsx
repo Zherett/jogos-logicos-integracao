@@ -451,6 +451,11 @@ export function RankedPathTrack({
                     if (!onSaveAdminReward) return;
                     setSavingAdmin(true);
                     try {
+                      const existingCoinsBonus = rewardsMap?.[selectedRank.id]?.coinsBonus;
+                      const preservedCoinsBonus =
+                        existingCoinsBonus && existingCoinsBonus > 0
+                          ? { coinsBonus: existingCoinsBonus }
+                          : {};
                       if (editType === "none") {
                         await onSaveAdminReward(selectedRank.id, null);
                       } else if (editType === "card_pack") {
@@ -460,6 +465,7 @@ export function RankedPathTrack({
                           packId: editPackId,
                           quantity: Math.max(1, Math.floor(editQty)),
                           label: pack?.name,
+                          ...preservedCoinsBonus,
                         });
                       } else if (editType === "coins") {
                         await onSaveAdminReward(selectedRank.id, {
@@ -470,6 +476,7 @@ export function RankedPathTrack({
                         await onSaveAdminReward(selectedRank.id, {
                           type: "points",
                           quantity: Math.max(1, Math.floor(editQty)),
+                          ...preservedCoinsBonus,
                         });
                       }
                     } finally {

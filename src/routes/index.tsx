@@ -4,7 +4,7 @@ import { Menu } from "@/components/games/Menu";
 import { getGameRegistration } from "@/lib/game-registry";
 import { CodeGate } from "@/components/games/CodeGate";
 import { loadUnlocked } from "@/lib/game-codes";
-import { PlayerAuthProvider, usePlayerAuth } from "@/lib/player-auth";
+import { usePlayerAuth } from "@/lib/player-auth";
 import { PlayerMenu } from "@/components/games/PlayerMenu";
 import { MedalUnlockNotification } from "@/components/games/MedalUnlockNotification";
 
@@ -27,8 +27,8 @@ const WeeklyTournamentDialog = lazy(() =>
 const DungeonGame = lazy(() =>
   import("@/components/games/DungeonGame").then((m) => ({ default: m.DungeonGame })),
 );
-import { GameRecordBanner } from "@/components/games/GameRecordBanner";
 import {
+  hasSyncedGameRecordsFromCloud,
   recordGameStageScore,
   seedRecordsFromRegistry,
   syncGameRecordsWithPlayFab,
@@ -83,8 +83,6 @@ import {
   isX1WindowOpen,
   stageForPlayer,
   TOURNAMENT_DAILY_FREE_ENTRIES,
-  TOURNAMENT_DAILY_ENTRIES_LIMIT,
-  TOURNAMENT_DAILY_EXTRA_XP_CAP,
   X1_MIN_LEVEL,
 } from "@/lib/player-profile";
 import { getActiveEventBonuses } from "@/lib/custom-events";
@@ -185,6 +183,9 @@ function Index() {
           auth.profile.ageStage,
           auth.profile.grade,
         ).id;
+        if (!hasSyncedGameRecordsFromCloud()) {
+          await syncGameRecordsWithPlayFab(undefined, true).catch(() => null);
+        }
         const stageRecRes = recordGameStageScore({
           gameId: gId,
           stage: pStage,
@@ -213,11 +214,17 @@ function Index() {
           tournamentPoints: attemptRes.newTournamentPoints,
           tournamentRankId: attemptRes.currentRank.id,
         });
-        // Persiste os +50 pontos de Novo Recorde da Etapa APÓS auth.recordMatch para nunca serem sobrescritos
-        if (stageRecRes.isNewRecord) {
+        // Persiste os +50 pontos de Novo Recorde da Etapa APÓS auth.recordMatch apenas após sync remoto confirmado
+        if (stageRecRes.isNewRecord && hasSyncedGameRecordsFromCloud()) {
           const liveProfile = getActiveAccount()?.profile;
           if (liveProfile) {
-            awardCareerPoints(liveProfile, RECORD_STAGE_MAX_POINTS, "Novo Recorde da Escola/Etapa");
+            awardCareerPoints(
+              liveProfile,
+              RECORD_STAGE_MAX_POINTS,
+              "Novo Recorde da Escola/Etapa",
+              undefined,
+              { source: "recorde" },
+            );
             await syncActiveProfileChangeToPlayFab(liveProfile).catch(() => null);
           }
         }
@@ -493,9 +500,6 @@ function Index() {
   const dailyTournamentEntries = isTodayRecord
     ? Math.max(0, auth.profile?.dailyTournamentEntries ?? 0)
     : 0;
-  const dailyTournamentXp = isTodayRecord
-    ? Math.max(0, auth.profile?.dailyTournamentXp ?? 0)
-    : 0;
 
   const handleExitGame = () => {
     if (activeRankedGameId) {
@@ -696,7 +700,6 @@ function Index() {
         const reg = getGameRegistration(view);
         if (!reg) return null;
         const GameComponent = reg.component;
-        const personalBest = displayStats[view]?.bestScore ?? 0;
         return (
           <Suspense
             fallback={

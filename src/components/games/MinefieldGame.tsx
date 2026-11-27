@@ -27,6 +27,8 @@ import {
   evaluateBonusCard,
 } from "@/lib/minefield-content";
 import { playTone } from "@/lib/sound";
+import { updateActiveGameLevel } from "@/lib/presence";
+import { useSafeTimeouts } from "@/lib/use-safe-timeouts";
 
 interface Props {
   onExit: () => void;
@@ -69,8 +71,20 @@ export function MinefieldGame({ onExit, onStatsChange, isRanked }: Props) {
   const currentLevel = Math.min(4, 1 + Math.floor(correct / 4));
 
   const timerRef = useRef<number | null>(null);
+  const timeLeftRef = useRef(answerSeconds);
   const opening = useRef<Set<string>>(new Set());
   const answerLockRef = useRef(false);
+  const { schedule: scheduleTimeout, clearAll: clearTimeouts } = useSafeTimeouts();
+
+  useEffect(() => {
+    if (phase === "playing") {
+      const progressLevel = Math.min(
+        4,
+        1 + Math.floor(revealed.size / Math.max(1, Math.ceil(board.length / 4))),
+      );
+      updateActiveGameLevel(progressLevel);
+    }
+  }, [phase, revealed.size, board.length]);
 
   function clearTimer() {
     if (timerRef.current) { window.clearInterval(timerRef.current); timerRef.current = null; }
@@ -109,11 +123,13 @@ export function MinefieldGame({ onExit, onStatsChange, isRanked }: Props) {
 
   function startGame() {
     clearTimer();
+    clearTimeouts();
     answerLockRef.current = false;
     setBoard(buildBoard());
     setRevealed(new Set());
     opening.current = new Set();
     setOpenCard(null); setAnswered(null); setFlipping(null);
+    setToast(null);
     setScore(0); setCorrect(0); setWrong(0);
     setElapsed(0);
     setFinished(false);
@@ -131,7 +147,7 @@ export function MinefieldGame({ onExit, onStatsChange, isRanked }: Props) {
     opening.current.add(card.id);
     beep(520, 0.1, "triangle");
     setFlipping(card.id);
-    window.setTimeout(() => {
+    scheduleTimeout(() => {
       setFlipping(null);
       opening.current.delete(card.id);
       setRevealed((r) => new Set(r).add(card.id));
@@ -151,7 +167,7 @@ export function MinefieldGame({ onExit, onStatsChange, isRanked }: Props) {
             Math.abs(card.points) === 1 ? "ponto" : "pontos"
           }`,
         );
-        window.setTimeout(() => setToast(null), 2400);
+        scheduleTimeout(() => setToast(null), 2400);
         nextTeam();
       } else {
         answerLockRef.current = false;
@@ -162,13 +178,19 @@ export function MinefieldGame({ onExit, onStatsChange, isRanked }: Props) {
             ? Array.from({ length: card.pizzaParts ?? 10 }, () => false)
             : [],
         );
+        timeLeftRef.current = answerSeconds;
         setTimeLeft(answerSeconds);
         clearTimer();
         timerRef.current = window.setInterval(() => {
-          setTimeLeft((t) => {
-            if (t <= 1) { clearTimer(); handleTimeout(); return 0; }
-            return t - 1;
-          });
+          const nextTime = timeLeftRef.current - 1;
+          timeLeftRef.current = nextTime;
+          if (nextTime <= 0) {
+            setTimeLeft(0);
+            clearTimer();
+            handleTimeout();
+          } else {
+            setTimeLeft(nextTime);
+          }
         }, 1000);
       }
     }, 420);
@@ -183,7 +205,7 @@ export function MinefieldGame({ onExit, onStatsChange, isRanked }: Props) {
     setScore((s) => Math.max(0, s + evalRes.scoreDelta));
     team.credit(evalRes.scoreDelta);
     beep(160, 0.3, "sawtooth");
-    window.setTimeout(closeCard, 1800);
+    scheduleTimeout(closeCard, 1800);
   }
 
   function answer(option: string) {
@@ -197,14 +219,14 @@ export function MinefieldGame({ onExit, onStatsChange, isRanked }: Props) {
       setCorrect((c) => c + 1);
       team.credit(evalRes.scoreDelta);
       beep(660, 0.1, "triangle");
-      window.setTimeout(() => beep(990, 0.16, "triangle"), 90);
+      scheduleTimeout(() => beep(990, 0.16, "triangle"), 90);
     } else {
       setScore((s) => Math.max(0, s + evalRes.scoreDelta));
       setWrong((w) => w + 1);
       team.credit(evalRes.scoreDelta);
       beep(170, 0.28, "sawtooth");
     }
-    window.setTimeout(closeCard, 1500);
+    scheduleTimeout(closeCard, 1500);
   }
 
   function closeCard() {
@@ -235,12 +257,17 @@ export function MinefieldGame({ onExit, onStatsChange, isRanked }: Props) {
   }, [allDone, finished, toast]);
 
   function replayWithCountdown() {
+    clearTimer();
+    clearTimeouts();
+    answerLockRef.current = false;
     setFinished(false);
     nextTeam();
     setPhase("countdown");
   }
   function backToSetup() {
     clearTimer();
+    clearTimeouts();
+    answerLockRef.current = false;
     setFinished(false);
     setPhase("setup");
   }
@@ -309,6 +336,7 @@ export function MinefieldGame({ onExit, onStatsChange, isRanked }: Props) {
         <GameTopBar title="Campo Minado Lógico" onExit={onExit} sessionActive={team.activeSession} onFinishSession={sessionEnd.request} />
         <ResultPanel
           gameId="minado"
+          mode={lastMatch?.mode ?? (isRanked ? "torneio_semanal" : undefined)}
           isTeam={team.activeSession}
           score={score} correct={correct} wrong={wrong} level={currentLevel}
           onReplay={replayWithCountdown} onMenu={onExit} onChangeSettings={backToSetup}
@@ -486,15 +514,21 @@ export function MinefieldGame({ onExit, onStatsChange, isRanked }: Props) {
               variant="outline"
               className="rounded-2xl"
               onClick={() => {
+                clearTimer();
+                // Na Ranqueada, impede encerrar prematuramente após 1 carta com vitória máxima (anti-farm 10/10 em 2s)
+                if (isRanked) {
+                  onExit();
+                  return;
+                }
                 if (correct === 0 && wrong === 0) {
-                  clearTimer();
                   onExit();
                 } else {
                   setFinished(true);
                 }
               }}
             >
-              <Flag className="mr-2 h-4 w-4" /> Encerrar partida
+              <Flag className="mr-2 h-4 w-4" />
+              {isRanked ? "Abandonar ranqueada" : "Encerrar partida"}
             </Button>
           </div>
         </div>

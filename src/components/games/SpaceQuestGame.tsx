@@ -49,6 +49,8 @@ import {
   stopHourglassTicking,
 } from "@/lib/sound";
 import { usePlayerAuth } from "@/lib/player-auth";
+import type { SpaceQuestMedalId } from "@/lib/playfab";
+import { updateActiveGameLevel } from "@/lib/presence";
 import type { GameComponentProps } from "@/lib/game-registry";
 
 interface ActiveFallingQuestion {
@@ -187,6 +189,12 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
   const auth = usePlayerAuth();
   const authRef = useRef(auth);
   authRef.current = auth;
+
+  useEffect(() => {
+    if (phase === "playing") {
+      updateActiveGameLevel(level);
+    }
+  }, [phase, level]);
 
   const onStatsChangeRef = useRef(onStatsChange);
   onStatsChangeRef.current = onStatsChange;
@@ -377,6 +385,8 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
   }, [phase, isRanked, gameOverReason]);
 
   // Clock padronizado: 1 minuto (60s base), +3s por acerto, máx 90s
+  // O próprio callback onEnd do useRoundClock dispara finishGame("timeout") exatamente quando o tempo zera,
+  // evitando encerramento instantâneo (0.0s) por estado residual no replay.
   const clock = useRoundClock(
     60,
     phase === "playing",
@@ -384,13 +394,6 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
     3,
     30,
   );
-
-  // Garantia extra: se o contador zerar enquanto estiver jogando, encerra tudo imediatamente
-  useEffect(() => {
-    if (phase === "playing" && clock.time <= 0 && !finishedRef.current) {
-      finishGame("timeout");
-    }
-  }, [phase, clock.time, finishGame]);
 
   // Background stars generation (deterministic static positions)
   const stars = useRef(
@@ -636,6 +639,9 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
           scoreRef.current = collision.nextScore;
           setScore(collision.nextScore);
 
+          wrongCountRef.current += collision.livesLost;
+          setWrongCount(wrongCountRef.current);
+
           setFloorCollisions((f) => f + collision.livesLost);
 
           livesRef.current = collision.nextLives;
@@ -812,7 +818,7 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
 
         // Concessão de medalhas de aura especiais
         if (res.unlockedMedalId && authRef.current.awardSpaceQuestMedal) {
-          void authRef.current.awardSpaceQuestMedal(res.unlockedMedalId as any);
+          void authRef.current.awardSpaceQuestMedal(res.unlockedMedalId as SpaceQuestMedalId);
           showBanner(
             `Medalha Desbloqueada: ${AURA_CONFIGS[targetItem.data.aura].medalTitle}! 🎖️`,
             3000,
@@ -1077,6 +1083,7 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
               wrong={wrongCount}
               level={level}
               gameId="spacequest"
+              mode={lastMatch?.mode ?? (isRanked ? "torneio_semanal" : undefined)}
               onReplay={handleReplay}
               onMenu={onExit}
             />
@@ -1452,15 +1459,15 @@ export function SpaceQuestGame({ onExit, onStatsChange, isRanked }: GameComponen
                     {exp.particles.map((p) => (
                       <div
                         key={p.id}
-                        className="absolute rounded-full"
+                        className="absolute rounded-full animate-sparkle"
                         style={{
                           width: `${p.size}px`,
                           height: `${p.size}px`,
                           backgroundColor: p.color,
                           boxShadow: `0 0 8px ${p.color}`,
-                          transform: `translate(${p.dx}px, ${p.dy}px)`,
-                          opacity: 0,
-                          transition: "all 350ms cubic-bezier(0.16, 1, 0.3, 1)",
+                          // @ts-expect-error CSS custom properties for sparkle burst
+                          "--dx": `${p.dx}px`,
+                          "--dy": `${p.dy}px`,
                         }}
                       />
                     ))}

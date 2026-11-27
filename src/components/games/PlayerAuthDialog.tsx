@@ -134,6 +134,11 @@ export function PlayerAuthDialog({ open, onOpenChange }: Props) {
       grade: finalGrade,
       turma: finalTurma,
       ageStage,
+      lgpdConsent: {
+        acceptedAt: new Date().toISOString(),
+        policyVersion: "2026-01",
+        guardianDeclared: true,
+      },
     });
     setBusy(false);
 
@@ -220,7 +225,7 @@ export function PlayerAuthDialog({ open, onOpenChange }: Props) {
                     </button>
                   </div>
                   <p className="text-[11px] text-muted-foreground">
-                    💡 Se você já tinha conta antes, continue usando a sua mesma senha de 6 dígitos. Caso tenha esquecido, procure seu professor ou a coordenação.
+                    💡 Use a sua senha cadastrada (mínimo 6 caracteres; para contas antigas, sua senha de 6 dígitos). Caso tenha esquecido, procure seu professor ou a coordenação/ADM para redefinição.
                   </p>
                 </div>
               </>

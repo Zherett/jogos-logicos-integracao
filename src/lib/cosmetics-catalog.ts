@@ -1,6 +1,7 @@
 // Catálogo de Cosméticos (Avatares e Auras do Perfil) e Regras de Loja (browser-safe)
 
 import type { CardPackDefinition } from "./cards-catalog.ts";
+import { isSafeHttpOrRelativeMediaUrl } from "./media-url.ts";
 
 export type AvatarIconKey =
   | "user"
@@ -519,19 +520,20 @@ export function sanitizeHex6(value?: string | null, fallback = DEFAULT_AVATAR_CO
  * Aceita apenas `https://`, caminhos relativos (`/`) ou `data:image/(png|jpeg|gif|webp);base64,...` até ~12 KB.
  */
 export function isSafeCosmeticImageUrl(url?: string | null): boolean {
-  if (!url || typeof url !== "string") return false;
-  const trimmed = url.trim();
-  if (!trimmed) return false;
-  if (trimmed.startsWith("/") && !trimmed.startsWith("//")) return !/\s/.test(trimmed);
-  if (/^data:image\/(png|jpe?g|gif|webp);base64,[a-z0-9+/=]+$/i.test(trimmed)) {
-    return trimmed.length <= MAX_DATA_IMAGE_URL_CHARS;
+  return isSafeHttpOrRelativeMediaUrl(url, {
+    allowDataImage: true,
+    maxDataImageChars: MAX_DATA_IMAGE_URL_CHARS,
+  });
+}
+
+function stripUndefinedEntries<T extends Record<string, unknown>>(obj: T): Partial<T> {
+  const clean: Partial<T> = {};
+  for (const [key, val] of Object.entries(obj)) {
+    if (val !== undefined) {
+      (clean as Record<string, unknown>)[key] = val;
+    }
   }
-  try {
-    const parsed = new URL(trimmed);
-    return parsed.protocol === "https:" && Boolean(parsed.hostname);
-  } catch {
-    return false;
-  }
+  return clean;
 }
 
 export function mergeWithDefaultAvatars(custom?: AvatarDefinition[] | null): AvatarDefinition[] {
@@ -546,11 +548,17 @@ export function mergeWithDefaultAvatars(custom?: AvatarDefinition[] | null): Ava
     if (item.imageUrl && !hasSafeImage && !base && !item.iconKey && !item.letterChar) {
       continue;
     }
-    const sanitizedItem: AvatarDefinition = {
-      ...item,
-      imageUrl: hasSafeImage ? item.imageUrl!.trim() : undefined,
-    };
-    byId.set(sanitizedItem.id, base ? { ...base, ...sanitizedItem } : sanitizedItem);
+    const cleanItem = stripUndefinedEntries(item as unknown as Record<string, unknown>) as Partial<AvatarDefinition>;
+    if (item.imageUrl !== undefined) {
+      cleanItem.imageUrl = hasSafeImage ? item.imageUrl.trim() : base?.imageUrl;
+      if (!cleanItem.imageUrl) {
+        delete cleanItem.imageUrl;
+      }
+    }
+    const merged: AvatarDefinition = base
+      ? ({ ...base, ...cleanItem } as AvatarDefinition)
+      : ({ ...(cleanItem as AvatarDefinition) });
+    byId.set(merged.id, merged);
   }
   return Array.from(byId.values());
 }
@@ -563,7 +571,10 @@ export function mergeWithDefaultAuras(custom?: AuraDefinition[] | null): AuraDef
   for (const item of custom ?? []) {
     if (!item || !item.id) continue;
     const base = byId.get(item.id);
-    const merged: AuraDefinition = base ? { ...base, ...item } : { ...item };
+    const cleanItem = stripUndefinedEntries(item as unknown as Record<string, unknown>) as Partial<AuraDefinition>;
+    const merged: AuraDefinition = base
+      ? ({ ...base, ...cleanItem } as AuraDefinition)
+      : ({ ...(cleanItem as AuraDefinition) });
     merged.primaryColor = sanitizeHex6(merged.primaryColor, base?.primaryColor ?? "#3b82f6");
     if (merged.secondaryColor) {
       merged.secondaryColor = sanitizeHex6(merged.secondaryColor, base?.secondaryColor ?? "#ec4899");
@@ -593,6 +604,10 @@ export function extractCustomAvatarsForStorage(allAvatars: AvatarDefinition[]): 
       Boolean(av.featured) !== Boolean(def.featured) ||
       av.name !== def.name ||
       av.description !== def.description ||
+      (av.iconKey ?? "") !== (def.iconKey ?? "") ||
+      (av.category ?? "") !== (def.category ?? "") ||
+      (av.letterChar ?? "") !== (def.letterChar ?? "") ||
+      (av.letterVariant ?? "") !== (def.letterVariant ?? "") ||
       (av.imageUrl ?? "") !== (def.imageUrl ?? "");
     if (changed) {
       result.push(av);
@@ -620,6 +635,7 @@ export function extractCustomAurasForStorage(allAuras: AuraDefinition[]): AuraDe
       Boolean(au.featured) !== Boolean(def.featured) ||
       au.name !== def.name ||
       au.description !== def.description ||
+      au.kind !== def.kind ||
       au.primaryColor !== def.primaryColor ||
       (au.secondaryColor ?? "") !== (def.secondaryColor ?? "");
     if (changed) {
@@ -1042,4 +1058,22 @@ export function paginateUnifiedInventorySlots<T>(
   }
 
   return { page, totalPages, totalItems, slots };
+}
+
+/** Calcula o tamanho UTF-8 aproximado da chave `PlatformAdminCatalogs` (limite PlayFab: 100 KB). */
+export function measurePlatformCatalogsBytes(payload: {
+  cardPacks?: unknown;
+  chestsCatalog?: unknown;
+  avatarsCatalog?: unknown;
+  aurasCatalog?: unknown;
+  cardsCatalog?: unknown;
+}): number {
+  const json = JSON.stringify({
+    cardPacks: payload.cardPacks ?? [],
+    chestsCatalog: payload.chestsCatalog ?? [],
+    avatarsCatalog: payload.avatarsCatalog ?? [],
+    aurasCatalog: payload.aurasCatalog ?? [],
+    ...(payload.cardsCatalog ? { cardsCatalog: payload.cardsCatalog } : {}),
+  });
+  return typeof TextEncoder !== "undefined" ? new TextEncoder().encode(json).length : json.length;
 }

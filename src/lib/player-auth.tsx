@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { onMatchSaved, type GameId } from "./game-storage";
-import { recordGameStageScore } from "./game-records";
+import { hasSyncedGameRecordsFromCloud, recordGameStageScore } from "./game-records";
 import { stageForPlayer } from "./player-profile";
 import {
   loadAdminConfig,
@@ -156,6 +156,7 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
   const [stats, setStats] = useState<GameStatRow[]>([]);
   const [adminConfig, setAdminConfig] = useState<PlatformAdminConfig>(() => loadAdminConfig());
   const [adminPinUnlocked, setAdminPinUnlocked] = useState(false);
+  const [adminPanelLocked, setAdminPanelLocked] = useState(false);
   const [sessionKickedTime, setSessionKickedTime] = useState<string | null>(null);
   const [cloudSessionExpired, setCloudSessionExpired] = useState(false);
 
@@ -265,6 +266,7 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
     if (res.error || !res.account) {
       return { error: res.error ?? "Não foi possível criar o perfil." };
     }
+    setAdminPanelLocked(false);
     setProfile({ ...res.account.profile });
     setUnlocked([...res.account.unlocked]);
     setStats([...res.account.stats]);
@@ -280,6 +282,7 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
         needsRecovery: res.needsRecovery,
       };
     }
+    setAdminPanelLocked(false);
     setProfile({ ...res.account.profile });
     setUnlocked([...res.account.unlocked]);
     setStats([...res.account.stats]);
@@ -321,6 +324,7 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
     setUnlocked([]);
     setStats([]);
     setAdminPinUnlocked(false);
+    setAdminPanelLocked(false);
     setCloudSessionExpired(false);
   }, []);
 
@@ -390,6 +394,7 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
       tournamentRankId?: string;
       isDraw?: boolean;
       opponentSchool?: string;
+      brokeStageRecord?: boolean;
     }) => {
       const updated = await playfabRecordMatch(args);
       if (updated) {
@@ -413,9 +418,10 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
       if (match.mode === "torneio_semanal" || match.mode === "x1_online") {
         return;
       }
+      let brokeStageRecord = false;
       if (match.score > 0) {
         const stage = stageForPlayer(profile.school, profile.birthdate, new Date(), profile.ageStage).id;
-        recordGameStageScore({
+        const stageRecRes = recordGameStageScore({
           gameId: id,
           stage,
           playerId: profile.id,
@@ -425,6 +431,7 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
           score: match.score,
           achievedAt: match.at ?? Date.now(),
         });
+        brokeStageRecord = Boolean(stageRecRes?.isNewRecord && hasSyncedGameRecordsFromCloud());
       }
       void recordMatch({
         gameId: id,
@@ -435,6 +442,7 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
         level: match.level,
         correct: match.correct,
         wrong: match.wrong,
+        brokeStageRecord,
       });
     });
     return () => onMatchSaved(null);
@@ -524,6 +532,7 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
     if (clean.length >= 4 && clean === expected) {
       setAdminUnlockedSession(true);
       setAdminPinUnlocked(true);
+      setAdminPanelLocked(false);
       return true;
     }
     return false;
@@ -532,9 +541,10 @@ export function PlayerAuthProvider({ children }: { children: ReactNode }) {
   const lockAdmin = useCallback(() => {
     setAdminUnlockedSession(false);
     setAdminPinUnlocked(false);
+    setAdminPanelLocked(true);
   }, []);
 
-  const isAdmin = Boolean(profile?.isAdmin || adminPinUnlocked);
+  const isAdmin = !adminPanelLocked && Boolean(profile?.isAdmin || adminPinUnlocked);
 
   const updatePlayerCards = useCallback(
     async (args: {

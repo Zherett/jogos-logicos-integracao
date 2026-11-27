@@ -77,6 +77,6 @@ export const X1_ARENA_THEMES: readonly X1ArenaTheme[] = [
 ];
 
 export function getX1ArenaTheme(seed: number): X1ArenaTheme {
-  const idx = Math.abs(Math.floor(seed)) % X1_ARENA_THEMES.length;
-  return X1_ARENA_THEMES[idx];
+  const safeSeed = Number.isFinite(seed) ? Math.abs(Math.floor(seed)) : 0;
+  return X1_ARENA_THEMES[safeSeed % X1_ARENA_THEMES.length] ?? X1_ARENA_THEMES[0];
 }

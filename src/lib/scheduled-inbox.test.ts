@@ -18,6 +18,7 @@ import {
   loadAllInboxMessages,
   getMessageReaders,
   getInboxMessagesForPlayer,
+  isMessageCanceled,
 } from "./inbox-messages.ts";
 import type { PlayerProfile } from "./playfab.ts";
 
@@ -246,5 +247,66 @@ describe("Sistema de Mensagens Programadas e Recorrentes (scheduled-inbox)", () 
       createdAt: "",
     };
     assert.equal(formatRecurrenceLabel(rMensal), "Todo dia 1 do mês às 09:00");
+  });
+
+  it("Bloco 1.3 (ECON-14): evita overflow em meses curtos (dia 31 -> 28/29/30), ancora validFrom >14d e gera ID determinístico com tombstone", () => {
+    const monthly31: ScheduledInboxRule = {
+      id: "rule_m31",
+      title: "Fechamento do Mês",
+      body: "Aviso mensal",
+      active: true,
+      recurrence: "monthly",
+      dayOfMonth: 31,
+      timeOfDay: "08:00",
+      recipientMode: "all",
+      createdAt: "2026-01-01T12:00:00.000Z",
+    };
+
+    // Fevereiro 2026 (28 dias) às 08:30 Coari (12:30Z) deve disparar em 28/02 e NÃO pular!
+    const feb28Due = new Date("2026-02-28T12:30:00.000Z");
+    assert.equal(isRuleDue(monthly31, feb28Due), true);
+
+    // Próxima execução após 01/02 deve cair em 28/02/2026 (nunca overflow para 03/03!)
+    const nextFeb = computeNextRunDate(monthly31, new Date("2026-02-01T12:00:00.000Z"));
+    assert.ok(nextFeb);
+    assert.equal(nextFeb.toISOString(), "2026-02-28T12:00:00.000Z");
+
+    // Semanal com validFrom > 14 dias no futuro encontra próxima ocorrência válida
+    const futureWeekly: ScheduledInboxRule = {
+      id: "rule_w_future",
+      title: "Semanal Futura",
+      body: "Teste",
+      active: true,
+      recurrence: "weekly",
+      daysOfWeek: [6], // sábado
+      timeOfDay: "09:00",
+      validFrom: "2026-08-01",
+      recipientMode: "all",
+      createdAt: "2026-07-01T12:00:00.000Z",
+    };
+    const nextW = computeNextRunDate(futureWeekly, new Date("2026-07-01T12:00:00.000Z"));
+    assert.ok(nextW);
+    assert.equal(nextW.toISOString().startsWith("2026-08-01"), true);
+
+    // triggerScheduledRule gera ID determinístico sched_<cycleKey>, preenche metadata e cancela ciclo anterior
+    const ruleDet: ScheduledInboxRule = {
+      id: "rule_det",
+      title: "Ciclo",
+      body: "Corpo",
+      active: true,
+      recurrence: "weekly",
+      daysOfWeek: [6],
+      timeOfDay: "08:00",
+      recipientMode: "all",
+      lastTriggeredMessageId: "msg_ciclo_antigo",
+      createdAt: "2026-11-01T12:00:00.000Z",
+    };
+    const { updatedRule, message } = triggerScheduledRule(ruleDet, new Date("2026-11-28T12:30:00.000Z"));
+    assert.equal(message.id, "sched_rule_det_weekly_2026-11-28");
+    assert.equal(updatedRule.lastTriggeredMessageId, message.id);
+    assert.equal((message.metadata as any)?.scheduledRuleId, "rule_det");
+    assert.equal((message.metadata as any)?.cycleKey, "rule_det_weekly_2026-11-28");
+    assert.equal(isMessageCanceled("msg_ciclo_antigo"), true);
+    assert.equal(isMessageCanceled(message.id), false);
   });
 });

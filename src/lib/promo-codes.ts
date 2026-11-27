@@ -3,10 +3,18 @@
  * Suporta 6 padrões de máscara de alta entropia, proteção contra brute-force / timing attacks,
  * transações atômicas de resgate e trava de acesso para contas de teste (Zheret & Lord).
  */
-import { awardCareerPoints, creditCoinMetrics } from "./career-points.ts";
-import { calculatePlayerLevel, nickSlug } from "./player-profile.ts";
+import { awardCareerPoints, checkLevelPromotionPoints, creditCoinMetrics } from "./career-points.ts";
+import { calculatePlayerLevel, nickSlug, syncLevelStageProgress } from "./player-profile.ts";
 import { recordScoreLedgerEntry } from "./score-history-ledger.ts";
-import { normalizeCardPackId } from "./chests-catalog.ts";
+import { calculateDuplicateCosmeticCompensation, normalizeCardPackId } from "./chests-catalog.ts";
+import {
+  ensureLevel5InitialLetterUnlock,
+  grantCosmeticToProfile,
+  mergeWithDefaultAuras,
+  mergeWithDefaultAvatars,
+} from "./cosmetics-catalog.ts";
+import { ALL_GAME_IDS } from "./game-storage.ts";
+import { getEnabledGameIdsSet } from "./medals-catalog.ts";
 import {
   acquireCanonicalConfigWriteTicket,
   callPlayFabClient,
@@ -16,6 +24,29 @@ import {
   loadStoredSession,
   type PlayerProfile,
 } from "./playfab.ts";
+import { safeLocalStorageSet } from "./storage-guard.ts";
+
+function readCachedAdminLevelConfig(): { maxAvailableGames: number; levelCoinStep: number } {
+  const fallback = { maxAvailableGames: ALL_GAME_IDS.length, levelCoinStep: 10 };
+  if (typeof window === "undefined") return fallback;
+  try {
+    for (const key of ["desafios-logica-admin-config-remote-v1", "desafios-logica-admin-config-v1"]) {
+      const raw = window.localStorage.getItem(key);
+      if (!raw) continue;
+      const cfg = JSON.parse(raw);
+      if (!cfg || typeof cfg !== "object") continue;
+      const enabledSet = getEnabledGameIdsSet(cfg.enabledGames);
+      const step = Number(cfg?.coinRewardsConfig?.levelCoinStep);
+      return {
+        maxAvailableGames: Math.max(1, enabledSet.size || ALL_GAME_IDS.length),
+        levelCoinStep: Number.isFinite(step) && step >= 0 ? step : 10,
+      };
+    }
+  } catch {
+    /* ignore */
+  }
+  return fallback;
+}
 
 export type PromoCodePattern =
   | "padrao_1" // LNNNL-LNNNL (ex: A124C-D123A)
@@ -85,6 +116,7 @@ export interface PromoCodeItem {
   claimedBySchool?: string;
   claimedAt?: string;
   hiddenForAdmin?: boolean; // Soft Delete
+  pendingCloudSync?: boolean; // Preserva lote recém-criado localmente até confirmar upload na nuvem
 }
 
 export interface PromoCodeInspectResult {
@@ -151,7 +183,7 @@ function saveRateLimitStore(): void {
     for (const [k, v] of rateLimitMap.entries()) {
       obj[k] = v;
     }
-    window.localStorage.setItem(PROMO_RATE_LIMIT_LOCAL_KEY, JSON.stringify(obj));
+    safeLocalStorageSet(PROMO_RATE_LIMIT_LOCAL_KEY, JSON.stringify(obj));
   } catch {
     /* ignore */
   }
@@ -180,12 +212,19 @@ export function loadDeletedPromoCleanCodes(): Set<string> {
   return inMemoryDeletedCleanCodes;
 }
 
+export const MAX_PROMO_TOMBSTONES = 200;
+
 function saveDeletedPromoCleanCodes(set: Set<string>): void {
   deletedMemoryLoaded = true;
   for (const c of set) inMemoryDeletedCleanCodes.add(c);
+  if (inMemoryDeletedCleanCodes.size > MAX_PROMO_TOMBSTONES) {
+    const trimmed = Array.from(inMemoryDeletedCleanCodes).slice(-MAX_PROMO_TOMBSTONES);
+    inMemoryDeletedCleanCodes.clear();
+    for (const c of trimmed) inMemoryDeletedCleanCodes.add(c);
+  }
   try {
     if (typeof window !== "undefined") {
-      window.localStorage.setItem(PROMO_TOMBSTONES_LOCAL_KEY, JSON.stringify(Array.from(inMemoryDeletedCleanCodes)));
+      safeLocalStorageSet(PROMO_TOMBSTONES_LOCAL_KEY, JSON.stringify(Array.from(inMemoryDeletedCleanCodes)));
     }
   } catch {
     /* ignore */
@@ -200,22 +239,29 @@ function addDeletedPromoCleanCode(cleanCode: string): void {
   saveDeletedPromoCleanCodes(set);
 }
 
-/** Contas de teste com acesso exclusivo ao modo Beta de resgate */
+/** Contas de teste legadas (mantido para compatibilidade de testes/referência) */
 export const PROMO_CODE_TESTER_ACCOUNTS = ["zheret", "lord"];
 
 /** Verifica se o perfil atual tem acesso liberado ao resgate de códigos */
 export function canAccessPromoCodeRedeem(profile?: Partial<PlayerProfile> | null): boolean {
   if (!profile) return false;
-  if (profile.isAdmin) return true; // Administrador autenticado sempre pode testar
-  const rawNick = (profile.nick ?? "").toLowerCase().trim();
-  const slug = (profile.nickNormalized ?? nickSlug(profile.nick ?? "")).toLowerCase().trim();
-  const id = (profile.id ?? "").toLowerCase().trim();
-  const allowed = new Set(["zheret", "lord", "josiney", "quemuel", "admin", "semed_admin"]);
-  return allowed.has(slug) || allowed.has(rawNick) || allowed.has(id);
+  if (profile.isAdmin) return true;
+  return Boolean((profile.id && profile.id.trim()) || (profile.nick && profile.nick.trim()));
 }
 
-/** Gera um caractere aleatório de uma lista */
+/** Gera um caractere aleatório usando CSPRNG (crypto.getRandomValues) quando disponível */
 function pickRandomChar(chars: string): string {
+  const cryptoObj = typeof globalThis !== "undefined" ? globalThis.crypto : undefined;
+  if (cryptoObj && typeof cryptoObj.getRandomValues === "function") {
+    const buf = new Uint32Array(1);
+    const limit = Math.floor(0x100000000 / chars.length) * chars.length;
+    let rand = 0;
+    do {
+      cryptoObj.getRandomValues(buf);
+      rand = buf[0];
+    } while (rand >= limit);
+    return chars.charAt(rand % chars.length);
+  }
   const idx = Math.floor(Math.random() * chars.length);
   return chars.charAt(idx);
 }
@@ -279,16 +325,68 @@ export function saveLocalPromoCodes(codes: PromoCodeItem[]): void {
   memoryLoaded = true;
   try {
     if (typeof window !== "undefined") {
-      window.localStorage.setItem(PROMO_CODES_LOCAL_KEY, JSON.stringify(codes));
+      safeLocalStorageSet(PROMO_CODES_LOCAL_KEY, JSON.stringify(codes));
     }
   } catch {
     /* ignore write error */
   }
 }
 
+export function measurePromoCatalogBytes(codes: PromoCodeItem[] = loadLocalPromoCodes()): number {
+  const json = JSON.stringify(codes);
+  return typeof TextEncoder !== "undefined" ? new TextEncoder().encode(json).length : json.length;
+}
+
+/**
+ * Remove do catálogo códigos já resgatados/ocultos mais antigos que `maxAgeDays` (padrão: 90 dias)
+ * para manter o SharedGroup `SEMED_PROMO_CODES_V1` bem abaixo do limite de 100 KB do PlayFab.
+ */
+export function archiveOldClaimedPromoCodes(
+  codes: PromoCodeItem[],
+  options?: { maxAgeDays?: number; nowMs?: number },
+): { remaining: PromoCodeItem[]; archivedCount: number } {
+  const maxAgeDays = Math.max(7, Math.floor(options?.maxAgeDays ?? 90));
+  const nowMs = options?.nowMs ?? Date.now();
+  const cutoffMs = nowMs - maxAgeDays * 86_400_000;
+  let archivedCount = 0;
+
+  const remaining = codes.filter((item) => {
+    if (!item) return false;
+    const isTerminal = item.status === "claimed" || Boolean(item.hiddenForAdmin);
+    if (!isTerminal) return true;
+    const refIso = item.claimedAt || item.createdAt;
+    const refMs = Date.parse(refIso || "");
+    if (Number.isFinite(refMs) && refMs < cutoffMs) {
+      archivedCount += 1;
+      return false;
+    }
+    return true;
+  });
+
+  return { remaining, archivedCount };
+}
+
 /**
  * Cria um lote de códigos únicos, garantindo que não colidam com códigos existentes.
  */
+function generateSecureIdSuffix(len = 6): string {
+  const alphabet = "0123456789abcdefghijklmnopqrstuvwxyz";
+  const cryptoObj = typeof globalThis !== "undefined" ? globalThis.crypto : undefined;
+  let out = "";
+  if (cryptoObj && typeof cryptoObj.getRandomValues === "function") {
+    const buf = new Uint32Array(len);
+    cryptoObj.getRandomValues(buf);
+    for (let i = 0; i < len; i++) {
+      out += alphabet.charAt(buf[i] % alphabet.length);
+    }
+    return out;
+  }
+  for (let i = 0; i < len; i++) {
+    out += alphabet.charAt(Math.floor(Math.random() * alphabet.length));
+  }
+  return out;
+}
+
 export function generatePromoCodesBatch(options: {
   count: number;
   pattern: PromoCodePattern;
@@ -301,7 +399,7 @@ export function generatePromoCodesBatch(options: {
   const existingCleanCodes = new Set(currentList.map((c) => c.cleanCode));
   const newBatch: PromoCodeItem[] = [];
   const nowIso = new Date().toISOString();
-  const batchId = `batch_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+  const batchId = `batch_${Date.now()}_${generateSecureIdSuffix(6)}`;
   const allowMultiple = options.allowMultiplePerStudent ?? false;
 
   let attempts = 0;
@@ -315,7 +413,7 @@ export function generatePromoCodesBatch(options: {
     if (!existingCleanCodes.has(clean)) {
       existingCleanCodes.add(clean);
       const item: PromoCodeItem = {
-        id: `promo_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+        id: `promo_${Date.now()}_${generateSecureIdSuffix(6)}`,
         code: formatted,
         cleanCode: clean,
         pattern: options.pattern,
@@ -343,6 +441,7 @@ export function generatePromoCodesBatch(options: {
         },
         createdAt: nowIso,
         createdBy: options.createdBy || "admin",
+        pendingCloudSync: true,
       };
       newBatch.push(item);
     }
@@ -385,7 +484,7 @@ export function checkStudentPromoRateLimit(studentId: string): {
 } {
   ensureRateLimitLoaded();
   const cleanId = nickSlug(studentId);
-  const now = Date.now();
+  const now = getAuthoritativeNow().getTime();
   const tracker = rateLimitMap.get(cleanId);
 
   if (!tracker) {
@@ -404,7 +503,7 @@ export function checkStudentPromoRateLimit(studentId: string): {
 export function recordFailedPromoAttempt(studentId: string): { blocked: boolean; remainingSeconds: number } {
   ensureRateLimitLoaded();
   const cleanId = nickSlug(studentId);
-  const now = Date.now();
+  const now = getAuthoritativeNow().getTime();
   const tracker = rateLimitMap.get(cleanId) ?? { failedAttempts: 0 };
   tracker.failedAttempts += 1;
 
@@ -440,7 +539,11 @@ export function resetStudentPromoFailedAttempts(studentId: string): void {
 /**
  * Etapa 1: Inspeciona a prévia do código sem consumi-lo (apenas leitura segura).
  */
-export function inspectPromoCode(rawInput: string, studentId: string): PromoCodeInspectResult {
+export function inspectPromoCode(
+  rawInput: string,
+  studentId: string,
+  studentProfile?: Pick<PlayerProfile, "claimedPromoCodeIds" | "claimedPromoBatchIds"> | null,
+): PromoCodeInspectResult {
   const rateLimit = checkStudentPromoRateLimit(studentId);
   if (rateLimit.blocked) {
     return {
@@ -460,6 +563,17 @@ export function inspectPromoCode(rawInput: string, studentId: string): PromoCode
     };
   }
 
+  if (
+    Array.isArray(studentProfile?.claimedPromoCodeIds) &&
+    studentProfile.claimedPromoCodeIds.includes(clean)
+  ) {
+    return {
+      valid: false,
+      status: "already_claimed",
+      errorMessage: "Este código já foi resgatado na sua conta.",
+    };
+  }
+
   const list = loadLocalPromoCodes();
   const match = list.find((c) => c.cleanCode === clean);
 
@@ -475,6 +589,17 @@ export function inspectPromoCode(rawInput: string, studentId: string): PromoCode
     };
   }
 
+  if (
+    Array.isArray(studentProfile?.claimedPromoCodeIds) &&
+    studentProfile.claimedPromoCodeIds.includes(match.id)
+  ) {
+    return {
+      valid: false,
+      status: "already_claimed",
+      errorMessage: "Este código já foi resgatado na sua conta.",
+    };
+  }
+
   if (match.status === "claimed") {
     recordFailedPromoAttempt(studentId);
     return {
@@ -484,16 +609,21 @@ export function inspectPromoCode(rawInput: string, studentId: string): PromoCode
     };
   }
 
-  // Verifica se o lote restringe a 1 resgate por aluno
+  // Verifica se o lote restringe a 1 resgate por aluno (catálogo + perfil cross-device)
   if (match.allowMultiplePerStudent === false && match.batchId) {
     const cleanStudentId = nickSlug(studentId);
-    const alreadyClaimedFromBatch = list.some(
-      (c) =>
-        c.batchId === match.batchId &&
-        c.status === "claimed" &&
-        (nickSlug(c.claimedByStudentId || "") === cleanStudentId ||
-          nickSlug(c.claimedByNick || "") === cleanStudentId),
-    );
+    const claimedInProfileBatch =
+      Array.isArray(studentProfile?.claimedPromoBatchIds) &&
+      studentProfile.claimedPromoBatchIds.includes(match.batchId);
+    const alreadyClaimedFromBatch =
+      claimedInProfileBatch ||
+      list.some(
+        (c) =>
+          c.batchId === match.batchId &&
+          c.status === "claimed" &&
+          (nickSlug(c.claimedByStudentId || "") === cleanStudentId ||
+            nickSlug(c.claimedByNick || "") === cleanStudentId),
+      );
     if (alreadyClaimedFromBatch) {
       return {
         valid: false,
@@ -597,30 +727,90 @@ export function claimPromoCode(
   saveLocalPromoCodes(list);
 
   // Grava trava permanente no PlayerProfile para sincronizar com o PlayFab UserData
+  applyPromoRewardsToProfile({
+    code: target.code,
+    cleanCode: target.cleanCode,
+    batchId: target.batchId,
+    eventId: target.id,
+    rewards: target.rewards,
+    student,
+  });
+
+  // Limpa as tentativas falhas após o sucesso
+  resetStudentPromoFailedAttempts(student.id);
+
+  return {
+    success: true,
+    code: target.code,
+    rewards: target.rewards,
+    updatedProfile: student,
+  };
+}
+
+/**
+ * Aplica as recompensas de um código promocional no perfil do aluno e registra no livro-razão.
+ */
+export function applyPromoRewardsToProfile(args: {
+  code: string;
+  cleanCode: string;
+  batchId?: string;
+  eventId?: string;
+  rewards: PromoCodeRewardPayload;
+  student: PlayerProfile;
+}): PlayerProfile {
+  const { code, cleanCode, batchId, eventId, rewards, student } = args;
+
   const prevClaimedCodes = Array.isArray(student.claimedPromoCodeIds) ? student.claimedPromoCodeIds : [];
-  if (!prevClaimedCodes.includes(target.cleanCode)) {
-    student.claimedPromoCodeIds = [...prevClaimedCodes, target.cleanCode];
+  if (!prevClaimedCodes.includes(cleanCode)) {
+    student.claimedPromoCodeIds = [...prevClaimedCodes, cleanCode];
   }
-  if (target.batchId) {
+  if (batchId) {
     const prevBatches = Array.isArray(student.claimedPromoBatchIds) ? student.claimedPromoBatchIds : [];
-    if (!prevBatches.includes(target.batchId)) {
-      student.claimedPromoBatchIds = [...prevBatches, target.batchId];
+    if (!prevBatches.includes(batchId)) {
+      student.claimedPromoBatchIds = [...prevBatches, batchId];
     }
   }
 
-  // 2. Concede XP se houver
-  const rewards = target.rewards;
+  // Concede XP se houver
   if (rewards.xp && rewards.xp > 0) {
+    const prevLevel = Math.max(1, Math.floor(Number(student.level) || 1));
     student.xp = (student.xp ?? 0) + rewards.xp;
     student.seasonXp = (student.seasonXp ?? 0) + rewards.xp;
-    student.level = calculatePlayerLevel({
+    const cfgSlice = readCachedAdminLevelConfig();
+    const synced = syncLevelStageProgress({
+      xp: student.xp,
+      lifetimeMatches: student.matchesPlayed ?? 0,
+      lifetimeWins: student.wins ?? 0,
+      lifetimeDistinctGames: student.distinctGamesPlayed ?? 0,
+      currentLevel: student.level,
+      existingStage: student.levelStageProgress ?? null,
+      maxAvailableGames: cfgSlice.maxAvailableGames,
+    });
+    student.level = synced.level || calculatePlayerLevel({
       xp: student.xp,
       matchesPlayed: student.matchesPlayed ?? 0,
       wins: student.wins ?? 0,
       distinctGames: student.distinctGamesPlayed ?? 0,
       currentLevel: student.level,
       stageProgress: student.levelStageProgress,
+      maxAvailableGames: cfgSlice.maxAvailableGames,
     });
+    student.levelStageProgress = synced.stageProgress;
+    if (student.level > prevLevel) {
+      if (!Array.isArray(student.achievedLevelsPoints)) {
+        const prior: number[] = [];
+        for (let lvl = 2; lvl <= prevLevel; lvl++) {
+          prior.push(lvl);
+        }
+        student.achievedLevelsPoints = prior;
+      }
+      checkLevelPromotionPoints(student.level, student, 1, cfgSlice.levelCoinStep);
+      if (student.level >= 5) {
+        const l5 = ensureLevel5InitialLetterUnlock(student);
+        student.unlockedAvatars = l5.profile.unlockedAvatars;
+        student.level5InitialAvatarGrantedId = l5.profile.level5InitialAvatarGrantedId;
+      }
+    }
     try {
       recordScoreLedgerEntry({
         playerId: student.id,
@@ -629,34 +819,23 @@ export function claimPromoCode(
         source: "codigo_promocional",
         amount: rewards.xp,
         balanceAfter: student.xp,
-        reason: `Resgate de Código Promocional (${target.code})`,
-        metadata: { eventId: target.id },
+        reason: `Resgate de Código Promocional (${code})`,
+        metadata: eventId ? { eventId } : undefined,
       });
     } catch {
       /* ignore */
     }
   }
 
-  // 3. Concede Pontos de Carreira se houver
+  // Concede Pontos de Carreira se houver (single ledger write via awardCareerPoints)
   if (rewards.points && rewards.points > 0) {
-    awardCareerPoints(student, rewards.points, `Código Promocional: ${target.code}`);
-    try {
-      recordScoreLedgerEntry({
-        playerId: student.id,
-        playerNick: student.nick,
-        type: "career_points",
-        source: "codigo_promocional",
-        amount: rewards.points,
-        balanceAfter: student.careerPoints,
-        reason: `Resgate de Código: +${rewards.points} Pontos (${target.code})`,
-        metadata: { eventId: target.id },
-      });
-    } catch {
-      /* ignore */
-    }
+    awardCareerPoints(student, rewards.points, `Código Promocional: ${code}`, 1, {
+      source: "codigo_promocional",
+      metadata: eventId ? { eventId } : undefined,
+    });
   }
 
-  // 3.1 Concede Moedas se houver
+  // Concede Moedas se houver
   if (rewards.coins && rewards.coins > 0) {
     const coinsQty = Math.floor(rewards.coins);
     creditCoinMetrics(student, coinsQty);
@@ -668,30 +847,46 @@ export function claimPromoCode(
         source: "codigo_promocional",
         amount: coinsQty,
         balanceAfter: student.coins,
-        reason: `Resgate de Código: +${coinsQty} Moedas (${target.code})`,
-        metadata: { eventId: target.id },
+        reason: `Resgate de Código: +${coinsQty} Moedas (${code})`,
+        metadata: eventId ? { eventId } : undefined,
       });
     } catch {
       /* ignore */
     }
   }
 
-  // 3.2 Concede Cosmético (Avatar ou Aura) se houver
-  if (rewards.cosmeticId) {
-    if (rewards.cosmeticKind === "aura") {
-      const cur = Array.isArray(student.unlockedAuras) ? student.unlockedAuras : [];
-      if (!cur.includes(rewards.cosmeticId)) {
-        student.unlockedAuras = [...cur, rewards.cosmeticId];
-      }
-    } else {
-      const cur = Array.isArray(student.unlockedAvatars) ? student.unlockedAvatars : [];
-      if (!cur.includes(rewards.cosmeticId)) {
-        student.unlockedAvatars = [...cur, rewards.cosmeticId];
+  // Concede Cosmético (Avatar, Peça de Avatar ou Aura) se houver, com compensação por duplicata
+  const effectiveCosmeticId = rewards.cosmeticId || rewards.avatarPieceId;
+  if (effectiveCosmeticId) {
+    const kind: "avatar" | "aura" = rewards.cosmeticKind === "aura" ? "aura" : "avatar";
+    const grant = grantCosmeticToProfile(student, kind, effectiveCosmeticId);
+    student.unlockedAvatars = grant.profile.unlockedAvatars;
+    student.unlockedAuras = grant.profile.unlockedAuras;
+    if (grant.alreadyOwned) {
+      const defs = kind === "aura" ? mergeWithDefaultAuras() : mergeWithDefaultAvatars();
+      const def = defs.find((d) => d.id === effectiveCosmeticId);
+      const compCoins = calculateDuplicateCosmeticCompensation(def?.priceCoins);
+      if (compCoins > 0) {
+        creditCoinMetrics(student, compCoins);
+        try {
+          recordScoreLedgerEntry({
+            playerId: student.id,
+            playerNick: student.nick,
+            type: "coins",
+            source: "codigo_promocional",
+            amount: compCoins,
+            balanceAfter: student.coins,
+            reason: `Compensação cosmético repetido (${def?.name ?? effectiveCosmeticId} · ${code})`,
+            metadata: eventId ? { eventId } : undefined,
+          });
+        } catch {
+          /* ignore */
+        }
       }
     }
   }
 
-  // 4. Concede Item (Pacote de Cartas OU Baú) se houver
+  // Concede Item (Pacote de Cartas OU Baú) se houver
   if (rewards.rewardItem?.category === "card_pack" && rewards.rewardItem.itemId) {
     const qty = Math.max(1, Math.floor(rewards.rewardItem.quantity || 1));
     const normalizedPackId = normalizeCardPackId(rewards.rewardItem.itemId);
@@ -720,15 +915,7 @@ export function claimPromoCode(
     };
   }
 
-  // Limpa as tentativas falhas após o sucesso
-  resetStudentPromoFailedAttempts(student.id);
-
-  return {
-    success: true,
-    code: target.code,
-    rewards,
-    updatedProfile: student,
-  };
+  return student;
 }
 
 /**
@@ -755,7 +942,7 @@ export function restorePromoCodesSnapshot(rawSnapshot: string | null): void {
   if (typeof window !== "undefined") {
     try {
       if (rawSnapshot !== null) {
-        window.localStorage.setItem(PROMO_CODES_LOCAL_KEY, rawSnapshot);
+        safeLocalStorageSet(PROMO_CODES_LOCAL_KEY, rawSnapshot);
       } else {
         window.localStorage.removeItem(PROMO_CODES_LOCAL_KEY);
       }
@@ -815,9 +1002,9 @@ export function mergePromoCatalogs(
     if (!item?.cleanCode || deletedSet.has(item.cleanCode)) continue;
     const cloudItem = map.get(item.cleanCode);
     if (!cloudItem) {
-      // Preserva item local apenas se foi criado nos últimos 15s (ainda subindo para nuvem)
+      // Preserva item local se aguarda upload (pendingCloudSync) ou foi criado nos últimos 15s (fallback legado)
       const ageMs = now - new Date(item.createdAt).getTime();
-      if (ageMs >= 0 && ageMs < 15_000) {
+      if (item.pendingCloudSync === true || (ageMs >= 0 && ageMs < 15_000)) {
         map.set(item.cleanCode, { ...item });
       }
     } else {
@@ -825,6 +1012,7 @@ export function mergePromoCatalogs(
         item.status === "claimed" && cloudItem.status !== "claimed"
           ? { ...item }
           : { ...cloudItem };
+      delete merged.pendingCloudSync;
       // Preserva soft delete se qualquer um dos lados marcou hiddenForAdmin
       if (item.hiddenForAdmin || cloudItem.hiddenForAdmin) {
         merged.hiddenForAdmin = true;
@@ -836,19 +1024,60 @@ export function mergePromoCatalogs(
 }
 
 /**
- * Sincroniza os códigos com a nuvem PlayFab (SharedGroup público) com ticket canônico,
- * read-merge e trava anti-wipe para evitar sobrescrita destrutiva entre dispositivos.
+ * Remove campos pessoais (nome completo e escola) antes de gravar no fallback SharedGroup público.
+ */
+function sanitizePromoCatalogForPublicSharedGroup(list: PromoCodeItem[]): PromoCodeItem[] {
+  return list.map((item) => {
+    if (!item || item.status !== "claimed") return item;
+    const { claimedByFullName: _fn, claimedBySchool: _sc, ...rest } = item;
+    return rest;
+  });
+}
+
+/**
+ * Sincroniza os códigos com a nuvem PlayFab.
+ * Prioriza CloudScript (TitleInternalData privado no servidor) quando disponível para ADM;
+ * faz fallback seguro para SharedGroupData (sem PII) se CloudScript não estiver publicado.
  */
 export async function syncPromoCodesToPlayFab(): Promise<boolean> {
   if (!isPlayFabConfigured()) return false;
   try {
+    const deletedSet = loadDeletedPromoCleanCodes();
+    const rawLocalList = loadLocalPromoCodes().filter((item) => !deletedSet.has(item.cleanCode));
+    const localList = rawLocalList.map(({ pendingCloudSync: _pending, ...rest }) => rest);
+
+    // 1. Tenta via CloudScript administrativo (TitleInternalData privado no servidor)
+    const userTicket = loadStoredSession()?.sessionTicket;
+    if (userTicket && !userTicket.startsWith("admin-")) {
+      try {
+        const csRes = await callPlayFabClient<{
+          FunctionResult?: { ok?: boolean; error?: string };
+        }>(
+          "ExecuteCloudScript",
+          {
+            FunctionName: "AdminSavePromoCodes",
+            FunctionParameter: {
+              catalog: localList,
+              deletedIds: Array.from(deletedSet),
+            },
+          },
+          userTicket,
+        );
+        if (!csRes.error && csRes.data?.FunctionResult?.ok === true) {
+          if (rawLocalList.some((item) => item.pendingCloudSync)) {
+            saveLocalPromoCodes(localList);
+          }
+          return true;
+        }
+      } catch {
+        /* Fallback para SharedGroup abaixo */
+      }
+    }
+
     const ticket = await acquireCanonicalConfigWriteTicket();
     if (!ticket) return false;
 
     await ensurePromoCodesSharedGroup(ticket);
-
-    const deletedSet = loadDeletedPromoCleanCodes();
-    const localList = loadLocalPromoCodes().filter((item) => !deletedSet.has(item.cleanCode));
 
     // Read-merge antes de gravar: preserva códigos criados em outros aparelhos e impede wipe acidental
     let finalList = localList;
@@ -893,7 +1122,8 @@ export async function syncPromoCodesToPlayFab(): Promise<boolean> {
       }
     }
 
-    const payload = JSON.stringify(finalList);
+    const sanitizedList = sanitizePromoCatalogForPublicSharedGroup(finalList);
+    const payload = JSON.stringify(sanitizedList);
     const deletedPayload = JSON.stringify(Array.from(deletedSet));
 
     const res = await callPlayFabClient(
@@ -912,6 +1142,9 @@ export async function syncPromoCodesToPlayFab(): Promise<boolean> {
       console.warn("[PromoCodes] Erro do PlayFab ao sincronizar códigos:", res.error);
       return false;
     }
+    if (rawLocalList.some((item) => item.pendingCloudSync)) {
+      saveLocalPromoCodes(localList);
+    }
     return true;
   } catch (err) {
     console.warn("[PromoCodes] Falha ao sincronizar códigos com a nuvem:", err);
@@ -920,13 +1153,42 @@ export async function syncPromoCodesToPlayFab(): Promise<boolean> {
 }
 
 /**
- * Baixa os códigos mais recentes da nuvem PlayFab.
- * Nunca sobrescreve a nuvem quando a leitura falha por erro de rede ou parse.
+ * Baixa os códigos mais recentes da nuvem PlayFab (uso administrativo).
+ * Prioriza CloudScript (AdminListPromoCodes -> TitleInternalData); faz fallback para SharedGroupData.
  */
 export async function fetchPromoCodesFromPlayFab(): Promise<PromoCodeItem[]> {
   if (!isPlayFabConfigured()) return loadLocalPromoCodes();
   try {
-    const ticket = (await getAdminPlayFabTicket()) ?? loadStoredSession()?.sessionTicket;
+    const userTicket = loadStoredSession()?.sessionTicket;
+    if (userTicket && !userTicket.startsWith("admin-")) {
+      try {
+        const csRes = await callPlayFabClient<{
+          FunctionResult?: {
+            ok?: boolean;
+            catalog?: PromoCodeItem[];
+            deletedIds?: string[];
+          };
+        }>(
+          "ExecuteCloudScript",
+          { FunctionName: "AdminListPromoCodes", FunctionParameter: {} },
+          userTicket,
+        );
+        if (!csRes.error && csRes.data?.FunctionResult?.ok === true && Array.isArray(csRes.data.FunctionResult.catalog)) {
+          const deletedSet = loadDeletedPromoCleanCodes();
+          for (const d of csRes.data.FunctionResult.deletedIds ?? []) {
+            if (typeof d === "string" && d.trim()) deletedSet.add(normalizePromoCodeInput(d));
+          }
+          saveDeletedPromoCleanCodes(deletedSet);
+          const merged = mergePromoCatalogs(csRes.data.FunctionResult.catalog, loadLocalPromoCodes(), deletedSet);
+          saveLocalPromoCodes(merged);
+          return merged;
+        }
+      } catch {
+        /* Fallback para SharedGroup abaixo */
+      }
+    }
+
+    const ticket = (await getAdminPlayFabTicket()) ?? userTicket;
     if (!ticket) return loadLocalPromoCodes();
 
     const res = await callPlayFabClient<{
@@ -987,4 +1249,142 @@ export async function fetchPromoCodesFromPlayFab(): Promise<PromoCodeItem[]> {
     console.warn("[PromoCodes] Falha ao baixar códigos da nuvem:", err);
     return loadLocalPromoCodes();
   }
+}
+
+/**
+ * Etapa 1 (Nuvem / Segura): Valida o código via CloudScript no servidor sem baixar o catálogo.
+ * Se CloudScript não estiver publicado ainda, faz fallback controlado para o catálogo local/nuvem.
+ */
+export async function inspectPromoCodeCloud(
+  rawInput: string,
+  studentId: string,
+  studentProfile?: Pick<PlayerProfile, "claimedPromoCodeIds" | "claimedPromoBatchIds"> | null,
+): Promise<PromoCodeInspectResult> {
+  const clean = normalizePromoCodeInput(rawInput);
+  if (!clean || clean.length < 6) {
+    return {
+      valid: false,
+      status: "invalid",
+      errorMessage: "Insira um código válido com no mínimo 6 caracteres.",
+    };
+  }
+
+  if (
+    Array.isArray(studentProfile?.claimedPromoCodeIds) &&
+    studentProfile.claimedPromoCodeIds.includes(clean)
+  ) {
+    return {
+      valid: false,
+      status: "already_claimed",
+      errorMessage: "Este código já foi resgatado na sua conta.",
+    };
+  }
+
+  const sessionTicket = loadStoredSession()?.sessionTicket;
+  if (isPlayFabConfigured() && sessionTicket && !sessionTicket.startsWith("admin-")) {
+    try {
+      const csRes = await callPlayFabClient<{
+        FunctionResult?: PromoCodeInspectResult & { ok?: boolean };
+      }>(
+        "ExecuteCloudScript",
+        {
+          FunctionName: "InspectPromoCode",
+          FunctionParameter: { code: rawInput, studentId },
+        },
+        sessionTicket,
+      );
+      const fr = csRes.data?.FunctionResult;
+      if (!csRes.error && fr && (fr.ok === true || typeof fr.valid === "boolean")) {
+        return {
+          valid: Boolean(fr.valid),
+          status: fr.status ?? (fr.valid ? "active" : "invalid"),
+          code: fr.code,
+          rewards: fr.rewards,
+          errorMessage: fr.errorMessage,
+          cooldownSeconds: fr.cooldownSeconds,
+        };
+      }
+    } catch {
+      /* Fallback abaixo se CloudScript não estiver disponível */
+    }
+  }
+
+  await fetchPromoCodesFromPlayFab();
+  return inspectPromoCode(rawInput, studentId, studentProfile);
+}
+
+/**
+ * Etapa 2 (Nuvem / Atômica): Consome o código via CloudScript no servidor e aplica recompensas no perfil.
+ * Retorna `{ usedCloudScript: true }` quando validado autoritativamente no servidor.
+ */
+export async function claimPromoCodeCloud(
+  rawInput: string,
+  student: PlayerProfile,
+): Promise<PromoCodeClaimResult & { usedCloudScript?: boolean }> {
+  if (!student || !student.id) {
+    return { success: false, code: rawInput, errorMessage: "Sessão de aluno inválida." };
+  }
+
+  const sessionTicket = loadStoredSession()?.sessionTicket;
+  if (isPlayFabConfigured() && sessionTicket && !sessionTicket.startsWith("admin-")) {
+    try {
+      const csRes = await callPlayFabClient<{
+        FunctionResult?: {
+          ok?: boolean;
+          code?: string;
+          cleanCode?: string;
+          batchId?: string;
+          rewards?: PromoCodeRewardPayload;
+          errorMessage?: string;
+        };
+      }>(
+        "ExecuteCloudScript",
+        {
+          FunctionName: "ClaimPromoCode",
+          FunctionParameter: {
+            code: rawInput,
+            studentId: student.id,
+            nick: student.nick,
+            fullName: student.full_name || student.nick,
+            school: student.school || "",
+          },
+        },
+        sessionTicket,
+      );
+      const fr = csRes.data?.FunctionResult;
+      if (!csRes.error && fr && typeof fr.ok === "boolean") {
+        if (!fr.ok || !fr.rewards) {
+          return {
+            success: false,
+            code: rawInput,
+            errorMessage: fr.errorMessage || "Código inválido ou já resgatado.",
+            usedCloudScript: true,
+          };
+        }
+        const resolvedCode = fr.code || rawInput.trim().toUpperCase();
+        const resolvedClean = fr.cleanCode || normalizePromoCodeInput(resolvedCode);
+        applyPromoRewardsToProfile({
+          code: resolvedCode,
+          cleanCode: resolvedClean,
+          batchId: fr.batchId,
+          rewards: fr.rewards,
+          student,
+        });
+        resetStudentPromoFailedAttempts(student.id);
+        return {
+          success: true,
+          code: resolvedCode,
+          rewards: fr.rewards,
+          updatedProfile: student,
+          usedCloudScript: true,
+        };
+      }
+    } catch {
+      /* Fallback abaixo se CloudScript não estiver disponível */
+    }
+  }
+
+  await fetchPromoCodesFromPlayFab();
+  const localRes = claimPromoCode(rawInput, student);
+  return { ...localRes, usedCloudScript: false };
 }

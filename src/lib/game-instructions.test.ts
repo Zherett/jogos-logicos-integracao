@@ -15,6 +15,14 @@ describe("Instruções e Orientações Pedagógicas dos Jogos", () => {
     }
   });
 
+  it("GAME-13: instruções refletem exatamente as regras e pontuações reais dos 11 jogos", () => {
+    assert.ok(getGameInstructions("logica").scoring.includes("−10"));
+    assert.ok(getGameInstructions("minado").scoring.includes("+5") && getGameInstructions("minado").scoring.includes("−3"));
+    assert.ok(getGameInstructions("robogrid").howToPlay.join(" ").includes("10×10"));
+    assert.ok(getGameInstructions("variaveis").howToPlay.join(" ").includes("5 vidas"));
+    assert.ok(getGameInstructions("rpg").howToPlay.join(" ").includes("5 chefes"));
+  });
+
   it("retorna fallback consistente para IDs desconhecidos", () => {
     // @ts-expect-error teste com id inválido
     const fallback = getGameInstructions("jogo_inexistente");

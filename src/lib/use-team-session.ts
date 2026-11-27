@@ -25,6 +25,7 @@ export function useTeamSession(): TeamSession {
   const [scores, setScores] = useState<number[]>([]);
   const [current, setCurrentState] = useState(0);
   const currentRef = useRef(0);
+  const orderRef = useRef<string[]>([]);
 
   const setCurrent = useCallback((i: number) => {
     currentRef.current = i;
@@ -47,18 +48,18 @@ export function useTeamSession(): TeamSession {
   }, []);
 
   const advance = useCallback(() => {
-    setOrder((o) => {
-      if (o.length > 1) setCurrent((currentRef.current + 1) % o.length);
-      return o;
-    });
+    const o = orderRef.current;
+    if (o.length > 1) {
+      setCurrent((currentRef.current + 1) % o.length);
+    }
   }, [setCurrent]);
 
   const finish = useCallback(() => {
+    orderRef.current = [];
     setOrder([]);
     setScores([]);
     setCurrent(0);
   }, [setCurrent]);
-
 
   const begin = useCallback(
     (config: TeamConfig) => {
@@ -66,15 +67,19 @@ export function useTeamSession(): TeamSession {
         finish();
         return;
       }
-      setOrder((prev) => {
-        if (prev.length === config.teams.length && prev.every((t) => config.teams.includes(t))) {
-          return prev; // keep the running session order
-        }
-        setScores(config.teams.map(() => 0));
-        setCurrent(0);
-        return config.order === "aleatoria" ? shuffleTeams(config.teams) : [...config.teams];
-      });
-      setScores((prev) => (prev.length === config.teams.length ? prev : config.teams.map(() => 0)));
+      const prev = orderRef.current;
+      const sameSession =
+        prev.length === config.teams.length && prev.every((t) => config.teams.includes(t));
+      if (sameSession) {
+        setScores((s) => (s.length === config.teams.length ? s : config.teams.map(() => 0)));
+        return;
+      }
+      const nextOrder =
+        config.order === "aleatoria" ? shuffleTeams(config.teams) : [...config.teams];
+      orderRef.current = nextOrder;
+      setOrder(nextOrder);
+      setScores(config.teams.map(() => 0));
+      setCurrent(0);
     },
     [finish, setCurrent],
   );

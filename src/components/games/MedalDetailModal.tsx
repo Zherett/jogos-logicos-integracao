@@ -140,12 +140,14 @@ export function MedalDetailModal({
             )}
             <span
               className={`rounded-full border px-3 py-0.5 text-xs font-black uppercase tracking-wider ${
-                isSecretRevealed
-                  ? "border-emerald-400 bg-emerald-950/60 text-emerald-300"
-                  : rarity.badgeBgClass
+                isSecretLocked
+                  ? "border-amber-500/40 bg-amber-500/15 text-amber-600 dark:text-amber-400"
+                  : isSecretRevealed
+                    ? "border-emerald-400 bg-emerald-950/60 text-emerald-300"
+                    : rarity.badgeBgClass
               }`}
             >
-              {rarity.label}
+              {isSecretLocked ? "Secreta" : rarity.label}
             </span>
             <span className="rounded-full bg-amber-500/15 border border-amber-500/40 px-2.5 py-0.5 text-[11px] font-black text-amber-600 dark:text-amber-400">
               {isSecretLocked ? "+?? XP" : `+${MEDAL_XP_REWARDS[medal.rarity]} XP`}
@@ -175,10 +177,10 @@ export function MedalDetailModal({
           {/* Recompensas da Medalha: Pontos de Conquista e XP */}
           <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
             <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 border border-amber-500/30 px-2.5 py-1 text-xs font-bold text-amber-500">
-              🪙 +{MEDAL_POINTS_REWARDS[medal.rarity] ?? 20} Pontos
+              🪙 {isSecretLocked ? "+?? Pontos" : `+${MEDAL_POINTS_REWARDS[medal.rarity] ?? 20} Pontos`}
             </span>
             <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 border border-primary/30 px-2.5 py-1 text-xs font-bold text-primary">
-              ⚡ +{MEDAL_XP_REWARDS[medal.rarity] ?? 10} XP
+              ⚡ {isSecretLocked ? "+?? XP" : `+${MEDAL_XP_REWARDS[medal.rarity] ?? 10} XP`}
             </span>
           </div>
 
@@ -233,15 +235,17 @@ export function MedalDetailModal({
           </div>
 
           {/* Primeiro Aluno a Conquistar (Pioneiro da Medalha) */}
-          <div className="mt-3 w-full rounded-2xl border border-amber-500/25 bg-amber-500/5 p-3 text-left">
-            <div className="flex items-center gap-1.5 text-xs font-black text-amber-600 dark:text-amber-400">
-              <Compass className="h-4 w-4 shrink-0" />
-              <span>{pioneerInfo.title}</span>
+          {!isSecretLocked && (
+            <div className="mt-3 w-full rounded-2xl border border-amber-500/25 bg-amber-500/5 p-3 text-left">
+              <div className="flex items-center gap-1.5 text-xs font-black text-amber-600 dark:text-amber-400">
+                <Compass className="h-4 w-4 shrink-0" />
+                <span>{pioneerInfo.title}</span>
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
+                {pioneerInfo.description}
+              </p>
             </div>
-            <p className="mt-1 text-xs text-muted-foreground leading-relaxed">
-              {pioneerInfo.description}
-            </p>
-          </div>
+          )}
 
           <button
             type="button"

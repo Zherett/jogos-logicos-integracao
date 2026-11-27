@@ -4,6 +4,10 @@ import {
   evaluateStageGameRecordUpdate,
   formatRecordDateBR,
   getRecordKey,
+  hasSyncedGameRecordsFromCloud,
+  markGameRecordsSyncedFromCloud,
+  MAX_ALLOWED_RECORD_SCORE_BY_GAME,
+  sanitizeGameRecordsForCloud,
   type StageGameRecord,
 } from "./game-records.ts";
 import { sanitizeGameBestScore } from "./playfab.ts";
@@ -225,5 +229,65 @@ describe("Sistema de Recordes de Pontuação por Jogo e por Etapa", () => {
     assert.equal(sanitizeGameBestScore("logica", 270), 270);
     // Outros jogos como Batalha de Robôs permitem pontuações > 480 normalmente
     assert.equal(sanitizeGameBestScore("rpg", 1435), 1435);
+  });
+
+  it("Onda 0 (LGPD-01): sanitizeGameRecordsForCloud remove fullName antes de publicar em SharedGroup público", () => {
+    const sanitized = sanitizeGameRecordsForCloud({
+      "logica:etapa_1": {
+        gameId: "logica",
+        stage: "etapa_1",
+        score: 300,
+        updatedAt: 1_000_000,
+        holders: [
+          {
+            playerId: "p1",
+            nick: "Maria10",
+            fullName: "MARIA SILVA SANTOS",
+            school: "Elisângela Litaiff",
+            achievedAt: 1_000_000,
+          },
+        ],
+      },
+    });
+    assert.equal("fullName" in sanitized["logica:etapa_1"].holders[0], false);
+    assert.equal(sanitized["logica:etapa_1"].holders[0].nick, "Maria10");
+  });
+
+  it("Bloco 1.3 (ECON-04/ECON-11): rejeita NaN/Infinity/acima do teto e rastreia estado de sync na nuvem", () => {
+    const infRes = evaluateStageGameRecordUpdate(null, {
+      gameId: "rpg",
+      stage: "etapa_1",
+      playerId: "p1",
+      nick: "Maria10",
+      score: Number.POSITIVE_INFINITY,
+      achievedAt: 1_000_000,
+    });
+    assert.equal(infRes.isNewRecord, false);
+
+    const nanRes = evaluateStageGameRecordUpdate(null, {
+      gameId: "logica",
+      stage: "etapa_1",
+      playerId: "p1",
+      nick: "Maria10",
+      score: Number.NaN,
+      achievedAt: 1_000_000,
+    });
+    assert.equal(nanRes.isNewRecord, false);
+
+    const overCap = evaluateStageGameRecordUpdate(null, {
+      gameId: "rpg",
+      stage: "etapa_1",
+      playerId: "p1",
+      nick: "Maria10",
+      score: MAX_ALLOWED_RECORD_SCORE_BY_GAME.rpg + 500,
+      achievedAt: 1_000_000,
+    });
+    assert.equal(overCap.isNewRecord, false);
+
+    markGameRecordsSyncedFromCloud(false);
+    assert.equal(hasSyncedGameRecordsFromCloud(), false);
+    markGameRecordsSyncedFromCloud(true);
+    assert.equal(hasSyncedGameRecordsFromCloud(), true);
+    markGameRecordsSyncedFromCloud(false);
   });
 });

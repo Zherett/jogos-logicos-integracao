@@ -335,8 +335,9 @@ export function AdminEventsTab({
     }
     const hasAnyBonus = evHasMultiplier || evHasMatchCap || evHasDailyCap || evHasRankedMultiplier || evHasPointsMultiplier;
     const hasAnyMedal = evAttachedMedals.length > 0 || Boolean(evLinkedMedalId);
-    if (!hasAnyBonus && !hasAnyMedal) {
-      flashSaved("Marque pelo menos uma caixa de bônus ou vincule uma medalha ao evento.");
+    const hasAnyReward = evRewards.length > 0;
+    if (!hasAnyBonus && !hasAnyMedal && !hasAnyReward) {
+      flashSaved("Marque pelo menos uma caixa de bônus, adicione uma recompensa ou vincule uma medalha ao evento.");
       return;
     }
 
@@ -372,6 +373,8 @@ export function AdminEventsTab({
     }
 
     if (editingSpecialEventId) {
+      const nextLinkedId = linkedIds[0] ?? (evLinkedMedalId || null);
+      const nextLinkedIds = linkedIds.length > 0 ? linkedIds : nextLinkedId ? [nextLinkedId] : [];
       const list = specialEvents.map((existing) => {
         if (existing.id !== editingSpecialEventId) return existing;
         return {
@@ -394,8 +397,8 @@ export function AdminEventsTab({
           dailyXpCap: evHasDailyCap ? 1000 + Number(evDailyExtraXp) : undefined,
           startsAt: calculatedStartsAt,
           endsAt: calculatedEndsAt,
-          linkedMedalId: linkedIds[0] ?? (evLinkedMedalId || existing.linkedMedalId || null),
-          linkedMedalIds: linkedIds.length > 0 ? linkedIds : existing.linkedMedalIds,
+          linkedMedalId: nextLinkedId,
+          linkedMedalIds: nextLinkedIds,
           objectiveDescription: evObjective?.trim() || null,
           rewardObjective: evRewardObjective,
           rewards: evRewards,
@@ -554,8 +557,9 @@ export function AdminEventsTab({
     }
     const hasAnyBonus = recHasMultiplier || recHasMatchCap || recHasDailyCap || recHasRankedMultiplier || recHasPointsMultiplier;
     const hasAnyMedal = recAttachedMedals.length > 0 || Boolean(recLinkedMedal);
-    if (!hasAnyBonus && !hasAnyMedal) {
-      flashSaved("Marque pelo menos uma caixa de bônus ou vincule uma medalha ao evento.");
+    const hasAnyReward = recRewards.length > 0;
+    if (!hasAnyBonus && !hasAnyMedal && !hasAnyReward) {
+      flashSaved("Marque pelo menos uma caixa de bônus, adicione uma recompensa ou vincule uma medalha ao evento.");
       return;
     }
     const newCustoms = [...(draft.customMedals ?? [])];
@@ -568,6 +572,8 @@ export function AdminEventsTab({
     }
 
     if (editingRecurringEventId) {
+      const nextLinkedId = linkedIds[0] ?? (recLinkedMedal || null);
+      const nextLinkedIds = linkedIds.length > 0 ? linkedIds : nextLinkedId ? [nextLinkedId] : [];
       const list = recurringEvents.map((existing) => {
         if (existing.id !== editingRecurringEventId) return existing;
         return {
@@ -582,8 +588,8 @@ export function AdminEventsTab({
           pointsMultiplier: recHasPointsMultiplier ? Number(recPointsMultiplier) : undefined,
           matchXpCap: recHasMatchCap ? Number(recMatchCap) : undefined,
           dailyXpCap: recHasDailyCap ? 1000 + Number(recDailyExtraXp) : undefined,
-          linkedMedalId: linkedIds[0] ?? (recLinkedMedal || existing.linkedMedalId || null),
-          linkedMedalIds: linkedIds.length > 0 ? linkedIds : existing.linkedMedalIds,
+          linkedMedalId: nextLinkedId,
+          linkedMedalIds: nextLinkedIds,
           objectiveDescription: recObjective?.trim() || null,
           rewardObjective: recRewardObjective,
           rewards: recRewards,
@@ -1291,7 +1297,14 @@ export function AdminEventsTab({
                                     </div>
                                     <button
                                       type="button"
-                                      onClick={() => setEvAttachedMedals(evAttachedMedals.filter((_, i) => i !== idx))}
+                                      onClick={() => {
+                                        const removed = evAttachedMedals[idx];
+                                        const nextList = evAttachedMedals.filter((_, i) => i !== idx);
+                                        setEvAttachedMedals(nextList);
+                                        if (removed && evLinkedMedalId === removed.id) {
+                                          setEvLinkedMedalId(nextList[0]?.id ?? "");
+                                        }
+                                      }}
                                       className="rounded-lg p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                                       title="Remover medalha deste evento"
                                     >
@@ -2102,7 +2115,14 @@ export function AdminEventsTab({
                                     </div>
                                     <button
                                       type="button"
-                                      onClick={() => setRecAttachedMedals(recAttachedMedals.filter((_, i) => i !== idx))}
+                                      onClick={() => {
+                                        const removed = recAttachedMedals[idx];
+                                        const nextList = recAttachedMedals.filter((_, i) => i !== idx);
+                                        setRecAttachedMedals(nextList);
+                                        if (removed && recLinkedMedal === removed.id) {
+                                          setRecLinkedMedal(nextList[0]?.id ?? "");
+                                        }
+                                      }}
                                       className="rounded-lg p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                                       title="Remover medalha deste evento"
                                     >

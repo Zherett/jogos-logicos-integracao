@@ -19,6 +19,7 @@ import {
 import { Button } from "@/components/ui/button";
 import type { CardDefinition } from "@/lib/cards-catalog";
 import {
+  DUNGEON_MAX_FLOOR,
   DUNGEON_MONSTERS,
   DUNGEON_RESOURCES,
   DUNGEON_RESOURCE_IDS,
@@ -57,6 +58,7 @@ interface DungeonEncounterStageProps {
   dungeonState: PlayerDungeonState;
   equippedCards: CardDefinition[];
   effectiveLevel: number;
+  isBusy?: boolean;
   onUpdateState: (nextState: PlayerDungeonState) => void;
   onFloorClearExtract: (
     nextState: PlayerDungeonState,
@@ -108,6 +110,7 @@ export function DungeonEncounterStage({
   dungeonState,
   equippedCards,
   effectiveLevel,
+  isBusy = false,
   onUpdateState,
   onFloorClearExtract,
   onGuardianClear,
@@ -168,6 +171,7 @@ export function DungeonEncounterStage({
   } | null>(null);
 
   const trapTimerRef = useRef<number | null>(null);
+  const stageLockRef = useRef(false);
 
   const currentEncounter: DungeonFloorEncounter | null = useMemo(() => {
     if (!run || !run.active) return null;
@@ -177,6 +181,10 @@ export function DungeonEncounterStage({
       null
     );
   }, [run]);
+
+  useEffect(() => {
+    stageLockRef.current = false;
+  }, [currentEncounter?.id, stepPhase, run?.currentFloor]);
 
   const floorProgress = useMemo(() => getFloorProgressStats(run), [run]);
   const isFloorCompleted = Boolean(
@@ -277,7 +285,10 @@ export function DungeonEncounterStage({
     overrideMult?: number,
     options?: { healAmount?: number; nextPendingMult?: number },
   ) {
-    if (!run || !currentEncounter) return;
+    if (isBusy || stageLockRef.current || !run || !currentEncounter || currentEncounter.completed) {
+      return;
+    }
+    stageLockRef.current = true;
     playTone(660, 0.14, "triangle", 0.08);
 
     const mult = overrideMult ?? run.pendingLootMultiplier ?? 1;
@@ -378,6 +389,7 @@ export function DungeonEncounterStage({
   }
 
   function startEncounterInteraction(enc: DungeonFloorEncounter) {
+    if (isBusy || stageLockRef.current) return;
     setFeedbackMsg(null);
     setEncounterErrors(0);
     setQuestionData(null);
@@ -443,8 +455,10 @@ export function DungeonEncounterStage({
     }
 
     if (enc.kind === "guardian") {
+      const m = DUNGEON_MONSTERS.find((item) => item.id === enc.monsterId);
+      const bossHits = Math.max(2, m?.hitsRequired ?? 3);
       setBossPhase(1);
-      setBossPhase1Remaining(2);
+      setBossPhase1Remaining(bossHits);
       setCombatTimer(16 + bonuses.extraTimerSeconds);
       setQuestionData(generateDungeonQuestion(run!.currentFloor, "arithmetic"));
       setStepPhase("active");
@@ -455,18 +469,47 @@ export function DungeonEncounterStage({
     setStepPhase("active");
   }
 
+  function nextDistinctQuestion(
+    floor: number,
+    kind: "arithmetic" | "comparison" | "variable" | "percent",
+    prevPrompt?: string,
+  ): DungeonQuestionChallenge {
+    let candidate = generateDungeonQuestion(floor, kind);
+    for (let i = 0; i < 4 && candidate.prompt === prevPrompt; i++) {
+      candidate = generateDungeonQuestion(floor, kind);
+    }
+    return candidate;
+  }
+
+  function nextDistinctPuzzle(
+    floor: number,
+    kind: DungeonPuzzleChallenge["kind"],
+    prevPrompt?: string,
+  ): DungeonPuzzleChallenge {
+    let candidate = generateDungeonPuzzle(floor, kind);
+    for (let i = 0; i < 4 && candidate.prompt === prevPrompt; i++) {
+      candidate = generateDungeonPuzzle(floor, kind);
+    }
+    return candidate;
+  }
+
   function handleAnswerQuestion(selectedIndex: number) {
     if (!questionData || !currentEncounter || !run) return;
     const isCorrect = selectedIndex === questionData.correctIndex;
+    const currentPrompt = questionData.prompt;
 
     if (currentEncounter.kind === "shrine") {
+      const preservedMult = run.pendingLootMultiplier ?? 1;
       if (isCorrect) {
         const heal = Math.max(8, Math.round(run.maxHp * 0.25));
         completeCurrentEncounter(`Fonte ativada! +${heal} HP restaurado`, undefined, 1, {
           healAmount: heal,
+          nextPendingMult: preservedMult,
         });
       } else {
-        completeCurrentEncounter("Selo da fonte falhou (sem cura)", undefined, 1);
+        completeCurrentEncounter("Selo da fonte falhou (sem cura)", undefined, 1, {
+          nextPendingMult: preservedMult,
+        });
       }
       return;
     }
@@ -476,11 +519,20 @@ export function DungeonEncounterStage({
         completeCurrentEncounter("Resposta correta!");
       } else {
         handleDamage(12, "Resposta incorreta no corredor.");
+        const sub =
+          currentEncounter.subType === "arithmetic" ||
+          currentEncounter.subType === "comparison" ||
+          currentEncounter.subType === "variable" ||
+          currentEncounter.subType === "percent"
+            ? currentEncounter.subType
+            : "arithmetic";
+        setQuestionData(nextDistinctQuestion(run.currentFloor, sub, currentPrompt));
       }
       return;
     }
 
     if (currentEncounter.kind === "combat") {
+      const qTypes = ["arithmetic", "comparison", "variable", "percent"] as const;
       if (isCorrect) {
         const isCrit = Math.random() * 100 < bonuses.critChancePercent;
         const dmg = isCrit ? 2 : 1;
@@ -498,27 +550,41 @@ export function DungeonEncounterStage({
           );
         } else {
           setCombatTimer(14 + bonuses.extraTimerSeconds);
-          const qTypes = ["arithmetic", "comparison", "variable", "percent"];
           setQuestionData(
-            generateDungeonQuestion(
+            nextDistinctQuestion(
               run.currentFloor,
               qTypes[Math.floor(Math.random() * qTypes.length)],
+              currentPrompt,
             ),
           );
         }
       } else {
         handleDamage(18, "Erro durante o combate!");
+        setCombatTimer(14 + bonuses.extraTimerSeconds);
+        setQuestionData(
+          nextDistinctQuestion(
+            run.currentFloor,
+            qTypes[Math.floor(Math.random() * qTypes.length)],
+            currentPrompt,
+          ),
+        );
       }
       return;
     }
 
     if (currentEncounter.kind === "guardian" && bossPhase === 1) {
       if (isCorrect) {
-        playTone(620, 0.12, "triangle", 0.08);
-        const rem = bossPhase1Remaining - 1;
+        const isCrit = Math.random() * 100 < bonuses.critChancePercent;
+        const dmg = isCrit ? 2 : 1;
+        playTone(isCrit ? 880 : 620, 0.12, "triangle", 0.08);
+        const rem = Math.max(0, bossPhase1Remaining - dmg);
         if (rem <= 0) {
           setBossPhase(2);
-          setFeedbackMsg("🔓 Escudo do Guardião quebrado! Agora alinhe a chave rúnica.");
+          setFeedbackMsg(
+            isCrit
+              ? "⚡ GOLPE CRÍTICO! Escudo do Guardião destruído — alinhe a chave rúnica."
+              : "🔓 Escudo do Guardião quebrado! Agora alinhe a chave rúnica.",
+          );
           const inter = generateDungeonInteraction(run.currentFloor, "fit_key");
           setInteractionData(inter);
           if (inter.kind === "fit_key") {
@@ -527,17 +593,23 @@ export function DungeonEncounterStage({
         } else {
           setBossPhase1Remaining(rem);
           setCombatTimer(16 + bonuses.extraTimerSeconds);
-          setFeedbackMsg(`⚔️ Escudo trincado! Falta ${rem} golpe(s) na Fase 1.`);
-          setQuestionData(generateDungeonQuestion(run.currentFloor, "variable"));
+          setFeedbackMsg(
+            isCrit
+              ? `⚡ GOLPE CRÍTICO no Escudo (-2)! Falta(m) ${rem} golpe(s) na Fase 1.`
+              : `⚔️ Escudo trincado (-1)! Falta(m) ${rem} golpe(s) na Fase 1.`,
+          );
+          setQuestionData(nextDistinctQuestion(run.currentFloor, "variable", currentPrompt));
         }
       } else {
         handleDamage(20, "Contra-ataque do Guardião!");
+        setCombatTimer(16 + bonuses.extraTimerSeconds);
+        setQuestionData(nextDistinctQuestion(run.currentFloor, "arithmetic", currentPrompt));
       }
     }
   }
 
   function handleAnswerPuzzle(selectedIndex: number) {
-    if (!puzzleData || !currentEncounter) return;
+    if (!puzzleData || !currentEncounter || !run) return;
     if (selectedIndex === puzzleData.correctIndex) {
       if (currentEncounter.kind === "guardian" && bossPhase === 3) {
         completeCurrentEncounter("Guardião derrotado com maestria!");
@@ -549,26 +621,31 @@ export function DungeonEncounterStage({
         currentEncounter.kind === "guardian" ? 20 : 15,
         "Combinação incorreta no enigma.",
       );
+      setPuzzleData(nextDistinctPuzzle(run.currentFloor, puzzleData.kind, puzzleData.prompt));
     }
   }
 
   /* ------------------ Tela de Vitória sobre o Guardião ------------------ */
   if (guardianVictory) {
+    const isFinalDungeonClear = guardianVictory.checkpoint >= DUNGEON_MAX_FLOOR;
     return (
       <div className="mx-auto max-w-2xl rounded-3xl border-2 border-amber-500/60 bg-card p-6 shadow-2xl space-y-5 text-center animate-in fade-in duration-300">
         <div className="mx-auto grid h-16 w-16 place-items-center rounded-2xl bg-amber-500/20 text-4xl border border-amber-500/40">
-          👑
+          {isFinalDungeonClear ? "🏆" : "👑"}
         </div>
         <div className="space-y-1">
           <span className="rounded-full bg-amber-500/20 border border-amber-500/40 px-3 py-0.5 text-[11px] font-black uppercase text-amber-500">
-            Checkpoint Desbloqueado • Andar {guardianVictory.checkpoint}
+            {isFinalDungeonClear
+              ? `Expedição Concluída • Andar ${guardianVictory.checkpoint}`
+              : `Checkpoint Desbloqueado • Andar ${guardianVictory.checkpoint}`}
           </span>
           <h2 className="font-display text-2xl font-black text-foreground">
-            Guardião Derrotado!
+            {isFinalDungeonClear ? "Guardião Final Derrotado!" : "Guardião Derrotado!"}
           </h2>
           <p className="text-xs text-muted-foreground">
-            Todos os recursos da sua Mochila Temporária foram salvos com segurança (100%) e o
-            Portal de Checkpoint foi ativado.
+            {isFinalDungeonClear
+              ? "Você conquistou o último andar do Observatório Cristalino! 100% dos recursos da mochila foram extraídos com segurança."
+              : "Todos os recursos da sua Mochila Temporária foram salvos com segurança (100%) e o Portal de Checkpoint foi ativado."}
           </p>
         </div>
 
@@ -877,8 +954,9 @@ export function DungeonEncounterStage({
           <div className="grid gap-3 sm:grid-cols-2">
             <Button
               type="button"
-              disabled={!nextFloorCheck.ok}
+              disabled={!nextFloorCheck.ok || isBusy}
               onClick={() => {
+                if (isBusy || stageLockRef.current) return;
                 const res = advanceToNextDungeonFloor({
                   state: dungeonState,
                   level: effectiveLevel,
@@ -888,6 +966,7 @@ export function DungeonEncounterStage({
                   setFeedbackMsg(res.error ?? "Não foi possível avançar.");
                   return;
                 }
+                stageLockRef.current = true;
                 setStepPhase("narrative");
                 setLastLoot(null);
                 setFeedbackMsg(null);
@@ -904,7 +983,10 @@ export function DungeonEncounterStage({
             <Button
               type="button"
               variant="outline"
+              disabled={isBusy}
               onClick={() => {
+                if (isBusy || stageLockRef.current) return;
+                stageLockRef.current = true;
                 const ext = extractDungeonRun(dungeonState);
                 onFloorClearExtract(
                   ext.state,
@@ -1404,7 +1486,9 @@ export function DungeonEncounterStage({
                               <button
                                 key={spot.id}
                                 type="button"
+                                disabled={isBusy}
                                 onClick={() => {
+                                  if (isBusy || stageLockRef.current || cleanedSpots.includes(spot.id)) return;
                                   playTone(720, 0.08, "sine", 0.06);
                                   const next = [...cleanedSpots, spot.id];
                                   setCleanedSpots(next);
@@ -1662,7 +1746,9 @@ export function DungeonEncounterStage({
 
                 <Button
                   type="button"
+                  disabled={isBusy}
                   onClick={() => {
+                    if (isBusy) return;
                     setLastLoot(null);
                     setStepPhase("narrative");
                   }}

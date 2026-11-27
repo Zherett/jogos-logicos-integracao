@@ -22,11 +22,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PromoCodeRedeemDialog } from "./PromoCodeRedeemDialog";
 import { mergeWithDefaultCardPacks } from "@/lib/cards-catalog";
+import { mergeWithDefaultChests } from "@/lib/chests-catalog";
 import { usePlayerAuth } from "@/lib/player-auth";
 import {
+  archiveOldClaimedPromoCodes,
   generatePromoCodesBatch,
   loadLocalPromoCodes,
+  measurePromoCatalogBytes,
   deletePromoCode,
+  saveLocalPromoCodes,
   syncPromoCodesToPlayFab,
   fetchPromoCodesFromPlayFab,
   PROMO_CHEST_PRESETS,
@@ -43,9 +47,17 @@ export function AdminPromoCodesTab() {
     () => mergeWithDefaultCardPacks(auth.adminConfig.cardPacks),
     [auth.adminConfig.cardPacks],
   );
+  const availableChests = useMemo(() => {
+    const merged = mergeWithDefaultChests(auth.adminConfig.chestsCatalog);
+    if (merged.length > 0) {
+      return merged.map((c) => ({ id: c.id, label: c.name }));
+    }
+    return [...PROMO_CHEST_PRESETS];
+  }, [auth.adminConfig.chestsCatalog]);
   const [codes, setCodes] = useState<PromoCodeItem[]>(() => loadLocalPromoCodes());
   const [filterStatus, setFilterStatus] = useState<"ALL" | "active" | "claimed">("ALL");
   const [searchFilter, setSearchFilter] = useState("");
+  const [visibleLimit, setVisibleLimit] = useState<number>(100);
   const [syncing, setSyncing] = useState(false);
   const [copiedBatch, setCopiedBatch] = useState(false);
   const [testRedeemOpen, setTestRedeemOpen] = useState(false);
@@ -56,6 +68,7 @@ export function AdminPromoCodesTab() {
   const [batchCount, setBatchCount] = useState<number>(10);
   const [rewardXp, setRewardXp] = useState<number>(50);
   const [rewardPoints, setRewardPoints] = useState<number>(25);
+  const [rewardCoins, setRewardCoins] = useState<number>(0);
   const [itemCategory, setItemCategory] = useState<"none" | PromoRewardItemCategory>("none");
   const [selectedItemId, setSelectedItemId] = useState<string>("");
   const [itemQuantity, setItemQuantity] = useState<number>(1);
@@ -85,7 +98,7 @@ export function AdminPromoCodesTab() {
     const safeQty = Math.max(1, Math.min(99, Math.floor(itemQuantity || 1)));
 
     if (itemCategory === "chest") {
-      const found = PROMO_CHEST_PRESETS.find((c) => c.id === selectedItemId) ?? PROMO_CHEST_PRESETS[0];
+      const found = availableChests.find((c) => c.id === selectedItemId) ?? availableChests[0];
       if (found) {
         rewardItem = { category: "chest", itemId: found.id, label: found.label, quantity: safeQty };
         chestNameLegacy = found.label;
@@ -106,6 +119,7 @@ export function AdminPromoCodesTab() {
       rewards: {
         xp: rewardXp,
         points: rewardPoints,
+        ...(rewardCoins > 0 ? { coins: rewardCoins } : {}),
         chestName: chestNameLegacy,
         chestQuantity: chestQtyLegacy,
         rewardItem,
@@ -150,6 +164,27 @@ export function AdminPromoCodesTab() {
     }
   }
 
+  const catalogKb = useMemo(
+    () => Math.round((measurePromoCatalogBytes(codes) / 1024) * 10) / 10,
+    [codes],
+  );
+
+  async function handleArchiveOldClaimed() {
+    const { remaining, archivedCount } = archiveOldClaimedPromoCodes(loadLocalPromoCodes());
+    if (archivedCount === 0) {
+      flash("Nenhum código resgatado há mais de 90 dias para arquivar.");
+      return;
+    }
+    saveLocalPromoCodes(remaining);
+    setCodes([...remaining]);
+    const synced = await syncPromoCodesToPlayFab();
+    flash(
+      synced
+        ? `🧹 ${archivedCount} código(s) antigo(s) arquivado(s) na nuvem!`
+        : `🧹 ${archivedCount} código(s) antigo(s) arquivado(s) localmente.`,
+    );
+  }
+
   // Filtra os códigos visíveis para o ADM (exclui soft-deleted hiddenForAdmin)
   const visibleCodes = useMemo(() => {
     return codes.filter((c) => {
@@ -167,17 +202,41 @@ export function AdminPromoCodesTab() {
     });
   }, [codes, filterStatus, searchFilter]);
 
-  function handleCopyAllActive() {
+  useEffect(() => {
+    setVisibleLimit(100);
+  }, [filterStatus, searchFilter]);
+
+  async function handleCopyAllActive() {
     const actives = visibleCodes.filter((c) => c.status === "active").map((c) => c.code);
     if (actives.length === 0) {
       flash("Nenhum código ativo para copiar.");
       return;
     }
     const text = actives.join("\n");
-    navigator.clipboard.writeText(text);
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.left = "-9999px";
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand("copy");
+        document.body.removeChild(ta);
+        if (!ok) {
+          flash("Não foi possível copiar automaticamente os códigos.");
+          return;
+        }
+      } catch {
+        flash("Não foi possível copiar os códigos para a área de transferência.");
+        return;
+      }
+    }
     setCopiedBatch(true);
     setTimeout(() => setCopiedBatch(false), 3000);
-    flash(`📋 ${actives.length} códigos copiados para a área de transferência!`);
+    flash(`📋 ${actives.length} código(s) copiado(s) para a área de transferência!`);
   }
 
   return (
@@ -188,16 +247,37 @@ export function AdminPromoCodesTab() {
           <h3 className="font-display text-lg font-black text-foreground flex items-center gap-2">
             <Ticket className="h-5 w-5 text-fuchsia-500" />
             Gerador & Gestão de Códigos Promocionais
-            <span className="rounded-full bg-fuchsia-500/20 text-fuchsia-600 dark:text-fuchsia-400 px-2 py-0.5 text-[10px] font-black uppercase">
-              Closed Beta
-            </span>
           </h3>
           <p className="text-xs text-muted-foreground mt-0.5">
             Crie lotes de códigos com máscaras criptográficas de alta entropia para cartões escolares e eventos.
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span
+            className={`rounded-lg border px-2.5 py-1 text-[11px] font-bold ${
+              catalogKb >= 85
+                ? "border-destructive/50 bg-destructive/10 text-destructive"
+                : catalogKb >= 65
+                  ? "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                  : "border-border bg-secondary/40 text-muted-foreground"
+            }`}
+            title="Uso estimado do SharedGroup SEMED_PROMO_CODES_V1 (limite PlayFab: 100 KB)"
+          >
+            Uso: {catalogKb} KB / 100 KB
+          </span>
+
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={handleArchiveOldClaimed}
+            className="rounded-xl text-xs font-bold h-9"
+            title="Remove códigos já resgatados há mais de 90 dias para liberar espaço na nuvem"
+          >
+            Arquivar +90d
+          </Button>
+
           <Button
             type="button"
             variant="outline"
@@ -287,12 +367,23 @@ export function AdminPromoCodesTab() {
           </div>
 
           <div className="space-y-1">
-            <Label className="text-xs font-bold text-muted-foreground">Moedas (Pontos):</Label>
+            <Label className="text-xs font-bold text-muted-foreground">Pontos de Carreira:</Label>
             <Input
               type="number"
               min={0}
               value={rewardPoints}
               onChange={(e) => setRewardPoints(Number(e.target.value))}
+              className="h-9 text-xs rounded-xl font-bold"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <Label className="text-xs font-bold text-muted-foreground">Moedas:</Label>
+            <Input
+              type="number"
+              min={0}
+              value={rewardCoins}
+              onChange={(e) => setRewardCoins(Math.max(0, Number(e.target.value) || 0))}
               className="h-9 text-xs rounded-xl font-bold"
             />
           </div>
@@ -305,7 +396,7 @@ export function AdminPromoCodesTab() {
                 const nextCat = e.target.value as "none" | PromoRewardItemCategory;
                 setItemCategory(nextCat);
                 if (nextCat === "chest") {
-                  setSelectedItemId(PROMO_CHEST_PRESETS[0]?.id ?? "");
+                  setSelectedItemId(availableChests[0]?.id ?? "");
                 } else if (nextCat === "card_pack") {
                   setSelectedItemId(availablePacks[0]?.id ?? "");
                 } else {
@@ -333,7 +424,7 @@ export function AdminPromoCodesTab() {
                 className="w-full h-9 rounded-xl border bg-background px-3 text-xs font-semibold"
               >
                 {itemCategory === "chest"
-                  ? PROMO_CHEST_PRESETS.map((c) => (
+                  ? availableChests.map((c) => (
                       <option key={c.id} value={c.id}>
                         {c.label}
                       </option>
@@ -478,7 +569,7 @@ export function AdminPromoCodesTab() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {visibleCodes.slice(0, 100).map((item) => (
+                {visibleCodes.slice(0, visibleLimit).map((item) => (
                   <tr key={item.id} className="hover:bg-muted/20">
                     <td className="px-3 py-2.5 font-mono font-black text-foreground">{item.code}</td>
                     <td className="px-3 py-2.5 text-muted-foreground font-medium">
@@ -498,6 +589,9 @@ export function AdminPromoCodesTab() {
                     <td className="px-3 py-2.5 font-bold">
                       <span className="text-amber-500">+{item.rewards.xp} XP</span>
                       {item.rewards.points > 0 && <span className="text-yellow-500 ml-1.5">+{item.rewards.points} pts</span>}
+                      {(item.rewards.coins ?? 0) > 0 && (
+                        <span className="text-amber-400 ml-1.5">+{item.rewards.coins} moedas</span>
+                      )}
                       {item.rewards.rewardItem ? (
                         <span className="text-primary ml-1.5">
                           • {item.rewards.rewardItem.category === "card_pack" ? "🃏" : "🎁"}{" "}
@@ -554,6 +648,20 @@ export function AdminPromoCodesTab() {
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+        {visibleCodes.length > visibleLimit && (
+          <div className="flex justify-center pt-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setVisibleLimit((n) => n + 100)}
+              className="rounded-xl text-xs font-bold"
+            >
+              Mostrar mais códigos (exibindo {Math.min(visibleLimit, visibleCodes.length)} de{" "}
+              {visibleCodes.length})
+            </Button>
           </div>
         )}
       </div>

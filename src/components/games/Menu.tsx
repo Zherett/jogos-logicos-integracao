@@ -1,7 +1,5 @@
 import React, { lazy, Suspense, useState, useEffect } from "react";
 import {
-  Trophy,
-  Star,
   Sparkles,
   KeyRound,
   Medal,
@@ -23,7 +21,6 @@ import {
   Compass,
 } from "lucide-react";
 import type { AllStats, GameId } from "@/lib/game-storage";
-import { GAME_NAMES } from "@/lib/game-storage";
 import { GAME_REGISTRY, type GameRegistration } from "@/lib/game-registry";
 import { isAdminOrTestAccount, TOURNAMENT_MIN_LEVEL, X1_MIN_LEVEL } from "@/lib/player-profile";
 import {
@@ -36,7 +33,6 @@ import type { PlayerProfile } from "@/lib/playfab";
 import { stageForPlayer } from "@/lib/player-profile";
 import { LegalModal, DPO_CONTACT_EMAIL, type LegalTab } from "./LegalModal";
 import {
-  formatRecordDateBR,
   getGameStageRecord,
   loadGameRecords,
   type AllGameRecords,
@@ -123,7 +119,6 @@ export function Menu({
   const effectiveX1ArenaClosed = Boolean(x1ArenaClosed && !isAdminBypass);
   // Na Ranqueada, contas de teste (LORD e ZHERET) seguem exatamente as mesmas regras dos alunos (Nível 3+)
   const canTournament = Boolean(playerProfile && (playerProfile.isAdmin || playerLevel >= TOURNAMENT_MIN_LEVEL));
-  const canX1 = Boolean(playerProfile && (isAdminBypass || (playerLevel >= X1_MIN_LEVEL && x1OpenNow)));
 
   const [legalOpen, setLegalOpen] = useState(false);
   const [legalTab, setLegalTab] = useState<LegalTab>("privacidade");
@@ -569,6 +564,12 @@ export function Menu({
           hideAllDefaultNotices={hideAllDefaultNotices}
           pauseNoticeBoard={pauseNoticeBoard}
           weeklyGameName={weeklyGameName}
+          enabledGames={enabledGames}
+          adminOnlyGames={adminOnlyGames}
+          isAdmin={isAdmin}
+          x1HoursLabel={x1HoursLabel}
+          x1Enabled={effectiveX1Enabled}
+          tournamentEnabled={tournamentEnabled}
           onSelectGame={(gameId) => {
             const g = GAME_REGISTRY.find((item) => item.id === gameId);
             if (g) {
@@ -770,27 +771,5 @@ export function Menu({
         </Suspense>
       )}
     </div>
-  );
-}
-
-function Badge({
-  icon,
-  label,
-  value,
-  tone,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: number;
-  tone: "primary" | "accent";
-}) {
-  const cls = tone === "primary" ? "bg-primary/10 text-primary" : "bg-accent/15 text-accent";
-  return (
-    <span
-      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold ${cls}`}
-    >
-      {icon}
-      <span className="opacity-80">{label}:</span> <span className="font-extrabold">{value}</span>
-    </span>
   );
 }

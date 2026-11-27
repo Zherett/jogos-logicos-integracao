@@ -6,6 +6,7 @@ import {
   buildX1Board,
   cancelAllWaitingRoomsForHost,
   cancelWaitingX1Room,
+  canonicalizeRoomForSyncComparison,
   clearX1MatchHistory,
   computeScoreRaceBlueShare,
   confirmX1HostReady,
@@ -38,6 +39,7 @@ import {
   X1_MATCH_DISCONNECT_TIMEOUT_MS,
   X1_MINADO_TURN_SELECT_TIMEOUT_SEC,
   X1_ROBOT_INITIAL_HP,
+  X1_VICTORY_BONUS_XP,
   type X1Room,
 } from "./x1-challenge.ts";
 import { resolvePlayerAvatar } from "./avatar.ts";
@@ -868,5 +870,133 @@ describe("Arena de Desafio X1 Online (1v1 Versus Mode)", () => {
     staleLocal.revision = (timedOut.revision ?? 1) + 5;
     const merged = mergeX1RoomStates(staleLocal, timedOut);
     assert.notEqual(merged.minadoState?.currentTurnPlayerId, initialTurn);
+  });
+
+  it("Bloco 1.4 (X1-01/03/04/05/06/12): matchInstanceId, reentrada, canonical sync, F5 sem W.O., RPG consenso e bonus XP/tema", () => {
+    // X1-12: constante alinhada com XP real de vitória (25) e getX1ArenaTheme seguro para NaN
+    assert.equal(X1_VICTORY_BONUS_XP, 25);
+    const nanTheme = getX1ArenaTheme(Number.NaN);
+    assert.ok(nanTheme && typeof nanTheme.id === "string" && nanTheme.id.length > 0);
+
+    // X1-01: instâncias diferentes com o mesmo código não misturam placar nem side-states antigos
+    const oldInst: ReturnType<typeof makeSampleRoom> = {
+      ...makeSampleRoom(),
+      code: "7777",
+      matchInstanceId: "inst_old",
+      createdAt: 1_000_000,
+      createdAtServerMs: 1_000_000,
+      status: "finished",
+      winnerId: "host_1",
+      host: { ...makeSampleRoom().host, score: 90, correct: 6 },
+    };
+    const newInst: ReturnType<typeof makeSampleRoom> = {
+      ...makeSampleRoom(),
+      code: "7777",
+      matchInstanceId: "inst_new",
+      createdAt: 2_000_000,
+      createdAtServerMs: 2_000_000,
+      status: "waiting",
+      guest: null,
+      winnerId: null,
+      host: { ...makeSampleRoom().host, score: 0, correct: 0 },
+    };
+    const separated = mergeX1RoomStates(oldInst, newInst, 2_000_000);
+    assert.equal(separated.matchInstanceId, "inst_new");
+    assert.equal(separated.status, "waiting");
+    assert.equal(separated.host.score, 0);
+
+    // X1-03: bloqueia 3º convidado, bloqueia sala encerrada e preserva progresso na reconexão do mesmo convidado
+    const room = createX1Room({
+      host: { playerId: "h_14", nick: "Host14", school: "SEMED", level: 7 },
+      gameId: "logica",
+    });
+    const j1 = joinX1Room({
+      code: room.code,
+      guest: { playerId: "g_14", nick: "Guest14", school: "SEMED", level: 7 },
+    });
+    assert.equal(j1.error, null);
+    startX1MatchAfterCountdown(room.code);
+    updateX1PlayerProgress({
+      code: room.code,
+      playerId: "g_14",
+      score: 45,
+      correct: 3,
+      wrong: 0,
+      currentQuestionIdx: 3,
+    });
+    const jThird = joinX1Room({
+      code: room.code,
+      guest: { playerId: "intruder", nick: "Intruso", school: "SEMED", level: 7 },
+    });
+    assert.ok(jThird.error);
+    const jReenter = joinX1Room({
+      code: room.code,
+      guest: { playerId: "g_14", nick: "Guest14", school: "SEMED", level: 7 },
+    });
+    assert.equal(jReenter.error, null);
+    assert.equal(jReenter.room?.guest?.score, 45);
+    assert.equal(jReenter.room?.status, "playing");
+
+    // X1-04: canonicalizeRoomForSyncComparison ignora espelhos locais quando *ServerMs coincide
+    const remoteSample: ReturnType<typeof makeSampleRoom> = {
+      ...makeSampleRoom(),
+      countdownEndsAtServerMs: 1_700_000_010_000,
+      countdownEndsAt: 1_700_000_010_000,
+      startedAtServerMs: 1_700_000_020_000,
+      startedAt: 1_700_000_020_000,
+    };
+    const localSkewedMirror = structuredClone(remoteSample);
+    localSkewedMirror.countdownEndsAt = 1_700_000_055_000;
+    localSkewedMirror.startedAt = 1_700_000_065_000;
+    assert.equal(
+      canonicalizeRoomForSyncComparison(remoteSample),
+      canonicalizeRoomForSyncComparison(localSkewedMirror),
+    );
+
+    // X1-05: após F5 (código novo sem observação local), primeiro check NÃO declara W.O. instantâneo
+    const freshRoom = createX1Room({
+      host: { playerId: "h_f5", nick: "HostF5", school: "SEMED", level: 7 },
+      gameId: "logica",
+    });
+    joinX1Room({
+      code: freshRoom.code,
+      guest: { playerId: "g_f5", nick: "GuestF5", school: "SEMED", level: 7 },
+    });
+    const activeF5 = startX1MatchAfterCountdown(freshRoom.code)!;
+    // Mesmo que startedAt esteja 60s atrás (como após reload longo), a 1ª verificação ancora localOppObservedAt em now
+    activeF5.startedAt = Date.now() - 60_000;
+    const woFirstPass = forfeitX1DisconnectedOpponent(
+      activeF5.code,
+      "h_f5",
+      X1_MATCH_DISCONNECT_TIMEOUT_MS,
+    );
+    assert.equal(woFirstPass, null);
+
+    // X1-06: consenso de término no RPG X1 congela vencedor contra eventos atrasados
+    const rpgBase: ReturnType<typeof makeSampleRoom> = {
+      ...makeSampleRoom(),
+      code: "8844",
+      gameId: "rpg",
+      status: "finished",
+      finishedAt: 1_700_000_100_000,
+      finishedAtServerMs: 1_700_000_100_000,
+      winnerId: "host_1",
+      blueShare: 100,
+      rpgEvents: [
+        { id: "host:1", role: "host", seq: 1, isCorrect: true, serverTs: 1_700_000_010_000 },
+        { id: "host:2", role: "host", seq: 2, isCorrect: true, serverTs: 1_700_000_020_000 },
+        { id: "host:3", role: "host", seq: 3, isCorrect: true, serverTs: 1_700_000_030_000 },
+      ],
+    };
+    const lateGuestEventRoom = structuredClone(rpgBase);
+    lateGuestEventRoom.finishedAt = 1_700_000_105_000;
+    lateGuestEventRoom.finishedAtServerMs = 1_700_000_105_000;
+    lateGuestEventRoom.rpgEvents = [
+      ...(rpgBase.rpgEvents ?? []),
+      { id: "guest:1", role: "guest", seq: 1, isCorrect: true, serverTs: 1_700_000_011_000 },
+    ];
+    const rpgConsensus = mergeX1RoomStates(rpgBase, lateGuestEventRoom);
+    assert.equal(rpgConsensus.status, "finished");
+    assert.equal(rpgConsensus.winnerId, "host_1");
   });
 });

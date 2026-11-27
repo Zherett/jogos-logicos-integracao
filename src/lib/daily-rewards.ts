@@ -8,14 +8,21 @@ import {
   type ChestDefinition,
   type ChestOpenOutcome,
 } from "./chests-catalog.ts";
-import { awardCareerPoints, awardCoins, MEDAL_COINS_REWARDS } from "./career-points.ts";
+import {
+  awardCareerPoints,
+  awardCoins,
+  DAILY_LOGIN_POINTS,
+  MEDAL_COINS_REWARDS,
+  MEDAL_POINTS_REWARDS,
+} from "./career-points.ts";
 import {
   grantCosmeticToProfile,
   mergeWithDefaultAuras,
   mergeWithDefaultAvatars,
 } from "./cosmetics-catalog.ts";
 import { getLocalDateKey } from "./player-profile.ts";
-import { getCurrentActiveStreakDays } from "./medals-catalog.ts";
+import { getCoariDateKey, getOfficialNow, parseUtcMs, shiftDateKeyUTC } from "./official-time.ts";
+import { getCurrentActiveStreakDays, MEDAL_XP_REWARDS } from "./medals-catalog.ts";
 
 /** Incremento de pontos por dia seguido na ofensiva (a partir do 2º dia consecutivo) */
 export const DAILY_STREAK_BONUS_STEP = 5;
@@ -344,6 +351,7 @@ export function claimDailyRewardForProfile(
   const tier = schedule.find((t) => t.day === claimedDay) ?? schedule[0];
 
   // Atualiza marcadores de check-in (e marca lastDailyLoginPointsDate para evitar duplo pagamento)
+  const alreadyGotLoginBonusToday = profile.lastDailyLoginPointsDate === todayKey;
   profile.dailyCheckInCount = state.totalCheckIns + 1;
   profile.lastDailyRewardClaimDate = todayKey;
   profile.lastDailyLoginPointsDate = todayKey;
@@ -367,12 +375,19 @@ export function claimDailyRewardForProfile(
   const dailyLoginCoins = Math.max(0, Math.floor(routine?.dailyLoginCoins ?? 0));
 
   const totalPoints = Math.max(0, tier.points) + streakBonusPoints;
+  const netDailyPoints = alreadyGotLoginBonusToday
+    ? Math.max(0, totalPoints - DAILY_LOGIN_POINTS)
+    : totalPoints;
   const totalXp = Math.max(0, tier.xp) + streakBonusXp;
   const totalCoins = Math.max(0, tier.coins ?? 0) + dailyLoginCoins + streakBonusCoins;
+  let awardedPoints = netDailyPoints;
+  let awardedXp = totalXp;
   let medalCoinsAwarded = 0;
 
-  if (totalPoints > 0) {
-    awardCareerPoints(profile, totalPoints, `Recompensa Diária (Dia ${claimedDay})`);
+  if (netDailyPoints > 0) {
+    awardCareerPoints(profile, netDailyPoints, `Recompensa Diária (Dia ${claimedDay})`, undefined, {
+      source: "recompensa_diaria",
+    });
   }
   if (totalXp > 0) {
     profile.xp = Math.max(0, (profile.xp ?? 0) + totalXp);
@@ -385,7 +400,11 @@ export function claimDailyRewardForProfile(
   // Concede/empilha a medalha de marco correspondente nos Dias 3, 5 e 7 SOMENTE se a ofensiva consecutiva atingir 3, 5 ou 7 dias seguidos (idempotente no mesmo dia)
   if (tier.milestoneMedalId && streak >= tier.day) {
     const unlocked = Array.isArray(profile.unlockedMedals) ? [...profile.unlockedMedals] : [];
-    const nowIso = (options?.now ?? new Date()).toISOString();
+    const refNow = options?.now ?? getOfficialNow();
+    const nowIso =
+      isoToOfficialDateKey(refNow.toISOString()) === todayKey
+        ? refNow.toISOString()
+        : `${todayKey}T16:00:00.000Z`;
     const existingIdx = unlocked.findIndex((m) => m?.medalId === tier.milestoneMedalId);
     const existingDateKey =
       existingIdx >= 0 ? isoToOfficialDateKey(unlocked[existingIdx]?.unlockedAt) : null;
@@ -410,6 +429,23 @@ export function claimDailyRewardForProfile(
 
       const milestoneRarity =
         tier.day === 7 ? "ouro" : tier.day === 5 ? "prata" : "bronze";
+      const medalXp = Math.max(0, Math.floor(MEDAL_XP_REWARDS[milestoneRarity] ?? 0));
+      const medalPts = Math.max(0, Math.floor(MEDAL_POINTS_REWARDS[milestoneRarity] ?? 0));
+      if (medalXp > 0) {
+        profile.xp = Math.max(0, (profile.xp ?? 0) + medalXp);
+        profile.seasonXp = Math.max(0, (profile.seasonXp ?? 0) + medalXp);
+        awardedXp += medalXp;
+      }
+      if (medalPts > 0) {
+        awardCareerPoints(
+          profile,
+          medalPts,
+          `Medalha Marco Diário (Dia ${tier.day})`,
+          undefined,
+          { source: "medalha", metadata: { medalId: tier.milestoneMedalId } },
+        );
+        awardedPoints += medalPts;
+      }
       const medalCoins = Math.max(
         0,
         Math.floor(
@@ -444,7 +480,9 @@ export function claimDailyRewardForProfile(
       profile.chestsOpenedTotal = (profile.chestsOpenedTotal ?? 0) + 1;
 
       if (chestOutcome.points > 0) {
-        awardCareerPoints(profile, chestOutcome.points, `Baú Semanal: ${chestDefinition.name}`);
+        awardCareerPoints(profile, chestOutcome.points, `Baú Semanal: ${chestDefinition.name}`, undefined, {
+          source: "bau",
+        });
       }
       if (chestOutcome.xp > 0) {
         profile.xp = Math.max(0, (profile.xp ?? 0) + chestOutcome.xp);
@@ -515,9 +553,9 @@ export function claimDailyRewardForProfile(
   return {
     ok: true,
     claimedDay,
-    pointsAwarded: totalPoints,
+    pointsAwarded: awardedPoints,
     streakBonusPoints,
-    xpAwarded: totalXp,
+    xpAwarded: awardedXp,
     streakBonusXp,
     coinsAwarded: totalCoins,
     ...(medalCoinsAwarded > 0 ? { medalCoinsAwarded } : {}),
@@ -591,26 +629,16 @@ export function canAccessShopAndCustomization(
 
 /** Desloca uma chave de data `YYYY-MM-DD` em `deltaDays` dias. */
 export function shiftDateKey(dateKey: string, deltaDays: number): string {
-  const [y, m, d] = dateKey.split("-").map((n) => Number(n));
-  if (!y || !m || !d) return getLocalDateKey();
-  const dt = new Date(y, m - 1, d);
-  dt.setDate(dt.getDate() + deltaDays);
-  return getLocalDateKey(dt);
+  return shiftDateKeyUTC(dateKey, deltaDays);
 }
-
-const OFFICIAL_SEMED_UTC_OFFSET_MS = -4 * 60 * 60 * 1000;
 
 function isoToOfficialDateKey(iso?: string | null): string | null {
   if (!iso || typeof iso !== "string") return null;
   const trimmed = iso.trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
-  const ms = Date.parse(trimmed);
-  if (!Number.isFinite(ms)) return null;
-  const shifted = new Date(ms + OFFICIAL_SEMED_UTC_OFFSET_MS);
-  const y = shifted.getUTCFullYear();
-  const m = String(shifted.getUTCMonth() + 1).padStart(2, "0");
-  const d = String(shifted.getUTCDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
+  const ms = parseUtcMs(trimmed);
+  if (ms === null) return null;
+  return getCoariDateKey(ms);
 }
 
 /**
@@ -803,7 +831,7 @@ export function applyRetroactiveDay1CheckIn(
 
   profile.dailyCheckInCount = 1;
   profile.lastDailyRewardClaimDate = evalRes.day1DateKey;
-  profile.retroactiveDay1GrantedAt = options?.nowIso ?? new Date().toISOString();
+  profile.retroactiveDay1GrantedAt = options?.nowIso ?? getOfficialNow().toISOString();
 
   if (evalRes.pointsToAward > 0) {
     awardCareerPoints(profile, evalRes.pointsToAward, "Retrocoleta Diária (Dia 1)");

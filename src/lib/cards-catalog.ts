@@ -1,4 +1,5 @@
 // Catálogo de Cartas Colecionáveis, Raridades e Pacotes (browser-safe)
+import { isSafeHttpOrRelativeMediaUrl } from "./media-url.ts";
 
 export type CardRarity = "comum" | "incomum" | "rara" | "epica" | "lendaria";
 
@@ -375,16 +376,7 @@ export const DEFAULT_CARD_PACKS: CardPackDefinition[] = [
 ];
 
 export function isValidCardMediaUrl(url?: string | null): boolean {
-  if (!url || typeof url !== "string") return false;
-  const trimmed = url.trim();
-  if (!trimmed) return false;
-  if (trimmed.startsWith("/") && !trimmed.startsWith("//")) return true;
-  try {
-    const parsed = new URL(trimmed);
-    return parsed.protocol === "https:";
-  } catch {
-    return false;
-  }
+  return isSafeHttpOrRelativeMediaUrl(url, { allowDataImage: false });
 }
 
 export function sumPackProbabilities(probs: PackProbabilities): number {
@@ -615,17 +607,33 @@ function pickRarityWithFallback(
   availableByRarity: Map<CardRarity, CardDefinition[]>,
   rng: () => number,
 ): CardRarity | null {
-  const roll = rng() * 100;
-  let cumulative = 0;
-  let chosen: CardRarity = CARD_RARITIES[0];
+  const positiveRarities = CARD_RARITIES.filter(
+    (r) => Math.max(0, Number(probs[r]) || 0) > 0,
+  );
+  const totalWeight = positiveRarities.reduce(
+    (sum, r) => sum + Math.max(0, Number(probs[r]) || 0),
+    0,
+  );
 
-  for (const r of CARD_RARITIES) {
-    cumulative += Math.max(0, Number(probs[r]) || 0);
-    if (roll < cumulative) {
-      chosen = r;
-      break;
+  let chosen: CardRarity | null = null;
+  if (totalWeight > 0 && positiveRarities.length > 0) {
+    const safeRng = Number.isFinite(rng()) ? Math.min(Math.max(0, rng()), 1 - 1e-12) : 0;
+    const roll = safeRng * totalWeight;
+    let cumulative = 0;
+    chosen = positiveRarities[positiveRarities.length - 1];
+
+    for (const r of positiveRarities) {
+      cumulative += Math.max(0, Number(probs[r]) || 0);
+      if (roll < cumulative) {
+        chosen = r;
+        break;
+      }
     }
+  } else {
+    chosen = CARD_RARITIES.find((r) => (availableByRarity.get(r)?.length ?? 0) > 0) ?? null;
   }
+
+  if (!chosen) return null;
 
   if ((availableByRarity.get(chosen)?.length ?? 0) > 0) {
     return chosen;
@@ -678,7 +686,9 @@ function pickCardVariantByFoilChance(
   if (!chosenGroup) return null;
 
   if (chosenGroup.normal.length > 0 && chosenGroup.foil.length > 0) {
-    const clampedFoil = Math.max(0, Math.min(100, Number(foilChancePercent)));
+    const rawFoil = Number(foilChancePercent);
+    const safeFoil = Number.isFinite(rawFoil) ? rawFoil : DEFAULT_CARD_FOIL_CHANCE_PERCENT;
+    const clampedFoil = Math.max(0, Math.min(100, safeFoil));
     const rollFoil = rng() * 100 < clampedFoil;
     const pool = rollFoil ? chosenGroup.foil : chosenGroup.normal;
     return pool[Math.floor(rng() * pool.length) % pool.length];
@@ -956,12 +966,36 @@ export function orderPackRevealCards(
   return ordered;
 }
 
+function stripUndefinedProps<T extends object>(obj?: T | null): Partial<T> {
+  if (!obj) return {};
+  const clean: Partial<T> = {};
+  for (const [k, v] of Object.entries(obj) as Array<[keyof T, unknown]>) {
+    if (v !== undefined) {
+      (clean as Record<string, unknown>)[k as string] = v;
+    }
+  }
+  return clean;
+}
+
 export function mergeWithDefaultCardPacks(
   configured?: CardPackDefinition[] | null,
 ): CardPackDefinition[] {
   const list = Array.isArray(configured) ? configured : [];
   const byId = new Map(list.map((p) => [p.id, p]));
-  const merged: CardPackDefinition[] = DEFAULT_CARD_PACKS.map((def) => byId.get(def.id) ?? def);
+  const merged: CardPackDefinition[] = DEFAULT_CARD_PACKS.map((def) => {
+    const override = byId.get(def.id);
+    if (!override) return def;
+    const cleanOverride = stripUndefinedProps(override);
+    const cleanProbs = stripUndefinedProps(override.probabilities);
+    return {
+      ...def,
+      ...cleanOverride,
+      probabilities: {
+        ...def.probabilities,
+        ...cleanProbs,
+      },
+    };
+  });
   for (const p of list) {
     if (!DEFAULT_CARD_PACKS.some((d) => d.id === p.id)) {
       merged.push(p);
@@ -1009,6 +1043,11 @@ export function serializeCardsCatalogChunks(
     for (const card of list) {
       const cardStr = JSON.stringify(card);
       const cardBytes = measureUtf8Bytes(cardStr);
+      if (2 + cardBytes > safeLimit) {
+        throw new Error(
+          `A carta "${card.name || card.id}" excede o limite máximo de ${safeLimit} bytes por bloco (${2 + cardBytes} bytes).`,
+        );
+      }
       const separatorBytes = currentBatch.length > 0 ? 1 : 0;
 
       if (currentBatch.length > 0 && currentBytes + separatorBytes + cardBytes > safeLimit) {
@@ -1068,7 +1107,13 @@ export function deserializeCardsCatalogChunks(
       return { cards: [], ok: false, expectedChunks: 0, loadedChunks: 0, totalCardsExpected: 0 };
     }
     if (expectedChunks === 0) {
-      return { cards: [], ok: true, expectedChunks: 0, loadedChunks: 0, totalCardsExpected: 0 };
+      return {
+        cards: [],
+        ok: totalCardsExpected === 0,
+        expectedChunks: 0,
+        loadedChunks: 0,
+        totalCardsExpected,
+      };
     }
 
     const cards: CardDefinition[] = [];
@@ -1088,6 +1133,10 @@ export function deserializeCardsCatalogChunks(
         }
       }
       loadedChunks += 1;
+    }
+
+    if (totalCardsExpected > 0 && cards.length !== totalCardsExpected) {
+      return { cards: [], ok: false, expectedChunks, loadedChunks, totalCardsExpected };
     }
 
     return { cards, ok: true, expectedChunks, loadedChunks, totalCardsExpected };
@@ -1259,8 +1308,11 @@ export function mergeCardsCatalog(
   const byId = new Map<string, CardDefinition>();
   const order: string[] = [];
   for (const c of safeExisting) {
+    if (!c?.id) continue;
+    if (!byId.has(c.id)) {
+      order.push(c.id);
+    }
     byId.set(c.id, c);
-    order.push(c.id);
   }
 
   let addedCount = 0;

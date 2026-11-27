@@ -9,8 +9,14 @@ import type { SystemInboxMessage, AdminBroadcastDraft } from "./inbox-messages.t
 import {
   sendAdminBroadcastMessage,
   loadAllInboxMessages,
-  removeInboxMessageById,
+  cancelInboxMessage,
 } from "./inbox-messages.ts";
+import {
+  getCoariDateKey,
+  getCoariTimeParts,
+  makeCoariDate,
+} from "./official-time.ts";
+import { safeLocalStorageSet } from "./storage-guard.ts";
 
 export type ScheduleRecurrenceType = "weekly" | "monthly" | "once";
 
@@ -88,11 +94,31 @@ export function clearMemoryScheduledRules(): void {
   memoryScheduledRules = [];
 }
 
+function getCoariParts(date: Date): {
+  year: number;
+  month: number;
+  day: number;
+  dayOfWeek: number;
+  hours: number;
+  minutes: number;
+} {
+  const parts = getCoariTimeParts(date);
+  return {
+    year: parts.year,
+    month: parts.month0,
+    day: parts.day,
+    dayOfWeek: parts.dayOfWeek,
+    hours: parts.hour,
+    minutes: parts.minute,
+  };
+}
+
+function daysInMonth(year: number, month0Based: number): number {
+  return new Date(Date.UTC(year, month0Based + 1, 0)).getUTCDate();
+}
+
 export function formatDateIso(date: Date): string {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
+  return getCoariDateKey(date);
 }
 
 export function computeCycleKey(rule: ScheduledInboxRule, now: Date): string {
@@ -100,9 +126,9 @@ export function computeCycleKey(rule: ScheduledInboxRule, now: Date): string {
     return `${rule.id}_weekly_${formatDateIso(now)}`;
   }
   if (rule.recurrence === "monthly") {
-    const y = now.getFullYear();
-    const m = String(now.getMonth() + 1).padStart(2, "0");
-    return `${rule.id}_monthly_${y}-${m}`;
+    const { year, month } = getCoariParts(now);
+    const m = String(month + 1).padStart(2, "0");
+    return `${rule.id}_monthly_${year}-${m}`;
   }
   if (rule.recurrence === "once") {
     return `${rule.id}_once_${rule.specificDate || formatDateIso(now)}`;
@@ -142,8 +168,9 @@ export function isRuleDue(rule: ScheduledInboxRule, now = new Date()): boolean {
   if (rule.validFrom && todayStr < rule.validFrom) return false;
   if (rule.validUntil && todayStr > rule.validUntil) return false;
 
+  const nowCoari = getCoariParts(now);
   const [ruleHours, ruleMinutes] = (rule.timeOfDay || "08:00").split(":").map(Number);
-  const nowTotalMinutes = now.getHours() * 60 + now.getMinutes();
+  const nowTotalMinutes = nowCoari.hours * 60 + nowCoari.minutes;
   const ruleTotalMinutes = (ruleHours || 0) * 60 + (ruleMinutes || 0);
 
   if (nowTotalMinutes < ruleTotalMinutes) {
@@ -151,12 +178,14 @@ export function isRuleDue(rule: ScheduledInboxRule, now = new Date()): boolean {
   }
 
   if (rule.recurrence === "weekly") {
-    const day = now.getDay();
+    const day = nowCoari.dayOfWeek;
     if (!rule.daysOfWeek || !rule.daysOfWeek.includes(day)) {
       return false;
     }
   } else if (rule.recurrence === "monthly") {
-    if (now.getDate() !== (rule.dayOfMonth || 1)) {
+    const requestedDay = Math.max(1, rule.dayOfMonth || 1);
+    const effectiveDay = Math.min(requestedDay, daysInMonth(nowCoari.year, nowCoari.month));
+    if (nowCoari.day !== effectiveDay) {
       return false;
     }
   } else if (rule.recurrence === "once") {
@@ -182,24 +211,33 @@ export function computeNextRunDate(rule: ScheduledInboxRule, fromDate = new Date
   if (rule.recurrence === "once") {
     if (!rule.specificDate) return null;
     const [y, m, d] = rule.specificDate.split("-").map(Number);
-    const target = new Date(y, m - 1, d, hours || 0, minutes || 0, 0, 0);
+    const target = makeCoariDate(y, m - 1, d, hours || 0, minutes || 0, 0, 0);
     return target.getTime() > from.getTime() ? target : null;
   }
 
   if (rule.recurrence === "weekly") {
     const days = rule.daysOfWeek && rule.daysOfWeek.length > 0 ? rule.daysOfWeek : [6];
+    let anchor = new Date(from);
+    const fromIso = formatDateIso(anchor);
+    if (rule.validFrom && rule.validFrom > fromIso) {
+      const [vy, vm, vd] = rule.validFrom.split("-").map(Number);
+      if (vy && vm && vd) {
+        anchor = makeCoariDate(vy, vm - 1, vd, 0, 0, 0, 0);
+      }
+    }
+    const anchorParts = getCoariParts(anchor);
     for (let i = 0; i <= 14; i++) {
-      const candidate = new Date(
-        from.getFullYear(),
-        from.getMonth(),
-        from.getDate() + i,
+      const candidate = makeCoariDate(
+        anchorParts.year,
+        anchorParts.month,
+        anchorParts.day + i,
         hours || 0,
         minutes || 0,
         0,
-        0
+        0,
       );
       if (candidate.getTime() <= from.getTime()) continue;
-      if (days.includes(candidate.getDay())) {
+      if (days.includes(getCoariParts(candidate).dayOfWeek)) {
         const iso = formatDateIso(candidate);
         if (rule.validFrom && iso < rule.validFrom) continue;
         if (rule.validUntil && iso > rule.validUntil) return null;
@@ -210,11 +248,14 @@ export function computeNextRunDate(rule: ScheduledInboxRule, fromDate = new Date
   }
 
   if (rule.recurrence === "monthly") {
-    const targetDay = rule.dayOfMonth || 1;
-    for (let mOffset = 0; mOffset <= 12; mOffset++) {
-      const year = from.getFullYear();
-      const month = from.getMonth() + mOffset;
-      const candidate = new Date(year, month, targetDay, hours || 0, minutes || 0, 0, 0);
+    const requestedDay = Math.max(1, rule.dayOfMonth || 1);
+    const fromParts = getCoariParts(from);
+    for (let mOffset = 0; mOffset <= 24; mOffset++) {
+      const totalMonths = fromParts.year * 12 + fromParts.month + mOffset;
+      const year = Math.floor(totalMonths / 12);
+      const month = totalMonths % 12;
+      const effectiveDay = Math.min(requestedDay, daysInMonth(year, month));
+      const candidate = makeCoariDate(year, month, effectiveDay, hours || 0, minutes || 0, 0, 0);
       if (candidate.getTime() <= from.getTime()) continue;
       const iso = formatDateIso(candidate);
       if (rule.validFrom && iso < rule.validFrom) continue;
@@ -231,20 +272,23 @@ export function triggerScheduledRule(
   now = new Date()
 ): { updatedRule: ScheduledInboxRule; message: SystemInboxMessage } {
   const cycleKey = computeCycleKey(rule, now);
+  const deterministicId = `sched_${cycleKey}`;
 
-  // REGRA DO USUÁRIO:
-  // "quando ela for reenviada novamente, os dados anteriores somem para dar espaço para os novos dados.
-  // quem leu, quem não leu, somem para dar espaço aos dados dessa nova semana."
-  // Remove a mensagem do ciclo anterior para que a nova semana inicie com contagem 0% de leitura
-  if (rule.lastTriggeredMessageId) {
+  // Cancela a mensagem do ciclo anterior com tombstone para impedir ressurreição cross-device
+  if (rule.lastTriggeredMessageId && rule.lastTriggeredMessageId !== deterministicId) {
     try {
-      removeInboxMessageById(rule.lastTriggeredMessageId);
+      cancelInboxMessage(rule.lastTriggeredMessageId);
     } catch {
       /* ignore */
     }
   }
 
   const draft: AdminBroadcastDraft = {
+    id: deterministicId,
+    metadata: {
+      scheduledRuleId: rule.id,
+      cycleKey,
+    },
     mode: rule.recipientMode,
     targetSchool: rule.targetSchool,
     targetStage: rule.targetStage,
@@ -266,11 +310,6 @@ export function triggerScheduledRule(
   };
 
   const message = sendAdminBroadcastMessage(draft);
-  message.metadata = {
-    ...message.metadata,
-    scheduledRuleId: rule.id,
-    cycleKey,
-  };
 
   const updatedRule: ScheduledInboxRule = {
     ...rule,
@@ -311,9 +350,18 @@ export function loadScheduledInboxRules(): ScheduledInboxRule[] {
         if (cRaw) {
           const cfg = JSON.parse(cRaw);
           if (Array.isArray(cfg?.scheduledInboxRules)) {
+            const isRemoteSource = key === ADMIN_CONFIG_REMOTE_KEY;
             for (const r of cfg.scheduledInboxRules) {
-              if (r && r.id && !map.has(r.id)) {
+              if (!r || !r.id) continue;
+              const existing = map.get(r.id);
+              if (!existing) {
                 map.set(r.id, r);
+              } else if (isRemoteSource) {
+                const rVer = String(r.updatedAt || r.createdAt || "");
+                const exVer = String(existing.updatedAt || existing.createdAt || "");
+                if (!exVer || rVer >= exVer) {
+                  map.set(r.id, r);
+                }
               }
             }
           }
@@ -337,7 +385,7 @@ export function saveScheduledInboxRules(rules: ScheduledInboxRule[]): void {
   memoryScheduledRules = [...rules];
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(SCHEDULED_RULES_STORAGE_KEY, JSON.stringify(rules));
+    safeLocalStorageSet(SCHEDULED_RULES_STORAGE_KEY, JSON.stringify(rules));
   } catch (err) {
     console.warn("Falha ao salvar regras de mensagens programadas:", err);
   }

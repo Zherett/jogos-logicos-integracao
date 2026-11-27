@@ -4,6 +4,7 @@ import {
   claimDailyMissionForProfile,
   generateDailyMissions,
   getDailyMissionsCountForLevel,
+  mergeDailyMissionProgress,
   pickLeastPlayedGameForPlayer,
   recordMatchIntoDailyMissions,
 } from "./daily-missions.ts";
@@ -218,5 +219,51 @@ describe("Sistema de Missões Diárias (Faixas de Nível + Missão Personalizada
       dateKey,
     });
     assert.equal(claim.ok, true);
+  });
+
+  it("Bloco 1.3 (ECON-18): mergeDailyMissionProgress é comutativo e bloqueia 6/5 resgates por troca de jogo pessoal", () => {
+    const dateKey = "2026-11-26";
+    const devA: any = {
+      dateKey,
+      plays: 3,
+      wins: 2,
+      distinctGameIds: ["logica"],
+      flawlessCount: 1,
+      competitiveCount: 0,
+      playsByGame: { logica: 2, rpg: 2 },
+      claimedIds: [`dm_${dateKey}_personal_logica`],
+      personalizedGameId: "logica",
+    };
+    const devB: any = {
+      dateKey,
+      plays: 3,
+      wins: 2,
+      distinctGameIds: ["rpg"],
+      flawlessCount: 0,
+      competitiveCount: 1,
+      playsByGame: { rpg: 2 },
+      claimedIds: [],
+      personalizedGameId: "rpg",
+    };
+
+    const mergeAB = mergeDailyMissionProgress(devA, devB)!;
+    const mergeBA = mergeDailyMissionProgress(devB, devA)!;
+    assert.equal(mergeAB.personalizedGameId, "logica");
+    assert.equal(mergeBA.personalizedGameId, "logica", "Merge deve ser comutativo em qualquer ordem");
+
+    // Mesmo que o cache aponte para outro personalizedGameId, qualquer dm_<dateKey>_personal_* já resgatado bloqueia 6º resgate
+    const profConflict: any = {
+      id: "p_6_5",
+      level: 2,
+      dailyMissionProgress: {
+        ...mergeBA,
+        personalizedGameId: "rpg",
+      },
+    };
+    const missions = generateDailyMissions({ profile: profConflict, dateKey });
+    assert.equal(missions[4].claimed, true, "5ª missão pessoal já resgatada na conta não pode reabrir");
+    const secondClaim = claimDailyMissionForProfile(profConflict, missions[4].id, { dateKey });
+    assert.equal(secondClaim.ok, false);
+    assert.equal(secondClaim.alreadyClaimed, true);
   });
 });

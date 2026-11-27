@@ -7,17 +7,29 @@
 // - Regra de exclusao: mensagens com recompensa nao podem ser apagadas ate o resgate
 
 import type { PlayerProfile } from "./playfab.ts";
-import { awardCareerPoints, creditCoinMetrics } from "./career-points.ts";
-import { normalizeCardPackId } from "./chests-catalog.ts";
-import { getAllAvailableMedals, type PlayerUnlockedMedal } from "./medals-catalog.ts";
+import { isSafeHttpOrRelativeMediaUrl } from "./media-url.ts";
+import { safeLocalStorageSet } from "./storage-guard.ts";
+import { awardCareerPoints, checkLevelPromotionPoints, creditCoinMetrics } from "./career-points.ts";
+import { calculateDuplicateCosmeticCompensation, normalizeCardPackId } from "./chests-catalog.ts";
+import {
+  ensureLevel5InitialLetterUnlock,
+  grantCosmeticToProfile,
+  mergeWithDefaultAuras,
+  mergeWithDefaultAvatars,
+} from "./cosmetics-catalog.ts";
+import { getAllAvailableMedals, getEnabledGameIdsSet, type PlayerUnlockedMedal } from "./medals-catalog.ts";
 import {
   stageForPlayer,
   accumulateTournamentMedal,
   calculatePlayerLevel,
+  nickSlug,
+  syncLevelStageProgress,
   type TournamentMedal,
 } from "./player-profile.ts";
-import { GAME_NAMES, type GameId } from "./game-storage.ts";
+import { ALL_GAME_IDS, GAME_NAMES, type GameId } from "./game-storage.ts";
 import { recordScoreLedgerEntry } from "./score-history-ledger.ts";
+
+export type PendingScoreLedgerInput = Parameters<typeof recordScoreLedgerEntry>[0];
 
 export type InboxRewardType = "points" | "xp" | "coins" | "medal" | "cosmetic" | "future_item";
 
@@ -108,6 +120,107 @@ export const ADMIN_NOTIFICATIONS_SHARED_GROUP_ID = "SEMED_ADMIN_NOTIFICATIONS_V1
 
 // REGRA DO USUÁRIO: Mensagens lidas com recompensas resgatadas são auto-expiradas em 24h
 export const INBOX_MESSAGE_AUTO_PURGE_MS = 24 * 60 * 60 * 1000; // 24 horas
+export const INBOX_RETENTION_LIMIT = 80;
+
+function readCachedAdminLevelConfig(): { maxAvailableGames: number; levelCoinStep: number } {
+  const fallback = { maxAvailableGames: ALL_GAME_IDS.length, levelCoinStep: 10 };
+  if (typeof window === "undefined") return fallback;
+  try {
+    for (const key of [ADMIN_CONFIG_REMOTE_KEY, ADMIN_CONFIG_LOCAL_KEY]) {
+      const raw = window.localStorage.getItem(key);
+      if (!raw) continue;
+      const cfg = JSON.parse(raw);
+      if (!cfg || typeof cfg !== "object") continue;
+      const enabledSet = getEnabledGameIdsSet(cfg.enabledGames);
+      const step = Number(cfg?.coinRewardsConfig?.levelCoinStep);
+      return {
+        maxAvailableGames: Math.max(1, enabledSet.size || ALL_GAME_IDS.length),
+        levelCoinStep: Number.isFinite(step) && step >= 0 ? step : 10,
+      };
+    }
+  } catch {
+    /* ignore */
+  }
+  return fallback;
+}
+
+function getPlayerAliasKeys(player?: {
+  id?: string;
+  nick?: string;
+  nickNormalized?: string;
+  playfabId?: string;
+} | null): string[] {
+  if (!player) return [];
+  const pId = String(player.id || "").toLowerCase().trim();
+  const pNick = String(player.nick || "").toLowerCase().trim();
+  const pNickNorm = String(player.nickNormalized || "").toLowerCase().trim();
+  const pPlayfabId = String(player.playfabId || "").toLowerCase().trim();
+  const strippedId = pId.startsWith("pf_local_") ? pId.replace(/^pf_local_/, "").trim() : "";
+  const nickSlugVal = pNick ? nickSlug(pNick) : "";
+
+  const keys = new Set<string>();
+  for (const candidate of [pId, strippedId, pNick, nickSlugVal, pNickNorm, pPlayfabId]) {
+    if (candidate) keys.add(candidate);
+  }
+  return Array.from(keys);
+}
+
+export function getCanonicalInboxStudentKey(
+  playerOrId?:
+    | string
+    | { id?: string; nick?: string; nickNormalized?: string; playfabId?: string }
+    | null,
+): string {
+  if (!playerOrId) return "";
+  if (typeof playerOrId === "string") {
+    const clean = playerOrId.toLowerCase().trim();
+    if (!clean) return "";
+    return clean.startsWith("pf_local_") ? clean.replace(/^pf_local_/, "").trim() || clean : clean;
+  }
+  const pNickNorm = String(playerOrId.nickNormalized || "").toLowerCase().trim();
+  if (pNickNorm) return pNickNorm;
+  const pNick = String(playerOrId.nick || "").trim();
+  if (pNick) {
+    const slug = nickSlug(pNick);
+    if (slug) return slug;
+    return pNick.toLowerCase();
+  }
+  const pId = String(playerOrId.id || "").toLowerCase().trim();
+  if (pId) {
+    return pId.startsWith("pf_local_") ? pId.replace(/^pf_local_/, "").trim() || pId : pId;
+  }
+  return String(playerOrId.playfabId || "").toLowerCase().trim();
+}
+
+export function pruneExpiredLocalInboxReceipts(
+  map: Record<string, Record<string, string>>,
+  activeMessageIds: Set<string>,
+  nowMs = Date.now(),
+  maxAgeDays = 90,
+): number {
+  const cutoffMs = nowMs - Math.max(7, maxAgeDays) * 86_400_000;
+  let removed = 0;
+  for (const [studentKey, entryMap] of Object.entries(map)) {
+    if (!entryMap || typeof entryMap !== "object") {
+      delete map[studentKey];
+      continue;
+    }
+    for (const [msgId, rawVal] of Object.entries(entryMap)) {
+      if (activeMessageIds.has(msgId)) continue;
+      if (typeof rawVal === "string") {
+        const tsMs = Date.parse(rawVal);
+        if (Number.isFinite(tsMs) && tsMs < cutoffMs) {
+          delete entryMap[msgId];
+          removed += 1;
+        }
+      }
+    }
+    if (Object.keys(entryMap).length === 0) {
+      delete map[studentKey];
+    }
+  }
+  return removed;
+}
 
 const INBOX_CHANNEL_NAME = "semed_inbox_realtime_sync_v1";
 
@@ -140,7 +253,7 @@ export function broadcastInboxEvent(payload: Omit<InboxSyncPayload, "timestamp">
   }
   if (typeof window !== "undefined") {
     try {
-      window.localStorage.setItem("desafios_inbox_sync_pulse", JSON.stringify(fullPayload));
+      safeLocalStorageSet("desafios_inbox_sync_pulse", JSON.stringify(fullPayload));
     } catch {
       /* ignore */
     }
@@ -246,7 +359,7 @@ export function saveCanceledMessageIds(set: Set<string>): void {
   memoryCanceledMessages = new Set(set);
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(CANCELED_MESSAGES_KEY, JSON.stringify(Array.from(set)));
+    safeLocalStorageSet(CANCELED_MESSAGES_KEY, JSON.stringify(Array.from(set)));
   } catch (err) {
     console.warn("Falha ao salvar IDs de mensagens canceladas:", err);
   }
@@ -299,7 +412,7 @@ export function cancelInboxMessage(messageId: string): {
             changed = true;
           }
           if (changed) {
-            window.localStorage.setItem(key, JSON.stringify(cfg));
+            safeLocalStorageSet(key, JSON.stringify(cfg));
           }
         }
       } catch {
@@ -343,16 +456,25 @@ export function loadAllInboxMessages(): SystemInboxMessage[] {
       }
     }
 
-    // Mescla com mensagens salvas no cache de configuração do ADM (nuvem/PlayFab)
+    // Mescla com mensagens salvas no cache de configuração do ADM (nuvem/PlayFab), priorizando a versão remota mais recente
     for (const key of [ADMIN_CONFIG_LOCAL_KEY, ADMIN_CONFIG_REMOTE_KEY]) {
       try {
         const cRaw = window.localStorage.getItem(key);
         if (cRaw) {
           const cfg = JSON.parse(cRaw);
           if (Array.isArray(cfg?.inboxMessages)) {
+            const isRemoteSource = key === ADMIN_CONFIG_REMOTE_KEY;
             for (const m of cfg.inboxMessages) {
-              if (m && m.id && !map.has(m.id)) {
+              if (!m || !m.id) continue;
+              const existing = map.get(m.id);
+              if (!existing) {
                 map.set(m.id, m);
+              } else if (isRemoteSource) {
+                const mVer = String((m as any).updatedAt || m.createdAt || "");
+                const exVer = String((existing as any).updatedAt || existing.createdAt || "");
+                if (!exVer || mVer >= exVer) {
+                  map.set(m.id, m);
+                }
               }
             }
           }
@@ -375,11 +497,11 @@ export function loadAllInboxMessages(): SystemInboxMessage[] {
 }
 
 export function saveAllInboxMessages(messages: SystemInboxMessage[]): void {
-  const trimmed = messages.slice(0, 500);
+  const trimmed = messages.slice(0, INBOX_RETENTION_LIMIT);
   memoryInboxMessages = [...trimmed];
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(INBOX_STORAGE_KEY, JSON.stringify(trimmed));
+    safeLocalStorageSet(INBOX_STORAGE_KEY, JSON.stringify(trimmed));
   } catch (err) {
     console.warn("Falha ao salvar caixa de mensagens:", err);
   }
@@ -399,7 +521,7 @@ function saveStudentMap(key: string, data: Record<string, any>, setMem: (d: any)
   setMem(data);
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(key, JSON.stringify(data));
+    safeLocalStorageSet(key, JSON.stringify(data));
   } catch {
     /* ignore */
   }
@@ -464,6 +586,8 @@ export function createInboxMessage(
 }
 
 export interface AdminBroadcastDraft {
+  id?: string;
+  metadata?: Record<string, unknown>;
   mode: "all" | "school" | "stage" | "students";
   targetSchool?: string;
   targetStage?: string;
@@ -536,14 +660,15 @@ export interface ExtractedInboxTags {
  */
 export function extractInboxTags(text: string): ExtractedInboxTags {
   if (!text) return { games: [], events: [], gifs: [], imgs: [] };
-  const tagMatches = text.match(/\[([a-zA-Z0-9_-]+)\]/g) || [];
   const gamesSet = new Set<string>();
   const eventsSet = new Set<string>();
   const gifsSet = new Set<string>();
   const imgsSet = new Set<string>();
 
-  for (const raw of tagMatches) {
-    const inner = raw.slice(1, -1).toLowerCase().trim();
+  const tagRegex = /\[([a-zA-Z0-9_-]+)(?::\d{1,3}%?)?\]/g;
+  let match: RegExpExecArray | null;
+  while ((match = tagRegex.exec(text)) !== null) {
+    const inner = match[1].toLowerCase().trim();
     if (/^game\d*$/.test(inner)) {
       gamesSet.add(inner);
     } else if (/^event\d*$/.test(inner)) {
@@ -654,15 +779,16 @@ export function formatInboxMessageText(
   // Substitui tags de jogos: [game], [game1], [game2], etc.
   res = res.replace(/\[(game\d*)\]/gi, (match, tagKey) => {
     const key = tagKey.toLowerCase();
+    const isPrimaryGameTag = key === "game" || key === "game1";
     const gId =
       options?.mentionedGames?.[key] ||
-      (key === "game"
+      (isPrimaryGameTag
         ? options?.mentionedGameId || Object.values(options?.mentionedGames || {})[0]
-        : options?.mentionedGameId || Object.values(options?.mentionedGames || {})[0] || "");
+        : "");
     const normalizedGId = gId ? (gId.toLowerCase().replace(/[_-]/g, "") as GameId) : undefined;
     const gName = gId
       ? GAME_NAMES[gId as GameId] || (normalizedGId ? GAME_NAMES[normalizedGId] : undefined) || gId
-      : (key === "game" ? options?.mentionedGameName : undefined);
+      : (isPrimaryGameTag ? options?.mentionedGameName : undefined);
     if (!gName) return match;
     const prefix = options?.includeEmoji ? "🎮 " : "";
     return `${prefix}${gName}`;
@@ -671,12 +797,13 @@ export function formatInboxMessageText(
   // Substitui tags de eventos: [event], [event1], [event2], etc.
   res = res.replace(/\[(event\d*)\]/gi, (match, tagKey) => {
     const key = tagKey.toLowerCase();
+    const isPrimaryEventTag = key === "event" || key === "event1";
     const ev =
       options?.mentionedEvents?.[key] ||
-      (key === "event"
+      (isPrimaryEventTag
         ? (options?.mentionedEventTitle ? { eventTitle: options.mentionedEventTitle } : Object.values(options?.mentionedEvents || {})[0])
-        : (options?.mentionedEventTitle ? { eventTitle: options.mentionedEventTitle } : Object.values(options?.mentionedEvents || {})[0]));
-    const evTitle = ev?.eventTitle || (key === "event" ? options?.mentionedEventTitle : undefined);
+        : undefined);
+    const evTitle = ev?.eventTitle || (isPrimaryEventTag ? options?.mentionedEventTitle : undefined);
     if (!evTitle) return match;
     const prefix = options?.includeEmoji ? "✨ " : "";
     return `${prefix}${evTitle}`;
@@ -738,6 +865,7 @@ export function sendAdminBroadcastMessage(draft: AdminBroadcastDraft): SystemInb
       : "ALL";
 
   const msg = createInboxMessage({
+    id: draft.id,
     recipientId: targetRecipientId,
     recipientFilter: broadcastFilter,
     sender: "adm",
@@ -756,6 +884,7 @@ export function sendAdminBroadcastMessage(draft: AdminBroadcastDraft): SystemInb
     mentionedEvents: draft.mentionedEvents ?? {},
     reward: rewardObj,
     rewards: rewardsList.length > 0 ? rewardsList : undefined,
+    metadata: draft.metadata,
     includeNewPlayers: Boolean(draft.includeNewPlayers),
   });
 
@@ -771,20 +900,26 @@ export function sendAdminBroadcastMessage(draft: AdminBroadcastDraft): SystemInb
  */
 export function matchPlayerIdentifier(target: string, player: any): boolean {
   if (!target || !player) return false;
-  const t = target.toLowerCase().trim();
-  const id = (player.id || "").toLowerCase().trim();
-  const nick = (player.nick || "").toLowerCase().trim();
-  const nickNorm = (player.nickNormalized || "").toLowerCase().trim();
-  const playfabId = (player.playfabId || "").toLowerCase().trim();
+  const rawTarget = String(target).toLowerCase().trim();
+  const strippedTarget = rawTarget.replace(/^pf_local_/, "").trim();
+  const slugTarget = nickSlug(strippedTarget);
+  if (!strippedTarget && !slugTarget) return false;
 
-  if (t === id || t === nick || (nickNorm && t === nickNorm) || (playfabId && t === playfabId)) {
+  const id = String(player.id || "").toLowerCase().trim();
+  const strippedId = id.replace(/^pf_local_/, "").trim();
+  const nick = String(player.nick || "").toLowerCase().trim();
+  const nickNorm = String(player.nickNormalized || "").toLowerCase().trim();
+  const playfabId = String(player.playfabId || "").toLowerCase().trim();
+
+  const candidates = [id, strippedId, nick, nickNorm, playfabId].filter(Boolean);
+  if (candidates.includes(rawTarget) || (strippedTarget && candidates.includes(strippedTarget))) {
     return true;
   }
-  if (t.replace(/^pf_local_/, "") === nick || t.replace(/^pf_local_/, "") === nickNorm) {
-    return true;
-  }
-  if (id.replace(/^pf_local_/, "") === t) {
-    return true;
+  if (slugTarget) {
+    const slugCandidates = [strippedId, nick, nickNorm].map((v) => nickSlug(v)).filter(Boolean);
+    if (slugCandidates.includes(slugTarget)) {
+      return true;
+    }
   }
   return false;
 }
@@ -863,38 +998,73 @@ export function isMessageEligibleForPlayer(
   return false;
 }
 
-/**
- * Retorna todas as mensagens da caixa de entrada do aluno, com estados de leitura e resgate aplicados.
- * Aplica a regra de expiração de 24 horas: mensagens lidas e com recompensas resgatadas são auto-apagadas após 24h.
- */
-export function getInboxMessagesForPlayer(
-  player: PlayerProfile | { id: string; nick?: string; school?: string; birthdate?: string },
-  nowTime: number = Date.now()
-): SystemInboxMessage[] {
+function mergeStudentMapForAliases<T extends Record<string, any>>(
+  allMap: Record<string, T>,
+  aliases: string[],
+): T {
+  const merged = {} as Record<string, any>;
+  for (const key of aliases) {
+    const slice = allMap[key];
+    if (slice && typeof slice === "object") {
+      Object.assign(merged, slice);
+    }
+  }
+  return merged as T;
+}
+
+function isInboxMessageAutoExpired(cloned: SystemInboxMessage, nowTime: number): boolean {
+  if (!cloned.read) return false;
+  let isEligibleForAutoPurge = false;
+  let completionTimestamp = 0;
+
+  if (cloned.reward) {
+    // Se houver recompensa, SÓ inicia a contagem de 24h quando a recompensa estiver resgatada
+    if (cloned.reward.claimed) {
+      isEligibleForAutoPurge = true;
+      const readTs = cloned.readAt ? new Date(cloned.readAt).getTime() : 0;
+      const claimTs = cloned.reward.claimedAt ? new Date(cloned.reward.claimedAt).getTime() : 0;
+      completionTimestamp = Math.max(readTs, claimTs);
+    }
+  } else {
+    // Sem recompensa anexa: a contagem de 24h inicia com a leitura
+    isEligibleForAutoPurge = true;
+    completionTimestamp = cloned.readAt ? new Date(cloned.readAt).getTime() : 0;
+  }
+
+  // Fallback caso timestamps de leitura sejam zero
+  if (isEligibleForAutoPurge && (!completionTimestamp || isNaN(completionTimestamp))) {
+    completionTimestamp = cloned.createdAt ? new Date(cloned.createdAt).getTime() : 0;
+  }
+
+  return Boolean(
+    isEligibleForAutoPurge &&
+      completionTimestamp > 0 &&
+      nowTime - completionTimestamp >= INBOX_MESSAGE_AUTO_PURGE_MS,
+  );
+}
+
+function collectInboxMessagesForPlayer(
+  player: PlayerProfile | { id: string; nick?: string; nickNormalized?: string; playfabId?: string; school?: string; birthdate?: string },
+  nowTime: number = Date.now(),
+): { visible: SystemInboxMessage[]; expiredIds: string[] } {
   const all = loadAllInboxMessages();
-  const pId = (player.id || "").toLowerCase().trim();
-  const pNick = (player.nick || "").toLowerCase().trim();
+  const aliases = getPlayerAliasKeys(player);
 
-  const deletesMap = loadStudentMap(STUDENT_DELETES_KEY, memoryStudentDeletes)[pId] || {};
-  const allReads = loadStudentMap(STUDENT_READS_KEY, memoryStudentReads);
-  const readsMap: Record<string, any> = {
-    ...(allReads[pId] || {}),
-    ...(pNick ? allReads[pNick] || {} : {}),
-    ...(pId.startsWith("pf_local_") ? allReads[pId.replace(/^pf_local_/, "")] || {} : {}),
-  };
+  const deletesMap = mergeStudentMapForAliases(
+    loadStudentMap(STUDENT_DELETES_KEY, memoryStudentDeletes),
+    aliases,
+  );
+  const readsMap = mergeStudentMapForAliases(
+    loadStudentMap(STUDENT_READS_KEY, memoryStudentReads),
+    aliases,
+  );
+  const claimsMap = mergeStudentMapForAliases<Record<string, string>>(
+    loadStudentMap(STUDENT_CLAIMS_KEY, memoryStudentClaims),
+    aliases,
+  );
 
-  const allClaims = loadStudentMap(STUDENT_CLAIMS_KEY, memoryStudentClaims);
-  const pNickNorm = ((player as any).nickNormalized || "").toLowerCase().trim();
-  const pPlayfabId = ((player as any).playfabId || "").toLowerCase().trim();
-  const claimsMap: Record<string, string> = {
-    ...(allClaims[pId] || {}),
-    ...(pNick ? allClaims[pNick] || {} : {}),
-    ...(pNickNorm ? allClaims[pNickNorm] || {} : {}),
-    ...(pPlayfabId ? allClaims[pPlayfabId] || {} : {}),
-    ...(pId.startsWith("pf_local_") ? allClaims[pId.replace(/^pf_local_/, "")] || {} : {}),
-  };
-
-  const playerMessages: SystemInboxMessage[] = [];
+  const visible: SystemInboxMessage[] = [];
+  const expiredIds: string[] = [];
 
   for (const raw of all) {
     // Se o envio da mensagem foi cancelado pelo ADM, não exibir para o aluno
@@ -913,13 +1083,17 @@ export function getInboxMessagesForPlayer(
       const isClaimedInProfile =
         Array.isArray((player as any).claimedInboxRewardIds) &&
         (player as any).claimedInboxRewardIds.includes(raw.id);
+      const profileClaimTs = (player as any).claimedInboxRewardTimestamps?.[raw.id];
 
       const rawRewards = getMessageRewards(raw);
       const anyRawClaimed = rawRewards.some((r) => r.claimed);
       const rawFirstClaimedAt = rawRewards.find((r) => r.claimedAt)?.claimedAt;
-      const claimedAt = claimsMap[raw.id] || (isClaimedInProfile ? (rawFirstClaimedAt || new Date().toISOString()) : undefined);
+      const claimedAt =
+        claimsMap[raw.id] ||
+        (isClaimedInProfile ? profileClaimTs || rawFirstClaimedAt : undefined);
       const isClaimed = Boolean(claimedAt || isClaimedInProfile || anyRawClaimed);
-      const resolvedClaimedAt = claimedAt || (isClaimed ? rawFirstClaimedAt || new Date().toISOString() : undefined);
+      const resolvedClaimedAt =
+        claimedAt || (isClaimed ? profileClaimTs || rawFirstClaimedAt : undefined);
 
       const clonedRewards: InboxReward[] | undefined = rawRewards.length > 0
         ? rawRewards.map((r) => ({
@@ -938,51 +1112,48 @@ export function getInboxMessagesForPlayer(
         rewards: clonedRewards,
       };
 
-      // REGRA DO USUÁRIO: AUTO-EXCLUSÃO EM 24 HORAS
-      // "As mensagens da caixa de entrada que forem lidas e que tiverem as recompensas resgatadas,
-      // e que não forem deletadas, serão apagadas em 24 horas. Se não forem apagadas manualmente,
-      // elas automaticamente vão se apagar se já tiverem sido lidas e se as recompensas, caso houver,
-      // tenham sido resgatadas. Se ainda houver recompensas para resgatar, essa contagem não é iniciada."
-      if (cloned.read) {
-        let isEligibleForAutoPurge = false;
-        let completionTimestamp = 0;
-
-        if (cloned.reward) {
-          // Se houver recompensa, SÓ inicia a contagem de 24h quando a recompensa estiver resgatada
-          if (cloned.reward.claimed) {
-            isEligibleForAutoPurge = true;
-            const readTs = cloned.readAt ? new Date(cloned.readAt).getTime() : 0;
-            const claimTs = cloned.reward.claimedAt ? new Date(cloned.reward.claimedAt).getTime() : 0;
-            completionTimestamp = Math.max(readTs, claimTs);
-          }
-        } else {
-          // Sem recompensa anexa: a contagem de 24h inicia com a leitura
-          isEligibleForAutoPurge = true;
-          completionTimestamp = cloned.readAt ? new Date(cloned.readAt).getTime() : 0;
-        }
-
-        // Fallback caso timestamps de leitura sejam zero
-        if (isEligibleForAutoPurge && (!completionTimestamp || isNaN(completionTimestamp))) {
-          completionTimestamp = cloned.createdAt ? new Date(cloned.createdAt).getTime() : 0;
-        }
-
-        if (isEligibleForAutoPurge && completionTimestamp > 0) {
-          if (nowTime - completionTimestamp >= INBOX_MESSAGE_AUTO_PURGE_MS) {
-            // Auto-apaga a mensagem para este aluno
-            deleteInboxMessageForPlayer(raw.id, player);
-            continue;
-          }
-        }
+      // REGRA DO USUÁRIO: AUTO-EXCLUSÃO EM 24 HORAS (avaliação pura; persistência via purgeExpiredInboxMessagesForPlayer)
+      if (isInboxMessageAutoExpired(cloned, nowTime)) {
+        expiredIds.push(raw.id);
+        continue;
       }
 
-      playerMessages.push(cloned);
+      visible.push(cloned);
     }
   }
 
   // Ordena por data decrescente (mais recente no topo)
-  playerMessages.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  visible.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-  return playerMessages;
+  return { visible, expiredIds };
+}
+
+/**
+ * Retorna todas as mensagens da caixa de entrada do aluno, com estados de leitura e resgate aplicados.
+ * Aplica filtro puro de expiração de 24 horas sem mutar localStorage durante leitura.
+ */
+export function getInboxMessagesForPlayer(
+  player: PlayerProfile | { id: string; nick?: string; nickNormalized?: string; playfabId?: string; school?: string; birthdate?: string },
+  nowTime: number = Date.now(),
+): SystemInboxMessage[] {
+  return collectInboxMessagesForPlayer(player, nowTime).visible;
+}
+
+/**
+ * Persiste a exclusão das mensagens já expiradas pela regra de 24h (efeito explícito com relógio autoritativo).
+ */
+export function purgeExpiredInboxMessagesForPlayer(
+  player: PlayerProfile | { id: string; nick?: string; nickNormalized?: string; playfabId?: string; school?: string; birthdate?: string; claimedInboxRewardIds?: string[] },
+  nowTime: number = Date.now(),
+): number {
+  if (!player) return 0;
+  const { expiredIds } = collectInboxMessagesForPlayer(player, nowTime);
+  let purged = 0;
+  for (const id of expiredIds) {
+    const res = deleteInboxMessageForPlayer(id, player);
+    if (res.success) purged++;
+  }
+  return purged;
 }
 
 /**
@@ -996,25 +1167,15 @@ export function markInboxMessageAsRead(
     const nowIso = new Date().toISOString();
     const id = typeof playerOrId === "string" ? playerOrId : playerOrId.id;
     const nick = typeof playerOrId === "object" ? playerOrId.nick : undefined;
-    const nickNorm = typeof playerOrId === "object" ? playerOrId.nickNormalized : undefined;
-    const playfabId = typeof playerOrId === "object" ? playerOrId.playfabId : undefined;
+    const canonicalKey = getCanonicalInboxStudentKey(playerOrId);
 
     const reads = loadStudentMap(STUDENT_READS_KEY, memoryStudentReads);
-    const markKey = (k?: string) => {
-      if (!k) return;
-      const clean = k.toLowerCase().trim();
-      if (!clean) return;
-      if (!reads[clean]) reads[clean] = {};
-      reads[clean][messageId] = nowIso;
-    };
-
-    markKey(id);
-    if (id && id.startsWith("pf_local_")) {
-      markKey(id.replace(/^pf_local_/, ""));
+    if (canonicalKey) {
+      if (!reads[canonicalKey]) reads[canonicalKey] = {};
+      reads[canonicalKey][messageId] = nowIso;
     }
-    markKey(nick);
-    markKey(nickNorm);
-    markKey(playfabId);
+    const activeIds = new Set(loadAllInboxMessages().map((m) => m.id));
+    pruneExpiredLocalInboxReceipts(reads, activeIds);
     saveStudentMap(STUDENT_READS_KEY, reads, (d) => (memoryStudentReads = d));
 
     // Notifica em tempo real (cross-tab / instantâneo) que a mensagem foi lida
@@ -1228,15 +1389,18 @@ export function runRetroactiveInboxReadsScan(
     }
   }
 
-  // 2. Propagação de leitura entre os múltiplos identificadores do mesmo aluno
+  // 2. Consolida leitura dos identificadores legados do aluno na chave canônica única (sem multiplicar em 4x)
   for (const st of allStudents) {
     if (!st) continue;
     const pId = (st.id || "").toLowerCase().trim();
     const pNick = (st.nick || "").toLowerCase().trim();
     const pNickNorm = (st.nickNormalized || "").toLowerCase().trim();
     const pPlayfab = (st.playfabId || "").toLowerCase().trim();
+    const canonicalKey = getCanonicalInboxStudentKey(st);
+    if (!canonicalKey) continue;
 
     const knownReads: Record<string, string> = {
+      ...(reads[canonicalKey] || {}),
       ...(reads[pId] || {}),
       ...(pNick ? reads[pNick] || {} : {}),
       ...(pNickNorm ? reads[pNickNorm] || {} : {}),
@@ -1244,14 +1408,11 @@ export function runRetroactiveInboxReadsScan(
     };
 
     if (Object.keys(knownReads).length > 0) {
-      for (const alias of [pId, pNick, pNickNorm, pPlayfab]) {
-        if (!alias) continue;
-        if (!reads[alias]) reads[alias] = {};
-        for (const [mId, ts] of Object.entries(knownReads)) {
-          if (!reads[alias][mId]) {
-            reads[alias][mId] = ts;
-            recoveredCount++;
-          }
+      if (!reads[canonicalKey]) reads[canonicalKey] = {};
+      for (const [mId, ts] of Object.entries(knownReads)) {
+        if (!reads[canonicalKey][mId]) {
+          reads[canonicalKey][mId] = ts;
+          recoveredCount++;
         }
       }
     }
@@ -1267,7 +1428,7 @@ export function runRetroactiveInboxReadsScan(
 export function markAllInboxMessagesAsReadForRecipient(playerId: string, profile?: PlayerProfile): void {
   const msgs = profile ? getInboxMessagesForPlayer(profile) : getInboxMessagesForRecipient(playerId);
   for (const m of msgs) {
-    markInboxMessageAsRead(m.id, playerId);
+    markInboxMessageAsRead(m.id, profile ?? playerId);
   }
 }
 
@@ -1285,11 +1446,148 @@ export function getInboxMessagesForRecipient(recipientId: string): SystemInboxMe
  * Atualiza pontos ou medalha do aluno e trava contra resgates duplicados.
  * Sincroniza em nuvem e impede que outro dispositivo resgate o mesmo presente novamente.
  */
+function applyXpAndSyncLevelInInbox(args: {
+  profile: PlayerProfile;
+  xpBonus: number;
+  ledgerSource: PendingScoreLedgerInput["source"];
+  reason: string;
+  messageId: string;
+  deferLocalCommit: boolean;
+  pushLedger: (entry: PendingScoreLedgerInput) => void;
+}): void {
+  const { profile, xpBonus, ledgerSource, reason, messageId, deferLocalCommit, pushLedger } = args;
+  if (!(xpBonus > 0)) return;
+  const prevLevel = Math.max(1, Math.floor(Number(profile.level) || 1));
+  profile.xp = (profile.xp ?? 0) + xpBonus;
+  profile.seasonXp = (profile.seasonXp ?? 0) + xpBonus;
+  const cfgSlice = readCachedAdminLevelConfig();
+  const synced = syncLevelStageProgress({
+    xp: profile.xp,
+    lifetimeMatches: profile.matchesPlayed ?? 0,
+    lifetimeWins: profile.wins ?? 0,
+    lifetimeDistinctGames: profile.distinctGamesPlayed ?? 0,
+    currentLevel: profile.level,
+    existingStage: profile.levelStageProgress ?? null,
+    maxAvailableGames: cfgSlice.maxAvailableGames,
+  });
+  profile.level =
+    synced.level ||
+    calculatePlayerLevel({
+      xp: profile.xp,
+      matchesPlayed: profile.matchesPlayed ?? 0,
+      wins: profile.wins ?? 0,
+      distinctGames: profile.distinctGamesPlayed ?? 0,
+      currentLevel: profile.level,
+      stageProgress: profile.levelStageProgress,
+      maxAvailableGames: cfgSlice.maxAvailableGames,
+    });
+  profile.levelStageProgress = synced.stageProgress;
+
+  if (profile.level > prevLevel) {
+    if (!Array.isArray(profile.achievedLevelsPoints)) {
+      const prior: number[] = [];
+      for (let lvl = 2; lvl <= prevLevel; lvl++) {
+        prior.push(lvl);
+      }
+      profile.achievedLevelsPoints = prior;
+    }
+    const ptsBeforePromo = Number(profile.careerPoints ?? 0);
+    const coinsBeforePromo = Number(profile.coins ?? 0);
+    checkLevelPromotionPoints(profile.level, profile, 1, cfgSlice.levelCoinStep, {
+      skipLedger: deferLocalCommit,
+    });
+    if (deferLocalCommit) {
+      const ptsDelta = Number(profile.careerPoints ?? 0) - ptsBeforePromo;
+      const coinsDelta = Number(profile.coins ?? 0) - coinsBeforePromo;
+      if (ptsDelta > 0) {
+        pushLedger({
+          playerId: profile.id,
+          playerNick: profile.nick,
+          type: "career_points",
+          source: "promocao_nivel",
+          amount: ptsDelta,
+          balanceAfter: profile.careerPoints,
+          reason: `Alcance do Nível ${profile.level}`,
+          metadata: { messageId },
+        });
+      }
+      if (coinsDelta > 0) {
+        pushLedger({
+          playerId: profile.id,
+          playerNick: profile.nick,
+          type: "coins",
+          source: "promocao_nivel",
+          amount: coinsDelta,
+          balanceAfter: profile.coins,
+          reason: `Alcance do Nível ${profile.level}`,
+          metadata: { messageId },
+        });
+      }
+    }
+
+    if (profile.level >= 5) {
+      const l5 = ensureLevel5InitialLetterUnlock(profile);
+      profile.unlockedAvatars = l5.profile.unlockedAvatars;
+      profile.level5InitialAvatarGrantedId = l5.profile.level5InitialAvatarGrantedId;
+    }
+  }
+
+  pushLedger({
+    playerId: profile.id,
+    playerNick: profile.nick,
+    type: "xp",
+    source: ledgerSource,
+    amount: xpBonus,
+    balanceAfter: profile.xp,
+    reason,
+    metadata: { messageId },
+  });
+}
+
+function grantInboxCosmeticWithCompensation(args: {
+  profile: PlayerProfile;
+  kind: "avatar" | "aura";
+  cosmeticId: string;
+  msgTitle: string;
+  messageId: string;
+  pushLedger: (entry: PendingScoreLedgerInput) => void;
+}): void {
+  const { profile, kind, cosmeticId, msgTitle, messageId, pushLedger } = args;
+  const grant = grantCosmeticToProfile(profile, kind, cosmeticId);
+  profile.unlockedAvatars = grant.profile.unlockedAvatars;
+  profile.unlockedAuras = grant.profile.unlockedAuras;
+  if (grant.alreadyOwned) {
+    const defs = kind === "aura" ? mergeWithDefaultAuras() : mergeWithDefaultAvatars();
+    const def = defs.find((d) => d.id === cosmeticId);
+    const compCoins = calculateDuplicateCosmeticCompensation(def?.priceCoins);
+    if (compCoins > 0) {
+      creditCoinMetrics(profile, compCoins);
+      pushLedger({
+        playerId: profile.id,
+        playerNick: profile.nick,
+        type: "coins",
+        source: "correio",
+        amount: compCoins,
+        balanceAfter: profile.coins,
+        reason: `Compensação cosmético repetido (${def?.name ?? cosmeticId} · ${msgTitle})`,
+        metadata: { messageId },
+      });
+    }
+  }
+}
+
 export function claimInboxReward(
   messageId: string,
   inputProfile: PlayerProfile,
-  options?: { deferLocalCommit?: boolean },
-): { success: boolean; error?: string; reward?: InboxReward; profile: PlayerProfile; claimedAt?: string } {
+  options?: { deferLocalCommit?: boolean; nowIso?: string },
+): {
+  success: boolean;
+  error?: string;
+  reward?: InboxReward;
+  profile: PlayerProfile;
+  claimedAt?: string;
+  pendingLedgerEntries?: PendingScoreLedgerInput[];
+} {
   if (!inputProfile) {
     return { success: false, error: "Perfil do aluno inválido.", profile: inputProfile };
   }
@@ -1308,27 +1606,25 @@ export function claimInboxReward(
         claimedInboxRewardIds: Array.isArray(inputProfile.claimedInboxRewardIds)
           ? [...inputProfile.claimedInboxRewardIds]
           : undefined,
+        claimedInboxRewardTimestamps: inputProfile.claimedInboxRewardTimestamps
+          ? { ...inputProfile.claimedInboxRewardTimestamps }
+          : undefined,
       }
     : inputProfile;
 
-  const pId = profile.id.toLowerCase().trim();
-  const pNick = (profile.nick || "").toLowerCase().trim();
-  const pNickNorm = (profile.nickNormalized || "").toLowerCase().trim();
-  const pPlayfabId = (profile.playfabId || "").toLowerCase().trim();
-
   const claims = loadStudentMap(STUDENT_CLAIMS_KEY, memoryStudentClaims);
-
-  const alreadyClaimedLocal =
-    (claims[pId] && claims[pId][messageId]) ||
-    (pNick && claims[pNick] && claims[pNick][messageId]) ||
-    (pNickNorm && claims[pNickNorm] && claims[pNickNorm][messageId]) ||
-    (pPlayfabId && claims[pPlayfabId] && claims[pPlayfabId][messageId]);
+  const aliases = getPlayerAliasKeys(profile);
+  const alreadyClaimedLocal = aliases.some((k) => Boolean(claims[k]?.[messageId]));
 
   const alreadyClaimedProfile =
     Array.isArray(profile.claimedInboxRewardIds) && profile.claimedInboxRewardIds.includes(messageId);
 
   if (alreadyClaimedLocal || alreadyClaimedProfile) {
     return { success: false, error: "Esta recompensa já foi resgatada anteriormente.", profile };
+  }
+
+  if (isMessageCanceled(messageId)) {
+    return { success: false, error: "Esta mensagem foi cancelada pela administração.", profile };
   }
 
   const all = loadAllInboxMessages();
@@ -1338,100 +1634,88 @@ export function claimInboxReward(
     return { success: false, error: "Nenhuma recompensa encontrada nesta mensagem.", profile };
   }
 
-  if (msg.recipientId !== "ALL") {
-    if (!matchPlayerIdentifier(msg.recipientId, profile)) {
-      return { success: false, error: "Esta recompensa não pertence a este perfil de aluno.", profile };
-    }
+  if (!isMessageEligibleForPlayer(msg, profile)) {
+    return { success: false, error: "Esta recompensa não pertence a este perfil de aluno.", profile };
   }
 
   if (msg.recipientId !== "ALL" && rewardsList.every((r) => r.claimed)) {
     return { success: false, error: "Esta recompensa já foi resgatada anteriormente.", profile };
   }
 
-  const nowIso = new Date().toISOString();
-
-  for (const reward of rewardsList) {
-    // 1. Conceder Pontos se houver
-    if (reward.type === "points" && reward.pointsAmount && reward.pointsAmount > 0) {
-      awardCareerPoints(profile, reward.pointsAmount, `Recompensa Correio: ${msg.title}`);
+  const nowIso = options?.nowIso ?? new Date().toISOString();
+  const pendingLedgerEntries: PendingScoreLedgerInput[] = [];
+  const pushLedger = (entry: PendingScoreLedgerInput) => {
+    if (deferLocalCommit) {
+      pendingLedgerEntries.push(entry);
+    } else {
       try {
-        recordScoreLedgerEntry({
-          playerId: profile.id,
-          playerNick: profile.nick,
-          type: "career_points",
-          source: "correio",
-          amount: reward.pointsAmount!,
-          balanceAfter: profile.careerPoints,
-          reason: `Recompensa Postal: ${reward.pointsAmount} Pontos`,
-          metadata: { messageId },
-        });
+        recordScoreLedgerEntry(entry);
       } catch {
         /* ignore */
       }
     }
+  };
 
-    // 1.1 Conceder XP direto se houver
+  for (const reward of rewardsList) {
+    // 1. Conceder Pontos se houver (ledger único via pushLedger)
+    if (reward.type === "points" && reward.pointsAmount && reward.pointsAmount > 0) {
+      awardCareerPoints(profile, reward.pointsAmount, `Recompensa Correio: ${msg.title}`, 1, {
+        source: "correio",
+        skipLedger: true,
+      });
+      pushLedger({
+        playerId: profile.id,
+        playerNick: profile.nick,
+        type: "career_points",
+        source: "correio",
+        amount: reward.pointsAmount!,
+        balanceAfter: profile.careerPoints,
+        reason: `Recompensa Postal: ${reward.pointsAmount} Pontos`,
+        metadata: { messageId },
+      });
+    }
+
+    // 1.1 Conceder XP direto se houver (com sincronização completa de nível e bônus de promoção)
     if (reward.type === "xp" && reward.pointsAmount && reward.pointsAmount > 0) {
       const xpBonus = reward.pointsAmount;
-      profile.xp = (profile.xp ?? 0) + xpBonus;
-      profile.seasonXp = (profile.seasonXp ?? 0) + xpBonus;
-      profile.level = calculatePlayerLevel({
-        xp: profile.xp,
-        matchesPlayed: profile.matchesPlayed ?? 0,
-        wins: profile.wins ?? 0,
-        distinctGames: profile.distinctGamesPlayed ?? 0,
-        currentLevel: profile.level,
-        stageProgress: profile.levelStageProgress,
+      applyXpAndSyncLevelInInbox({
+        profile,
+        xpBonus,
+        ledgerSource: "correio",
+        reason: `Recompensa Postal: +${xpBonus} XP (${msg.title})`,
+        messageId,
+        deferLocalCommit,
+        pushLedger,
       });
-      try {
-        recordScoreLedgerEntry({
-          playerId: profile.id,
-          playerNick: profile.nick,
-          type: "xp",
-          source: "correio",
-          amount: xpBonus,
-          balanceAfter: profile.xp,
-          reason: `Recompensa Postal: +${xpBonus} XP (${msg.title})`,
-          metadata: { messageId },
-        });
-      } catch {
-        /* ignore */
-      }
     }
 
     // 1.2 Conceder Moedas se houver
     if (reward.type === "coins" && reward.pointsAmount && reward.pointsAmount > 0) {
       const coinsBonus = Math.floor(reward.pointsAmount);
       creditCoinMetrics(profile, coinsBonus);
-      try {
-        recordScoreLedgerEntry({
-          playerId: profile.id,
-          playerNick: profile.nick,
-          type: "coins",
-          source: "correio",
-          amount: coinsBonus,
-          balanceAfter: profile.coins,
-          reason: `Recompensa Postal: +${coinsBonus} Moedas (${msg.title})`,
-          metadata: { messageId },
-        });
-      } catch {
-        /* ignore */
-      }
+      pushLedger({
+        playerId: profile.id,
+        playerNick: profile.nick,
+        type: "coins",
+        source: "correio",
+        amount: coinsBonus,
+        balanceAfter: profile.coins,
+        reason: `Recompensa Postal: +${coinsBonus} Moedas (${msg.title})`,
+        metadata: { messageId },
+      });
     }
 
-    // 1.3 Conceder Cosmético (Avatar ou Aura) se houver
+    // 1.3 Conceder Cosmético (Avatar ou Aura) se houver, com compensação por duplicata
     if (reward.type === "cosmetic" && reward.cosmeticId) {
-      if (reward.cosmeticKind === "aura") {
-        const cur = Array.isArray(profile.unlockedAuras) ? profile.unlockedAuras : [];
-        if (!cur.includes(reward.cosmeticId)) {
-          profile.unlockedAuras = [...cur, reward.cosmeticId];
-        }
-      } else {
-        const cur = Array.isArray(profile.unlockedAvatars) ? profile.unlockedAvatars : [];
-        if (!cur.includes(reward.cosmeticId)) {
-          profile.unlockedAvatars = [...cur, reward.cosmeticId];
-        }
-      }
+      const kind: "avatar" | "aura" = reward.cosmeticKind === "aura" ? "aura" : "avatar";
+      grantInboxCosmeticWithCompensation({
+        profile,
+        kind,
+        cosmeticId: reward.cosmeticId,
+        msgTitle: msg.title,
+        messageId,
+        pushLedger,
+      });
     }
 
     // 1.4 Conceder Item (Baú, Pacote de Cartas ou Cosmético) via future_item
@@ -1450,19 +1734,20 @@ export function claimInboxReward(
           prevPacks[normalizedPackId] = (Number(prevPacks[normalizedPackId]) || 0) + qty;
           profile.unopenedPacks = prevPacks;
         } else if (cat === "cosmetic") {
-          const cKind = String(reward.itemData.cosmeticKind || "avatar");
-          if (cKind === "aura") {
-            const cur = Array.isArray(profile.unlockedAuras) ? profile.unlockedAuras : [];
-            if (!cur.includes(itemId)) profile.unlockedAuras = [...cur, itemId];
-          } else {
-            const cur = Array.isArray(profile.unlockedAvatars) ? profile.unlockedAvatars : [];
-            if (!cur.includes(itemId)) profile.unlockedAvatars = [...cur, itemId];
-          }
+          const cKind: "avatar" | "aura" = String(reward.itemData.cosmeticKind || "avatar") === "aura" ? "aura" : "avatar";
+          grantInboxCosmeticWithCompensation({
+            profile,
+            kind: cKind,
+            cosmeticId: itemId,
+            msgTitle: msg.title,
+            messageId,
+            pushLedger,
+          });
         }
       }
     }
 
-    // 2. Conceder Medalha se houver
+    // 2. Conceder Medalha se houver (Opção A: sem auto-XP/pontos do catálogo; respeita isStackable)
     if (reward.type === "medal") {
       if (reward.medalId) {
         const allMedals = getAllAvailableMedals();
@@ -1479,7 +1764,7 @@ export function claimInboxReward(
               count: 1,
             };
             profile.unlockedMedals.push(newUnlocked);
-          } else {
+          } else if (medalDef.isStackable) {
             existing.count = (existing.count ?? 1) + 1;
           }
         }
@@ -1492,58 +1777,43 @@ export function claimInboxReward(
         // Concede exclusivamente o bônus de XP previsto na medalha ranqueada (jamais converte pointsAmount de moedas/loja em XP!)
         const bonusXp = tm.bonusXpAwarded ?? 0;
         if (bonusXp > 0) {
-          profile.xp = (profile.xp ?? 0) + bonusXp;
-          profile.seasonXp = (profile.seasonXp ?? 0) + bonusXp;
-          profile.level = calculatePlayerLevel({
-            xp: profile.xp,
-            matchesPlayed: profile.matchesPlayed ?? 0,
-            wins: profile.wins ?? 0,
-            distinctGames: profile.distinctGamesPlayed ?? 0,
-            currentLevel: profile.level,
-            stageProgress: profile.levelStageProgress,
+          applyXpAndSyncLevelInInbox({
+            profile,
+            xpBonus: bonusXp,
+            ledgerSource: "torneio_semanal",
+            reason: `Bônus de XP do Torneio Ranqueado (${tm.label || tm.tier})`,
+            messageId,
+            deferLocalCommit,
+            pushLedger,
           });
-          try {
-            recordScoreLedgerEntry({
-              playerId: profile.id,
-              playerNick: profile.nick,
-              type: "xp",
-              source: "torneio_semanal",
-              amount: bonusXp,
-              balanceAfter: profile.xp,
-              reason: `Bônus de XP do Torneio Ranqueado (${tm.label || tm.tier})`,
-              metadata: { messageId },
-            });
-          } catch {
-            /* ignore */
-          }
         }
       }
 
-      try {
-        if (reward.medalId) {
-          recordScoreLedgerEntry({
-            playerId: profile.id,
-            playerNick: profile.nick,
-            type: "medal",
-            source: "correio",
-            amount: 1,
-            reason: `Medalha Resgatada da Caixa Postal (${reward.medalId})`,
-            metadata: { messageId, medalId: reward.medalId },
-          });
-        }
-      } catch {
-        /* ignore */
+      if (reward.medalId) {
+        pushLedger({
+          playerId: profile.id,
+          playerNick: profile.nick,
+          type: "medal",
+          source: "correio",
+          amount: 1,
+          reason: `Medalha Resgatada da Caixa Postal (${reward.medalId})`,
+          metadata: { messageId, medalId: reward.medalId },
+        });
       }
     }
   }
 
-  // 3. Atualizar profile.claimedInboxRewardIds permanente (trava cross-device)
+  // 3. Atualizar profile.claimedInboxRewardIds e timestamps cross-device
   if (!Array.isArray(profile.claimedInboxRewardIds)) {
     profile.claimedInboxRewardIds = [];
   }
   if (!profile.claimedInboxRewardIds.includes(messageId)) {
     profile.claimedInboxRewardIds.push(messageId);
   }
+  profile.claimedInboxRewardTimestamps = {
+    ...(profile.claimedInboxRewardTimestamps ?? {}),
+    [messageId]: nowIso,
+  };
 
   if (!deferLocalCommit) {
     commitInboxClaimLocally(messageId, profile, nowIso);
@@ -1554,31 +1824,45 @@ export function claimInboxReward(
     reward: { ...rewardsList[0], claimed: true, claimedAt: nowIso },
     profile,
     claimedAt: nowIso,
+    ...(deferLocalCommit ? { pendingLedgerEntries } : {}),
   };
 }
 
 /**
- * Efetiva o marcador local de resgate de recompensa do Correio (localStorage + cache em memória).
- * Deve ser chamado após a confirmação do servidor quando `claimInboxReward` usa `deferLocalCommit: true`.
+ * Efetiva o marcador local de resgate de recompensa do Correio (localStorage + cache em memória)
+ * e grava os lançamentos adiados no livro-razão após confirmação do servidor.
  */
 export function commitInboxClaimLocally(
   messageId: string,
   profile: PlayerProfile,
   claimedAtIso = new Date().toISOString(),
+  pendingLedgerEntries?: PendingScoreLedgerInput[],
 ): void {
-  const pId = profile.id.toLowerCase().trim();
-  const pNick = (profile.nick || "").toLowerCase().trim();
-  const pNickNorm = (profile.nickNormalized || "").toLowerCase().trim();
-  const pPlayfabId = (profile.playfabId || "").toLowerCase().trim();
+  const canonicalKey = getCanonicalInboxStudentKey(profile);
 
   const claims = loadStudentMap(STUDENT_CLAIMS_KEY, memoryStudentClaims);
-  for (const k of [pId, pNick, pNickNorm, pPlayfabId]) {
-    if (k) {
-      if (!claims[k]) claims[k] = {};
-      claims[k][messageId] = claimedAtIso;
+  if (canonicalKey) {
+    if (!claims[canonicalKey]) claims[canonicalKey] = {};
+    claims[canonicalKey][messageId] = claimedAtIso;
+  }
+  const activeIds = new Set(loadAllInboxMessages().map((m) => m.id));
+  pruneExpiredLocalInboxReceipts(claims, activeIds);
+  saveStudentMap(STUDENT_CLAIMS_KEY, claims, (d) => (memoryStudentClaims = d));
+
+  profile.claimedInboxRewardTimestamps = {
+    ...(profile.claimedInboxRewardTimestamps ?? {}),
+    [messageId]: claimedAtIso,
+  };
+
+  if (Array.isArray(pendingLedgerEntries) && pendingLedgerEntries.length > 0) {
+    for (const entry of pendingLedgerEntries) {
+      try {
+        recordScoreLedgerEntry(entry);
+      } catch {
+        /* ignore */
+      }
     }
   }
-  saveStudentMap(STUDENT_CLAIMS_KEY, claims, (d) => (memoryStudentClaims = d));
 
   markInboxMessageAsRead(messageId, profile);
   broadcastInboxEvent({
@@ -1612,10 +1896,7 @@ export function deleteInboxMessageForPlayer(
   messageId: string,
   player: PlayerProfile | { id: string; nick?: string; nickNormalized?: string; playfabId?: string; claimedInboxRewardIds?: string[] }
 ): { success: boolean; error?: string } {
-  const pId = player.id.toLowerCase().trim();
-  const pNick = (player.nick || "").toLowerCase().trim();
-  const pNickNorm = (player.nickNormalized || "").toLowerCase().trim();
-  const pPlayfabId = (player.playfabId || "").toLowerCase().trim();
+  const aliases = getPlayerAliasKeys(player);
   const all = loadAllInboxMessages();
   const msg = all.find((m) => m.id === messageId);
 
@@ -1627,12 +1908,7 @@ export function deleteInboxMessageForPlayer(
   const msgRewards = getMessageRewards(msg);
   if (msgRewards.length > 0) {
     const claims = loadStudentMap(STUDENT_CLAIMS_KEY, memoryStudentClaims);
-    const claimedLocal = Boolean(
-      claims[pId]?.[messageId] ||
-        (pNick && claims[pNick]?.[messageId]) ||
-        (pNickNorm && claims[pNickNorm]?.[messageId]) ||
-        (pPlayfabId && claims[pPlayfabId]?.[messageId]),
-    );
+    const claimedLocal = aliases.some((k) => Boolean(claims[k]?.[messageId]));
     const claimedProfile = Boolean(
       Array.isArray(player.claimedInboxRewardIds) &&
         player.claimedInboxRewardIds.includes(messageId),
@@ -1650,10 +1926,13 @@ export function deleteInboxMessageForPlayer(
     }
   }
 
-  // Marca como deletada para este aluno
+  // Marca como deletada apenas na chave canônica única do aluno (elimina amplificação 4x)
   const deletes = loadStudentMap(STUDENT_DELETES_KEY, memoryStudentDeletes);
-  if (!deletes[pId]) deletes[pId] = {};
-  deletes[pId][messageId] = true;
+  const canonicalKey = getCanonicalInboxStudentKey(player);
+  if (canonicalKey) {
+    if (!deletes[canonicalKey]) deletes[canonicalKey] = {};
+    deletes[canonicalKey][messageId] = true;
+  }
   saveStudentMap(STUDENT_DELETES_KEY, deletes, (d) => (memoryStudentDeletes = d));
 
   return { success: true };
@@ -1767,16 +2046,7 @@ export type InboxBodySegment =
  * Valida URL de mídia externa/interna para impedir esquemas perigosos (javascript:, data:, etc.)
  */
 export function isSafeMediaUrl(url?: string | null): boolean {
-  if (!url || typeof url !== "string") return false;
-  const trimmed = url.trim();
-  if (!trimmed) return false;
-  if (trimmed.startsWith("/") && !trimmed.startsWith("//")) return true;
-  try {
-    const parsed = new URL(trimmed);
-    return parsed.protocol === "https:";
-  } catch {
-    return false;
-  }
+  return isSafeHttpOrRelativeMediaUrl(url, { allowDataImage: false });
 }
 
 export function getMediaRowSlotWidth(scale: number): string {

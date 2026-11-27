@@ -41,8 +41,8 @@ export function useCountdown(seconds: number, running: boolean, onEnd: () => voi
 export interface RoundClock {
   time: number;
   bonus: number;
-  /** Adds bonus seconds (capped) — call only when the bonus is on. */
-  addBonus: (amount?: number) => void;
+  /** Adds bonus seconds (capped) and returns how many seconds were actually added. */
+  addBonus: (amount?: number) => number;
 }
 
 /** Countdown that can be extended with bonus seconds on correct answers. */
@@ -61,7 +61,13 @@ export function useRoundClock(
   onEndRef.current = onEnd;
 
   useEffect(() => {
-    if (!running) return;
+    if (!running) {
+      bonusRef.current = 0;
+      endedRef.current = false;
+      setBonus(0);
+      setRemaining(seconds);
+      return;
+    }
     bonusRef.current = 0;
     setBonus(0);
     setRemaining(seconds);
@@ -81,14 +87,15 @@ export function useRoundClock(
   }, [running, seconds]);
 
   const addBonus = useCallback(
-    (amount?: number) => {
-      if (endedRef.current) return;
+    (amount?: number): number => {
+      if (endedRef.current) return 0;
       const next = Math.min(max, bonusRef.current + (amount ?? step));
-      if (next === bonusRef.current) return;
+      if (next === bonusRef.current) return 0;
       const gained = next - bonusRef.current;
       bonusRef.current = next;
       setBonus(next);
       setRemaining((r) => r + gained);
+      return gained;
     },
     [step, max],
   );

@@ -229,4 +229,52 @@ describe("Relatório de Vendas da Loja (store-analytics)", () => {
       [...byName.map((i) => i.name)].sort((a, b) => a.localeCompare(b, "pt-BR", { sensitivity: "base" })),
     );
   });
+
+  it("Bloco 1.3 (ECON-23): exclui lixeira (deletedAt), deduplica snapshots por nickSlug, normaliza pacotes legados e calcula untrackedLegacyCoins por aluno", () => {
+    const avatarBot = DEFAULT_AVATARS.find((a) => a.id === "avatar_bot")!;
+    const packBasico = { ...DEFAULT_CARD_PACKS[0], priceCoins: 50 };
+
+    const players: StoreAnalyticsPlayerSlice[] = [
+      // Mesmo aluno salvo duas vezes (pf_local_* + PlayFab ID) -> mantém snapshot mais completo
+      {
+        id: "pf_local_joao",
+        nick: "João",
+        coinsSpentTotal: 100,
+        purchasedCosmeticIds: [`avatar:${avatarBot.id}`],
+        storeCoinsSpentByItem: { [`avatar:${avatarBot.id}`]: 100 },
+      },
+      {
+        id: "PF_999",
+        nick: "João",
+        nickNormalized: "joao",
+        coinsSpentTotal: 150,
+        purchasedCosmeticIds: [`avatar:${avatarBot.id}`],
+        purchasedPackCounts: { pack_avancado: 1 }, // ID legado -> normaliza para pack_mestre
+        storeCoinsSpentByItem: {
+          [`avatar:${avatarBot.id}`]: 100,
+          "pack:pack_avancado": 50,
+        },
+      },
+      // Conta na lixeira deve ser ignorada
+      {
+        id: "p_lixeira",
+        nick: "Excluido",
+        deletedAt: "2026-11-20T00:00:00.000Z",
+        coinsSpentTotal: 500,
+        purchasedCosmeticIds: [`avatar:${avatarBot.id}`],
+      },
+      // Aluno com moedas legadas não rastreadas (+80 sem item) e João não mascara Maria
+      {
+        id: "p_maria",
+        nick: "Maria",
+        coinsSpentTotal: 80,
+      },
+    ];
+
+    const report = computeStoreSalesReport(players, { cardPacks: DEFAULT_CARD_PACKS });
+    assert.equal(report.analyzedPlayersCount, 2, "Deve excluir deletedAt e deduplicar João");
+    assert.equal(report.totalCoinsSpent, 230); // 150 + 80
+    assert.equal(report.untrackedLegacyCoins, 80, "Apenas as 80 moedas não rastreadas de Maria contam como legadas");
+    assert.ok(report.items.some((i) => i.key === "pack:pack_mestre" && i.quantitySold === 1));
+  });
 });

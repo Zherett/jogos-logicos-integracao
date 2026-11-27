@@ -15,6 +15,7 @@ import {
   recordWeeklyTournamentAttempt,
   resolveCanonicalTournamentPoints,
   resolveWeeklyTournamentGame,
+  sanitizeTournamentRecordForCloud,
   TOURNAMENT_DAILY_FREE_ENTRIES,
   TOURNAMENT_DAILY_PAID_ENTRIES_LIMIT,
   TOURNAMENT_DAILY_ENTRIES_LIMIT,
@@ -1213,5 +1214,147 @@ describe("Torneio Semanal Ranqueado (Nível 3+) e Regras da Arena X1 (Nível 5+,
     });
     assert.equal(s2Res.ok, true);
     assert.equal(s2Res.updatedProfile?.unopenedPacks?.pack_basico, 4);
+  });
+
+  it("Onda 0 (LGPD-01): sanitizeTournamentRecordForCloud remove birthdate, age e fullName antes de publicar", () => {
+    const clean = sanitizeTournamentRecordForCloud({
+      playerId: "aluno_1",
+      nick: "Aluno_1",
+      fullName: "JOAO PEDRO SOUZA",
+      school: "Raimunda Cruz",
+      birthdate: "2015-04-12",
+      age: 11,
+      stage: "etapa_1",
+      level: 5,
+      bestScore: 100,
+      totalEntries: 3,
+      tournamentPoints: 30,
+      activeTop5Since: null,
+      accumulatedTop5Ms: 0,
+      updatedAt: 1_000_000,
+    });
+    assert.equal("birthdate" in clean, false);
+    assert.equal("age" in clean, false);
+    assert.equal(clean.fullName, "");
+    assert.equal(clean.nick, "Aluno_1");
+    assert.equal(clean.school, "Raimunda Cruz");
+  });
+
+  it("Bloco 1.1 (RANK-04 / RANK-05): claimRankedMilestoneReward valida nível/pontos/moedas/packId e bônus de 10 vitórias perfeitas funciona mesmo após erro anterior", async () => {
+    // 1. Nível 1 não pode resgatar nem bronze_1
+    const lvl1Res = claimRankedMilestoneReward({
+      profile: { id: "p_lvl1", nick: "Novato", nickNormalized: "novato", full_name: "NOVATO", school: "Nenhuma", grade: null, birthdate: "", xp: 0, seasonXp: 0, level: 1, wins: 0, matchesPlayed: 0, badges: [], seasonId: 1 } as any,
+      rankId: "bronze_1",
+      seasonId: 1,
+      reward: { type: "points", quantity: 10 },
+      currentPoints: 100,
+    });
+    assert.equal(lvl1Res.ok, false);
+
+    // 2. Nível 3 com 0 pts não pode resgatar bronze_1; Infinity não corrompe; packId é normalizado e allowCoinsRewards=false bloqueia
+    const baseEligible = {
+      id: "p_lvl4",
+      nick: "Elegivel",
+      nickNormalized: "elegivel",
+      full_name: "ELEGIVEL",
+      school: "Nenhuma",
+      grade: null,
+      birthdate: "",
+      xp: 1000,
+      seasonXp: 1000,
+      level: 4,
+      wins: 10,
+      matchesPlayed: 15,
+      badges: [],
+      seasonId: 1,
+    } as any;
+
+    const zeroPtsRes = claimRankedMilestoneReward({
+      profile: baseEligible,
+      rankId: "bronze_1",
+      seasonId: 1,
+      reward: { type: "points", quantity: 10 },
+      currentPoints: 0,
+    });
+    assert.equal(zeroPtsRes.ok, false);
+
+    const infBlockedRes = claimRankedMilestoneReward({
+      profile: baseEligible,
+      rankId: "ouro_1",
+      seasonId: 1,
+      reward: { type: "points", quantity: 10 },
+      currentPoints: Number.POSITIVE_INFINITY,
+    });
+    assert.equal(infBlockedRes.ok, false);
+
+    const coinsBlockedRes = claimRankedMilestoneReward({
+      profile: baseEligible,
+      rankId: "bronze_1",
+      seasonId: 1,
+      reward: { type: "coins", quantity: 50 },
+      currentPoints: 10,
+      allowCoinsRewards: false,
+    });
+    assert.equal(coinsBlockedRes.ok, false);
+
+    const packClaimRes = claimRankedMilestoneReward({
+      profile: baseEligible,
+      rankId: "bronze_1",
+      seasonId: 1,
+      reward: { type: "card_pack", packId: "pack_avancado", quantity: 1, coinsBonus: 30 },
+      currentPoints: 10,
+      allowCoinsRewards: false,
+    });
+    assert.equal(packClaimRes.ok, true);
+    assert.equal(packClaimRes.updatedProfile?.unopenedPacks?.pack_avancado ?? 0, 0);
+    assert.equal(packClaimRes.updatedProfile?.unopenedPacks?.pack_mestre, 1);
+    assert.equal(packClaimRes.updatedProfile?.coins ?? 0, 0); // coinsBonus respeitou allowCoinsRewards=false
+
+    // 3. Bônus de 10 partidas perfeitas no mesmo dia (mesmo após 1 partida anterior com erro)
+    const hadWindow = typeof (globalThis as any).window !== "undefined";
+    const prevWindow = (globalThis as any).window;
+    const memStorage = new Map<string, string>();
+    if (!hadWindow) {
+      (globalThis as any).window = {
+        localStorage: {
+          getItem: (k: string) => (memStorage.has(k) ? memStorage.get(k)! : null),
+          setItem: (k: string, v: string) => memStorage.set(k, String(v)),
+          removeItem: (k: string) => memStorage.delete(k),
+          clear: () => memStorage.clear(),
+        },
+        dispatchEvent: () => true,
+      };
+    }
+    try {
+      const testProfile = {
+        ...baseEligible,
+        id: "p_perf10",
+        nick: "Perfeito10",
+        nickNormalized: "perfeito10",
+        tournamentPoints: 0,
+      };
+      // 1ª partida com 1 erro (não perfeita)
+      await recordWeeklyTournamentAttempt({
+        profile: testProfile,
+        score: 90,
+        correct: 9,
+        wrong: 1,
+      });
+      let dailyBonusTriggered = false;
+      for (let i = 0; i < 10; i++) {
+        const attempt = await recordWeeklyTournamentAttempt({
+          profile: { ...testProfile, tournamentPoints: i * 10 },
+          score: 100,
+          correct: 10,
+          wrong: 0,
+        });
+        if (attempt.dailyBonusAwarded) dailyBonusTriggered = true;
+      }
+      assert.equal(dailyBonusTriggered, true);
+    } finally {
+      if (!hadWindow) {
+        (globalThis as any).window = prevWindow;
+      }
+    }
   });
 });

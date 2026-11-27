@@ -34,8 +34,8 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
-  --font-display: "Fredoka", system-ui, sans-serif;
-  --font-sans: "Nunito", system-ui, sans-serif;
+  --font-display: "Fredoka", ui-rounded, "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+  --font-sans: "Nunito", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
 }
 
 :root {
@@ -161,6 +161,17 @@
   0%,100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-primary) 45%, transparent); }
   50% { box-shadow: 0 0 0 12px color-mix(in oklab, var(--color-primary) 0%, transparent); }
 }
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-6px); }
+  40% { transform: translateX(6px); }
+  60% { transform: translateX(-4px); }
+  80% { transform: translateX(4px); }
+}
 
 @utility animate-pop-in { animation: pop-in 0.35s cubic-bezier(.2,.9,.3,1.3); }
 @utility animate-flash-correct { animation: flash-correct 0.55s ease-out; }
@@ -169,6 +180,8 @@
 @utility animate-level-up { animation: level-up 0.7s cubic-bezier(.2,.9,.3,1.3); }
 @utility animate-card-reveal { animation: card-reveal 0.55s cubic-bezier(.2,.9,.3,1.2); }
 @utility animate-shake-x { animation: shake-x 0.45s ease-in-out; }
+@utility animate-shake { animation: shake 0.45s ease-in-out; }
+@utility animate-fade-in { animation: fade-in 0.25s ease-out both; }
 @utility animate-hit-flash { animation: hit-flash 0.4s ease-out; }
 @utility animate-countdown { animation: countdown-pop 0.8s ease-out forwards; }
 @utility animate-snap-in { animation: snap-in 0.35s cubic-bezier(.2,.9,.3,1.4); }
@@ -610,6 +623,14 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
   .animate-avatar-dual-spin,
   .animate-avatar-dual-face-a,
   .animate-avatar-dual-face-b,

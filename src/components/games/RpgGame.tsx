@@ -38,6 +38,8 @@ import {
 import { MedalIcon } from "./MedalIcon";
 import type { MedalDefinition } from "@/lib/medals-catalog";
 import { usePlayerAuth } from "@/lib/player-auth";
+import { updateActiveGameLevel } from "@/lib/presence";
+import { useSafeTimeouts } from "@/lib/use-safe-timeouts";
 
 interface Props {
   onExit: () => void;
@@ -94,6 +96,16 @@ export function RpgGame({ onExit, onStatsChange, isRanked = false }: Props) {
   const correctRef = useRef(0);
   const wrongRef = useRef(0);
   const finishedRef = useRef(false);
+  const wasRankedMatchRef = useRef(false);
+  const onStatsChangeRef = useRef(onStatsChange);
+  onStatsChangeRef.current = onStatsChange;
+  const { schedule, clearAll } = useSafeTimeouts();
+
+  useEffect(() => {
+    if (phase === "playing") {
+      updateActiveGameLevel(stage);
+    }
+  }, [phase, stage]);
 
   stunnedUntilRef.current = stunnedUntil;
   unlockedMedalRef.current = unlockedSpecialMedal;
@@ -157,6 +169,7 @@ export function RpgGame({ onExit, onStatsChange, isRanked = false }: Props) {
     ) => {
       if (finishedRef.current) return;
       finishedRef.current = true;
+      wasRankedMatchRef.current = wasRankedMatchRef.current || Boolean(isRanked);
       const safeScore = Math.max(0, finalScore);
       updateBest("rpg", safeScore, reachedStage);
       saveLastMatch("rpg", {
@@ -166,14 +179,17 @@ export function RpgGame({ onExit, onStatsChange, isRanked = false }: Props) {
         wrong: finalWrong,
         mode: isRanked ? "torneio_semanal" : "padrao",
       });
-      onStatsChange?.();
+      onStatsChangeRef.current?.();
+      clearAll();
       setPhase(finalPhase);
     },
-    [onStatsChange, isRanked],
+    [isRanked, clearAll],
   );
 
   const startBattle = () => {
+    clearAll();
     finishedRef.current = false;
+    wasRankedMatchRef.current = Boolean(isRanked);
     specialSpawnedRef.current = false;
     const firstBoss = getRobotBoss(1, false);
     setBoss(firstBoss);
@@ -227,7 +243,7 @@ export function RpgGame({ onExit, onStatsChange, isRanked = false }: Props) {
         // Red bar reached 100% on the left! Player robot suffers an overload shock
         playRpgPlayerHit();
         setPlayerHitFlash(true);
-        window.setTimeout(() => setPlayerHitFlash(false), 550);
+        schedule(() => setPlayerHitFlash(false), 550);
 
         const nextLives = livesRef.current - 1;
         setPlayerLives(nextLives);
@@ -240,7 +256,7 @@ export function RpgGame({ onExit, onStatsChange, isRanked = false }: Props) {
         }
 
         setClashBanner("⚠️ SOBRECARGA INIMIGA! Você perdeu 1 escudo!");
-        window.setTimeout(() => setClashBanner(null), 1800);
+        schedule(() => setClashBanner(null), 1800);
         applyVisualShare(INITIAL_BLUE_SHARE);
       } else {
         applyVisualShare(tickRes.blueShare);
@@ -251,11 +267,11 @@ export function RpgGame({ onExit, onStatsChange, isRanked = false }: Props) {
 
     frameId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(frameId);
-  }, [phase, finishMatch, applyVisualShare]);
+  }, [phase, finishMatch, applyVisualShare, schedule]);
 
   const handleAnswer = useCallback(
     (chosen: boolean) => {
-      if (phase !== "playing" || isTransitioningRef.current) return;
+      if (phase !== "playing" || isTransitioningRef.current || unlockedMedalRef.current) return;
       if (performance.now() < stunnedUntilRef.current) return;
 
       const currentBoss = bossRef.current;
@@ -277,7 +293,7 @@ export function RpgGame({ onExit, onStatsChange, isRanked = false }: Props) {
         setStreak(0);
         setScore((s) => Math.max(0, s + outcome.scoreDelta));
         setPlayerHitFlash(true);
-        window.setTimeout(() => setPlayerHitFlash(false), 450);
+        schedule(() => setPlayerHitFlash(false), 450);
 
         // Stun for 0.9s to prevent button mashing
         const until = performance.now() + 900;
@@ -300,7 +316,7 @@ export function RpgGame({ onExit, onStatsChange, isRanked = false }: Props) {
             return;
           }
           setClashBanner("⚠️ ERRO CRÍTICO! O raio inimigo atingiu seu robô (-1 escudo)!");
-          window.setTimeout(() => setClashBanner(null), 1800);
+          schedule(() => setClashBanner(null), 1800);
           applyVisualShare(INITIAL_BLUE_SHARE);
         } else {
           applyVisualShare(outcome.nextBlueShare);
@@ -323,9 +339,9 @@ export function RpgGame({ onExit, onStatsChange, isRanked = false }: Props) {
         setClashBanner(null);
       }
 
-      window.setTimeout(() => setEnemyHitKind(null), 500);
+      schedule(() => setEnemyHitKind(null), 500);
       if (outcome.isSuperHit) {
-        window.setTimeout(() => setClashBanner(null), 2200);
+        schedule(() => setClashBanner(null), 2200);
       }
 
       const nextStreak = streak + 1;
@@ -347,9 +363,9 @@ export function RpgGame({ onExit, onStatsChange, isRanked = false }: Props) {
             if (res.success && res.medal) {
               setUnlockedSpecialMedal(res.medal);
               playTone(523, 0.12, "triangle");
-              window.setTimeout(() => playTone(659, 0.12, "triangle"), 120);
-              window.setTimeout(() => playTone(784, 0.16, "triangle"), 240);
-              window.setTimeout(() => playTone(1046, 0.35, "sine"), 360);
+              schedule(() => playTone(659, 0.12, "triangle"), 120);
+              schedule(() => playTone(784, 0.16, "triangle"), 240);
+              schedule(() => playTone(1046, 0.35, "sine"), 360);
             }
           });
         }
@@ -379,7 +395,7 @@ export function RpgGame({ onExit, onStatsChange, isRanked = false }: Props) {
         }
         const nextBoss = getRobotBoss(nextStage, isSpecial);
 
-        window.setTimeout(() => {
+        schedule(() => {
           setEnemyDefeatedAnim(false);
           setEnemyEnteringAnim(true);
           setBoss(nextBoss);
@@ -398,11 +414,11 @@ export function RpgGame({ onExit, onStatsChange, isRanked = false }: Props) {
             setClashBanner(`🤖 FASE ${nextStage}: Novo Inimigo — ${nextBoss.name} (HP ${nextBoss.maxHp})`);
           }
 
-          window.setTimeout(() => {
+          schedule(() => {
             setEnemyEnteringAnim(false);
             isTransitioningRef.current = false;
             nextQuestion(nextStage);
-            window.setTimeout(() => setClashBanner(null), 2000);
+            schedule(() => setClashBanner(null), 2000);
           }, 700);
         }, 700);
         return;
@@ -424,13 +440,16 @@ export function RpgGame({ onExit, onStatsChange, isRanked = false }: Props) {
       finishMatch,
       nextQuestion,
       applyVisualShare,
+      schedule,
+      auth,
     ],
   );
 
   // Keyboard shortcuts: V / ArrowLeft = Verdadeiro, F / ArrowRight = Falso
   useEffect(() => {
-    if (phase !== "playing") return;
+    if (phase !== "playing" || unlockedSpecialMedal) return;
     const onKey = (e: KeyboardEvent) => {
+      if (unlockedMedalRef.current || isTransitioningRef.current) return;
       const k = e.key.toLowerCase();
       if (k === "v" || e.key === "ArrowLeft") {
         e.preventDefault();
@@ -442,7 +461,7 @@ export function RpgGame({ onExit, onStatsChange, isRanked = false }: Props) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [phase, handleAnswer]);
+  }, [phase, unlockedSpecialMedal, handleAnswer]);
 
   const displayBlue = Math.max(0, Math.min(100, Math.round(blueShare)));
   const displayRed = Math.max(0, 100 - displayBlue);
@@ -745,6 +764,7 @@ export function RpgGame({ onExit, onStatsChange, isRanked = false }: Props) {
           </div>
           <ResultPanel
             gameId="rpg"
+            mode={wasRankedMatchRef.current || isRanked ? "torneio_semanal" : "padrao"}
             score={score}
             correct={correctCount}
             wrong={wrongCount}

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import {
   ArrowLeft,
@@ -40,9 +40,11 @@ import { canAccessShopAndCustomization, canUseDefaultAvatar } from "@/lib/daily-
 import { usePlayerAuth } from "@/lib/player-auth";
 import {
   fetchLeaderboard,
+  getLastLeaderboardCloudMeta,
   getLeaderboardSnapshotLocal,
   getPlayerPublicProfile,
   getSchoolStandings,
+  type LeaderboardCloudMeta,
   type LeaderboardEntry,
   type LeaderboardFilter,
 } from "@/lib/playfab";
@@ -62,6 +64,7 @@ const PlayerInspectModal = lazy(() =>
 export type RankingTabKind = "pontos" | "medalhas" | "geral" | "jogos" | "escolas" | "torneio";
 
 const PAGE_BATCH_SIZE = 20;
+const FETCH_MAX_RESULTS = 100;
 
 // Cache em memória de sessão para alternância instantânea entre abas e etapas
 const leaderboardSessionCache = new Map<string, LeaderboardEntry[]>();
@@ -72,8 +75,9 @@ function getLeaderboardCacheKey(
   game: GameId,
   school: string,
   seasonId: number | string,
+  viewerId: string,
 ): string {
-  return `${tab}::${stage}::${game}::${school}::${seasonId}`;
+  return `${viewerId}::${tab}::${stage}::${game}::${school}::${seasonId}`;
 }
 
 function buildLeaderboardFilter(
@@ -159,15 +163,25 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
   const [visibleLimit, setVisibleLimit] = useState(PAGE_BATCH_SIZE);
 
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
+  const [cloudLimitMeta, setCloudLimitMeta] = useState<LeaderboardCloudMeta | null>(null);
   const [loading, setLoading] = useState(false);
   const [syncingBackground, setSyncingBackground] = useState(false);
   const [inspectPlayerId, setInspectPlayerId] = useState<string | null>(null);
   const [showStageSelector, setShowStageSelector] = useState(false);
   const [refreshCounter, setRefreshCounter] = useState(0);
   const [forceSyncTick, setForceSyncTick] = useState(0);
+  const pendingForceSyncRef = useRef(false);
   const [tournamentTick, setTournamentTick] = useState(0);
 
   const cfg = auth.adminConfig;
+
+  // Garante que selectedGame nunca fique preso em um jogo desabilitado (ex.: "logica")
+  useEffect(() => {
+    const enabledIds = ALL_GAME_IDS.filter((id) => cfg.enabledGames?.[id] !== false);
+    if (enabledIds.length > 0 && !enabledIds.includes(selectedGame)) {
+      setSelectedGame(enabledIds[0]);
+    }
+  }, [cfg.enabledGames, selectedGame]);
 
   // Sincroniza tab quando a URL muda (ex.: ?tab=torneio)
   useEffect(() => {
@@ -175,7 +189,9 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
   }, [initialTab]);
 
   // Mantém a etapa padrão sincronizada caso o perfil carregue após o primeiro render
+  // e limpa cache de sessão ao trocar de conta ou fazer logout em PCs compartilhados
   useEffect(() => {
+    leaderboardSessionCache.clear();
     if (auth.profile) {
       setSelectedStage(resolveDefaultRankingCategory(auth.profile));
       setTournamentStage(
@@ -203,13 +219,13 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
         setPlayerCurrentActivity({ type: "menu" });
       }
     };
-  }, [tab, auth.profile?.id]);
+  }, [auth.profile?.id]);
 
   // Recalcula o placar geral das escolas SOMENTE quando o aluno está visualizando "Escolas -> Placar Geral"
   const schoolStandings = useMemo(() => {
     if (tab !== "escolas" || selectedSchool !== "TODAS") return [];
-    return getSchoolStandings();
-  }, [tab, selectedSchool, refreshCounter, syncingBackground]);
+    return getSchoolStandings(selectedStage);
+  }, [tab, selectedSchool, selectedStage, refreshCounter, syncingBackground]);
 
   // Snapshot síncrono local do Torneio Ranqueado (somente quando na aba "torneio")
   const effectiveTournamentStage: AgeStageId | "TODAS" = auth.isAdmin
@@ -229,11 +245,12 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
   // Carregamento instantâneo local + revalidação leve em segundo plano (sem bloquear a UI)
   useEffect(() => {
     let active = true;
+    const isForced = pendingForceSyncRef.current;
+    pendingForceSyncRef.current = false;
 
     if (tab === "torneio") {
       setLoading(false);
       setSyncingBackground(true);
-      const isForced = forceSyncTick > 0;
       void syncWeeklyTournamentWithPlayFab(isForced)
         .then(() => {
           if (active) setTournamentTick((t) => t + 1);
@@ -254,8 +271,8 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
       setLoading(false);
       // Ainda assim sincroniza suavemente em segundo plano para garantir escolas atualizadas
       setSyncingBackground(true);
-      void fetchLeaderboard({ kind: "xp_season", stage: selectedStage }, PAGE_BATCH_SIZE, {
-        forceCloudSync: forceSyncTick > 0,
+      void fetchLeaderboard({ kind: "xp_season", stage: selectedStage }, FETCH_MAX_RESULTS, {
+        forceCloudSync: isForced,
       })
         .then(() => {
           if (active) setRefreshCounter((c) => c + 1);
@@ -281,10 +298,11 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
       selectedGame,
       selectedSchool,
       cfg.seasonId,
+      auth.profile?.id ?? "anon",
     );
     const cached = leaderboardSessionCache.get(currentKey);
     const localSnapshot =
-      cached && cached.length > 0 ? cached : getLeaderboardSnapshotLocal(filter, PAGE_BATCH_SIZE);
+      cached && cached.length > 0 ? cached : getLeaderboardSnapshotLocal(filter, FETCH_MAX_RESULTS);
 
     if (localSnapshot.length > 0) {
       leaderboardSessionCache.set(currentKey, localSnapshot);
@@ -296,12 +314,12 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
     }
 
     setSyncingBackground(true);
-    const isForced = forceSyncTick > 0;
-    void fetchLeaderboard(filter, PAGE_BATCH_SIZE, { forceCloudSync: isForced })
+    void fetchLeaderboard(filter, FETCH_MAX_RESULTS, { forceCloudSync: isForced })
       .then((res) => {
         if (!active) return;
         leaderboardSessionCache.set(currentKey, res);
         setEntries(res);
+        setCloudLimitMeta(getLastLeaderboardCloudMeta());
         setLoading(false);
       })
       .catch(() => {
@@ -321,10 +339,12 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
     selectedStage,
     cfg.seasonId,
     forceSyncTick,
+    auth.profile?.id,
   ]);
 
   const handleManualRefresh = useCallback(() => {
     leaderboardSessionCache.clear();
+    pendingForceSyncRef.current = true;
     setForceSyncTick((t) => t + 1);
   }, []);
 
@@ -1197,6 +1217,18 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
                     </Button>
                   </div>
                 )}
+
+                {(filteredEntries.length >= FETCH_MAX_RESULTS || cloudLimitMeta?.isCappedAtLimit) && (
+                  <div className="mt-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-center text-[11px] font-medium text-muted-foreground">
+                    Exibindo os {FETCH_MAX_RESULTS} primeiros colocados desta categoria.
+                    {cloudLimitMeta?.playerServerPosition &&
+                      cloudLimitMeta.playerServerPosition > FETCH_MAX_RESULTS && (
+                        <span className="ml-1 font-bold text-foreground">
+                          Sua posição oficial nesta categoria: #{cloudLimitMeta.playerServerPosition}.
+                        </span>
+                      )}
+                  </div>
+                )}
               </>
             )}
           </div>
@@ -1211,6 +1243,7 @@ export function RankingView({ initialTab = "medalhas" }: RankingViewProps) {
             onOpenChange={(v) => !v && setInspectPlayerId(null)}
             onStudentUpdated={() => {
               leaderboardSessionCache.clear();
+              pendingForceSyncRef.current = true;
               setRefreshCounter((c) => c + 1);
               setForceSyncTick((t) => t + 1);
               void auth.refresh();

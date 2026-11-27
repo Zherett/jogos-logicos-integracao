@@ -17,6 +17,7 @@ import { useSessionEnd } from "@/lib/use-session-end";
 import { NORMAL_CONFIG, type TeamConfig } from "@/lib/teams";
 import { generateQuestion, checkAnswer, type CQuestion } from "@/lib/complete-logic";
 import { playCorrect, playWrong } from "@/lib/sound";
+import { useSafeTimeouts } from "@/lib/use-safe-timeouts";
 
 const TITLE = "Completando a Lógica";
 const DURATION = 120;
@@ -63,12 +64,14 @@ export function CompleteLogicGame({ onExit, onStatsChange, isRanked }: Props) {
   const used = useRef(new Set<string>());
   const answerBonus = useRef(0);
   const lockRef = useRef(false);
+  const { schedule, clearAll } = useSafeTimeouts();
 
   const score = Math.max(0, correct * POINTS_CORRECT - wrong * POINTS_WRONG);
 
   useEffect(() => { setLastMatch(loadLastMatch("completar")); }, []);
 
   const clock = useRoundClock(DURATION, running, () => {
+    clearAll();
     setRunning(false);
     setFinished(true);
   }, BONUS_PER_CORRECT, MAX_BONUS);
@@ -99,6 +102,7 @@ export function CompleteLogicGame({ onExit, onStatsChange, isRanked }: Props) {
   }
 
   function startGame() {
+    clearAll();
     setRunId((r) => r + 1);
     team.begin(teamConfig);
     used.current = new Set();
@@ -113,6 +117,9 @@ export function CompleteLogicGame({ onExit, onStatsChange, isRanked }: Props) {
   }
 
   function replayWithCountdown() {
+    clearAll();
+    lockRef.current = false;
+    setFeedback(null); setBanner(null);
     team.advance();
     setFinished(false);
     setRunning(false);
@@ -120,6 +127,9 @@ export function CompleteLogicGame({ onExit, onStatsChange, isRanked }: Props) {
   }
 
   function backToSetup() {
+    clearAll();
+    lockRef.current = false;
+    setFeedback(null); setBanner(null);
     setRunning(false);
     setFinished(false);
     setPhase("setup");
@@ -129,7 +139,9 @@ export function CompleteLogicGame({ onExit, onStatsChange, isRanked }: Props) {
 
   function submit() {
     if (lockRef.current || !running || !question) return;
-    const n = numVal.trim() === "" ? null : Number(numVal);
+    const trimmedNum = numVal.trim();
+    const parsedNum = trimmedNum === "" ? null : Number(trimmedNum);
+    const n = parsedNum !== null && Number.isFinite(parsedNum) ? parsedNum : null;
     if (question.hasNum && n === null) return;
     if (question.hasOp && !opVal) return;
     lockRef.current = true;
@@ -157,14 +169,14 @@ export function CompleteLogicGame({ onExit, onStatsChange, isRanked }: Props) {
     let msg: string | null = null;
     if (nextStage >= PER_LEVEL) {
       const perfect = hits === PER_LEVEL;
-      if (perfect && bonusOn) clock.addBonus(LEVEL_PERFECT_BONUS);
+      const addedPerfectBonus = perfect && bonusOn ? clock.addBonus(LEVEL_PERFECT_BONUS) : 0;
       if (level < MAX_LEVEL) {
         newLevel = level + 1;
         msg = `Nível ${newLevel}!`;
       } else if (perfect) {
         msg = "Rodada perfeita!";
       }
-      if (perfect && bonusOn) msg = `${msg ?? ""} +${LEVEL_PERFECT_BONUS}s`.trim();
+      if (addedPerfectBonus > 0) msg = `${msg ?? ""} +${addedPerfectBonus}s`.trim();
       setStage(0);
       setLevelHits(0);
       setLevel(newLevel);
@@ -174,7 +186,7 @@ export function CompleteLogicGame({ onExit, onStatsChange, isRanked }: Props) {
     }
 
     if (msg) setBanner(msg);
-    setTimeout(() => {
+    schedule(() => {
       setFeedback(null);
       setBanner(null);
       loadQuestion(newLevel);
@@ -224,6 +236,7 @@ export function CompleteLogicGame({ onExit, onStatsChange, isRanked }: Props) {
         <GameTopBar title={TITLE} onExit={onExit} sessionActive={team.activeSession} onFinishSession={sessionEnd.request} />
         <ResultPanel
           gameId="completar"
+          mode={lastMatch?.mode ?? (isRanked ? "torneio_semanal" : undefined)}
           isTeam={team.activeSession}
           score={score} correct={correct} wrong={wrong} level={level}
           onReplay={replayWithCountdown} onMenu={onExit} onChangeSettings={backToSetup} />
@@ -233,7 +246,12 @@ export function CompleteLogicGame({ onExit, onStatsChange, isRanked }: Props) {
   }
 
   const flashClass = feedback === "correct" ? "animate-flash-correct" : feedback === "wrong" ? "animate-flash-wrong" : "";
-  const ready = !!question && (!question.hasNum || numVal.trim() !== "") && (!question.hasOp || !!opVal);
+  const trimmedInput = numVal.trim();
+  const parsedInput = trimmedInput === "" ? null : Number(trimmedInput);
+  const ready =
+    !!question &&
+    (!question.hasNum || (parsedInput !== null && Number.isFinite(parsedInput))) &&
+    (!question.hasOp || !!opVal);
   const resultLabel = question ? (typeof question.result === "boolean" ? (question.result ? "V" : "F") : String(question.result)) : "";
 
   return (

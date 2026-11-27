@@ -34,8 +34,10 @@ import {
   recordScoreLedgerEntry,
   TRANSACTION_SOURCE_LABELS,
   TRANSACTION_TYPE_LABELS,
+  type ScoreLedgerEntry,
   type ScoreTransactionType,
 } from "@/lib/score-history-ledger";
+import { nickSlug } from "@/lib/player-profile";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -272,44 +274,55 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
     setAdjSaving(true);
     try {
       const targetId = profile.nickNormalized || profile.id || profile.nick;
-      const pIdForLedger = profile.id || profile.nickNormalized || profile.nick;
-      const prevTourPts = Math.max(0, Math.floor(profile.tournamentPoints ?? 0));
-      const computedNextTourPts = Math.max(0, prevTourPts + adjAmount);
-      const ledgerEntry = recordScoreLedgerEntry({
-        playerId: pIdForLedger,
-        playerNick: profile.nick,
-        type: adjType,
-        source: "ajuste_adm",
-        amount: adjAmount,
-        balanceAfter:
-          adjType === "xp"
-            ? Math.max(0, (profile.xp ?? 0) + adjAmount)
-            : adjType === "tournament_pts"
-              ? computedNextTourPts
-              : Math.max(0, (profile.pointsBalance ?? 0) + adjAmount),
-        reason: `Ajuste ADM: ${adjReason.trim()}`,
-        metadata: { adminUser: auth.profile?.nick || "ADM" },
-      });
+      const pIdForLedger = nickSlug(
+        profile.id || profile.nickNormalized || profile.nick || "desconhecido",
+      );
+      const entryId = `tx_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+      const entryTimestamp = new Date().toISOString();
+      let committedEntry: ScoreLedgerEntry | null = null;
 
       const adjRes = await adjustStudentProfileByAdmin(targetId, (p) => {
+        let balanceAfter: number;
         if (adjType === "xp") {
           p.xp = Math.max(0, (p.xp ?? 0) + adjAmount);
           p.seasonXp = Math.max(0, (p.seasonXp ?? 0) + adjAmount);
+          balanceAfter = p.xp;
         } else if (adjType === "tournament_pts") {
           const nextPts = Math.max(0, Math.floor((p.tournamentPoints ?? 0) + adjAmount));
           p.tournamentPoints = nextPts;
           p.bestTournamentPoints = Math.max(p.bestTournamentPoints ?? 0, nextPts);
           p.tournamentRankId = getTournamentRank(nextPts).currentRank.id;
+          balanceAfter = nextPts;
         } else {
           p.careerPoints = Math.max(0, (p.careerPoints ?? 0) + adjAmount);
           p.pointsBalance = Math.max(0, (p.pointsBalance ?? 0) + adjAmount);
+          balanceAfter = p.pointsBalance;
         }
-        p.scoreLedger = [...(p.scoreLedger ?? []).filter((e) => e.id !== ledgerEntry.id), ledgerEntry].slice(-80);
+        committedEntry = {
+          id: entryId,
+          playerId: pIdForLedger,
+          playerNick: p.nick || profile.nick || "Jogador",
+          type: adjType,
+          source: "ajuste_adm",
+          amount: Math.round(adjAmount),
+          balanceAfter: Math.round(balanceAfter),
+          reason: `Ajuste ADM: ${adjReason.trim()}`,
+          metadata: { adminUser: auth.profile?.nick || "ADM" },
+          timestamp: entryTimestamp,
+        };
+        p.scoreLedger = [
+          ...(p.scoreLedger ?? []).filter((e) => e.id !== entryId),
+          committedEntry,
+        ].slice(-80);
         return p;
       });
       if (!adjRes.profile) {
         alert(adjRes.error ?? "Não foi possível aplicar o ajuste neste aluno.");
         return;
+      }
+
+      if (committedEntry) {
+        recordScoreLedgerEntry(committedEntry);
       }
 
       // Sincroniza também a chave individual `rnk_<slug>` no TOURNAMENT_SEASON_N quando o ajuste for na Ranqueada
@@ -580,7 +593,7 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                   <span className="font-semibold text-foreground">
                     {stageInfo.shortLabel}
                   </span>
-                  {auth.profile?.isAdmin && !isEditing && (
+                  {auth.isAdmin && !isEditing && (
                     <button
                       type="button"
                       onClick={() => {
@@ -649,7 +662,7 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                   </div>
                 </div>
 
-                {auth.profile?.isAdmin && (
+                {auth.isAdmin && (
                   <button
                     type="button"
                     onClick={() => setIsAdjustmentOpen(true)}
@@ -742,7 +755,7 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
               </div>
 
               {/* Modal de Concessão de Ajuste pelo ADM */}
-              {isAdjustmentOpen && auth.profile?.isAdmin && (
+              {isAdjustmentOpen && auth.isAdmin && (
                 <div className="rounded-xl border-2 border-primary/40 bg-secondary/40 p-3 space-y-2.5 animate-in fade-in">
                   <div className="flex items-center justify-between text-xs font-black text-primary">
                     <span>Novo Ajuste Manual de Pontuação (Auditoria ADM)</span>
@@ -759,7 +772,9 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                       <label className="text-[10px] font-bold text-muted-foreground">Tipo de Recurso:</label>
                       <select
                         value={adjType}
-                        onChange={(e) => setAdjType(e.target.value as any)}
+                        onChange={(e) =>
+                          setAdjType(e.target.value as "xp" | "career_points" | "tournament_pts")
+                        }
                         className="h-8 w-full rounded-lg border bg-background px-2 text-xs font-semibold"
                       >
                         <option value="xp">⚡ Experiência (XP)</option>
@@ -938,7 +953,10 @@ export function PlayerInspectModal({ playerId, open, onOpenChange, onStudentUpda
                       setEditSchool(val);
                       if (val === "Nenhuma" || val === "Outro") {
                         setEditTurma("");
-                      } else if (schoolNeedsGrade(val) && !RAIMUNDO_GRADES.includes(editGrade as any)) {
+                      } else if (
+                        schoolNeedsGrade(val) &&
+                        !RAIMUNDO_GRADES.includes(editGrade as (typeof RAIMUNDO_GRADES)[number])
+                      ) {
                         setEditGrade(RAIMUNDO_GRADES[0]);
                       }
                     }}

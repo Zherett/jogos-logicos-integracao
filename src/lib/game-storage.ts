@@ -1,4 +1,6 @@
 // Storage helpers for best scores per game
+import { safeLocalStorageSet } from "./storage-guard.ts";
+
 const KEY = "desafios-logica-stats-v1";
 const LAST_KEY = "desafios-logica-last-v1";
 
@@ -102,7 +104,7 @@ export function loadStats(): AllStats {
 
 export function saveStats(stats: AllStats) {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(KEY, JSON.stringify(stats));
+  safeLocalStorageSet(KEY, JSON.stringify(stats));
 }
 
 export function clearLocalStats() {
@@ -155,7 +157,7 @@ export function saveLastMatch(id: GameId, match: Omit<LastMatch, "at"> & { at?: 
     at: match.at ?? Date.now(),
   };
   all[id] = full;
-  window.localStorage.setItem(LAST_KEY, JSON.stringify(all));
+  safeLocalStorageSet(LAST_KEY, JSON.stringify(all));
   try {
     matchListener?.(id, full);
   } catch {

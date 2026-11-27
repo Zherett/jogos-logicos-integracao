@@ -5,13 +5,22 @@
  * Extensão de Prazos, Renovação Automática em Cadeia e Indicadores de Progresso).
  */
 
+import {
+  COARI_OFFSET_MS,
+  formatCoariDateBR,
+  formatCoariTimeBR,
+  getOfficialNow,
+  getOfficialNowMs,
+  parseUtcMs,
+} from "./official-time.ts";
+
 export const SEASON_DURATION_PRESETS = [7, 14, 30] as const;
 export type SeasonDurationPreset = (typeof SEASON_DURATION_PRESETS)[number];
 
 export const DEFAULT_SEASON_DURATION_DAYS: SeasonDurationPreset = 14;
 
 /** Fuso oficial da SEMED Coari/AM (UTC-4) */
-const OFFICIAL_COARI_UTC_OFFSET_MS = -4 * 60 * 60 * 1000;
+const OFFICIAL_COARI_UTC_OFFSET_MS = COARI_OFFSET_MS;
 
 const PT_BR_MONTH_NAMES = [
   "Janeiro",
@@ -75,13 +84,13 @@ export function computeMonthlyTournamentDatesForYearMonth(
  * Retorna os limites do mês calendário (UTC-4) correspondente à data de referência.
  */
 export function computeMonthlyTournamentDates(
-  referenceDate: Date = new Date(),
+  referenceDate: Date = getOfficialNow(),
   options?: { advanceMonths?: number },
 ): MonthlyTournamentDates {
   const safeMs =
     referenceDate instanceof Date && !Number.isNaN(referenceDate.getTime())
       ? referenceDate.getTime()
-      : Date.now();
+      : getOfficialNowMs();
   const shifted = new Date(safeMs + OFFICIAL_COARI_UTC_OFFSET_MS);
   const advance = Math.trunc(options?.advanceMonths ?? 0);
   return computeMonthlyTournamentDatesForYearMonth(
@@ -97,7 +106,7 @@ export function computeMonthlyTournamentDates(
  */
 export function computeNextMonthlyTournamentDates(
   previousEndIso?: string | null,
-  now: Date = new Date(),
+  now: Date = getOfficialNow(),
 ): MonthlyTournamentDates {
   const currentMonth = computeMonthlyTournamentDates(now, { advanceMonths: 0 });
   if (previousEndIso) {
@@ -120,17 +129,9 @@ export function formatOfficialCoariDate(
   dateOrIso: Date | string | null | undefined,
   options?: { includeYear?: boolean },
 ): string {
-  if (!dateOrIso) return "";
-  const dt = dateOrIso instanceof Date ? dateOrIso : new Date(dateOrIso);
-  if (Number.isNaN(dt.getTime())) return "";
-  const shifted = new Date(dt.getTime() + OFFICIAL_COARI_UTC_OFFSET_MS);
-  const dd = String(shifted.getUTCDate()).padStart(2, "0");
-  const mm = String(shifted.getUTCMonth() + 1).padStart(2, "0");
-  if (options?.includeYear === false) {
-    return `${dd}/${mm}`;
-  }
-  const yyyy = shifted.getUTCFullYear();
-  return `${dd}/${mm}/${yyyy}`;
+  const ms = parseUtcMs(dateOrIso);
+  if (ms === null) return "";
+  return formatCoariDateBR(ms, options);
 }
 
 export interface SeasonProgressInfo {
@@ -151,7 +152,7 @@ export interface SeasonProgressInfo {
  * Se uma temporada dura N dias (ex: 7 ou 14 dias), o encerramento ocorre no N-ésimo dia às 23:59:59.999.
  */
 export function computeSeasonDates(
-  startDate: Date = new Date(),
+  startDate: Date = getOfficialNow(),
   durationDays: number = DEFAULT_SEASON_DURATION_DAYS,
 ): { start: Date; end: Date } {
   const start = new Date(startDate);
@@ -164,19 +165,28 @@ export function computeSeasonDates(
 
 /**
  * Estende uma data de encerramento em um número específico de dias (ex: +3, +7, +14).
- * Mantém o horário padronizado de encerramento (23:59:59).
+ * Mantém o horário padronizado de encerramento (23:59:59.999) no fuso oficial de Coari (UTC-4).
  */
 export function extendSeasonDate(
   currentEndDate: Date,
   additionalDays: number,
 ): Date {
-  const safeDays = Math.max(1, additionalDays);
+  const safeDays = Math.max(1, Math.floor(Number(additionalDays) || 1));
   const baseMs = currentEndDate instanceof Date && !Number.isNaN(currentEndDate.getTime())
     ? currentEndDate.getTime()
-    : Date.now();
-  const nextEnd = new Date(baseMs + safeDays * 24 * 60 * 60 * 1000);
-  nextEnd.setHours(23, 59, 59, 999);
-  return nextEnd;
+    : getOfficialNowMs();
+  const shifted = new Date(baseMs + OFFICIAL_COARI_UTC_OFFSET_MS);
+  const nextEndUtcMs =
+    Date.UTC(
+      shifted.getUTCFullYear(),
+      shifted.getUTCMonth(),
+      shifted.getUTCDate() + safeDays,
+      23,
+      59,
+      59,
+      999,
+    ) - OFFICIAL_COARI_UTC_OFFSET_MS;
+  return new Date(nextEndUtcMs);
 }
 
 /**
@@ -210,7 +220,7 @@ export function parseDatetimeLocal(str: string): Date | null {
 export function getSeasonProgress(
   startIso?: string | null,
   endIso?: string | null,
-  nowMs = Date.now(),
+  nowMs = getOfficialNowMs(),
 ): SeasonProgressInfo {
   const now = new Date(nowMs);
   const start = startIso ? new Date(startIso) : new Date(nowMs - 7 * 24 * 60 * 60 * 1000);
@@ -230,7 +240,7 @@ export function getSeasonProgress(
       progressPercent: 0,
       isExpired: false,
       formattedCountdown: "Encerramento não agendado (Ciclo Contínuo)",
-      formattedRangeLabel: `Iniciada em ${safeStart.toLocaleDateString("pt-BR")}`,
+      formattedRangeLabel: `Iniciada em ${formatCoariDateBR(safeStart)}`,
     };
   }
 
@@ -246,19 +256,22 @@ export function getSeasonProgress(
   const progressPercent = Math.min(100, Math.max(0, (elapsedMs / totalMs) * 100));
   const isExpired = nowMs >= safeEnd.getTime();
 
+  const remainingMins = Math.floor((remainingMs % (60 * 60 * 1000)) / (60 * 1000));
   let formattedCountdown = "";
   if (isExpired) {
     formattedCountdown = "Temporada Concluída! Aguardando renovação...";
-  } else if (remainingDays === 0 && remainingHours <= 1) {
-    const remainingMins = Math.floor((remainingMs % (60 * 60 * 1000)) / (60 * 1000));
-    formattedCountdown = `Última hora! Termina em ${remainingMins} min`;
+  } else if (remainingDays === 0 && remainingHours < 1) {
+    formattedCountdown = `Última hora! Termina em ${Math.max(1, remainingMins)} min`;
   } else if (remainingDays === 0) {
-    formattedCountdown = `Termina hoje! Restam ${remainingHours}h`;
+    formattedCountdown =
+      remainingMins > 0
+        ? `Termina hoje! Restam ${remainingHours}h e ${remainingMins}min`
+        : `Termina hoje! Restam ${remainingHours}h`;
   } else {
-    formattedCountdown = `Termina em ${remainingDays}d e ${remainingHours}h (${safeEnd.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })} às ${safeEnd.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })})`;
+    formattedCountdown = `Termina em ${remainingDays}d e ${remainingHours}h (${formatCoariDateBR(safeEnd, { includeYear: false })} às ${formatCoariTimeBR(safeEnd)})`;
   }
 
-  const formattedRangeLabel = `${safeStart.toLocaleDateString("pt-BR")} até ${safeEnd.toLocaleDateString("pt-BR")} (${totalDays} dias)`;
+  const formattedRangeLabel = `${formatCoariDateBR(safeStart)} até ${formatCoariDateBR(safeEnd)} (${totalDays} dias)`;
 
   return {
     start: safeStart,

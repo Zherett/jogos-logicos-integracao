@@ -164,11 +164,25 @@ export function X1ArenaDialog({
     sendHeartbeat();
     const unsub = subscribeX1Updates(() => setTick((t) => t + 1));
     const pollMs = waitingRoomCode ? 700 : 2500;
-    const timer = window.setInterval(sendHeartbeat, pollMs);
+    const timer = window.setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      sendHeartbeat();
+    }, pollMs);
+    const onVisibilityChange = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "visible") {
+        sendHeartbeat();
+      }
+    };
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", onVisibilityChange);
+    }
 
     return () => {
       unsub();
       window.clearInterval(timer);
+      if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", onVisibilityChange);
+      }
     };
   }, [open, profile, waitingRoomCode]);
 
@@ -206,7 +220,7 @@ export function X1ArenaDialog({
     const handleUnload = () => {
       const code = waitingRoomCodeRef.current;
       if (code && !matchStartedRef.current && profile?.id) {
-        cancelWaitingX1Room(code, profile.id);
+        cancelWaitingX1Room(code, profile.id, profile.nick, true);
       }
     };
     window.addEventListener("beforeunload", handleUnload);

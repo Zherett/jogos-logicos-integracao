@@ -472,11 +472,20 @@ export function generateDoubleWaveQuestions(
   const q1 = generateSpaceQuestQuestion(level, undefined, options);
   const allDiffs: QuestionDifficulty[] = ["easy", "medium", "hard"];
   const otherDiffs = allDiffs.filter((d) => d !== q1.difficulty);
-  const diff2 = otherDiffs[Math.floor(Math.random() * otherDiffs.length)];
+  let diff2 = otherDiffs[Math.floor(Math.random() * otherDiffs.length)];
 
   // Se q1 foi especial, q2 é obrigatoriamente normal!
+  // Garante também que eventual fixedDifficulty de aura2 respeite a dificuldade distinta de q1.
   const allowSpecialForQ2 = q1.aura === "normal" && options?.allowSpecial !== false;
-  const aura2 = allowSpecialForQ2 ? rollAura(undefined, options) : "normal";
+  let aura2: AuraType = allowSpecialForQ2 ? rollAura(undefined, options) : "normal";
+  const fixed2 = AURA_CONFIGS[aura2].fixedDifficulty;
+  if (fixed2) {
+    if (fixed2 !== q1.difficulty) {
+      diff2 = fixed2;
+    } else {
+      aura2 = "normal";
+    }
+  }
 
   const kind2: QuestionKind = Math.random() < 0.5 ? "logic" : "math";
   const q2 =

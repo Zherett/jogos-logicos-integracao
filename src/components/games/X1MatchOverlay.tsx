@@ -27,6 +27,7 @@ import { type ClashQuestion } from "@/lib/rpg-content";
 import { resolvePlayerAvatar } from "@/lib/avatar";
 import { getX1ArenaTheme } from "@/lib/x1-arenas";
 import { playCorrect, playTone, playWrong } from "@/lib/sound";
+import { useSafeTimeouts } from "@/lib/use-safe-timeouts";
 import {
   X1_MINADO_TURN_SELECT_TIMEOUT_SEC,
   answerX1MinadoQuestion,
@@ -66,9 +67,28 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
   const isHost =
     room.host.playerId === rawMyId ||
     Boolean(rawMyNick && room.host.nick.trim().toLowerCase() === rawMyNick);
-  const myId = isHost ? room.host.playerId : (room.guest?.playerId ?? rawMyId);
+  const isGuest = Boolean(
+    !isHost &&
+      room.guest &&
+      (room.guest.playerId === rawMyId ||
+        Boolean(rawMyNick && room.guest.nick.trim().toLowerCase() === rawMyNick)),
+  );
+  const isParticipant = !auth.profile || isHost || !room.guest || isGuest;
+  const myId = isHost ? room.host.playerId : isGuest && room.guest ? room.guest.playerId : rawMyId;
   const me = isHost ? room.host : (room.guest ?? room.host);
   const opponent = isHost ? room.guest : room.host;
+
+  const { schedule, clearAll } = useSafeTimeouts();
+  const lastFallbackAttemptRef = useRef(0);
+  const questionTimeoutSentForRef = useRef<string | null>(null);
+  const turnTimeoutSentForSeqRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!isParticipant) {
+      clearAll();
+      onExitX1(true);
+    }
+  }, [isParticipant, clearAll, onExitX1]);
 
   const [secondsLeft, setSecondsLeft] = useState(
     initialRoom.durationSec <= 0 ? 0 : initialRoom.durationSec,
@@ -112,7 +132,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
 
   // Heartbeat contínuo na partida para detectar desconexão real do oponente (W.O. apenas por botão Desistir ou ausência > 45s)
   useEffect(() => {
-    if (room.status !== "playing") return;
+    if (!isParticipant || room.status !== "playing") return;
     touchX1MatchHeartbeat(room.code, myId);
     const hb = window.setInterval(() => {
       touchX1MatchHeartbeat(room.code, myId);
@@ -120,11 +140,11 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
       if (wo) setRoom({ ...wo });
     }, 5000);
     return () => window.clearInterval(hb);
-  }, [room.status, room.code, myId]);
+  }, [isParticipant, room.status, room.code, myId]);
 
   const handleRequestExit = () => {
     if (room.status === "finished") {
-      closeX1Room(room.code);
+      if (isParticipant) closeX1Room(room.code);
       onExitX1();
     } else {
       setConfirmForfeitOpen(true);
@@ -132,6 +152,11 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
   };
 
   const handleConfirmForfeit = () => {
+    if (!isParticipant) {
+      setConfirmForfeitOpen(false);
+      onExitX1(true);
+      return;
+    }
     const totalAnswers =
       (room.host.correct + room.host.wrong) +
       ((room.guest?.correct ?? 0) + (room.guest?.wrong ?? 0));
@@ -231,8 +256,14 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
         return;
       }
 
-      // Fallback de segurança caso o host demore > 5s para confirmar handshake por oscilação de rede
-      if (!isHost && room.guestJoinedAtServerMs && getX1ServerNow(now) - room.guestJoinedAtServerMs >= 5000) {
+      // Fallback de segurança caso o host demore > 5s para confirmar handshake por oscilação de rede (throttle 1000ms)
+      if (
+        !isHost &&
+        room.guestJoinedAtServerMs &&
+        getX1ServerNow(now) - room.guestJoinedAtServerMs >= 5000 &&
+        now - lastFallbackAttemptRef.current >= 1000
+      ) {
+        lastFallbackAttemptRef.current = now;
         void triggerX1CountdownFallbackIfStuck(room.code, 5000).then((updated) => {
           if (updated) setRoom({ ...updated });
         });
@@ -290,10 +321,17 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
 
   // Campo Minado active question timer (20s sincronizado pelo relógio UTC)
   useEffect(() => {
-    if (room.gameId !== "minado" || room.status !== "playing") return;
+    if (room.gameId !== "minado" || room.status !== "playing") {
+      questionTimeoutSentForRef.current = null;
+      return;
+    }
     const activeQ = room.minadoState?.activeQuestion;
-    if (!activeQ || activeQ.answered) return;
+    if (!activeQ || activeQ.answered) {
+      questionTimeoutSentForRef.current = null;
+      return;
+    }
 
+    const qKey = `${activeQ.cardId}:${activeQ.openedBy}`;
     const isMyActiveQuestion = activeQ.openedBy === myId;
     const marginMs = isMyActiveQuestion ? 0 : 5_000;
 
@@ -303,22 +341,33 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
       const expired = activeQ.expiresAtServerMs
         ? getX1ServerNow(now) >= activeQ.expiresAtServerMs + marginMs
         : now >= activeQ.expiresAt + marginMs;
-      if (expired) {
-        playWrong();
+      if (expired && questionTimeoutSentForRef.current !== qKey) {
+        questionTimeoutSentForRef.current = qKey;
+        if (isMyActiveQuestion) {
+          playWrong();
+          setMinadoFeedback("⏱️ Seu tempo acabou! (−3 pts, vez passada)");
+        } else {
+          setMinadoFeedback("⏱️ Tempo do oponente esgotado! Sua vez.");
+        }
+        schedule(() => setMinadoFeedback(null), 2200);
         const updated = timeoutX1MinadoQuestion(room.code);
         if (updated.room) setRoom({ ...updated.room });
       }
     }, 300);
 
     return () => window.clearInterval(timer);
-  }, [room.gameId, room.status, room.minadoState?.activeQuestion, room.code, myId]);
+  }, [room.gameId, room.status, room.minadoState?.activeQuestion, room.code, myId, schedule]);
 
   // Campo Minado turn selection timer (25s sem abrir carta, sincronizado pelo relógio UTC)
   useEffect(() => {
-    if (room.gameId !== "minado" || room.status !== "playing") return;
+    if (room.gameId !== "minado" || room.status !== "playing") {
+      turnTimeoutSentForSeqRef.current = null;
+      return;
+    }
     const minado = room.minadoState;
     if (!minado || minado.activeQuestion) return;
 
+    const seqKey = minado.turnSeq ?? 0;
     const isMyTurn = minado.currentTurnPlayerId === myId;
     const marginMs = isMyTurn ? 0 : 3000;
     const turnStartedAt = minado.turnStartedAt || room.startedAt || room.createdAt;
@@ -330,10 +379,15 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
       const expired = turnStartedAtServerMs
         ? getX1ServerNow(now) >= turnStartedAtServerMs + X1_MINADO_TURN_SELECT_TIMEOUT_SEC * 1000 + marginMs
         : now >= turnStartedAt + X1_MINADO_TURN_SELECT_TIMEOUT_SEC * 1000 + marginMs;
-      if (expired) {
-        playWrong();
-        setMinadoFeedback("⏱️ Tempo de escolha esgotado! (−2 pts, vez passada)");
-        window.setTimeout(() => setMinadoFeedback(null), 2200);
+      if (expired && turnTimeoutSentForSeqRef.current !== seqKey) {
+        turnTimeoutSentForSeqRef.current = seqKey;
+        if (isMyTurn) {
+          playWrong();
+          setMinadoFeedback("⏱️ Seu tempo de escolha esgotado! (−2 pts, vez passada)");
+        } else {
+          setMinadoFeedback("⏱️ Tempo de escolha do oponente esgotado! Sua vez!");
+        }
+        schedule(() => setMinadoFeedback(null), 2200);
         const updated = timeoutX1MinadoTurnSelection(room.code);
         if (updated.room) setRoom({ ...updated.room });
       }
@@ -347,11 +401,13 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
     room.minadoState?.currentTurnPlayerId,
     room.minadoState?.turnStartedAt,
     room.minadoState?.turnStartedAtServerMs,
+    room.minadoState?.turnSeq,
     room.startedAtServerMs,
     room.startedAt,
     room.createdAt,
     room.code,
     myId,
+    schedule,
   ]);
 
   // Auto-close countdown (1 minute anchored locally) on finished screen
@@ -415,6 +471,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
   const handleRobotAnswer = useCallback(
     (chosen: boolean) => {
       if (
+        !isParticipant ||
         room.status !== "playing" ||
         isConsolidatingFinal ||
         stunned ||
@@ -437,7 +494,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
           setGuestPose("hit");
           setHostPose("attack");
         }
-        window.setTimeout(() => {
+        schedule(() => {
           setStunned(false);
           setAnswerCooling(false);
           answerLockRef.current = false;
@@ -453,7 +510,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
           setGuestPose("attack");
           setHostPose("hit");
         }
-        window.setTimeout(() => {
+        schedule(() => {
           setAnswerCooling(false);
           answerLockRef.current = false;
           setHostPose("idle");
@@ -470,7 +527,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
       if (res.isSuperHit) {
         playTone(980, 0.2, "sawtooth");
         setBanner("⚡ SUPER RAIO! Você tirou 3 de vida do oponente de uma vez!");
-        window.setTimeout(() => setBanner(null), 2200);
+        schedule(() => setBanner(null), 2200);
       }
 
       if (res.room) setRoom({ ...res.room });
@@ -491,6 +548,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
       isHost,
       me.correct,
       me.wrong,
+      schedule,
     ],
   );
 
@@ -498,6 +556,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
   const handleRaceAnswer = useCallback(
     (chosenAnswer: string) => {
       if (
+        !isParticipant ||
         room.status !== "playing" ||
         isConsolidatingFinal ||
         !room.questionList ||
@@ -512,13 +571,13 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
       const isCorrect = chosenAnswer === curQ.answer;
       if (isCorrect) {
         playCorrect();
-        window.setTimeout(() => {
+        schedule(() => {
           raceLockRef.current = false;
         }, 160);
       } else {
         playWrong();
         setStunned(true);
-        window.setTimeout(() => {
+        schedule(() => {
           setStunned(false);
           raceLockRef.current = false;
         }, 600);
@@ -548,6 +607,7 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
       }
     },
     [
+      isParticipant,
       room.status,
       room.questionList,
       room.code,
@@ -558,12 +618,13 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
       me.correct,
       me.wrong,
       stunned,
+      schedule,
     ],
   );
 
   // Campo Minado card click handler (com animação suave de virar a carta)
   const handleMinadoCardClick = (cardIdx: number) => {
-    if (room.status !== "playing" || !room.minadoState) return;
+    if (!isParticipant || room.status !== "playing" || !room.minadoState) return;
     if (room.minadoState.currentTurnPlayerId !== myId) return;
     if (room.minadoState.activeQuestion && !room.minadoState.activeQuestion.answered) return;
     if (flippingCardId) return;
@@ -574,25 +635,25 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
     setFlippingCardId(card.id);
     playTone(520, 0.08, "triangle");
 
-    window.setTimeout(() => {
+    schedule(() => {
       setFlippingCardId(null);
       const res = openX1MinadoCard({
         code: room.code,
         playerId: myId,
         cardId: card.id,
       });
-      if (!res.room) return;
+      if (res.error || !res.room) return;
       setRoom({ ...res.room });
 
       if (card.kind === "bonus") {
         if (card.points > 0) {
           playCorrect();
           setMinadoFeedback(`🎁 Bônus Encontrado! +${card.points} pontos.`);
-          window.setTimeout(() => setMinadoFeedback(null), 2000);
+          schedule(() => setMinadoFeedback(null), 2000);
         } else {
           playWrong();
           setMinadoFeedback(`💥 MINA ATIVADA! ${card.points} pontos.`);
-          window.setTimeout(() => setMinadoFeedback(null), 2000);
+          schedule(() => setMinadoFeedback(null), 2000);
         }
       }
     }, 320);
@@ -601,16 +662,24 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
   // Campo Minado question answer handler com trava anti-duplo-clique
   const handleMinadoAnswer = (chosenOpt: string) => {
     if (
+      !isParticipant ||
       room.status !== "playing" ||
       !room.minadoState?.activeQuestion ||
+      room.minadoState.activeQuestion.openedBy !== myId ||
       minadoAnswerLockRef.current
     )
       return;
     minadoAnswerLockRef.current = true;
-    window.setTimeout(() => {
+    schedule(() => {
       minadoAnswerLockRef.current = false;
     }, 350);
     const isCorrect = chosenOpt === room.minadoState.activeQuestion.answer;
+    const res = answerX1MinadoQuestion({
+      code: room.code,
+      playerId: myId,
+      option: chosenOpt,
+    });
+    if (!res.room) return;
     if (isCorrect) {
       playCorrect();
       setMinadoFeedback("✅ Resposta Correta! +5 pontos somados.");
@@ -618,14 +687,8 @@ export function X1MatchOverlay({ initialRoom, onExitX1 }: Props) {
       playWrong();
       setMinadoFeedback("❌ Resposta Incorreta! −3 pontos e erro contabilizado.");
     }
-    window.setTimeout(() => setMinadoFeedback(null), 2000);
-
-    const res = answerX1MinadoQuestion({
-      code: room.code,
-      playerId: myId,
-      option: chosenOpt,
-    });
-    if (res.room) setRoom({ ...res.room });
+    schedule(() => setMinadoFeedback(null), 2000);
+    setRoom({ ...res.room });
   };
 
   const redShare = Math.max(0, 100 - room.blueShare);

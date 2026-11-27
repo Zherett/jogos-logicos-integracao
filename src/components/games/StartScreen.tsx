@@ -17,11 +17,12 @@ interface Props {
   onFinishSession?: () => void;
   bonusTime?: boolean;
   onBonusTimeChange?: (v: boolean) => void;
+  bonusTimeLabel?: string;
 }
 
 export function StartScreen({
   title, description, onStart, onExit, children, disabled, lastMatch,
-  sessionActive, onFinishSession, bonusTime, onBonusTimeChange,
+  sessionActive, onFinishSession, bonusTime, onBonusTimeChange, bonusTimeLabel,
 }: Props) {
   return (
     <div className="space-y-4">
@@ -41,7 +42,7 @@ export function StartScreen({
 
         {typeof bonusTime === "boolean" && onBonusTimeChange && (
           <div className="mt-6">
-            <BonusTimeToggle value={bonusTime} onChange={onBonusTimeChange} className="w-full" />
+            <BonusTimeToggle value={bonusTime} onChange={onBonusTimeChange} label={bonusTimeLabel} className="w-full" />
           </div>
         )}
 
@@ -63,13 +64,18 @@ export function StartScreen({
 }
 
 export function OptionChip({
-  active, onClick, children,
-}: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  active, onClick, children, disabled,
+}: { active: boolean; onClick: () => void; children: React.ReactNode; disabled?: boolean }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`rounded-2xl border-2 px-4 py-3 font-display font-bold transition-all hover:scale-[1.02] active:scale-95 ${
+      disabled={disabled}
+      className={`rounded-2xl border-2 px-4 py-3 font-display font-bold transition-all ${
+        disabled
+          ? "opacity-50 cursor-not-allowed"
+          : "hover:scale-[1.02] active:scale-95"
+      } ${
         active
           ? "bg-primary text-primary-foreground border-primary shadow-md"
           : "bg-card hover:bg-secondary border-border text-foreground"

@@ -98,6 +98,8 @@ export interface PlayerDungeonState {
   permanentResources: DungeonResourceInventory;
   currentRun: DungeonActiveRun | null;
   updatedAt?: string;
+  /** Timestamp oficial calibrado no servidor (ms) para resolver conflitos sem depender do relógio local */
+  updatedAtServerMs?: number;
 }
 
 /* ------------------------------ RNG Helpers ------------------------------ */
@@ -251,31 +253,33 @@ export function normalizeDungeonState(
   let currentRun: DungeonActiveRun | null = null;
   if (raw.currentRun && raw.currentRun.active) {
     const r = raw.currentRun;
-    currentRun = {
-      active: true,
-      currentFloor: Math.max(1, Math.min(DUNGEON_MAX_FLOOR, Math.floor(Number(r.currentFloor) || 1))),
-      maxHp: Math.max(50, Math.floor(Number(r.maxHp) || DUNGEON_BASE_HP)),
-      hp: Math.max(
-        0,
-        Math.min(
-          Math.max(50, Math.floor(Number(r.maxHp) || DUNGEON_BASE_HP)),
-          Math.floor(Number(r.hp) || DUNGEON_BASE_HP),
-        ),
-      ),
-      shieldsRemaining: Math.max(0, Math.floor(Number(r.shieldsRemaining) || 0)),
-      floorProgressIndex: Math.max(0, Math.floor(Number(r.floorProgressIndex) || 0)),
-      encounters: Array.isArray(r.encounters) ? r.encounters : [],
-      narrativeLog: Array.isArray(r.narrativeLog) ? r.narrativeLog.slice(-40) : [],
-      tempBackpack: sanitizeInventory(r.tempBackpack),
-      tempCoins: Math.max(0, Math.floor(Number(r.tempCoins) || 0)),
-      tempXp: Math.max(0, Math.floor(Number(r.tempXp) || 0)),
-      equippedCardIds: Array.isArray(r.equippedCardIds) ? r.equippedCardIds.slice(0, 3) : equippedIds,
-      pendingLootMultiplier:
-        typeof r.pendingLootMultiplier === "number" && r.pendingLootMultiplier > 1
-          ? r.pendingLootMultiplier
-          : 1,
-      floorErrors: Math.max(0, Math.floor(Number(r.floorErrors) || 0)),
-    };
+    const normalizedMaxHp = Math.max(50, Math.floor(Number(r.maxHp) || DUNGEON_BASE_HP));
+    const parsedHp = Number(r.hp);
+    const normalizedHp = Number.isFinite(parsedHp)
+      ? Math.max(0, Math.min(normalizedMaxHp, Math.floor(parsedHp)))
+      : DUNGEON_BASE_HP;
+    // Run derrotada (hp <= 0) nunca ressuscita com 100 HP ao recarregar
+    if (normalizedHp > 0) {
+      currentRun = {
+        active: true,
+        currentFloor: Math.max(1, Math.min(DUNGEON_MAX_FLOOR, Math.floor(Number(r.currentFloor) || 1))),
+        maxHp: normalizedMaxHp,
+        hp: normalizedHp,
+        shieldsRemaining: Math.max(0, Math.floor(Number(r.shieldsRemaining) || 0)),
+        floorProgressIndex: Math.max(0, Math.floor(Number(r.floorProgressIndex) || 0)),
+        encounters: Array.isArray(r.encounters) ? r.encounters : [],
+        narrativeLog: Array.isArray(r.narrativeLog) ? r.narrativeLog.slice(-40) : [],
+        tempBackpack: sanitizeInventory(r.tempBackpack),
+        tempCoins: Math.max(0, Math.floor(Number(r.tempCoins) || 0)),
+        tempXp: Math.max(0, Math.floor(Number(r.tempXp) || 0)),
+        equippedCardIds: Array.isArray(r.equippedCardIds) ? r.equippedCardIds.slice(0, 3) : equippedIds,
+        pendingLootMultiplier:
+          typeof r.pendingLootMultiplier === "number" && r.pendingLootMultiplier > 1
+            ? r.pendingLootMultiplier
+            : 1,
+        floorErrors: Math.max(0, Math.floor(Number(r.floorErrors) || 0)),
+      };
+    }
   }
 
   return {
@@ -305,18 +309,27 @@ export function normalizeDungeonState(
     permanentResources: sanitizeInventory(raw.permanentResources),
     currentRun,
     updatedAt: raw.updatedAt,
+    ...(typeof raw.updatedAtServerMs === "number" && Number.isFinite(raw.updatedAtServerMs)
+      ? { updatedAtServerMs: raw.updatedAtServerMs }
+      : {}),
   };
+}
+
+function getRunProgressRank(run: DungeonActiveRun | null): number {
+  if (!run || !run.active) return -1;
+  const completedCount = (run.encounters ?? []).filter((e) => e.completed).length;
+  return run.currentFloor * 100 + Math.max(run.floorProgressIndex ?? 0, completedCount);
 }
 
 /**
  * Mescla estados local e da nuvem mantendo a progressão monotonicamente crescente
- * (maior andar, checkpoints, chefes derrotados) e respeitando a fonte mais recente
- * para estamina, inventário de recursos, loadout e run ativa.
+ * (maior andar, checkpoints, chefes derrotados) e protegendo contra clock skew de máquina local.
  */
 export function mergeDungeonStates(
   local?: Partial<PlayerDungeonState> | null,
   cloud?: Partial<PlayerDungeonState> | null,
   localIsNewer = false,
+  serverNowMs = Date.now(),
 ): PlayerDungeonState {
   if (!local && !cloud) return createDefaultDungeonState();
   if (!local) return normalizeDungeonState(cloud);
@@ -325,13 +338,52 @@ export function mergeDungeonStates(
   const normLocal = normalizeDungeonState(local);
   const normCloud = normalizeDungeonState(cloud);
 
-  const localTs = normLocal.updatedAt ? Date.parse(normLocal.updatedAt) : 0;
-  const cloudTs = normCloud.updatedAt ? Date.parse(normCloud.updatedAt) : 0;
+  const maxAllowedTs = serverNowMs + 5 * 60_000;
+  const resolveReliableTs = (ds: PlayerDungeonState): number => {
+    if (
+      typeof ds.updatedAtServerMs === "number" &&
+      Number.isFinite(ds.updatedAtServerMs) &&
+      ds.updatedAtServerMs > 0
+    ) {
+      return Math.min(ds.updatedAtServerMs, maxAllowedTs);
+    }
+    const parsed = ds.updatedAt ? Date.parse(ds.updatedAt) : 0;
+    if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+    return Math.min(parsed, maxAllowedTs);
+  };
+
+  const localTs = resolveReliableTs(normLocal);
+  const cloudTs = resolveReliableTs(normCloud);
+  const bothHaveServerTs =
+    typeof normLocal.updatedAtServerMs === "number" &&
+    typeof normCloud.updatedAtServerMs === "number";
+  const localWasFutureSkewed =
+    typeof normLocal.updatedAtServerMs !== "number" &&
+    Boolean(normLocal.updatedAt && Date.parse(normLocal.updatedAt) > maxAllowedTs);
+  const cloudWasFutureSkewed =
+    typeof normCloud.updatedAtServerMs !== "number" &&
+    Boolean(normCloud.updatedAt && Date.parse(normCloud.updatedAt) > maxAllowedTs);
+
   const preferLocal =
-    localTs > 0 && cloudTs > 0 ? localTs >= cloudTs : localIsNewer;
+    localWasFutureSkewed !== cloudWasFutureSkewed
+      ? !localWasFutureSkewed
+      : localTs > 0 && cloudTs > 0
+        ? localTs >= cloudTs
+        : localIsNewer;
 
   const primary = preferLocal ? normLocal : normCloud;
   const secondary = preferLocal ? normCloud : normLocal;
+
+  // Se ambos possuem run ativa sem timestamps de servidor confiáveis ou com possível skew,
+  // evita perder progresso de andar/encontro já concluído dentro da expedição.
+  let chosenRun = primary.currentRun;
+  if (normLocal.currentRun && normCloud.currentRun && !bothHaveServerTs) {
+    const localRank = getRunProgressRank(normLocal.currentRun);
+    const cloudRank = getRunProgressRank(normCloud.currentRun);
+    if (localRank !== cloudRank) {
+      chosenRun = localRank > cloudRank ? normLocal.currentRun : normCloud.currentRun;
+    }
+  }
 
   const checkpoints = Array.from(
     new Set([
@@ -373,8 +425,11 @@ export function mergeDungeonStates(
           ? secondary.loadout
           : primary.loadout,
     permanentResources: primary.permanentResources,
-    currentRun: primary.currentRun,
+    currentRun: chosenRun,
     updatedAt: primary.updatedAt ?? secondary.updatedAt,
+    ...(primary.updatedAtServerMs || secondary.updatedAtServerMs
+      ? { updatedAtServerMs: primary.updatedAtServerMs ?? secondary.updatedAtServerMs }
+      : {}),
   };
 }
 
@@ -732,6 +787,25 @@ export function validateDungeonLoadout(
     resolved.push(def);
   }
   return { valid: true, cards: resolved };
+}
+
+/**
+ * Resolve estritamente as cartas travadas na run ativa (`run.equippedCardIds`),
+ * exigindo posse real na coleção do jogador e sem jamais recorrer a cartas gratuitas.
+ */
+export function resolveActiveRunCards(
+  run: DungeonActiveRun | null | undefined,
+  ownedCardsMap: Record<string, number> | undefined,
+  catalog: readonly CardDefinition[],
+): { valid: boolean; error?: string; cards: CardDefinition[] } {
+  if (!run || !Array.isArray(run.equippedCardIds) || run.equippedCardIds.length !== DUNGEON_REQUIRED_CARDS) {
+    return {
+      valid: false,
+      error: `Esta expedição não possui ${DUNGEON_REQUIRED_CARDS} cartas válidas travadas no deck.`,
+      cards: [],
+    };
+  }
+  return validateDungeonLoadout(run.equippedCardIds, ownedCardsMap, catalog);
 }
 
 export function aggregateDungeonLoadout(

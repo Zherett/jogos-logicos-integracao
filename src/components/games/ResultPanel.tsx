@@ -48,7 +48,7 @@ export function ResultPanel({
   const total = correct + wrong;
   const pct = total === 0 ? 0 : Math.round((correct / total) * 100);
 
-  let authProfile: any = null;
+  let authProfile: { dailyXp?: number; dailyXpDate?: string } | null = null;
   try {
     const auth = usePlayerAuth();
     authProfile = auth.profile;
@@ -105,7 +105,7 @@ export function ResultPanel({
 
       {mode === "torneio_semanal" && (() => {
         const eventBonuses = getActiveEventBonuses(
-          (gameId ?? "todos") as any,
+          gameId,
           1000,
           20,
           undefined,
@@ -141,7 +141,8 @@ export function ResultPanel({
 
       <div className="mt-6 flex flex-col sm:flex-row gap-3">
         <Button size="lg" className="flex-1 h-14 text-base font-bold" onClick={onReplay}>
-          <RotateCcw className="mr-2 h-5 w-5" /> Jogar novamente
+          <RotateCcw className="mr-2 h-5 w-5" />{" "}
+          {mode === "torneio_semanal" ? "Treinar novamente (Modo Casual)" : "Jogar novamente"}
         </Button>
         {onChangeSettings && (
           <Button size="lg" variant="outline" className="flex-1 h-14 text-base font-bold" onClick={onChangeSettings}>

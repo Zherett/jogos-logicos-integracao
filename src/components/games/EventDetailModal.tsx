@@ -29,6 +29,7 @@ import {
   DAYS_OF_WEEK,
 } from "@/lib/custom-events";
 import { getAllAvailableMedals, RARITY_INFO } from "@/lib/medals-catalog";
+import { getAuthoritativeNow } from "@/lib/playfab";
 import { MedalIcon } from "./MedalIcon";
 
 interface EventDetailModalProps {
@@ -46,13 +47,23 @@ export function EventDetailModal({
 }: EventDetailModalProps) {
   if (!event && !fallbackTitle) return null;
 
+  const now = getAuthoritativeNow();
   const isSpecial = event && "startsAt" in event;
   const isRecurring = event && "daysOfWeek" in event;
 
+  const startMs = isSpecial ? new Date((event as SpecialEvent).startsAt).getTime() : Number.NaN;
+  const endMs = isSpecial ? new Date((event as SpecialEvent).endsAt).getTime() : Number.NaN;
+  const isUpcoming = Boolean(
+    isSpecial && event?.active && Number.isFinite(startMs) && now.getTime() < startMs,
+  );
+  const isEnded = Boolean(
+    isSpecial && (!event?.active || (Number.isFinite(endMs) && now.getTime() > endMs)),
+  );
+
   const isActiveNow = event
     ? isSpecial
-      ? isEventActive(event as SpecialEvent)
-      : isRecurringEventActive(event as RecurringEvent)
+      ? isEventActive(event as SpecialEvent, now)
+      : isRecurringEventActive(event as RecurringEvent, now)
     : false;
 
   const title = event?.title || fallbackTitle || "Evento Especial";
@@ -80,10 +91,18 @@ export function EventDetailModal({
               className={`rounded-full px-2.5 py-0.5 text-[10px] font-black uppercase tracking-wider ${
                 isActiveNow
                   ? "bg-amber-500 text-zinc-950 animate-pulse shadow-xs"
-                  : "bg-muted text-muted-foreground"
+                  : isUpcoming
+                    ? "bg-sky-500/15 text-sky-600 dark:text-sky-400 border border-sky-500/30"
+                    : "bg-muted text-muted-foreground"
               }`}
             >
-              {isActiveNow ? "⚡ AO VIVO / ATIVO" : "PROGRAMADO / AGUARDANDO"}
+              {isActiveNow
+                ? "⚡ AO VIVO / ATIVO"
+                : isUpcoming
+                  ? "🗓️ EM BREVE"
+                  : isEnded
+                    ? "ENCERRADO"
+                    : "PROGRAMADO / AGUARDANDO"}
             </span>
 
             {event && (
@@ -182,7 +201,12 @@ export function EventDetailModal({
                   </p>
                   <p className="flex items-center gap-1 text-amber-500 font-bold">
                     <Clock className="h-3 w-3" />
-                    Tempo: {isActiveNow ? formatEventRemainingTime((event as SpecialEvent).endsAt) : "Encerrado"}
+                    Tempo:{" "}
+                    {isActiveNow
+                      ? formatEventRemainingTime((event as SpecialEvent).endsAt, now)
+                      : isUpcoming
+                        ? "Em breve"
+                        : "Encerrado"}
                   </p>
                 </div>
               )}

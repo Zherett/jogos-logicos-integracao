@@ -70,4 +70,89 @@ describe("Jornal Dinâmico (newspaper)", () => {
     assert.ok(articles[0].headline.includes("LucasPro"));
     assert.equal(articles[0].featuredPlayer?.playerId, "p_carmesim");
   });
+
+  it("Bloco 1.3 (ECON-17): inclui medalha 'heroi'/'sq_*', ignora 'projected_' no total, evita plantão com timestamp futuro, ignora holder ADM em empates e usa stageForPlayer em pioneiros", () => {
+    // 2026-11-17T10:30:00Z = 06:30 UTC-4 (antes das 07h00 Coari) -> edição ainda de 2026-11-16
+    assert.equal(getNewspaperEditionKey(new Date("2026-11-17T10:30:00.000Z")), "2026-11-16");
+    // 2026-11-17T11:00:00Z = 07:00 UTC-4 -> vira para 2026-11-17
+    assert.equal(getNewspaperEditionKey(new Date("2026-11-17T11:00:00.000Z")), "2026-11-17");
+
+    const now = new Date("2026-11-17T16:00:00.000Z"); // 12:00 UTC-4
+    const futureSkewIso = new Date(now.getTime() + 6 * 60 * 60 * 1000).toISOString();
+
+    const aluno = makePlayer({
+      id: "aluno_sq",
+      nick: "Estelar",
+      nickNormalized: "estelar",
+      birthdate: "",
+      ageStage: "etapa_2",
+      unlockedMedals: [{ medalId: "sq_hero_medal", unlockedAt: futureSkewIso, count: 1 }],
+      tournamentMedals: [
+        { id: "projected_week", weekKey: "2026-W47", gameId: "logica", tier: "ouro", rank: 1, label: "Ouro", heldMinutes: 10, earnedAt: now.toISOString(), count: 1, historyWeeks: ["2026-W47"] } as any,
+      ],
+    });
+    const adm = makePlayer({
+      id: "adm_1",
+      nick: "JOSINEY",
+      nickNormalized: "josiney",
+      isAdmin: true,
+    });
+
+    const medals = [
+      {
+        id: "sq_hero_medal",
+        title: "Herói Galáctico",
+        description: "Space Quest",
+        category: "especial" as any,
+        rarity: "heroi" as any,
+        iconName: "trophy" as any,
+        condition: { type: "player_level" as const, threshold: 1 },
+      },
+    ];
+
+    const articles = generateNewspaperArticles({
+      players: [aluno, adm],
+      medals: medals as any,
+      records: {
+        "logica:etapa_2": {
+          gameId: "logica",
+          stage: "etapa_2",
+          score: 480,
+          updatedAt: now.getTime(),
+          holders: [
+            { playerId: "aluno_sq", nick: "Estelar", school: "Escola Teste", achievedAt: now.getTime() - 1000 },
+            { playerId: "adm_1", nick: "JOSINEY", school: "ADM", achievedAt: now.getTime() },
+          ],
+        },
+      },
+      pioneers: {
+        sq_hero_medal: {
+          medalId: "sq_hero_medal",
+          studentId: "aluno_sq",
+          studentNick: "Estelar",
+          studentFullName: "ALUNO ESTELAR",
+          studentSchool: "Escola Teste",
+          unlockedAt: now.toISOString(),
+          timestampMs: now.getTime(),
+        },
+      },
+      now,
+    });
+
+    // Timestamp futuro NÃO deve marcar a medalha como Plantão "🚨 ÚLTIMA HORA"
+    const sqArticle = articles.find((a) => a.id.startsWith("rare_medal_sq_hero_medal"));
+    assert.ok(sqArticle, "Medalha herói/sq_* deve aparecer no jornal");
+    assert.equal(sqArticle.isBreaking, false);
+    assert.equal(sqArticle.featuredPlayer?.medalsCount, 1, "projected_ não deve ser contado em medalsCount");
+
+    // Recorde do aluno NÃO deve ser ocultado pelo ADM empatando por último
+    const recArticle = articles.find((a) => a.id.startsWith("record_break_"));
+    assert.ok(recArticle);
+    assert.equal(recArticle.featuredPlayer?.nick, "Estelar");
+
+    // Pioneiro usa stageForPlayer (etapa_2 mesmo sem birthdate)
+    const pioneerArticle = articles.find((a) => a.id.startsWith("pioneer_sq_hero_medal_"));
+    assert.ok(pioneerArticle);
+    assert.ok(pioneerArticle.summary.includes("2ª Etapa"));
+  });
 });

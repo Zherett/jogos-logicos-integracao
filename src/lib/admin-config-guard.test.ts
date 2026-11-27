@@ -147,4 +147,70 @@ describe("Blindagem de PlatformAdminConfig (Isolamento, Anti-Wipe, Revisão e Ba
     assert.equal(parsed.summary?.promoCodesCount, 1);
     assert.equal(parsed.promoCodes?.length, 1);
   });
+
+  it("isola o domínio 'x1' sem sobrescrever outros domínios ou coleções", () => {
+    const remote = makePopulatedRemote();
+    const res = mergeAdminConfigForCloudWrite(
+      remote,
+      {
+        ...DEFAULT_ADMIN_CONFIG,
+        x1OpenHour: 8,
+        x1CloseHour: 20,
+        x1MinadoGridSize: 8,
+        noticeSlides: [],
+        customMedals: [],
+        cardsCatalog: [],
+        rankedSeasonId: 9,
+      },
+      { domain: "x1" },
+    );
+    assert.equal(res.blockedError, undefined);
+    assert.equal(res.merged.x1OpenHour, 8);
+    assert.equal(res.merged.x1CloseHour, 20);
+    assert.equal(res.merged.x1MinadoGridSize, 8);
+    assert.equal(res.merged.noticeSlides?.length, 2);
+    assert.equal(res.merged.customMedals?.length, 2);
+    assert.equal(res.merged.cardsCatalog?.length, 1);
+    assert.equal(res.merged.rankedSeasonId, 1);
+  });
+
+  it("permite esvaziar coleções apenas quando allowEmptyCollections autoriza explicitamente", () => {
+    const remote = makePopulatedRemote();
+    const blocked = mergeAdminConfigForCloudWrite(
+      remote,
+      { ...remote, noticeSlides: [], customMedals: [] },
+      { domain: "notices" },
+    );
+    assert.equal(blocked.merged.noticeSlides?.length, 2);
+    assert.ok(blocked.preservedCollections.includes("noticeSlides"));
+
+    const clearedNotices = mergeAdminConfigForCloudWrite(
+      remote,
+      { ...remote, noticeSlides: [] },
+      { domain: "notices", allowEmptyCollections: ["noticeSlides"] },
+    );
+    assert.equal(clearedNotices.merged.noticeSlides?.length, 0);
+
+    const clearedMedals = mergeAdminConfigForCloudWrite(
+      remote,
+      { ...remote, customMedals: [] },
+      { domain: "medals", allowEmptyCollections: ["customMedals"] },
+    );
+    assert.equal(clearedMedals.merged.customMedals?.length, 0);
+  });
+
+  it("remove campo opcional em domain='season' quando clearFields especifica o campo", () => {
+    const remote: PlatformAdminConfig = {
+      ...makePopulatedRemote(),
+      scheduledResetAt: "2026-12-01T00:00:00.000Z",
+    };
+    const res = mergeAdminConfigForCloudWrite(
+      remote,
+      { ...remote, scheduledResetAt: undefined } as unknown as PlatformAdminConfig,
+      { domain: "season", clearFields: ["scheduledResetAt"] },
+    );
+    assert.equal(res.blockedError, undefined);
+    assert.equal(res.merged.scheduledResetAt, undefined);
+    assert.equal("scheduledResetAt" in res.merged, false);
+  });
 });

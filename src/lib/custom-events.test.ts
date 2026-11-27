@@ -499,4 +499,37 @@ describe("Eventos Personalizados Criados pelo Administrador", () => {
     assert.equal(rankedBonuses.pointsMultiplier, 1.5);
     assert.equal(rankedBonuses.rankedMultiplier, 1.5);
   });
+
+  it("Bloco 1.3 (ECON-19): aplica scope 'modo_x1' exclusivamente com isX1Match=true e filtra eventos expirados em getAllActiveEvents", () => {
+    const now = new Date("2026-11-26T16:00:00.000Z"); // 12:00 Coari
+    const x1Event: SpecialEvent = {
+      id: "ev_x1_only",
+      title: "Hora do X1",
+      description: "2x Pontos de Conquista no X1",
+      scope: "modo_x1",
+      bonusType: "personalizado",
+      pointsMultiplier: 2,
+      startsAt: "2026-11-26T00:00:00.000Z",
+      endsAt: "2026-11-27T00:00:00.000Z",
+      active: true,
+      createdAt: "2026-11-25T00:00:00.000Z",
+    };
+    const expiredEv: SpecialEvent = {
+      ...x1Event,
+      id: "ev_expired",
+      title: "Expirado",
+      startsAt: "2026-11-20T00:00:00.000Z",
+      endsAt: "2026-11-21T00:00:00.000Z",
+    };
+
+    const normalRes = getActiveEventBonuses("rpg", 1000, 20, [x1Event], now, [], false, false);
+    assert.equal(normalRes.pointsMultiplier, 1, "Partida normal não recebe evento modo_x1");
+
+    const x1Res = getActiveEventBonuses("rpg", 1000, 20, [x1Event], now, [], false, true);
+    assert.equal(x1Res.pointsMultiplier, 2, "Partida X1 deve ativar evento modo_x1");
+
+    const listed = getAllActiveEvents([x1Event, expiredEv], [], now);
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0].id, "ev_x1_only");
+  });
 });

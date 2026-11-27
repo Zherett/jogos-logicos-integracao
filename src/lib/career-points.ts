@@ -2,7 +2,11 @@ import type { PlayerProfile } from "./playfab.ts";
 import { getAllAvailableMedals, type MedalRarity } from "./medals-catalog.ts";
 import { getLocalDateKey } from "./player-profile.ts";
 import { loadAllInboxMessages, getMessageRewards } from "./inbox-messages.ts";
-import { recordScoreLedgerEntry, type ScoreTransactionSource } from "./score-history-ledger.ts";
+import {
+  recordScoreLedgerEntry,
+  type ScoreLedgerEntry,
+  type ScoreTransactionSource,
+} from "./score-history-ledger.ts";
 
 /** Pontos concedidos por raridade de medalha */
 export const MEDAL_POINTS_REWARDS: Record<MedalRarity | "secreta", number> = {
@@ -67,6 +71,7 @@ export function awardCoins(
   amount: number,
   reason = "Moedas Conquistadas",
   explicitSource?: ScoreTransactionSource,
+  options?: { skipLedger?: boolean },
 ): { profile: PlayerProfile; coinsAwarded: number } {
   if (!profile) return { profile, coinsAwarded: 0 };
   const numAmount = Number(amount);
@@ -74,34 +79,36 @@ export function awardCoins(
   const coinsAwarded = Math.max(0, Math.round(numAmount));
   if (coinsAwarded <= 0) return { profile, coinsAwarded: 0 };
   creditCoinMetrics(profile, coinsAwarded);
-  try {
-    const rLower = (reason || "").toLowerCase();
-    const source: ScoreTransactionSource =
-      explicitSource ??
-      (rLower.includes("retroativ")
-        ? "retroatribuicao"
-        : rLower.includes("missão diária") || rLower.includes("missao diaria")
-          ? "missao_diaria"
-          : rLower.includes("missão semanal") || rLower.includes("missao semanal")
-            ? "missao_semanal"
-            : rLower.includes("recompensa diária") || rLower.includes("check-in") || rLower.includes("login")
-              ? "recompensa_diaria"
-              : rLower.includes("baú") || rLower.includes("bau")
-                ? "bau"
-                : rLower.includes("nível") || rLower.includes("nivel")
-                  ? "promocao_nivel"
-                  : "medalha");
-    recordScoreLedgerEntry({
-      playerId: profile.id || profile.nick,
-      playerNick: profile.nick || "Jogador",
-      type: "coins",
-      source,
-      amount: coinsAwarded,
-      balanceAfter: profile.coins,
-      reason,
-    });
-  } catch {
-    /* ignore */
+  if (!options?.skipLedger) {
+    try {
+      const rLower = (reason || "").toLowerCase();
+      const source: ScoreTransactionSource =
+        explicitSource ??
+        (rLower.includes("retroativ")
+          ? "retroatribuicao"
+          : rLower.includes("missão diária") || rLower.includes("missao diaria")
+            ? "missao_diaria"
+            : rLower.includes("missão semanal") || rLower.includes("missao semanal")
+              ? "missao_semanal"
+              : rLower.includes("recompensa diária") || rLower.includes("check-in") || rLower.includes("login")
+                ? "recompensa_diaria"
+                : rLower.includes("baú") || rLower.includes("bau")
+                  ? "bau"
+                  : rLower.includes("nível") || rLower.includes("nivel")
+                    ? "promocao_nivel"
+                    : "medalha");
+      recordScoreLedgerEntry({
+        playerId: profile.id || profile.nick,
+        playerNick: profile.nick || "Jogador",
+        type: "coins",
+        source,
+        amount: coinsAwarded,
+        balanceAfter: profile.coins,
+        reason,
+      });
+    } catch {
+      /* ignore */
+    }
   }
   return { profile, coinsAwarded };
 }
@@ -145,6 +152,11 @@ export function awardCareerPoints(
   basePoints: number,
   _reason?: string,
   multiplier = 1,
+  options?: {
+    source?: ScoreTransactionSource;
+    skipLedger?: boolean;
+    metadata?: ScoreLedgerEntry["metadata"];
+  },
 ): { profile: PlayerProfile; pointsAwarded: number } {
   if (!profile) return { profile, pointsAwarded: 0 };
   if (!Number.isFinite(basePoints) || !Number.isFinite(multiplier)) {
@@ -162,35 +174,52 @@ export function awardCareerPoints(
   profile.pointsBalance = Math.max(0, currentBalance + pointsAwarded);
   profile.careerPoints = Math.max(0, currentCareer + pointsAwarded);
 
-  try {
-    const rLower = (_reason || "").toLowerCase();
-    const source = rLower.includes("login")
-      ? "login_diario"
-      : rLower.includes("primeiro jogo")
-        ? "primeiro_jogo"
-        : rLower.includes("recorde")
-          ? "recorde"
-          : rLower.includes("ranqueada") || rLower.includes("torneio")
-            ? "torneio_semanal"
-            : rLower.includes("x1")
-              ? "arena_x1"
-              : rLower.includes("nível") || rLower.includes("nivel")
-                ? "promocao_nivel"
-                : rLower.includes("medalha")
-                  ? "medalha"
-                  : "partida";
+  if (!options?.skipLedger) {
+    try {
+      const rLower = (_reason || "").toLowerCase();
+      const source: ScoreTransactionSource =
+        options?.source ??
+        (rLower.includes("login")
+          ? "login_diario"
+          : rLower.includes("primeiro jogo")
+            ? "primeiro_jogo"
+            : rLower.includes("recorde")
+              ? "recorde"
+              : rLower.includes("ranqueada") || rLower.includes("torneio")
+                ? "torneio_semanal"
+                : rLower.includes("x1")
+                  ? "arena_x1"
+                  : rLower.includes("nível") || rLower.includes("nivel")
+                    ? "promocao_nivel"
+                    : rLower.includes("medalha")
+                      ? "medalha"
+                      : rLower.includes("correio") || rLower.includes("postal")
+                        ? "correio"
+                        : rLower.includes("código") || rLower.includes("codigo")
+                          ? "codigo_promocional"
+                          : rLower.includes("recompensa diária") || rLower.includes("recompensa diaria")
+                            ? "recompensa_diaria"
+                            : rLower.includes("missão semanal") || rLower.includes("missao semanal")
+                              ? "missao_semanal"
+                              : rLower.includes("missão") || rLower.includes("missao")
+                                ? "missao_diaria"
+                                : rLower.includes("baú") || rLower.includes("bau")
+                                  ? "bau"
+                                  : "partida");
 
-    recordScoreLedgerEntry({
-      playerId: profile.id || profile.nick,
-      playerNick: profile.nick || "Jogador",
-      type: "career_points",
-      source,
-      amount: pointsAwarded,
-      balanceAfter: profile.careerPoints,
-      reason: _reason || "Pontos Conquistados",
-    });
-  } catch {
-    /* ignore ledger recording error */
+      recordScoreLedgerEntry({
+        playerId: profile.id || profile.nick,
+        playerNick: profile.nick || "Jogador",
+        type: "career_points",
+        source,
+        amount: pointsAwarded,
+        balanceAfter: profile.careerPoints,
+        reason: _reason || "Pontos Conquistados",
+        metadata: options?.metadata,
+      });
+    } catch {
+      /* ignore ledger recording error */
+    }
   }
 
   return { profile, pointsAwarded };
@@ -400,6 +429,7 @@ export function checkLevelPromotionPoints(
   profile: PlayerProfile,
   multiplier = 1,
   levelCoinStep = 10,
+  options?: { skipLedger?: boolean },
 ): { profile: PlayerProfile; pointsAwarded: number } {
   if (!profile || level < 2 || level > 10) {
     return { profile, pointsAwarded: 0 };
@@ -419,12 +449,15 @@ export function checkLevelPromotionPoints(
           basePts,
           `Alcance do Nível ${lvl}`,
           multiplier,
+          { source: "promocao_nivel", skipLedger: options?.skipLedger },
         );
         totalAwarded += pointsAwarded;
       }
       const coinsReward = getLevelUpCoinsReward(lvl, levelCoinStep);
       if (coinsReward > 0) {
-        awardCoins(profile, coinsReward, `Alcance do Nível ${lvl}`);
+        awardCoins(profile, coinsReward, `Alcance do Nível ${lvl}`, "promocao_nivel", {
+          skipLedger: options?.skipLedger,
+        });
       }
     }
   }
@@ -456,9 +489,10 @@ export function calculateRetroactivePoints(profile: PlayerProfile): number {
   if (Array.isArray(profile.unlockedMedals)) {
     for (const m of profile.unlockedMedals) {
       if (!m) continue;
-      const mId = (m as any).medalId ?? (m as any).id ?? "";
-      const rarity = ((m as any).rarity ?? catalogMap.get(mId) ?? "bronze") as MedalRarity;
-      const count = Math.max(1, (m as any).count ?? 1);
+      const legacy = m as { medalId?: string; id?: string; rarity?: MedalRarity; count?: number };
+      const mId = legacy.medalId ?? legacy.id ?? "";
+      const rarity = (legacy.rarity ?? catalogMap.get(mId) ?? "bronze") as MedalRarity;
+      const count = Math.max(1, legacy.count ?? 1);
       sum += (MEDAL_POINTS_REWARDS[rarity] ?? 20) * count;
     }
   }
@@ -520,28 +554,25 @@ export function sanitizeInflatedCareerPoints(
   );
 
   if (!options?.skipMedalPrune && totalMatches <= 15 && Array.isArray(profile.unlockedMedals)) {
+    const distinctGamesPlayed = statsList.filter((s) => (s?.plays ?? 0) > 0).length;
+    const hasPlayedRpg = statsList.some((s) => s?.game_id === "rpg" && (s?.plays ?? 0) > 0);
+    const maxHistoricalDays = Math.max(
+      profile.streakDays ?? 0,
+      profile.totalActiveDaysCount ?? 0,
+      Array.isArray(profile.activeDates) ? profile.activeDates.length : 0,
+    );
     profile.unlockedMedals = profile.unlockedMedals.filter((m) => {
       if (!m) return false;
-      const mId = m.medalId || (m as any).id || "";
+      const mId = m.medalId || (m as { id?: string }).id || "";
       if (
-        mId === "tournament_top_1_gold" ||
-        mId === "tournament_top_2_silver" ||
-        mId === "tournament_top_3_bronze" ||
-        mId.startsWith("secret_top5_") ||
-        mId.startsWith("secret_top1_") ||
-        mId.startsWith("beta_tester_") ||
-        mId.startsWith("meta_collector_") ||
-        mId === "explorer_all_games" ||
-        (mId === "m_rpg_ametista" && profile.nickNormalized !== "zheret") ||
-        (mId === "m_rpg_carmesim" && profile.nickNormalized !== "zheret") ||
-        (mId === "streak_3_days" && (profile.streakDays ?? 0) < 3) ||
-        (mId === "streak_5_days" && (profile.streakDays ?? 0) < 5) ||
-        (mId === "streak_7_days" && (profile.streakDays ?? 0) < 7) ||
-        (mId.startsWith("streak_") &&
-          mId !== "streak_3_days" &&
-          mId !== "streak_5_days" &&
-          mId !== "streak_7_days" &&
-          (profile.streakDays ?? 0) < 7)
+        (mId === "explore_all_games" && distinctGamesPlayed < 6) ||
+        (mId === "beta_tester_bronze" && totalMatches < 1) ||
+        (mId === "beta_tester_prata" && totalMatches < 8) ||
+        (mId === "beta_tester_ouro" && totalMatches < 12) ||
+        ((mId === "m_rpg_ametista" || mId === "m_rpg_carmesim") && !hasPlayedRpg) ||
+        (mId === "streak_3_days" && maxHistoricalDays < 3) ||
+        (mId === "streak_5_days" && maxHistoricalDays < 5) ||
+        (mId === "streak_7_days" && maxHistoricalDays < 7)
       ) {
         return false;
       }
@@ -577,6 +608,7 @@ export function sanitizeInflatedCareerPoints(
 
   // Pontos de dias ativos (login diário +25 e 1º jogo do dia +10 por data ativa real)
   const activeDatesCount = Math.max(
+    profile.totalActiveDaysCount ?? 0,
     Array.isArray(profile.activeDates) ? profile.activeDates.length : 0,
     profile.lastActiveDate ? 1 : 0,
     totalMatches > 0 ? 1 : 0,
@@ -639,20 +671,31 @@ export function sanitizeInflatedCareerPoints(
     chestsCount * 260 +
     promoClaimsCount * 250;
 
+  // Soma acumulada real dos bônus de nível até curLevel
+  let cumulativeLevelPoints = 0;
+  for (let lvl = 2; lvl <= curLevel; lvl++) {
+    cumulativeLevelPoints += LEVEL_POINTS_REWARDS[lvl] ?? 0;
+  }
+
+  const x1WinsPoints = Math.max(0, Math.floor(Number(profile.x1Wins) || 0)) * X1_WIN_POINTS;
+
   const legitimatePoints =
     baseRetro +
     tierPoints +
     loginAndFirstGamePoints +
     flawlessAndRecordPoints +
     rankedWinPoints +
+    x1WinsPoints +
     claimedInboxPoints +
     routineAndChestPoints;
 
-  // Teto proporcional inviolável de salvaguarda física baseado na atividade real do estudante
+  // Teto proporcional de salvaguarda física baseado na atividade real do estudante (inclui níveis, elos, X1 e rotina)
   const maxPhysicalCeiling = Math.max(
     150,
     totalMatches * 60 +
-      (curLevel - 1) * 60 +
+      cumulativeLevelPoints +
+      tierPoints +
+      x1WinsPoints +
       verifiedLoginDays * 35 +
       claimedInboxPoints +
       routineAndChestPoints +
@@ -661,25 +704,23 @@ export function sanitizeInflatedCareerPoints(
 
   const finalLegitimatePoints = Math.min(legitimatePoints, maxPhysicalCeiling);
 
-  // Margem de segurança para bônus de eventos (2x) ou recordes de etapa (+50)
-  const maxReasonableThreshold = Math.min(
-    maxPhysicalCeiling,
-    Math.max(
-      finalLegitimatePoints + 150,
-      Math.round(finalLegitimatePoints * 1.5),
-    )
+  // Margem de segurança de 1.5x para bônus de eventos (2x/3x), marcos ranqueados ou recordes de etapa (+50)
+  const maxReasonableThreshold = Math.max(
+    finalLegitimatePoints + 150,
+    Math.round(finalLegitimatePoints * 1.5),
   );
+  const hardCeiling = Math.max(maxPhysicalCeiling, maxReasonableThreshold);
 
   const currentCareer = profile.careerPoints ?? 0;
   const currentBalance = profile.pointsBalance ?? 0;
+  const spentTotal = Math.max(0, Math.floor(Number(profile.pointsSpentTotal) || 0));
 
   if (
-    currentCareer > maxReasonableThreshold ||
-    currentBalance > maxReasonableThreshold ||
-    currentCareer > maxPhysicalCeiling
+    currentCareer > hardCeiling ||
+    currentBalance > hardCeiling
   ) {
     profile.careerPoints = finalLegitimatePoints;
-    profile.pointsBalance = Math.max(0, finalLegitimatePoints);
+    profile.pointsBalance = Math.max(0, Math.min(currentBalance, finalLegitimatePoints - spentTotal));
     return { profile, wasSanitized: true };
   }
 
@@ -771,15 +812,16 @@ export function calculateRetroactiveMedalCoins(
   const countByMedal = new Map<string, { count: number; rarity: MedalRarity }>();
   for (const m of profile.unlockedMedals) {
     if (!m) continue;
-    const mId = String((m as any).medalId ?? (m as any).id ?? "").trim();
+    const legacy = m as { medalId?: string; id?: string; rarity?: MedalRarity; count?: unknown };
+    const mId = String(legacy.medalId ?? legacy.id ?? "").trim();
     if (!mId) continue;
     const rarity = (
       customMap[mId] ??
-      (m as any).rarity ??
+      legacy.rarity ??
       catalogMap.get(mId) ??
       "bronze"
     ) as MedalRarity;
-    const count = Math.max(1, Math.floor(Number((m as any).count ?? 1)));
+    const count = Math.max(1, Math.floor(Number(legacy.count ?? 1)));
     const prev = countByMedal.get(mId);
     if (prev) {
       prev.count = Math.max(prev.count, count);

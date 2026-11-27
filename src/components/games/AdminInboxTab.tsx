@@ -45,6 +45,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import {
   sendAdminBroadcastMessage,
   loadAllInboxMessages,
+  INBOX_RETENTION_LIMIT,
   getMessageReaders,
   runRetroactiveInboxReadsScan,
   subscribeToInboxSync,
@@ -99,6 +100,8 @@ interface Props {
 
 export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Props) {
   const auth = usePlayerAuth();
+  const adminConfigRef = useRef(auth.adminConfig);
+  adminConfigRef.current = auth.adminConfig;
 
   // Chave estável de dependência para evitar recriação desnecessária da lista em cada render
   const registeredStudentsKey = useMemo(() => {
@@ -129,6 +132,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
   // Conjunto de IDs de alunos explicitamente selecionados
   // REGRA DO USUÁRIO: Por padrão, os alunos começam DESMARCADOS
   const [selectedStudentIds, setSelectedStudentIds] = useState<Set<string>>(new Set());
+  const skipNextSelectionResetRef = useRef(false);
 
   // Dados da mensagem
   const [title, setTitle] = useState("");
@@ -572,7 +576,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
           await auth.updateAdminConfig(
             {
               ...auth.adminConfig,
-              inboxMessages: allMsgs.slice(0, 50),
+              inboxMessages: allMsgs.slice(0, INBOX_RETENTION_LIMIT),
               canceledInboxMessageIds: canceledIds,
             },
             { domain: "inbox" },
@@ -738,6 +742,10 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
   // Ao alternar o modo ou alterar o filtro de escola/etapa:
   // Por regra, os alunos começam DESMARCADOS (seleção limpa)
   useEffect(() => {
+    if (skipNextSelectionResetRef.current) {
+      skipNextSelectionResetRef.current = false;
+      return;
+    }
     setSelectedStudentIds(new Set());
   }, [recipientMode, selectedSchool, selectedStage]);
 
@@ -1021,7 +1029,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
         await auth.updateAdminConfig(
           {
             ...auth.adminConfig,
-            inboxMessages: allMsgs.slice(0, 50),
+            inboxMessages: allMsgs.slice(0, INBOX_RETENTION_LIMIT),
           },
           { domain: "inbox" },
         );
@@ -1122,8 +1130,9 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
         try {
           auth.updateAdminConfig(
             {
-              ...auth.adminConfig,
-              inboxMessages: loadAllInboxMessages().slice(0, 50),
+              ...adminConfigRef.current,
+              inboxMessages: loadAllInboxMessages().slice(0, INBOX_RETENTION_LIMIT),
+              canceledInboxMessageIds: Array.from(loadCanceledMessageIds()),
               scheduledInboxRules: loadScheduledInboxRules(),
             },
             { domain: "inbox" },
@@ -1368,20 +1377,53 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
           ? [rule.reward]
           : [];
     setSchedRewardsList(
-      existingRewards.map((r, idx) => ({
-        id: `edit_rew_${idx}_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`,
-        type: r.type,
-        pointsAmount: r.pointsAmount ?? 100,
-        medalId: r.medalId ?? availableMedals[0]?.id ?? "",
-        isSecret: Boolean(r.isSecret),
-      }))
+      existingRewards.map((r, idx) => {
+        const rawData = r.itemData as
+          | {
+              itemCategory?: "chest" | "card_pack" | "cosmetic";
+              itemId?: string;
+              itemName?: string;
+              quantity?: number;
+              cosmeticKind?: "avatar" | "aura";
+            }
+          | undefined;
+        const rewardItem: SelectedRewardItemValue | undefined =
+          r.type === "future_item" && rawData?.itemId
+            ? {
+                itemCategory: rawData.itemCategory ?? "chest",
+                itemId: String(rawData.itemId),
+                itemName: String(rawData.itemName ?? rawData.itemId),
+                quantity: Math.max(1, Number(rawData.quantity) || 1),
+                ...(rawData.cosmeticKind ? { cosmeticKind: rawData.cosmeticKind } : {}),
+              }
+            : undefined;
+        return {
+          id: `edit_rew_${idx}_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`,
+          type: r.type,
+          pointsAmount: r.pointsAmount ?? 100,
+          medalId: r.medalId ?? availableMedals[0]?.id ?? "",
+          ...(rewardItem ? { rewardItem } : {}),
+          isSecret: Boolean(r.isSecret),
+        };
+      }),
     );
 
+    const hasExplicitStudents =
+      Array.isArray(rule.targetStudentIds) && rule.targetStudentIds.length > 0;
+    const filterWillChange =
+      rule.recipientMode !== recipientMode ||
+      (Boolean(rule.targetSchool) && rule.targetSchool !== selectedSchool) ||
+      (Boolean(rule.targetStage) && rule.targetStage !== selectedStage);
+    if (hasExplicitStudents && filterWillChange) {
+      skipNextSelectionResetRef.current = true;
+    }
     setRecipientMode(rule.recipientMode);
     if (rule.targetSchool) setSelectedSchool(rule.targetSchool);
     if (rule.targetStage) setSelectedStage(rule.targetStage);
-    if (Array.isArray(rule.targetStudentIds) && rule.targetStudentIds.length > 0) {
+    if (hasExplicitStudents) {
       setSelectedStudentIds(new Set(rule.targetStudentIds));
+    } else {
+      setSelectedStudentIds(new Set());
     }
   };
 
@@ -1430,7 +1472,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
         await auth.updateAdminConfig(
           {
             ...auth.adminConfig,
-            inboxMessages: loadAllInboxMessages().slice(0, 50),
+            inboxMessages: loadAllInboxMessages().slice(0, INBOX_RETENTION_LIMIT),
             scheduledInboxRules: loadScheduledInboxRules(),
           },
           { domain: "inbox" },
@@ -2851,19 +2893,19 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                     size="sm"
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={() => {
-                      const el = bodyTextareaRef.current;
+                      const el = schedBodyTextareaRef.current;
                       if (el && el.selectionStart !== el.selectionEnd) {
                         const start = el.selectionStart;
                         const end = el.selectionEnd;
-                        const selected = body.slice(start, end);
-                        const next = `${body.slice(0, start)}*${selected}*${body.slice(end)}`;
-                        setBody(next);
+                        const selected = schedBody.slice(start, end);
+                        const next = `${schedBody.slice(0, start)}*${selected}*${schedBody.slice(end)}`;
+                        setSchedBody(next);
                         requestAnimationFrame(() => {
                           el.focus();
                           el.setSelectionRange(start + 1, end + 1);
                         });
                       } else {
-                        insertTagIntoTextarea(el, body, setBody, "*texto*");
+                        insertTagIntoTextarea(el, schedBody, setSchedBody, "*texto*");
                       }
                     }}
                     className="h-7 rounded-xl text-[11px] font-bold cursor-pointer"
@@ -3569,11 +3611,24 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => {
+                onClick={async () => {
                   const res = evaluateAndTriggerScheduledMessages(undefined, new Date());
                   refreshScheduledRules();
                   refreshHistory();
                   if (res.triggeredCount > 0) {
+                    try {
+                      await auth.updateAdminConfig(
+                        {
+                          ...adminConfigRef.current,
+                          inboxMessages: loadAllInboxMessages().slice(0, INBOX_RETENTION_LIMIT),
+                          canceledInboxMessageIds: Array.from(loadCanceledMessageIds()),
+                          scheduledInboxRules: loadScheduledInboxRules(),
+                        },
+                        { domain: "inbox" },
+                      );
+                    } catch (err) {
+                      console.warn("Aviso ao publicar disparos programados no PlayFab:", err);
+                    }
                     onBroadcastSent?.(`⚡ ${res.triggeredCount} mensagem(ns) programada(s) disparada(s)!`);
                   } else {
                     onBroadcastSent?.("Nenhum disparo pendente no momento exato.");
@@ -3664,12 +3719,12 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                           <div className="text-[11px] text-muted-foreground mt-1">
                             <b>Público:</b>{" "}
                             {rule.recipientMode === "all"
-                              ? "Todos os Alunos"
+                              ? `Todos os Alunos${rule.targetStudentIds?.length ? ` (${rule.targetStudentIds.length} selecionado(s))` : ""}`
                               : rule.recipientMode === "school"
-                                ? `Escola: ${rule.targetSchool || "Todas"}`
+                                ? `Escola: ${rule.targetSchool || "Todas"}${rule.targetStudentIds?.length ? ` (${rule.targetStudentIds.length} selecionado(s))` : ""}`
                                 : rule.recipientMode === "stage"
-                                  ? `Etapa: ${rule.targetStage || "Todas"}`
-                                  : `${rule.targetStudentIds?.length || 0} alunos selecionados`}
+                                  ? `Etapa: ${rule.targetStage || "Todas"}${rule.targetStudentIds?.length ? ` (${rule.targetStudentIds.length} selecionado(s))` : ""}`
+                                  : `${rule.targetStudentIds?.length || 0} aluno(s) selecionado(s)`}
                           </div>
                         </div>
 
@@ -4215,6 +4270,11 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                               🪙
                             </div>
                           )}
+                          {rew.type === "coins" && (
+                            <div className="grid h-10 w-10 place-items-center rounded-xl bg-amber-400/20 text-xl font-black shrink-0">
+                              🪙
+                            </div>
+                          )}
                           {rew.type === "medal" && (
                             <div className="grid h-10 w-10 place-items-center rounded-xl bg-primary/20 text-xl shrink-0">
                               🏅
@@ -4235,7 +4295,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                                 <span>+{rew.pointsAmount} Moedas da Loja</span>
                               )}
                               {rew.type === "medal" && (() => {
-                                const itemData = rew.itemData as any;
+                                const itemData = rew.itemData as { tournamentMedal?: { label?: string; bonusXpAwarded?: number } } | undefined;
                                 const tourMedal = itemData?.tournamentMedal;
                                 if (tourMedal?.label) {
                                   return <span>{tourMedal.label}</span>;
@@ -4244,7 +4304,7 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                                 return <span>Medalha: {def ? def.title : rew.medalId}</span>;
                               })()}
                               {rew.type === "future_item" && (() => {
-                                const idata = rew.itemData as any;
+                                const idata = rew.itemData as { itemName?: string; itemCategory?: string; quantity?: number } | undefined;
                                 if (idata?.itemName) {
                                   return (
                                     <span>
@@ -4260,9 +4320,19 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                             <div className="text-xs text-muted-foreground">
                               {rew.type === "points"
                                 ? "Pontos creditados na carteira e Hall da Fama"
-                                : (rew.itemData as any)?.tournamentMedal
-                                  ? `+${(rew.itemData as any).tournamentMedal.bonusXpAwarded ?? 0} XP Extra e Medalha de Pódio Oficial`
-                                  : "Adicionada à galeria de medalhas do aluno"}
+                                : rew.type === "coins"
+                                  ? "Moedas creditadas na carteira da Loja"
+                                  : rew.type === "future_item"
+                                    ? (() => {
+                                        const cat = (rew.itemData as { itemCategory?: string } | undefined)?.itemCategory;
+                                        if (cat === "chest") return "Baú adicionado ao inventário do aluno";
+                                        if (cat === "card_pack") return "Pacote de cartas adicionado ao inventário do aluno";
+                                        if (cat === "cosmetic") return "Cosmético desbloqueado no perfil do aluno";
+                                        return "Item creditado no inventário do aluno";
+                                      })()
+                                    : (rew.itemData as { tournamentMedal?: { bonusXpAwarded?: number } } | undefined)?.tournamentMedal
+                                      ? `+${(rew.itemData as { tournamentMedal?: { bonusXpAwarded?: number } }).tournamentMedal?.bonusXpAwarded ?? 0} XP Extra e Medalha de Pódio Oficial`
+                                      : "Adicionada à galeria de medalhas do aluno"}
                             </div>
                           </div>
                         </div>
@@ -4381,12 +4451,24 @@ export function AdminInboxTab({ registeredStudents = [], onBroadcastSent }: Prop
                               <span>
                                 {rew.type === "points"
                                   ? `🪙 +${rew.pointsAmount} Pontos`
-                                  : rew.type === "medal"
-                                    ? `🏅 Medalha: ${
-                                        availableMedals.find((m) => m.id === rew.medalId)?.title ??
-                                        rew.medalId
-                                      }`
-                                    : "📦 Item Especial"}
+                                  : rew.type === "coins"
+                                    ? `🪙 +${rew.pointsAmount} Moedas da Loja`
+                                    : rew.type === "medal"
+                                      ? `🏅 Medalha: ${
+                                          availableMedals.find((m) => m.id === rew.medalId)?.title ??
+                                          rew.medalId
+                                        }`
+                                      : rew.type === "future_item"
+                                        ? (() => {
+                                            const idata = rew.itemData as { itemName?: string; itemCategory?: string; quantity?: number } | undefined;
+                                            if (idata?.itemName) {
+                                              return idata.itemCategory === "cosmetic"
+                                                ? `✨ ${idata.itemName}`
+                                                : `📦 ${idata.quantity ?? 1}x ${idata.itemName}`;
+                                            }
+                                            return "📦 Item Especial";
+                                          })()
+                                        : "📦 Item Especial"}
                               </span>
                             </div>
                             {rew.isSecret && (

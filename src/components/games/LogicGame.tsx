@@ -17,6 +17,7 @@ import { SessionSummary } from "./SessionSummary";
 import { useSessionEnd } from "@/lib/use-session-end";
 import { NORMAL_CONFIG, type TeamConfig } from "@/lib/teams";
 import { playCorrect, playWrong } from "@/lib/sound";
+import { useSafeTimeouts } from "@/lib/use-safe-timeouts";
 
 const DURATION = 120;
 const LEVEL_UP_STREAK = 5;
@@ -56,11 +57,13 @@ export function LogicGame({ onExit, onStatsChange, isRanked }: Props) {
   const recentTexts = useRef<string[]>([]);
   const recentAnswers = useRef<boolean[]>([]);
   const lockRef = useRef(false);
+  const { schedule, clearAll } = useSafeTimeouts();
 
   // Derived score keeps hits and misses always in sync (floored at 0).
   const score = Math.max(0, correct * POINTS_CORRECT - wrong * POINTS_WRONG);
 
   const clock = useRoundClock(DURATION, running, () => {
+    clearAll();
     setRunning(false);
     setFinished(true);
   });
@@ -85,6 +88,7 @@ export function LogicGame({ onExit, onStatsChange, isRanked }: Props) {
   }, [finished]);
 
   function startGame() {
+    clearAll();
     setRunId((r) => r + 1);
     team.begin(teamConfig);
     recentTexts.current = [];
@@ -92,6 +96,7 @@ export function LogicGame({ onExit, onStatsChange, isRanked }: Props) {
     lockRef.current = false;
     setFeedback(null);
     setShowLevelUp(null);
+    setFloaters([]);
     setCorrect(0); setWrong(0); setLevel(1); setStreak(0);
     setFinished(false);
     const first = generateBalanced(1, [], []);
@@ -103,6 +108,10 @@ export function LogicGame({ onExit, onStatsChange, isRanked }: Props) {
   }
 
   function replayWithCountdown() {
+    clearAll();
+    lockRef.current = false;
+    setFeedback(null);
+    setShowLevelUp(null);
     team.advance();
     setFinished(false);
     setRunning(false);
@@ -110,6 +119,10 @@ export function LogicGame({ onExit, onStatsChange, isRanked }: Props) {
   }
 
   function backToSetup() {
+    clearAll();
+    lockRef.current = false;
+    setFeedback(null);
+    setShowLevelUp(null);
     setRunning(false);
     setFinished(false);
     setPhase("setup");
@@ -130,7 +143,7 @@ export function LogicGame({ onExit, onStatsChange, isRanked }: Props) {
     const ok = value === question.answer;
     const id = Date.now();
     setFloaters((f) => [...f, { id, text: ok ? `+${POINTS_CORRECT}` : `−${POINTS_WRONG}`, ok }]);
-    setTimeout(() => setFloaters((f) => f.filter((x) => x.id !== id)), 900);
+    schedule(() => setFloaters((f) => f.filter((x) => x.id !== id)), 900);
 
     if (ok) {
       playCorrect();
@@ -144,7 +157,7 @@ export function LogicGame({ onExit, onStatsChange, isRanked }: Props) {
         setLevel(newLevel);
         setStreak(0);
         setShowLevelUp(newLevel);
-        setTimeout(() => {
+        schedule(() => {
           setShowLevelUp(null);
           setFeedback(null);
           nextQuestion(newLevel);
@@ -152,7 +165,7 @@ export function LogicGame({ onExit, onStatsChange, isRanked }: Props) {
         }, 1100);
       } else {
         setStreak(newStreak);
-        setTimeout(() => {
+        schedule(() => {
           setFeedback(null);
           nextQuestion(level);
           lockRef.current = false;
@@ -163,7 +176,7 @@ export function LogicGame({ onExit, onStatsChange, isRanked }: Props) {
       setFeedback("wrong");
       setWrong((w) => w + 1);
       setStreak(0);
-      setTimeout(() => {
+      schedule(() => {
         setFeedback(null);
         nextQuestion(level);
         lockRef.current = false;
@@ -218,6 +231,7 @@ export function LogicGame({ onExit, onStatsChange, isRanked }: Props) {
         <GameTopBar title="Lógica Matemática" onExit={onExit} sessionActive={team.activeSession} onFinishSession={sessionEnd.request} />
         <ResultPanel
           gameId="logica"
+          mode={lastMatch?.mode ?? (isRanked ? "torneio_semanal" : undefined)}
           isTeam={team.activeSession}
           score={score} correct={correct} wrong={wrong} level={level}
           onReplay={replayWithCountdown} onMenu={onExit} onChangeSettings={backToSetup}

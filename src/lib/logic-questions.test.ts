@@ -112,4 +112,15 @@ describe("Lógica Matemática — Escalonamento Progressivo de Operações (logi
       `Taxa de previsão do padrão antigo deveria ser ~50% (acaso), mas foi ${(oldRuleRate * 100).toFixed(1)}%`,
     );
   });
+
+  it("GAME-15: não gera distratores negativos nas igualdades aritméticas do Nível 1 ao 4", () => {
+    for (let i = 0; i < 600; i++) {
+      const q = generateQuestion((i % 4) + 1, []);
+      assert.equal(
+        /=\s*-\d+/.test(q.text),
+        false,
+        `Não deve gerar distrator negativo em logic-questions: ${q.text}`,
+      );
+    }
+  });
 });

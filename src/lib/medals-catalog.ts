@@ -1974,9 +1974,11 @@ export function getTopShowcaseMedals(
     if (def) list.push(def);
   }
 
-  // Sort by rarity weight descending, then by title
+  // Sort by rarity weight descending (safe fallback for unknown custom rarity), then by title
   list.sort((a, b) => {
-    const weightDiff = RARITY_INFO[b.rarity].weight - RARITY_INFO[a.rarity].weight;
+    const wB = RARITY_INFO[b.rarity]?.weight ?? RARITY_INFO.bronze.weight;
+    const wA = RARITY_INFO[a.rarity]?.weight ?? RARITY_INFO.bronze.weight;
+    const weightDiff = wB - wA;
     if (weightDiff !== 0) return weightDiff;
     return a.title.localeCompare(b.title);
   });
@@ -2001,12 +2003,52 @@ export interface PlayerStatsContext {
   streakDays?: number;
   weeklyX1Wins?: number;
   enabledGames?: Partial<Record<GameId, boolean>>;
+  adminOnlyGames?: Partial<Record<GameId, boolean>>;
   /** IDs de eventos explicitamente voltados ao Modo X1 */
   x1EventIds?: Set<string>;
 }
 
 let cachedAdminEnabledGamesRaw: string | null = null;
 let cachedAdminEnabledGamesMap: Partial<Record<GameId, boolean>> = {};
+let cachedAdminOnlyGamesRaw: string | null = null;
+let cachedAdminOnlyGamesMap: Partial<Record<GameId, boolean>> = {};
+
+function getAdminOnlyGameIdsSet(
+  adminOnlyOverride?: Partial<Record<GameId, boolean>>,
+): Set<GameId> {
+  let map: Partial<Record<GameId, boolean>> = {};
+  if (typeof window !== "undefined") {
+    try {
+      const raw = window.localStorage.getItem("desafios-logica-admin-config-v1");
+      if (raw) {
+        if (raw === cachedAdminOnlyGamesRaw) {
+          map = cachedAdminOnlyGamesMap;
+        } else {
+          const parsed = JSON.parse(raw) as { adminOnlyGames?: Partial<Record<GameId, boolean>> };
+          cachedAdminOnlyGamesRaw = raw;
+          cachedAdminOnlyGamesMap = parsed?.adminOnlyGames ? { ...parsed.adminOnlyGames } : {};
+          map = cachedAdminOnlyGamesMap;
+        }
+      } else {
+        cachedAdminOnlyGamesRaw = null;
+        cachedAdminOnlyGamesMap = {};
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  const set = new Set<GameId>();
+  for (const gId of ALL_GAME_IDS) {
+    const val =
+      adminOnlyOverride && adminOnlyOverride[gId] !== undefined
+        ? adminOnlyOverride[gId]
+        : map[gId];
+    if (val === true) {
+      set.add(gId);
+    }
+  }
+  return set;
+}
 
 /**
  * Retorna o conjunto de jogos habilitados pelo Administrador na plataforma.
@@ -2523,6 +2565,10 @@ export function evaluatePlayerMedals(
 
   const p = ctx.profile;
   const enabledSet = getEnabledGameIdsSet(ctx.enabledGames);
+  const adminOnlySet = getAdminOnlyGameIdsSet(ctx.adminOnlyGames);
+  const eligibleGamesForMeta = Array.from(enabledSet).filter(
+    (gId) => Boolean(p.isAdmin) || !adminOnlySet.has(gId),
+  );
   const statsMap = aggregateStatsByGame(ctx.stats, ctx.enabledGames);
   const aggregatedRows = Array.from(statsMap.values()).filter((s) => s.plays > 0);
 
@@ -2733,13 +2779,8 @@ export function evaluatePlayerMedals(
           Array.isArray(p.tournamentMedals) &&
           p.tournamentMedals.some((tm) => {
             if (!tm || tm.rank !== cond.targetRank) return false;
-            // Torneio semanal em andamento (W46 encerra apenas em 15/11 às 23:59) NÃO pode conceder medalha de pódio oficial prematuramente
-            const isOngoingOrProjected =
-              tm.weekKey === "2026-W46" ||
-              tm.weekKey === "Season_1" ||
-              String(tm.id || "").startsWith("projected_") ||
-              (typeof tm.label === "string" && tm.label.includes("RoboGrid"));
-            return !isOngoingOrProjected;
+            const isProjected = String(tm.id || "").startsWith("projected_");
+            return !isProjected;
           })
         ) {
           earned = true;
@@ -2763,10 +2804,12 @@ export function evaluatePlayerMedals(
         break;
 
       case "all_game_medals": {
-        const allGameMasterMedalsUnlocked = ALL_GAME_IDS.every((gId) => {
-          const mId = `game_${gId}_lvl_master`;
-          return existingSet.has(mId) || newlyAwarded.some((m) => m.id === mId);
-        });
+        const allGameMasterMedalsUnlocked =
+          eligibleGamesForMeta.length > 0 &&
+          eligibleGamesForMeta.every((gId) => {
+            const mId = `game_${gId}_lvl_master`;
+            return existingSet.has(mId) || newlyAwarded.some((m) => m.id === mId);
+          });
         if (allGameMasterMedalsUnlocked) earned = true;
         break;
       }
@@ -2943,7 +2986,16 @@ export function evaluatePlayerMedals(
             break;
           }
           case "event_flawless": {
-            if ((evProg.flawlessCount ?? 0) >= req.threshold) earned = true;
+            const flawlessCur = req.gameId
+              ? (evProg.flawlessByGame?.[req.gameId] ?? 0)
+              : (evProg.flawlessCount ?? 0);
+            const bestScoreOk =
+              req.minScore === undefined ||
+              (req.gameId
+                ? (evProg.bestScoreByGame?.[req.gameId] ?? 0) >= req.minScore
+                : Math.max(...Object.values(evProg.bestScoreByGame ?? {}).map(Number), 0) >=
+                  req.minScore);
+            if (flawlessCur >= req.threshold && bestScoreOk) earned = true;
             break;
           }
           case "event_x1_wins": {
@@ -3028,7 +3080,9 @@ export function calculateMedalProgress(
           : Math.max(...Object.values(evProg.bestLevelByGame ?? {}).map(Number), 1);
         break;
       case "event_flawless":
-        cur = evProg.flawlessCount ?? 0;
+        cur = req.gameId
+          ? (evProg.flawlessByGame?.[req.gameId] ?? 0)
+          : (evProg.flawlessCount ?? 0);
         break;
       case "event_x1_wins":
         cur = evProg.x1Wins ?? 0;

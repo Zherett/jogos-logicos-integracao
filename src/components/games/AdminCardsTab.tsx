@@ -89,6 +89,10 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
   const [rarityFilter, setRarityFilter] = useState<CardRarity | "todas">("todas");
   const [cardsPage, setCardsPage] = useState(1);
   const [previewModalCard, setPreviewModalCard] = useState<CardDefinition | null>(null);
+  const [pendingImportBackup, setPendingImportBackup] = useState<{
+    cards: CardDefinition[];
+    skippedCount: number;
+  } | null>(null);
 
   // Formulário de Pacote (Criar Especial / Editar)
   const [editingPackId, setEditingPackId] = useState<string | null>(null);
@@ -185,6 +189,25 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
     setCloudFeedback(`💾 Backup exportado com ${cards.length} carta(s)! Guarde o arquivo em local seguro.`);
   }
 
+  async function executeCardsBackupImport(
+    importedCards: CardDefinition[],
+    skippedCount: number,
+    mode: "merge" | "replace",
+  ) {
+    const merged = mergeCardsCatalog(cards, importedCards, mode);
+    const nextCfg: PlatformAdminConfig = {
+      ...draft,
+      cardsCatalog: merged.cards,
+    };
+    const skippedHint = skippedCount > 0 ? ` (${skippedCount} ignorada(s))` : "";
+    setPendingImportBackup(null);
+    await persistConfig(
+      nextCfg,
+      `✅ Catálogo restaurado na nuvem! ${merged.cards.length} carta(s) ativas (+${merged.addedCount} adicionada(s), ${merged.updatedCount} atualizada(s))${skippedHint}.`,
+      { allowCardsCatalogWrite: true },
+    );
+  }
+
   async function handleImportCardsBackupFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     e.target.value = "";
@@ -198,26 +221,15 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
         return;
       }
 
-      const mode: "merge" | "replace" =
-        cards.length === 0
-          ? "replace"
-          : window.confirm(
-                `Encontradas ${parsed.cards.length} carta(s) válida(s) no arquivo.\n\nClique em OK para MESCLAR com as ${cards.length} carta(s) atuais (recomendado) ou Cancelar para SUBSTITUIR todo o catálogo atual.`,
-              )
-            ? "merge"
-            : "replace";
+      if (cards.length === 0) {
+        await executeCardsBackupImport(parsed.cards, parsed.skippedCount, "replace");
+        return;
+      }
 
-      const merged = mergeCardsCatalog(cards, parsed.cards, mode);
-      const nextCfg: PlatformAdminConfig = {
-        ...draft,
-        cardsCatalog: merged.cards,
-      };
-      const skippedHint = parsed.skippedCount > 0 ? ` (${parsed.skippedCount} ignorada(s))` : "";
-      await persistConfig(
-        nextCfg,
-        `✅ Catálogo restaurado na nuvem! ${merged.cards.length} carta(s) ativas (+${merged.addedCount} adicionada(s), ${merged.updatedCount} atualizada(s))${skippedHint}.`,
-        { allowCardsCatalogWrite: true },
-      );
+      setPendingImportBackup({
+        cards: parsed.cards,
+        skippedCount: parsed.skippedCount,
+      });
     } catch (err) {
       setCloudFeedback(
         `⚠️ Erro ao ler arquivo de backup: ${err instanceof Error ? err.message : "arquivo inválido."}`,
@@ -1285,6 +1297,71 @@ export function AdminCardsTab({ draft, setDraft, onSaveConfig }: AdminCardsTabPr
           </div>
         </div>
       )}
+
+      {/* Modal Seguro de Escolha de Modo de Importação de Backup de Cartas */}
+      <Dialog
+        open={Boolean(pendingImportBackup)}
+        onOpenChange={(v) => {
+          if (!v) setPendingImportBackup(null);
+        }}
+      >
+        <DialogContent className="max-w-md rounded-3xl">
+          <DialogHeader>
+            <DialogTitle className="font-display text-lg font-extrabold">
+              Importar Backup de Cartas
+            </DialogTitle>
+          </DialogHeader>
+          {pendingImportBackup && (
+            <div className="space-y-4 text-sm">
+              <p className="text-muted-foreground">
+                Encontradas <b className="text-foreground">{pendingImportBackup.cards.length}</b> carta(s) válida(s)
+                no arquivo{pendingImportBackup.skippedCount > 0 ? ` (${pendingImportBackup.skippedCount} ignorada(s))` : ""}.
+                Atualmente existem <b className="text-foreground">{cards.length}</b> carta(s) no catálogo.
+              </p>
+              <div className="flex flex-col gap-2">
+                <Button
+                  type="button"
+                  disabled={saving}
+                  className="rounded-xl font-bold"
+                  onClick={() =>
+                    void executeCardsBackupImport(
+                      pendingImportBackup.cards,
+                      pendingImportBackup.skippedCount,
+                      "merge",
+                    )
+                  }
+                >
+                  Mesclar com as cartas atuais (Recomendado)
+                </Button>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  disabled={saving}
+                  className="rounded-xl font-bold"
+                  onClick={() =>
+                    void executeCardsBackupImport(
+                      pendingImportBackup.cards,
+                      pendingImportBackup.skippedCount,
+                      "replace",
+                    )
+                  }
+                >
+                  Substituir todo o catálogo atual
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={saving}
+                  className="rounded-xl font-semibold"
+                  onClick={() => setPendingImportBackup(null)}
+                >
+                  Cancelar (não alterar nada)
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Modal de Prévia Ampliada da Carta */}
       <Dialog open={Boolean(previewModalCard)} onOpenChange={(v) => !v && setPreviewModalCard(null)}>

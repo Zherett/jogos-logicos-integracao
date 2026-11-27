@@ -2,6 +2,7 @@
 // Persiste a preferência em localStorage e sincroniza a classe 'dark' no elemento raiz (<html>).
 
 import { useEffect, useState } from "react";
+import { safeLocalStorageSet } from "./storage-guard.ts";
 
 const THEME_STORAGE_KEY = "desafios-theme-v1";
 export type ThemeMode = "light" | "dark";
@@ -23,7 +24,7 @@ export function getInitialTheme(): ThemeMode {
   return "dark";
 }
 
-export function applyTheme(theme: ThemeMode): void {
+function syncDocumentThemeClass(theme: ThemeMode): void {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
   if (theme === "dark") {
@@ -31,9 +32,15 @@ export function applyTheme(theme: ThemeMode): void {
   } else {
     root.classList.remove("dark");
   }
+}
+
+export function applyTheme(theme: ThemeMode, options?: { emitEvent?: boolean }): void {
+  syncDocumentThemeClass(theme);
   try {
-    localStorage.setItem(THEME_STORAGE_KEY, theme);
-    window.dispatchEvent(new CustomEvent("desafios:theme-changed", { detail: theme }));
+    safeLocalStorageSet(THEME_STORAGE_KEY, theme);
+    if (options?.emitEvent !== false && typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent("desafios:theme-changed", { detail: theme }));
+    }
   } catch {
     /* ignore */
   }
@@ -47,26 +54,29 @@ export function useTheme(): {
   const [theme, setLocalTheme] = useState<ThemeMode>(() => getInitialTheme());
 
   useEffect(() => {
-    applyTheme(theme);
+    syncDocumentThemeClass(theme);
+  }, [theme]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
     const handler = (e: Event) => {
       const custom = e as CustomEvent<ThemeMode>;
-      if (custom.detail && (custom.detail === "light" || custom.detail === "dark")) {
+      if (custom.detail === "light" || custom.detail === "dark") {
         setLocalTheme(custom.detail);
       }
     };
     window.addEventListener("desafios:theme-changed", handler);
     return () => window.removeEventListener("desafios:theme-changed", handler);
-  }, [theme]);
-
-  const toggleTheme = () => {
-    const next = theme === "dark" ? "light" : "dark";
-    setLocalTheme(next);
-    applyTheme(next);
-  };
+  }, []);
 
   const setTheme = (mode: ThemeMode) => {
     setLocalTheme(mode);
     applyTheme(mode);
+  };
+
+  const toggleTheme = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next);
   };
 
   return { theme, toggleTheme, setTheme };

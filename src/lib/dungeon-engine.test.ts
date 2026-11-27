@@ -23,7 +23,9 @@ import {
   getDungeonAccessForLevel,
   getFloorProgressStats,
   mergeDungeonStates,
+  normalizeDungeonState,
   recordExternalMatchForDungeonStamina,
+  resolveActiveRunCards,
   resolveCardDungeonBonus,
   resolveDungeonDefeat,
   startDungeonRun,
@@ -402,5 +404,86 @@ describe("Motor da Masmorra (Expedição Lógica)", () => {
     assert.equal(merged.progression.highestFloorReached, 9);
     assert.deepEqual(merged.progression.unlockedCheckpoints, [1, 5, 10]);
     assert.deepEqual(merged.progression.bossesDefeated, [5, 10]);
+  });
+
+  it("Onda 0 (DUNG-03): normalizeDungeonState não ressuscita run morta (hp: 0) para 100 HP", () => {
+    const base = createDefaultDungeonState("2026-11-26");
+    const started = startDungeonRun({
+      state: base,
+      startFloor: 1,
+      level: 8,
+      equippedCards: [],
+      rng: makeDeterministicRng(7),
+    }).state;
+    const deadRunState = {
+      ...started,
+      currentRun: started.currentRun ? { ...started.currentRun, hp: 0 } : null,
+    };
+    const normalized = normalizeDungeonState(deadRunState, "2026-11-26");
+    assert.equal(normalized.currentRun, null);
+  });
+
+  it("DUNG-04: resolveActiveRunCards trava nas cartas da run e rejeita cartas não possuídas", () => {
+    const c1 = DUNGEON_FALLBACK_TEST_CARDS[0];
+    const c2 = DUNGEON_FALLBACK_TEST_CARDS[1];
+    const c3 = DUNGEON_FALLBACK_TEST_CARDS[2];
+    const base = createDefaultDungeonState("2026-11-27");
+    const runRes = startDungeonRun({
+      state: base,
+      startFloor: 1,
+      level: 8,
+      equippedCards: [c1, c2, c3],
+      rng: makeDeterministicRng(99),
+    });
+    assert.equal(runRes.ok, true);
+
+    const valid = resolveActiveRunCards(
+      runRes.state.currentRun,
+      { [c1.id]: 1, [c2.id]: 1, [c3.id]: 1 },
+      DUNGEON_FALLBACK_TEST_CARDS,
+    );
+    assert.equal(valid.valid, true);
+    assert.equal(valid.cards.length, 3);
+
+    // Sem posse de uma das cartas da run: deve rejeitar sem conceder cartas gratuitas
+    const missingCard = resolveActiveRunCards(
+      runRes.state.currentRun,
+      { [c1.id]: 1, [c2.id]: 1 },
+      DUNGEON_FALLBACK_TEST_CARDS,
+    );
+    assert.equal(missingCard.valid, false);
+    assert.equal(missingCard.cards.length, 0);
+  });
+
+  it("DUNG-07: mergeDungeonStates ignora relógio futuro espúrio e preserva run ativa mais avançada", () => {
+    const serverNowMs = Date.parse("2026-11-27T12:00:00.000Z");
+    const cards = DUNGEON_FALLBACK_TEST_CARDS.slice(0, 3);
+    const localAdvanced = startDungeonRun({
+      state: createDefaultDungeonState("2026-11-27"),
+      startFloor: 1,
+      level: 8,
+      equippedCards: cards,
+      rng: makeDeterministicRng(5),
+    }).state;
+    localAdvanced.currentRun!.currentFloor = 4;
+    localAdvanced.currentRun!.floorProgressIndex = 3;
+    localAdvanced.updatedAt = "2026-11-27T11:55:00.000Z";
+    localAdvanced.updatedAtServerMs = serverNowMs - 5 * 60_000;
+
+    const skewedFutureCloud = startDungeonRun({
+      state: createDefaultDungeonState("2026-11-27"),
+      startFloor: 1,
+      level: 8,
+      equippedCards: cards,
+      rng: makeDeterministicRng(6),
+    }).state;
+    skewedFutureCloud.currentRun!.currentFloor = 1;
+    skewedFutureCloud.currentRun!.floorProgressIndex = 0;
+    // Relógio adiantado 1 ano no futuro (sem updatedAtServerMs)
+    skewedFutureCloud.updatedAt = "2027-11-27T12:00:00.000Z";
+
+    const merged = mergeDungeonStates(localAdvanced, skewedFutureCloud, false, serverNowMs);
+    assert.equal(merged.currentRun?.currentFloor, 4);
+    assert.equal(merged.currentRun?.floorProgressIndex, 3);
   });
 });

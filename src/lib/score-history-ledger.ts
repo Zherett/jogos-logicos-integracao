@@ -3,6 +3,8 @@
 // com origem, justificativa, metadados e data/hora para auditoria aprofundada, retroatribuição e resolução de bugs.
 
 import { nickSlug } from "./player-profile.ts";
+import { getOfficialNow } from "./official-time.ts";
+import { safeLocalStorageSet } from "./storage-guard.ts";
 import type { PlayerProfile } from "./playfab.ts";
 import { getAllAvailableMedals, MEDAL_XP_REWARDS, type MedalRarity } from "./medals-catalog.ts";
 import { GAME_NAMES } from "./game-storage.ts";
@@ -146,11 +148,44 @@ export function getPlayerRawLedgerEntries(
  */
 export function sanitizeScoreLedgerEntries(entries: ScoreLedgerEntry[]): ScoreLedgerEntry[] {
   if (!Array.isArray(entries)) return [];
-  const seenMedalKeys = new Set<string>();
+  const stackableIds = new Set(
+    getAllAvailableMedals()
+      .filter((m) => m.isStackable)
+      .map((m) => m.id),
+  );
+  const seenNonStackable = new Set<string>();
+  const lastBurstMs = new Map<string, number>();
+  const BURST_WINDOW_MS = 60_000;
   const cleaned: ScoreLedgerEntry[] = [];
+
+  const isBurstDuplicate = (key: string, timestamp?: string): boolean => {
+    const tsMs = Date.parse(timestamp || "");
+    const prevMs = lastBurstMs.get(key);
+    if (prevMs !== undefined) {
+      if (!Number.isFinite(tsMs) || !Number.isFinite(prevMs) || Math.abs(tsMs - prevMs) <= BURST_WINDOW_MS) {
+        if (Number.isFinite(tsMs)) {
+          lastBurstMs.set(key, tsMs);
+        }
+        return true;
+      }
+    }
+    lastBurstMs.set(key, tsMs);
+    return false;
+  };
 
   for (const entry of entries) {
     if (!entry) continue;
+
+    if (entry.type === "coins") {
+      const pId = nickSlug(entry.playerId || entry.playerNick || "");
+      const coinKey = `${pId}_coins_${entry.metadata?.medalId || entry.reason || "generic"}`;
+      if (isBurstDuplicate(coinKey, entry.timestamp)) {
+        continue;
+      }
+      cleaned.push(entry);
+      continue;
+    }
+
     // Identifica registros de medalha repetidos em loop
     const isMedalEntry =
       entry.source === "medalha" ||
@@ -166,11 +201,19 @@ export function sanitizeScoreLedgerEntries(entries: ScoreLedgerEntry[]): ScoreLe
           : entry.reason?.replace(/[^a-zA-Z0-9_]/g, "_") || "unknown");
       const key = `${pId}_${medalKey}_${entry.type}`;
 
-      if (seenMedalKeys.has(key)) {
-        // Ignora duplicata fantasma em loop
-        continue;
+      const isStackable =
+        stackableIds.has(medalKey) || medalKey.startsWith("tournament_top_");
+
+      if (isStackable) {
+        if (isBurstDuplicate(key, entry.timestamp)) {
+          continue;
+        }
+      } else {
+        if (seenNonStackable.has(key)) {
+          continue;
+        }
+        seenNonStackable.add(key);
       }
-      seenMedalKeys.add(key);
     }
 
     cleaned.push(entry);
@@ -199,13 +242,75 @@ function loadAllLedgerEntries(): ScoreLedgerEntry[] {
   }
 }
 
+export const MAX_LEDGER_ENTRIES_PER_PLAYER = 150;
+
+/**
+ * Aplica retenção justa por aluno (até `maxPerPlayer` transações recentes por aluno)
+ * antes de aplicar o teto global, evitando que um único usuário em PC compartilhado
+ * apague o extrato dos colegas.
+ */
+export function trimLedgerFairly(
+  entries: ScoreLedgerEntry[],
+  maxPerPlayer = MAX_LEDGER_ENTRIES_PER_PLAYER,
+  maxTotal = MAX_TOTAL_ENTRIES,
+): ScoreLedgerEntry[] {
+  if (!Array.isArray(entries) || entries.length === 0) return [];
+  const safePerPlayer = Math.max(10, Math.floor(maxPerPlayer));
+  const safeMaxTotal = Math.max(safePerPlayer, Math.floor(maxTotal));
+
+  const perPlayerCounts = new Map<string, number>();
+  const keptReversed: ScoreLedgerEntry[] = [];
+
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i];
+    if (!entry) continue;
+    const pKey = nickSlug(entry.playerId || entry.playerNick || "desconhecido") || "desconhecido";
+    const count = perPlayerCounts.get(pKey) ?? 0;
+    if (count >= safePerPlayer) continue;
+    perPlayerCounts.set(pKey, count + 1);
+    keptReversed.push(entry);
+  }
+
+  let kept = keptReversed.reverse();
+  if (kept.length > safeMaxTotal) {
+    // Reduz uniformemente o excesso entre jogadores com mais registros preservando o mínimo recente de cada aluno
+    const excess = kept.length - safeMaxTotal;
+    const finalReversed: ScoreLedgerEntry[] = [];
+    const seenPlayers = new Set<string>();
+    const playerSlotsUsed = new Map<string, number>();
+    const activePlayers = Math.max(1, perPlayerCounts.size);
+    const fairCap = Math.max(20, Math.floor(safeMaxTotal / activePlayers));
+    let skipped = 0;
+
+    for (let i = kept.length - 1; i >= 0; i--) {
+      const entry = kept[i];
+      const pKey = nickSlug(entry.playerId || entry.playerNick || "desconhecido") || "desconhecido";
+      const used = playerSlotsUsed.get(pKey) ?? 0;
+      if (skipped < excess && seenPlayers.has(pKey) && used >= fairCap) {
+        skipped++;
+        continue;
+      }
+      seenPlayers.add(pKey);
+      playerSlotsUsed.set(pKey, used + 1);
+      finalReversed.push(entry);
+    }
+    kept = finalReversed.reverse();
+    if (kept.length > safeMaxTotal) {
+      kept = kept.slice(-safeMaxTotal);
+    }
+  }
+  return kept;
+}
+
 function saveAllLedgerEntries(entries: ScoreLedgerEntry[]): void {
-  // Mantém os mais recentes respeitando o limite global
-  const trimmed = entries.slice(-MAX_TOTAL_ENTRIES);
+  const trimmed = trimLedgerFairly(entries, MAX_LEDGER_ENTRIES_PER_PLAYER, MAX_TOTAL_ENTRIES);
   inMemoryLedger = trimmed;
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(LEDGER_STORAGE_KEY, JSON.stringify(trimmed));
+    const writeRes = safeLocalStorageSet(LEDGER_STORAGE_KEY, JSON.stringify(trimmed));
+    if (!writeRes.ok) {
+      console.warn("[ScoreLedger] Falha ao persistir ledger no localStorage:", writeRes.error);
+    }
     window.dispatchEvent(
       new CustomEvent("desafios:score-ledger-updated", {
         detail: { count: trimmed.length, lastEntry: trimmed[trimmed.length - 1] },
@@ -225,17 +330,22 @@ export function recordScoreLedgerEntry(
     timestamp?: string;
   },
 ): ScoreLedgerEntry {
+  const numAmount = Number(entry.amount);
+  const safeAmount = Number.isFinite(numAmount) ? Math.round(numAmount) : 0;
+  const numBalance = entry.balanceAfter !== undefined ? Number(entry.balanceAfter) : undefined;
+  const safeBalance =
+    numBalance !== undefined && Number.isFinite(numBalance) ? Math.round(numBalance) : undefined;
   const fullEntry: ScoreLedgerEntry = {
     id: entry.id || `tx_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
     playerId: nickSlug(entry.playerId || entry.playerNick || "desconhecido"),
     playerNick: entry.playerNick || entry.playerId || "Jogador",
     type: entry.type,
     source: entry.source,
-    amount: Math.round(entry.amount),
-    balanceAfter: entry.balanceAfter !== undefined ? Math.round(entry.balanceAfter) : undefined,
+    amount: safeAmount,
+    balanceAfter: safeBalance,
     reason: entry.reason || "Pontuação recebida",
     metadata: entry.metadata,
-    timestamp: entry.timestamp || new Date().toISOString(),
+    timestamp: entry.timestamp || getOfficialNow().toISOString(),
   };
 
   const all = loadAllLedgerEntries();
@@ -255,7 +365,7 @@ export function reconstructStudentLedgerFromProfile(profile: PlayerProfile): Sco
   const cleanId = nickSlug(profile.id || profile.nickNormalized || profile.nick || "desconhecido");
   const playerNick = profile.nick || "Jogador";
   const results: ScoreLedgerEntry[] = [];
-  const baseTimestamp = profile.createdAt || new Date().toISOString();
+  const baseTimestamp = profile.createdAt || getOfficialNow().toISOString();
 
   const allMedals = getAllAvailableMedals();
   const medalMap = new Map(allMedals.map((m) => [m.id, m]));
@@ -267,13 +377,16 @@ export function reconstructStudentLedgerFromProfile(profile: PlayerProfile): Sco
   if (Array.isArray(profile.unlockedMedals)) {
     for (const m of profile.unlockedMedals) {
       if (!m) continue;
-      const mId = typeof m === "string" ? m : (m?.medalId ?? (m as any)?.id ?? "");
+      const legacy = m as { medalId?: string; id?: string; rarity?: MedalRarity; count?: unknown; unlockedAt?: string };
+      const mId = typeof m === "string" ? m : (legacy.medalId ?? legacy.id ?? "");
       if (!mId) continue;
       const def = medalMap.get(mId);
       const title = def?.title || mId;
-      const rarity = (def?.rarity || (m as any)?.rarity || "bronze") as MedalRarity;
-      const ptsReward = RECONSTRUCT_MEDAL_POINTS[rarity] ?? 20;
-      const xpReward = MEDAL_XP_REWARDS[rarity] ?? 10;
+      const rarity = (def?.rarity || legacy.rarity || "bronze") as MedalRarity;
+      const rawCount = typeof m === "object" ? Number((m as { count?: unknown }).count) : 1;
+      const medalCount = Number.isFinite(rawCount) && rawCount > 1 ? Math.floor(rawCount) : 1;
+      const ptsReward = (RECONSTRUCT_MEDAL_POINTS[rarity] ?? 20) * medalCount;
+      const xpReward = (MEDAL_XP_REWARDS[rarity] ?? 10) * medalCount;
       const ts = typeof m === "object" && m.unlockedAt ? m.unlockedAt : baseTimestamp;
 
       // Evento de medalha
@@ -283,8 +396,8 @@ export function reconstructStudentLedgerFromProfile(profile: PlayerProfile): Sco
         playerNick,
         type: "medal",
         source: "medalha",
-        amount: 1,
-        reason: `Medalha Conquistada: ${title}`,
+        amount: medalCount,
+        reason: `Medalha Conquistada: ${title}${medalCount > 1 ? ` (${medalCount}x)` : ""}`,
         metadata: { medalId: mId, medalTitle: title },
         timestamp: ts,
       });
@@ -351,14 +464,14 @@ export function reconstructStudentLedgerFromProfile(profile: PlayerProfile): Sco
       const estimatedXp = Math.min(remainingXp, stat.plays * 18);
       if (estimatedXp > 0) {
         results.push({
-          id: `syn_stat_xp_${stat.game_id}`,
+          id: `syn_stat_xp_${stat.game_id}_${stat.mode || "padrao"}`,
           playerId: cleanId,
           playerNick,
           type: "xp",
           source: stat.mode === "torneio_semanal" ? "torneio_semanal" : "partida",
           amount: estimatedXp,
           reason: `Partidas em ${gName} (${stat.plays} partidas, ${stat.wins} vitórias)`,
-          metadata: { gameId: stat.game_id, score: stat.best_score },
+          metadata: { gameId: stat.game_id, mode: stat.mode, score: stat.best_score },
           timestamp: stat.last_played_at || baseTimestamp,
         });
         currentXpSum += estimatedXp;
@@ -417,7 +530,7 @@ export function reconstructStudentLedgerFromProfile(profile: PlayerProfile): Sco
         if (share > 0) {
           accountedTourPts += share;
           results.push({
-            id: `syn_tour_pts_${st.game_id}`,
+            id: `syn_tour_pts_${st.game_id}_${st.mode || "torneio_semanal"}`,
             playerId: cleanId,
             playerNick,
             type: "tournament_pts",
@@ -466,10 +579,16 @@ function applyLedgerFilters(
     filtered = filtered.filter((e) => e.metadata?.gameId === filter.gameId);
   }
   if (filter?.startDate) {
-    filtered = filtered.filter((e) => (e.timestamp || "") >= filter.startDate!);
+    const startBound = /^\d{4}-\d{2}-\d{2}$/.test(filter.startDate.trim())
+      ? new Date(`${filter.startDate.trim()}T00:00:00.000-04:00`).toISOString()
+      : filter.startDate;
+    filtered = filtered.filter((e) => (e.timestamp || "") >= startBound);
   }
   if (filter?.endDate) {
-    filtered = filtered.filter((e) => (e.timestamp || "") <= filter.endDate!);
+    const endBound = /^\d{4}-\d{2}-\d{2}$/.test(filter.endDate.trim())
+      ? new Date(`${filter.endDate.trim()}T23:59:59.999-04:00`).toISOString()
+      : filter.endDate;
+    filtered = filtered.filter((e) => (e.timestamp || "") <= endBound);
   }
   if (filter?.search) {
     const sLower = filter.search.toLowerCase().trim();
@@ -555,52 +674,15 @@ export function getPlayerScoreLedger(
 export function getAllScoreLedger(filter?: ScoreLedgerFilter): ScoreLedgerEntry[] {
   const all = loadAllLedgerEntries();
   const cleanPlayerId = filter?.playerId ? nickSlug(filter.playerId) : undefined;
-  const searchLower = filter?.search?.toLowerCase().trim();
-
-  let results = all.filter((entry) => {
-    if (!entry) return false;
-    if (cleanPlayerId) {
-      const matchPId = nickSlug(entry.playerId || "") === cleanPlayerId;
-      const matchPNick = nickSlug(entry.playerNick || "") === cleanPlayerId;
-      if (!matchPId && !matchPNick) {
-        return false;
-      }
-    }
-    if (filter?.type && entry.type !== filter.type) {
-      return false;
-    }
-    if (filter?.source && entry.source !== filter.source) {
-      return false;
-    }
-    if (filter?.gameId && entry.metadata?.gameId !== filter.gameId) {
-      return false;
-    }
-    if (filter?.startDate && (entry.timestamp || "") < filter.startDate) {
-      return false;
-    }
-    if (filter?.endDate && (entry.timestamp || "") > filter.endDate) {
-      return false;
-    }
-    if (searchLower) {
-      const matchNick = (entry.playerNick || "").toLowerCase().includes(searchLower);
-      const matchReason = (entry.reason || "").toLowerCase().includes(searchLower);
-      const matchMedal = (entry.metadata?.medalTitle || "").toLowerCase().includes(searchLower);
-      const matchGame = (entry.metadata?.gameId || "").toLowerCase().includes(searchLower);
-      if (!matchNick && !matchReason && !matchMedal && !matchGame) {
-        return false;
-      }
-    }
-    return true;
-  });
-
-  // Ordena do mais recente para o mais antigo
-  results.sort((a, b) => (b.timestamp > a.timestamp ? 1 : b.timestamp < a.timestamp ? -1 : 0));
-
-  if (filter?.limit && filter.limit > 0) {
-    results = results.slice(0, filter.limit);
-  }
-
-  return results;
+  const scoped = cleanPlayerId
+    ? all.filter(
+        (entry) =>
+          entry &&
+          (nickSlug(entry.playerId || "") === cleanPlayerId ||
+            nickSlug(entry.playerNick || "") === cleanPlayerId),
+      )
+    : all.filter(Boolean);
+  return applyLedgerFilters(scoped, filter);
 }
 
 /**
@@ -617,6 +699,7 @@ export function calculateStudentScoreBreakdown(
   totalXpFromX1: number;
   totalCareerPoints: number;
   totalTournamentPoints: number;
+  totalCoins: number;
   totalMedalsAwarded: number;
   transactionsCount: number;
   sourcesBreakdown: Record<ScoreTransactionSource, { xp: number; points: number; count: number }>;
@@ -629,6 +712,7 @@ export function calculateStudentScoreBreakdown(
   let totalXpFromX1 = 0;
   let totalCareerPoints = 0;
   let totalTournamentPoints = 0;
+  let totalCoins = 0;
   let totalMedalsAwarded = 0;
 
   const sourcesBreakdown: Record<
@@ -676,6 +760,8 @@ export function calculateStudentScoreBreakdown(
       totalCareerPoints += tx.amount;
     } else if (tx.type === "tournament_pts") {
       totalTournamentPoints += tx.amount;
+    } else if (tx.type === "coins") {
+      totalCoins += tx.amount;
     } else if (tx.type === "medal") {
       totalMedalsAwarded += Math.max(1, tx.amount);
     }
@@ -688,6 +774,7 @@ export function calculateStudentScoreBreakdown(
     totalXpFromX1,
     totalCareerPoints,
     totalTournamentPoints,
+    totalCoins,
     totalMedalsAwarded,
     transactionsCount: entries.length,
     sourcesBreakdown,

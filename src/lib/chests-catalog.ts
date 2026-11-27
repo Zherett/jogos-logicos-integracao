@@ -202,6 +202,17 @@ function sanitizeChestHex6(value: string | undefined, fallback: string): string 
   return /^#[0-9a-fA-F]{6}$/.test(trimmed) ? trimmed : fallback;
 }
 
+function stripUndefinedProps<T extends object>(obj?: T | null): Partial<T> {
+  if (!obj) return {};
+  const clean: Partial<T> = {};
+  for (const [k, v] of Object.entries(obj) as Array<[keyof T, unknown]>) {
+    if (v !== undefined) {
+      (clean as Record<string, unknown>)[k as string] = v;
+    }
+  }
+  return clean;
+}
+
 export function mergeWithDefaultChests(custom?: ChestDefinition[] | null): ChestDefinition[] {
   const byId = new Map<string, ChestDefinition>();
   for (const def of DEFAULT_CHESTS) {
@@ -210,19 +221,24 @@ export function mergeWithDefaultChests(custom?: ChestDefinition[] | null): Chest
   for (const item of custom ?? []) {
     if (!item?.id) continue;
     const base = byId.get(item.id);
-    const normalizedPacks = (item.rewards?.cardPacks ?? []).map((p) => ({
-      ...p,
-      packId: normalizeCardPackId(p.packId),
-    }));
+    const cleanItem = stripUndefinedProps(item);
+    const cleanRewards = stripUndefinedProps(item.rewards);
+    const hasCustomPacks = Array.isArray(item.rewards?.cardPacks);
+    const normalizedPacks = hasCustomPacks
+      ? item.rewards!.cardPacks!.map((p) => ({
+          ...p,
+          packId: normalizeCardPackId(p.packId),
+        }))
+      : undefined;
     const sanitized: ChestDefinition = {
       ...(base ?? ({} as ChestDefinition)),
-      ...item,
+      ...cleanItem,
       ...(item.primaryColor ? { primaryColor: sanitizeChestHex6(item.primaryColor, base?.primaryColor ?? "#f59e0b") } : {}),
       ...(item.metalColor ? { metalColor: sanitizeChestHex6(item.metalColor, base?.metalColor ?? "#fbbf24") } : {}),
       rewards: {
         ...(base?.rewards ?? {}),
-        ...(item.rewards ?? {}),
-        ...(item.rewards?.cardPacks ? { cardPacks: normalizedPacks } : {}),
+        ...cleanRewards,
+        ...(hasCustomPacks ? { cardPacks: normalizedPacks } : {}),
       },
     };
     byId.set(item.id, sanitized);
@@ -251,11 +267,16 @@ export interface ChestOpenOutcome {
 
 function rollRange(range: { min: number; max: number } | undefined, rng: () => number): number {
   if (!range) return 0;
-  const min = Math.max(0, Math.floor(Math.min(range.min, range.max)));
-  const max = Math.max(min, Math.floor(Math.max(range.min, range.max)));
+  const rawMin = Number(range.min);
+  const rawMax = Number(range.max);
+  if (!Number.isFinite(rawMin) || !Number.isFinite(rawMax)) return 0;
+  const min = Math.max(0, Math.floor(Math.min(rawMin, rawMax)));
+  const max = Math.max(min, Math.floor(Math.max(rawMin, rawMax)));
   if (max <= 0) return 0;
   if (min === max) return min;
-  return min + Math.floor(rng() * (max - min + 1));
+  const rawRoll = Number(rng());
+  const safeRoll = Number.isFinite(rawRoll) ? Math.min(1 - Number.EPSILON, Math.max(0, rawRoll)) : 0;
+  return min + Math.floor(safeRoll * (max - min + 1));
 }
 
 export function openChest(
@@ -278,7 +299,7 @@ export function openChest(
 
   for (const drop of chest.rewards.cosmetics ?? []) {
     if (!drop?.itemId) continue;
-    const chance = Math.min(100, Math.max(0, drop.chancePercent));
+    const chance = Math.min(100, Math.max(0, Number(drop.chancePercent) || 0));
     if (chance >= 100 || rng() * 100 < chance) {
       cosmetics.push({ kind: drop.kind, itemId: drop.itemId });
     }
@@ -362,7 +383,8 @@ export function consumeAndOpenChestsBatch(
   let totalXp = 0;
   let totalCoins = 0;
   const packsMap = new Map<string, number>();
-  const cosmeticsMap = new Map<string, { kind: "avatar" | "aura"; itemId: string }>();
+  // Preserva todas as ocorrências sorteadas para que cada duplicata receba compensação em moedas na abertura em lote
+  const cosmeticsList: Array<{ kind: "avatar" | "aura"; itemId: string }> = [];
 
   for (let i = 0; i < toOpen; i++) {
     const single = openChest(chest, rng);
@@ -375,7 +397,7 @@ export function consumeAndOpenChestsBatch(
       }
     }
     for (const cosm of single.cosmetics) {
-      cosmeticsMap.set(`${cosm.kind}:${cosm.itemId}`, cosm);
+      cosmeticsList.push(cosm);
     }
   }
 
@@ -397,7 +419,7 @@ export function consumeAndOpenChestsBatch(
         packId,
         quantity: qty,
       })),
-      cosmetics: Array.from(cosmeticsMap.values()),
+      cosmetics: cosmeticsList,
     },
     updatedUnopenedChests,
   };

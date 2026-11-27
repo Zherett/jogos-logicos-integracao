@@ -93,7 +93,7 @@ describe("Catálogo e Abertura de Baús", () => {
     ]);
   });
 
-  it("abre vários baús em lote atomicamente somando bônus, agrupando pacotes e deduplicando cosméticos", () => {
+  it("abre vários baús em lote atomicamente somando bônus, agrupando pacotes e preservando duplicatas de cosméticos para compensação", () => {
     const chest = {
       ...DEFAULT_CHESTS[0],
       rewards: {
@@ -113,6 +113,49 @@ describe("Catálogo e Abertura de Baús", () => {
     assert.equal(res.outcome?.xp, 100);
     assert.equal(res.outcome?.coins, 20);
     assert.deepEqual(res.outcome?.packs, [{ packId: "pack_iniciante", quantity: 8 }]);
-    assert.deepEqual(res.outcome?.cosmetics, [{ kind: "aura", itemId: "aura_gold" }]);
+    // Todas as 4 ocorrências sorteadas são mantidas para compensação em moedas das 3 duplicatas
+    assert.equal(res.outcome?.cosmetics.length, 4);
+    assert.deepEqual(res.outcome?.cosmetics[0], { kind: "aura", itemId: "aura_gold" });
+  });
+
+  it("Onda 0 (ECON-05): nunca retorna NaN ou acima de max em rollRange com limites inválidos ou rng() === 1", () => {
+    const brokenChest = {
+      ...DEFAULT_CHESTS[0],
+      rewards: {
+        points: { min: Number.NaN, max: 100 },
+        xp: { min: 10, max: Number.POSITIVE_INFINITY },
+        coins: { min: 5, max: 15 },
+        cosmetics: [{ kind: "aura" as const, itemId: "aura_gold", chancePercent: Number.NaN }],
+      },
+    };
+
+    const out = openChest(brokenChest, () => 1);
+    assert.equal(Number.isFinite(out.points), true);
+    assert.equal(out.points, 0);
+    assert.equal(Number.isFinite(out.xp), true);
+    assert.equal(out.xp, 0);
+    assert.equal(out.coins, 15);
+    assert.deepEqual(out.cosmetics, []);
+  });
+
+  it("Bloco 1.3 (ECON-24): mergeWithDefaultChests preserva rewards padrão quando override contém undefined", () => {
+    const def0 = DEFAULT_CHESTS[0];
+    const merged = mergeWithDefaultChests([
+      {
+        ...def0,
+        name: "Baú Atualizado",
+        rewards: {
+          points: { min: 77, max: 77 },
+          xp: undefined as any,
+          coins: undefined as any,
+          cardPacks: undefined as any,
+        },
+      },
+    ]);
+    const updated = merged.find((c) => c.id === def0.id)!;
+    assert.equal(updated.name, "Baú Atualizado");
+    assert.deepEqual(updated.rewards.points, { min: 77, max: 77 });
+    assert.deepEqual(updated.rewards.xp, def0.rewards.xp);
+    assert.deepEqual(updated.rewards.coins, def0.rewards.coins);
   });
 });

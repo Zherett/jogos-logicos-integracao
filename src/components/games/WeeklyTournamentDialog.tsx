@@ -189,6 +189,7 @@ export function WeeklyTournamentDialog({
         seasonId: rankedSeasonId,
         reward,
         currentPoints: Math.max(currentPoints, liveProfile.bestTournamentPoints ?? 0),
+        allowCoinsRewards,
       });
       if (!res.ok || !res.updatedProfile) {
         setClaimFeedback({
@@ -653,8 +654,9 @@ export function WeeklyTournamentDialog({
                   setConfirmPaidOpen(false);
                   onOpenChange(false);
                   onStartRankedEntry(snap.gameId);
-                } catch (e: any) {
-                  alert(e?.message ?? "Erro ao iniciar partida paga.");
+                } catch (e: unknown) {
+                  const msg = e instanceof Error ? e.message : "Erro ao iniciar partida paga.";
+                  alert(msg);
                 } finally {
                   setSpendingEntry(false);
                 }

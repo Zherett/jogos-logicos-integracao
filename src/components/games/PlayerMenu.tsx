@@ -325,6 +325,9 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
     setDailyRewardsOpen(false);
     setCustomizeOpen(false);
     setPromoCodeOpen(false);
+    setInboxOpen(false);
+    setProfileOpen(false);
+    setTurmaModalOpen(false);
   }, [profile?.id]);
 
   // Atualiza em tempo real a atividade do aluno quando ele visualiza perfil, medalhas ou caixa de entrada
@@ -1136,7 +1139,7 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
                       )}
                     </div>
 
-                    {/* Botão de Resgate de Código Promocional (Closed Beta: Zheret, Lord, ADM) */}
+                    {/* Botão de Resgate de Código Promocional */}
                     {canAccessPromoCodeRedeem(profile) && (
                       <button
                         type="button"
@@ -1148,9 +1151,6 @@ export function PlayerMenu({ onConfigChanged, leftSlot }: Props) {
                       >
                         <Ticket className="h-4 w-4 text-fuchsia-500" />
                         <span>Resgatar Código Promocional</span>
-                        <span className="rounded-full bg-fuchsia-500/20 px-2 py-0.5 text-[9px] uppercase tracking-wider font-black">
-                          Closed Beta
-                        </span>
                       </button>
                     )}
               </div>

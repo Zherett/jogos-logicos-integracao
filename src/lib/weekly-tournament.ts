@@ -4,6 +4,8 @@
 // e sistema de Medalhas de Torneio engatilhado.
 
 import { ALL_GAME_IDS, GAME_NAMES, type GameId } from "./game-storage.ts";
+import { safeLocalStorageSet } from "./storage-guard.ts";
+import { normalizeCardPackId } from "./chests-catalog.ts";
 import { creditCoinMetrics } from "./career-points.ts";
 import {
   loadAdminConfig,
@@ -591,8 +593,14 @@ export function getWeekInfo(now = new Date()): {
   weekIndex: number;
   endsAtLabel: string;
 } {
-  // ISO-8601 week calculation anchored to Thursday of the current Monday-Sunday week
-  const d = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+  // Fuso horário oficial de Coari (UTC-4), garantindo transição consistente Domingo 23:59 -> Segunda 00:00 Coari
+  const coariShifted = new Date(now.getTime() - 4 * 60 * 60 * 1000);
+  const cYear = coariShifted.getUTCFullYear();
+  const cMonth = coariShifted.getUTCMonth();
+  const cDate = coariShifted.getUTCDate();
+
+  // ISO-8601 anchored to Thursday of the current Monday-Sunday week
+  const d = new Date(Date.UTC(cYear, cMonth, cDate));
   const dayNum = d.getUTCDay() || 7; // Monday = 1 ... Sunday = 7
   d.setUTCDate(d.getUTCDate() + 4 - dayNum);
   const isoYear = d.getUTCFullYear();
@@ -600,14 +608,21 @@ export function getWeekInfo(now = new Date()): {
   const weekNum = Math.ceil(((d.getTime() - yearStart.getTime()) / 86_400_000 + 1) / 7);
   const weekKey = `${isoYear}-W${String(weekNum).padStart(2, "0")}`;
 
-  // Current week's Sunday 23:59
+  // Índice contínuo de semanas desde a segunda-feira ISO 1969-12-29 (evita salto de paridade em anos ISO de 52 semanas)
+  const mondayUtcMs = Date.UTC(cYear, cMonth, cDate - (dayNum - 1));
+  const EPOCH_MONDAY_MS = Date.UTC(1969, 11, 29);
+  const weekIndex = Math.floor((mondayUtcMs - EPOCH_MONDAY_MS) / (7 * 86_400_000));
+
+  // Current week's Sunday 23:59 Coari
   const daysUntilSunday = 7 - dayNum;
-  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + daysUntilSunday);
-  const endsAtLabel = `${end.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" })} às 23:59`;
+  const end = new Date(Date.UTC(cYear, cMonth, cDate + daysUntilSunday));
+  const dd = String(end.getUTCDate()).padStart(2, "0");
+  const mm = String(end.getUTCMonth() + 1).padStart(2, "0");
+  const endsAtLabel = `${dd}/${mm} às 23:59`;
 
   return {
     weekKey,
-    weekIndex: isoYear * 53 + weekNum,
+    weekIndex,
     endsAtLabel,
   };
 }
@@ -1189,10 +1204,8 @@ function loadTournamentStore(now = new Date()): WeeklyTournamentStore {
         baseRecords[recKey] = {
           playerId: recKey,
           nick: p.nick,
-          fullName: p.full_name,
+          fullName: "",
           school: p.school,
-          birthdate: p.birthdate,
-          age: pAge,
           stage: pStage,
           level: p.level,
           bestScore: Math.max(existingRecord?.bestScore ?? 0, (typeof p.tournamentPoints === "number" ? p.tournamentPoints : 0)),
@@ -1424,7 +1437,7 @@ function saveTournamentStore(store: WeeklyTournamentStore) {
   store.updatedAt = Date.now();
   try {
     const serialized = JSON.stringify(store);
-    window.localStorage.setItem(TOURNAMENT_STORAGE_KEY, serialized);
+    safeLocalStorageSet(TOURNAMENT_STORAGE_KEY, serialized);
     cachedTourLookupRaw = null;
     cachedTourLookupMap = null;
   } catch {
@@ -1437,6 +1450,18 @@ let checkedLegacyTournamentSeason1 = false;
 let inFlightTournamentSyncPromise: Promise<void> | null = null;
 let lastTournamentSyncCompletedAt = 0;
 const TOURNAMENT_SYNC_TTL_MS = 45_000;
+
+export function sanitizeTournamentRecordForCloud(
+  record: TournamentPlayerRecord,
+): TournamentPlayerRecord {
+  const canonical = nickSlug(record.nick || record.playerId) || record.playerId;
+  const { birthdate: _omitBirthdate, age: _omitAge, ...rest } = record;
+  return {
+    ...rest,
+    playerId: canonical,
+    fullName: "",
+  };
+}
 
 export async function pushSingleTournamentPlayerToPlayFab(
   record: TournamentPlayerRecord,
@@ -1461,10 +1486,10 @@ export async function pushSingleTournamentPlayerToPlayFab(
   const groupId = getTournamentSeasonGroupId(seasonId);
   const canonical = nickSlug(record.nick || record.playerId) || record.playerId;
   const cloudKey = getTournamentPlayerCloudKey(canonical);
-  const payloadRec: TournamentPlayerRecord = {
+  const payloadRec: TournamentPlayerRecord = sanitizeTournamentRecordForCloud({
     ...record,
     playerId: canonical,
-  };
+  });
 
   try {
     if (!ensuredTournamentGroups.has(groupId)) {
@@ -1738,10 +1763,8 @@ async function runSyncWeeklyTournamentWithPlayFab(): Promise<void> {
       serverReflected[canonical] = {
         playerId: canonical,
         nick: p.nick,
-        fullName: p.full_name,
+        fullName: "",
         school: p.school,
-        birthdate: p.birthdate,
-        age: p.birthdate ? ageFrom(p.birthdate, nowDate) : pStageInfo.minAge,
         stage: pStageInfo.id,
         level: p.level,
         bestScore: pPts,
@@ -2003,7 +2026,7 @@ export async function recordWeeklyTournamentAttempt(args: {
   const alreadyGotBonusToday = isSameDay ? Boolean(existing?.dailyBonusAwarded) : false;
   let dailyBonusAwarded = false;
 
-  if (nextDailyMatches === 10 && nextDailyWins === 10 && !alreadyGotBonusToday) {
+  if (nextDailyWins >= 10 && !alreadyGotBonusToday) {
     pointsDelta += 25;
     dailyBonusAwarded = true;
   }
@@ -2015,10 +2038,8 @@ export async function recordWeeklyTournamentAttempt(args: {
   const savedRecord: TournamentPlayerRecord = {
     playerId: canonicalKey,
     nick: args.profile.nick,
-    fullName: args.profile.full_name,
+    fullName: "",
     school: args.profile.school,
-    birthdate: args.profile.birthdate,
-    age: pAge,
     stage: pStage.id,
     level: args.profile.level,
     bestScore: Math.max(existing?.bestScore ?? 0, safeScore),
@@ -2300,20 +2321,33 @@ export function claimRankedMilestoneReward(args: {
   seasonId: number;
   reward: RankedMilestoneReward;
   currentPoints: number;
+  allowCoinsRewards?: boolean;
 }): ClaimRankedMilestoneResult {
   const rankDef = TOURNAMENT_RANKS.find((r) => r.id === args.rankId);
   if (!rankDef) {
     return { ok: false, error: "Rank não encontrado." };
   }
-  const peakPoints = Math.max(
-    args.currentPoints,
-    args.profile.tournamentPoints ?? 0,
-    args.profile.bestTournamentPoints ?? 0,
-  );
-  if (peakPoints < rankDef.minPoints) {
+  if (!args.profile.isAdmin && (args.profile.level ?? 1) < TOURNAMENT_MIN_LEVEL) {
     return {
       ok: false,
-      error: `Alcance ${rankDef.minPoints} pontos no Torneio para desbloquear ${rankDef.name}.`,
+      error: `Alcance o Nível ${TOURNAMENT_MIN_LEVEL} para participar da Ranqueada e resgatar marcos.`,
+    };
+  }
+  const safeCurrentPts = Number.isFinite(args.currentPoints)
+    ? Math.max(0, Math.floor(args.currentPoints))
+    : 0;
+  const safeProfilePts = Number.isFinite(args.profile.tournamentPoints)
+    ? Math.max(0, Math.floor(args.profile.tournamentPoints!))
+    : 0;
+  const safeBestPts = Number.isFinite(args.profile.bestTournamentPoints)
+    ? Math.max(0, Math.floor(args.profile.bestTournamentPoints!))
+    : 0;
+  const peakPoints = Math.max(safeCurrentPts, safeProfilePts, safeBestPts);
+  const minRequired = rankDef.minPoints === 0 ? 1 : rankDef.minPoints;
+  if (peakPoints < minRequired) {
+    return {
+      ok: false,
+      error: `Alcance ${minRequired} pontos no Torneio para desbloquear ${rankDef.name}.`,
     };
   }
 
@@ -2325,27 +2359,84 @@ export function claimRankedMilestoneReward(args: {
     return { ok: false, error: "Recompensa deste marco já foi resgatada nesta temporada." };
   }
 
-  const qty = Math.max(1, Math.floor(args.reward.quantity || 1));
+  const rawQty = Number(args.reward.quantity);
+  if (!Number.isFinite(rawQty) || rawQty < 1) {
+    return { ok: false, error: "Configuração de recompensa inválida." };
+  }
+  const qty = Math.max(1, Math.floor(rawQty));
   const nextProfile: PlayerProfile = {
     ...args.profile,
     claimedRankedMilestones: [...existingClaimed, milestoneKey],
   };
 
   if (args.reward.type === "card_pack" && args.reward.packId) {
+    const normalizedPackId = normalizeCardPackId(args.reward.packId);
     const prevPacks = { ...(nextProfile.unopenedPacks ?? {}) };
-    prevPacks[args.reward.packId] = Math.max(0, Number(prevPacks[args.reward.packId]) || 0) + qty;
+    prevPacks[normalizedPackId] = Math.max(0, Number(prevPacks[normalizedPackId]) || 0) + qty;
     nextProfile.unopenedPacks = prevPacks;
   } else if (args.reward.type === "points") {
     nextProfile.pointsBalance = (nextProfile.pointsBalance ?? 0) + qty;
     nextProfile.careerPoints = (nextProfile.careerPoints ?? 0) + qty;
+    try {
+      recordScoreLedgerEntry({
+        playerId: nextProfile.id || nextProfile.nickNormalized || nextProfile.nick,
+        playerNick: nextProfile.nick,
+        type: "career_points",
+        source: "promocao_torneio",
+        amount: qty,
+        balanceAfter: nextProfile.careerPoints,
+        reason: `Marco da Trilha Ranqueada (${rankDef.name})`,
+        metadata: { mode: "torneio_semanal" },
+      });
+    } catch {
+      /* ignore */
+    }
   } else if (args.reward.type === "coins") {
+    if (args.allowCoinsRewards === false) {
+      return { ok: false, error: "Recompensas em Moedas serão liberadas em breve." };
+    }
     creditCoinMetrics(nextProfile, qty);
+    try {
+      recordScoreLedgerEntry({
+        playerId: nextProfile.id || nextProfile.nickNormalized || nextProfile.nick,
+        playerNick: nextProfile.nick,
+        type: "coins",
+        source: "promocao_torneio",
+        amount: qty,
+        balanceAfter: nextProfile.coins,
+        reason: `Marco da Trilha Ranqueada (${rankDef.name})`,
+        metadata: { mode: "torneio_semanal" },
+      });
+    } catch {
+      /* ignore */
+    }
   } else {
     return { ok: false, error: "Configuração de recompensa inválida." };
   }
 
-  if (args.reward.coinsBonus && args.reward.coinsBonus > 0 && args.reward.type !== "coins") {
-    creditCoinMetrics(nextProfile, Math.floor(args.reward.coinsBonus));
+  const rawCoinsBonus = Number(args.reward.coinsBonus);
+  if (
+    args.allowCoinsRewards !== false &&
+    Number.isFinite(rawCoinsBonus) &&
+    rawCoinsBonus > 0 &&
+    args.reward.type !== "coins"
+  ) {
+    const bonusCoins = Math.floor(rawCoinsBonus);
+    creditCoinMetrics(nextProfile, bonusCoins);
+    try {
+      recordScoreLedgerEntry({
+        playerId: nextProfile.id || nextProfile.nickNormalized || nextProfile.nick,
+        playerNick: nextProfile.nick,
+        type: "coins",
+        source: "promocao_torneio",
+        amount: bonusCoins,
+        balanceAfter: nextProfile.coins,
+        reason: `Bônus de Moedas — Marco (${rankDef.name})`,
+        metadata: { mode: "torneio_semanal" },
+      });
+    } catch {
+      /* ignore */
+    }
   }
 
   return { ok: true, updatedProfile: nextProfile, milestoneKey };

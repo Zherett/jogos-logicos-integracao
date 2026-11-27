@@ -6,6 +6,8 @@ import {
   type SpecialEvent,
   type RecurringEvent,
 } from "./custom-events.ts";
+import { getCoariDateKey, shiftDateKeyUTC } from "./official-time.ts";
+import { safeLocalStorageSet } from "./storage-guard.ts";
 
 export const SCHOOLS = [
   { name: "Nenhuma", slug: "nenhuma", range: "", needsGrade: false },
@@ -85,32 +87,31 @@ export function extractBirthYear(birthdate?: string | null): number | null {
 
 /**
  * Checks whether a student belongs to Etapa 3 (Comunidade / Outro).
- * Conforme diretriz pedagógica:
- * - Nascidos até dezembro de 2010 (ano de nascimento >= 2010, ex: 2010, 2011, 2012...)
- *   podem participar da 2ª Etapa (Ensino Fundamental - 6º ao 9º ano) e têm acesso
- *   à Escola Municipal Raimundo Bezerra.
- * - Nascidos antes de 2010 (ano de nascimento < 2010, ex: 2009, 2008, 2007...)
- *   pertencem à 3ª Etapa (Comunidade / Outro) e não possuem vínculo com escolas do Ensino Fundamental.
+ * Cálculo dinâmico relativo ao ano civil corrente (`now.getFullYear()`):
+ * - Em 2026: corte `< 2010` (17+ anos). Em 2027: `< 2011`, e assim por diante.
+ * - Alunos dentro da faixa do Ensino Fundamental (2ª Etapa) permanecem elegíveis às escolas oficiais.
  */
-export function isEtapa3OrOlder(birthdate?: string | null, _now = new Date()): boolean {
+export function isEtapa3OrOlder(birthdate?: string | null, now = new Date()): boolean {
   if (!birthdate) return false;
   const birthYear = extractBirthYear(birthdate);
   if (birthYear !== null) {
-    return birthYear < 2010;
+    const cutoffYear = now.getFullYear() - 16;
+    return birthYear < cutoffYear;
   }
   return false;
 }
 
 /**
  * Verifica se o aluno é elegível para a 1ª Etapa (Fase 1 / 5º ano):
- * - Alunos nascidos a partir de janeiro de 2014 (ano >= 2014: 2014, 2015, 2016...).
- * - Para cálculo por idade sem data completa, corresponde a até 12 anos em 2026.
+ * Cálculo dinâmico relativo ao ano civil corrente (`now.getFullYear() - 12`):
+ * - Em 2026: nascidos em `2014+` (até 12 anos). Em 2027: `2015+`, etc.
  */
 export function isEligibleForEtapa1(birthdate?: string | null, now = new Date()): boolean {
   if (!birthdate) return true;
   const birthYear = extractBirthYear(birthdate);
   if (birthYear !== null) {
-    return birthYear >= 2014;
+    const cutoffYear = now.getFullYear() - 12;
+    return birthYear >= cutoffYear;
   }
   return ageFrom(birthdate, now) <= 12;
 }
@@ -213,26 +214,28 @@ export function isPioneerExcludedAccount(p?: {
   if (p.isAdmin) return true;
   if (p.id === "admin-system" || p.id?.startsWith("admin-")) return true;
 
-  const rawNick = (p.nick ?? "").toLowerCase();
-  const slugNick = (p.nickNormalized ?? nickSlug(p.nick ?? "")).toLowerCase();
-  const rawName = (p.full_name ?? "").toLowerCase();
-
-  // Exclui perfis de teste da administracao: ZHERET e LORD
-  const testPatterns = ["zheret", "lord"];
-  for (const pattern of testPatterns) {
-    if (
-      slugNick === pattern ||
-      slugNick.startsWith(`${pattern}_`) ||
-      slugNick.endsWith(`_${pattern}`) ||
-      rawNick.includes(pattern) ||
-      rawName.includes(pattern)
-    ) {
-      return true;
-    }
+  const slugNick = nickSlug(p.nickNormalized ?? p.nick ?? "");
+  const firstNameToken = nickSlug((p.full_name ?? "").trim().split(/\s+/)[0] ?? "");
+  const exactExcluded = new Set([
+    "zheret",
+    "lord",
+    "josiney",
+    "quemuel",
+    "admin",
+    "adm",
+  ]);
+  if (exactExcluded.has(slugNick)) {
+    return true;
   }
-
-  // Exclui contas administrativas dedicadas
-  if (slugNick === "josiney" || slugNick === "quemuel" || rawNick.includes("admin")) {
+  if (
+    slugNick.startsWith("zheret_") ||
+    slugNick.startsWith("lord_") ||
+    slugNick.startsWith("admin_")
+  ) {
+    return true;
+  }
+  // Quando não houver apelido informado (ex: checagem apenas por nome), valida o primeiro token de conta de teste
+  if (!slugNick && (firstNameToken === "zheret" || firstNameToken === "lord")) {
     return true;
   }
 
@@ -445,7 +448,7 @@ export function loadTurmaRequests(): TurmaChangeRequest[] {
 export function saveTurmaRequests(reqs: TurmaChangeRequest[]): void {
   if (typeof window === "undefined") return;
   try {
-    localStorage.setItem(TURMA_REQUESTS_KEY, JSON.stringify(reqs));
+    safeLocalStorageSet(TURMA_REQUESTS_KEY, JSON.stringify(reqs));
   } catch {
     // ignore
   }
@@ -665,7 +668,7 @@ export const RANKING_SERIES_OPTIONS: readonly RankingSeriesOption[] = [
     id: "etapa_2",
     shortLabel: "2ª Etapa (6º - 9º ano)",
     label: "2ª Etapa (6º - 9º ano)",
-    description: "Raimundo Bezerra • 11 a 14 anos",
+    description: "Raimundo Bezerra, Agenor Smith • 6º ao 9º ano",
     emoji: "⚡",
   },
   {
@@ -1108,22 +1111,16 @@ export function calculatePlayerLevel(input: PlayerProgressionInput): number {
       : nextReq.minDistinctGames;
     const stageMatches =
       input.stageProgress.forLevel === baseLevel
-        ? Math.max(
-            Math.max(0, Math.floor(input.stageProgress.matches ?? 0)),
-            Math.max(0, Math.floor(input.matchesPlayed ?? 0)),
-          )
-        : Math.max(0, Math.floor(input.matchesPlayed ?? 0));
+        ? Math.max(0, Math.floor(input.stageProgress.matches ?? 0))
+        : 0;
     const stageWins =
       input.stageProgress.forLevel === baseLevel
-        ? Math.max(
-            Math.max(0, Math.floor(input.stageProgress.wins ?? 0)),
-            Math.max(0, Math.floor(input.wins ?? 0)),
-          )
-        : Math.max(0, Math.floor(input.wins ?? 0));
+        ? Math.max(0, Math.floor(input.stageProgress.wins ?? 0))
+        : 0;
     const stageDistinct =
       input.stageProgress.forLevel === baseLevel && Array.isArray(input.stageProgress.distinctGames)
-        ? Math.max(input.stageProgress.distinctGames.length, Math.max(0, Math.floor(input.distinctGames ?? 0)))
-        : Math.max(0, Math.floor(input.distinctGames ?? 0));
+        ? input.stageProgress.distinctGames.length
+        : 0;
 
     const meetsNext =
       safeXp >= nextReq.minXp &&
@@ -1353,14 +1350,17 @@ export function advanceLevelStageOnMatch(args: {
       ? args.stageProgress
       : { forLevel: lvl, matches: 0, wins: 0, distinctGames: [] };
 
-  const currentMatches = Math.max(
-    Math.max(0, Math.floor(baseStage.matches)),
-    typeof args.lifetimeMatches === "number" ? Math.max(0, Math.floor(args.lifetimeMatches)) : 0,
-  );
-  const currentWins = Math.max(
-    Math.max(0, Math.floor(baseStage.wins)),
-    typeof args.lifetimeWins === "number" ? Math.max(0, Math.floor(args.lifetimeWins)) : 0,
-  );
+  const hasMatchingStage = Boolean(args.stageProgress && args.stageProgress.forLevel === lvl);
+  const currentMatches = hasMatchingStage
+    ? Math.max(0, Math.floor(baseStage.matches))
+    : typeof args.lifetimeMatches === "number"
+      ? Math.max(0, Math.floor(args.lifetimeMatches))
+      : 0;
+  const currentWins = hasMatchingStage
+    ? Math.max(0, Math.floor(baseStage.wins))
+    : typeof args.lifetimeWins === "number"
+      ? Math.max(0, Math.floor(args.lifetimeWins))
+      : 0;
 
   const nextMatches = Math.min(nextReq.minMatches, currentMatches + 1);
   const nextWins = Math.min(
@@ -1547,8 +1547,12 @@ export function levelProgress(input: number | PlayerProgressionInput) {
 
 /* ------------------------- Daily XP Cap Helpers ------------------------- */
 
-/** Returns local date string in `YYYY-MM-DD` format for tracking the daily XP limit. */
-export function getLocalDateKey(now = new Date()): string {
+/** Returns official Coari (UTC-4) date string in `YYYY-MM-DD` format when `now` is omitted,
+ * or extracts `YYYY-MM-DD` from an explicit Date without changing caller wall-clock contracts. */
+export function getLocalDateKey(now?: Date): string {
+  if (!now) {
+    return getCoariDateKey();
+  }
   const y = now.getFullYear();
   const m = String(now.getMonth() + 1).padStart(2, "0");
   const d = String(now.getDate()).padStart(2, "0");
@@ -1559,9 +1563,7 @@ export function getLocalDateKey(now = new Date()): string {
 export function getPreviousDateKey(dateKey: string): string {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateKey);
   if (!match) return "";
-  const d = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-  d.setDate(d.getDate() - 1);
-  return getLocalDateKey(d);
+  return shiftDateKeyUTC(dateKey, -1);
 }
 
 export interface DailyXpCapResult {
@@ -1742,10 +1744,14 @@ export function computeMatchDisplayXp(args: {
   const won = typeof args.won === "boolean" ? args.won : isMatchVictory(safeScore, safeCorrect, safeWrong);
   const now = args.now ?? new Date();
 
+  const todayKey = getLocalDateKey(now);
+  const effectiveCompDailyXp =
+    args.dailyXpDate === undefined || args.dailyXpDate === todayKey ? (args.currentDailyXp ?? 0) : 0;
+
   // Caso especial: Arena X1 Online
   if (mode === "x1_online") {
     const rawXp = won ? 25 : 10;
-    const atCap = (args.currentDailyXp ?? 0) >= (args.dailyXpCap ?? 100);
+    const atCap = effectiveCompDailyXp >= (args.dailyXpCap ?? 100);
     if (atCap) {
       return {
         finalXp: 0,
@@ -1770,7 +1776,7 @@ export function computeMatchDisplayXp(args: {
   // Caso especial: Torneio Semanal Ranqueado
   if (mode === "torneio_semanal") {
     const rawXp = 10;
-    const atCap = (args.currentDailyXp ?? 0) >= (args.dailyXpCap ?? 100);
+    const atCap = effectiveCompDailyXp >= (args.dailyXpCap ?? 100);
     if (atCap) {
       return {
         finalXp: 0,
@@ -1815,8 +1821,7 @@ export function computeMatchDisplayXp(args: {
     calculatedXp = adjustXpForGameMode(calculatedXp, true);
   }
 
-  // Checa limite diário
-  const todayKey = getLocalDateKey(now);
+  // Checa limite diário (usa todayKey já calculado em Coari/local no topo)
   const isToday = args.dailyXpDate === todayKey;
   const currentDaily = isToday ? (args.currentDailyXp ?? 0) : 0;
   const dailyCap = bonuses.dailyXpCap;
@@ -1882,4 +1887,86 @@ export function splitStudentNameForPrivacy(fullName?: string | null): StudentPri
   const restName = clean.slice(spaceIdx + 1);
   const maskedRest = restName.replace(/\S/g, "•");
   return { firstName, restName, maskedRest };
+}
+
+export interface PrunePlayerProfileArraysOptions {
+  /** Dias de histórico mantidos explicitamente em `activeDates` (padrão: 90 dias). */
+  maxActiveDatesDays?: number;
+  /** Limite máximo de chaves deduplicadas por lista de resgates históricos. */
+  maxClaimedIds?: number;
+  /** Data oficial atual (`YYYY-MM-DD`) para janela deslizante. */
+  todayKey?: string;
+}
+
+function dedupeAndCapIdList(list: string[] | undefined, maxLen: number): string[] | undefined {
+  if (!Array.isArray(list)) return list;
+  const unique: string[] = [];
+  const seen = new Set<string>();
+  for (const item of list) {
+    if (typeof item !== "string") continue;
+    const clean = item.trim();
+    if (!clean || seen.has(clean)) continue;
+    seen.add(clean);
+    unique.push(clean);
+  }
+  return unique.length > maxLen ? unique.slice(-maxLen) : unique;
+}
+
+/**
+ * Poda arrays que crescem indefinidamente no `PlayerProfile` (`activeDates` e listas
+ * de resgates) antes da serialização no PlayFab `UserData`, preservando o total histórico
+ * em `totalActiveDaysCount` para auditorias de pontuação.
+ */
+export function prunePlayerProfileArrays<
+  T extends {
+    activeDates?: string[];
+    totalActiveDaysCount?: number;
+    claimedInboxRewardIds?: string[];
+    claimedPromoCodeIds?: string[];
+    claimedPromoBatchIds?: string[];
+    claimedEventRewardKeys?: string[];
+    claimedRankedMilestones?: string[];
+  },
+>(profile: T, options?: PrunePlayerProfileArraysOptions): T {
+  const maxDays = Math.max(7, Math.floor(options?.maxActiveDatesDays ?? 90));
+  const maxClaimedIds = Math.max(50, Math.floor(options?.maxClaimedIds ?? 300));
+  const todayKey = options?.todayKey ?? getCoariDateKey();
+
+  if (Array.isArray(profile.activeDates)) {
+    const validSorted = Array.from(
+      new Set(
+        profile.activeDates
+          .filter((d): d is string => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d.trim()))
+          .map((d) => d.trim()),
+      ),
+    ).sort();
+
+    if (validSorted.length > 0) {
+      profile.totalActiveDaysCount = Math.max(
+        profile.totalActiveDaysCount ?? 0,
+        validSorted.length,
+      );
+      const cutoffKey = shiftDateKeyUTC(todayKey, -maxDays);
+      const recent = validSorted.filter((d) => d >= cutoffKey);
+      profile.activeDates = recent.length > 0 ? recent : validSorted.slice(-maxDays);
+    }
+  }
+
+  if (profile.claimedInboxRewardIds) {
+    profile.claimedInboxRewardIds = dedupeAndCapIdList(profile.claimedInboxRewardIds, maxClaimedIds);
+  }
+  if (profile.claimedPromoCodeIds) {
+    profile.claimedPromoCodeIds = dedupeAndCapIdList(profile.claimedPromoCodeIds, maxClaimedIds);
+  }
+  if (profile.claimedPromoBatchIds) {
+    profile.claimedPromoBatchIds = dedupeAndCapIdList(profile.claimedPromoBatchIds, maxClaimedIds);
+  }
+  if (profile.claimedEventRewardKeys) {
+    profile.claimedEventRewardKeys = dedupeAndCapIdList(profile.claimedEventRewardKeys, maxClaimedIds);
+  }
+  if (profile.claimedRankedMilestones) {
+    profile.claimedRankedMilestones = dedupeAndCapIdList(profile.claimedRankedMilestones, maxClaimedIds);
+  }
+
+  return profile;
 }

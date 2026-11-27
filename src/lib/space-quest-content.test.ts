@@ -306,3 +306,18 @@ test("Space Quest Engine — Seleção Inteligente de Alvo na Mira (selectBestTa
   // Se o alvo atual está explodindo, troca automaticamente para o próximo válido mais baixo
   assert.equal(selectBestTargetId(items, "q_exploding"), "q_bottom");
 });
+
+test("Bloco 1.1 (GAME-06): generateDoubleWaveQuestions sempre respeita AURA_CONFIGS[q.aura].fixedDifficulty", () => {
+  for (let i = 0; i < 400; i++) {
+    const [q1, q2] = generateDoubleWaveQuestions((i % 5) + 1, { allowSpecial: true });
+    assert.notEqual(q1.difficulty, q2.difficulty);
+    const fixed1 = AURA_CONFIGS[q1.aura].fixedDifficulty;
+    if (fixed1) {
+      assert.equal(q1.difficulty, fixed1, `q1 aura ${q1.aura} deveria ser ${fixed1}, veio ${q1.difficulty}`);
+    }
+    const fixed2 = AURA_CONFIGS[q2.aura].fixedDifficulty;
+    if (fixed2) {
+      assert.equal(q2.difficulty, fixed2, `q2 aura ${q2.aura} deveria ser ${fixed2}, veio ${q2.difficulty}`);
+    }
+  }
+});

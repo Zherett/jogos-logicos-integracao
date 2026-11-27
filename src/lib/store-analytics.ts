@@ -2,13 +2,14 @@
 // Browser-safe (sem dependências de DOM/React) para reutilização direta na UI e em testes automatizados.
 
 import { mergeWithDefaultCardPacks, type CardPackDefinition } from "./cards-catalog.ts";
+import { normalizeCardPackId } from "./chests-catalog.ts";
 import {
   mergeWithDefaultAuras,
   mergeWithDefaultAvatars,
   type AuraDefinition,
   type AvatarDefinition,
 } from "./cosmetics-catalog.ts";
-import { isAdminOrTestAccount } from "./player-profile.ts";
+import { isAdminOrTestAccount, nickSlug } from "./player-profile.ts";
 
 export type StoreAnalyticsItemKind = "avatar" | "aura" | "pack";
 
@@ -22,6 +23,7 @@ export interface StoreAnalyticsPlayerSlice {
   school?: string | null;
   grade?: string | null;
   isAdmin?: boolean;
+  deletedAt?: string | null;
   coinsSpentTotal?: number;
   purchasedCosmeticIds?: string[];
   purchasedPackCounts?: Record<string, number>;
@@ -152,10 +154,10 @@ export function computeStoreSalesReport(
   const itemMap = new Map<string, ItemAccumulator>();
   const uniqueBuyerKeys = new Set<string>();
 
-  let totalCoinsSpent = 0;
-  let trackedItemCoins = 0;
   let analyzedPlayersCount = 0;
   let excludedAdminAndTestCount = 0;
+  let totalCoinsSpent = 0;
+  let totalUntrackedLegacyCoins = 0;
 
   function ensureAccumulator(
     key: string,
@@ -208,22 +210,46 @@ export function computeStoreSalesReport(
     return created;
   }
 
+  // Deduplica snapshots repetidos do mesmo jogador (ex: pf_local_* + playfabId) e ignora lixeira (deletedAt)
+  const dedupedPlayers = new Map<string, StoreAnalyticsPlayerSlice>();
   for (let i = 0; i < players.length; i++) {
     const p = players[i];
-    if (!p) continue;
+    if (!p || p.deletedAt) continue;
+    const rawKey = String(p.nickNormalized || p.nick || p.id || `player_${i}`);
+    const canonicalKey = nickSlug(rawKey) || rawKey.toLowerCase().trim() || `player_${i}`;
+    const existing = dedupedPlayers.get(canonicalKey);
+    if (!existing) {
+      dedupedPlayers.set(canonicalKey, p);
+      continue;
+    }
+    const existingSpent = Number(existing.coinsSpentTotal) || 0;
+    const nextSpent = Number(p.coinsSpentTotal) || 0;
+    const existingItems =
+      (Array.isArray(existing.purchasedCosmeticIds) ? existing.purchasedCosmeticIds.length : 0) +
+      Object.keys(existing.purchasedPackCounts ?? {}).length;
+    const nextItems =
+      (Array.isArray(p.purchasedCosmeticIds) ? p.purchasedCosmeticIds.length : 0) +
+      Object.keys(p.purchasedPackCounts ?? {}).length;
+    if (nextSpent > existingSpent || (nextSpent === existingSpent && nextItems > existingItems)) {
+      dedupedPlayers.set(canonicalKey, p);
+    }
+  }
+
+  for (const [canonicalKey, p] of dedupedPlayers.entries()) {
     if (!includeAdminAndTest && isAdminOrTestAccount(p)) {
       excludedAdminAndTestCount += 1;
       continue;
     }
     analyzedPlayersCount += 1;
 
-    const playerKey = String(p.id || p.nickNormalized || p.nick || `player_${i}`);
+    const playerKey = canonicalKey;
     const playerNick = String(p.nick || p.full_name || p.id || "Aluno").trim() || "Aluno";
     const playerSpent = Number.isFinite(Number(p.coinsSpentTotal))
       ? Math.max(0, Math.floor(Number(p.coinsSpentTotal)))
       : 0;
     totalCoinsSpent += playerSpent;
 
+    let playerTrackedItemCoins = 0;
     let playerMadePurchase = playerSpent > 0;
 
     // 1. Cosméticos comprados na loja (avatares e auras)
@@ -260,7 +286,7 @@ export function computeStoreSalesReport(
       acc.quantitySold += 1;
       acc.coinsSpent += coins;
       acc.hasEstimatedCoins = acc.hasEstimatedCoins || estimated;
-      trackedItemCoins += coins;
+      playerTrackedItemCoins += coins;
       playerMadePurchase = true;
 
       upsertBuyer(acc, {
@@ -273,37 +299,67 @@ export function computeStoreSalesReport(
       });
     }
 
-    // 2. Pacotes de cartas comprados na loja
+    // 2. Pacotes de cartas comprados na loja (normalizando IDs legados)
     if (p.purchasedPackCounts && typeof p.purchasedPackCounts === "object") {
+      const normalizedPacks = new Map<string, { qty: number; rawTrackedCoins: number; hasRawTracked: boolean }>();
       for (const [rawPackId, rawQty] of Object.entries(p.purchasedPackCounts)) {
-        const packId = String(rawPackId).trim();
+        const trimmedRawId = String(rawPackId).trim();
         const qty = Math.floor(Number(rawQty));
-        if (!packId || !Number.isFinite(qty) || qty <= 0) continue;
+        if (!trimmedRawId || !Number.isFinite(qty) || qty <= 0) continue;
+        const packId = normalizeCardPackId(trimmedRawId);
+        const cur = normalizedPacks.get(packId) ?? { qty: 0, rawTrackedCoins: 0, hasRawTracked: false };
+        cur.qty += qty;
+        const legacySpent = p.storeCoinsSpentByItem?.[`pack:${trimmedRawId}`];
+        if (
+          trimmedRawId !== packId &&
+          typeof legacySpent === "number" &&
+          Number.isFinite(legacySpent) &&
+          legacySpent >= 0
+        ) {
+          cur.rawTrackedCoins += Math.floor(legacySpent);
+          cur.hasRawTracked = true;
+        }
+        normalizedPacks.set(packId, cur);
+      }
 
+      for (const [packId, info] of normalizedPacks.entries()) {
         const packKey = `pack:${packId}`;
         const acc = ensureAccumulator(packKey, packId, "pack");
-        const { coins, estimated } = resolveTrackedCoins(
-          p.storeCoinsSpentByItem,
-          packKey,
-          (acc.currentPriceCoins ?? 0) * qty,
-        );
+        const directTracked = p.storeCoinsSpentByItem?.[packKey];
+        let coins = 0;
+        let estimated = false;
+        if (typeof directTracked === "number" && Number.isFinite(directTracked) && directTracked >= 0) {
+          coins = Math.floor(directTracked) + info.rawTrackedCoins;
+        } else if (info.hasRawTracked) {
+          coins = info.rawTrackedCoins;
+        } else {
+          const resCoins = resolveTrackedCoins(
+            p.storeCoinsSpentByItem,
+            packKey,
+            (acc.currentPriceCoins ?? 0) * info.qty,
+          );
+          coins = resCoins.coins;
+          estimated = resCoins.estimated;
+        }
 
-        acc.quantitySold += qty;
+        acc.quantitySold += info.qty;
         acc.coinsSpent += coins;
         acc.hasEstimatedCoins = acc.hasEstimatedCoins || estimated;
-        trackedItemCoins += coins;
+        playerTrackedItemCoins += coins;
         playerMadePurchase = true;
 
         upsertBuyer(acc, {
           playerId: playerKey,
           nick: playerNick,
           school: p.school ?? undefined,
-          quantity: qty,
+          quantity: info.qty,
           coinsSpent: coins,
           hasEstimatedCoins: estimated,
         });
       }
     }
+
+    totalUntrackedLegacyCoins += Math.max(0, playerSpent - playerTrackedItemCoins);
 
     if (playerMadePurchase) {
       uniqueBuyerKeys.add(playerKey);
@@ -359,7 +415,7 @@ export function computeStoreSalesReport(
     uniqueBuyersCount: uniqueBuyerKeys.size,
     analyzedPlayersCount,
     excludedAdminAndTestCount,
-    untrackedLegacyCoins: Math.max(0, totalCoinsSpent - trackedItemCoins),
+    untrackedLegacyCoins: totalUntrackedLegacyCoins,
     byKind,
     items,
   };

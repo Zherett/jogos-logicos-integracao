@@ -275,4 +275,33 @@ describe("Sistema de Pontuação e Moeda de Carreira (career-points)", () => {
     assert.equal(student.coins, 20);
     assert.equal(student.lifetimeCoins, 20);
   });
+
+  it("Onda 0 (ECON-01): subtrai pointsSpentTotal ao sanitizar (sem ressuscitar saldo) e preserva medalhas legítimas", () => {
+    const student = createMockProfile({
+      nick: "aluno_legitimo_gastou",
+      level: 5,
+      matchesPlayed: 12,
+      totalMatches: 12,
+      streakDays: 1, // ofensiva quebrou depois, mas já teve 4 dias ativos no histórico
+      activeDates: ["2026-11-20", "2026-11-21", "2026-11-22", "2026-11-24"],
+      stats: [{ game_id: "rpg", plays: 12, wins: 10, best_level: 3, best_score: 500 }],
+      unlockedMedals: [
+        { medalId: "beta_tester_ouro", unlockedAt: "2026-11-20T10:00:00Z" } as any,
+        { medalId: "m_rpg_ametista", unlockedAt: "2026-11-21T10:00:00Z" } as any,
+        { medalId: "streak_3_days", unlockedAt: "2026-11-22T10:00:00Z" } as any,
+      ],
+      careerPoints: 99999,
+      pointsBalance: 99999,
+      pointsSpentTotal: 400,
+    });
+
+    const { wasSanitized } = sanitizeInflatedCareerPoints(student);
+    assert.equal(wasSanitized, true);
+    // Saldo não pode ressuscitar pontos já convertidos/gastos
+    assert.equal(student.pointsBalance, Math.max(0, (student.careerPoints ?? 0) - 400));
+    // Medalhas legítimas comprovadas por partidas/RPG/histórico são preservadas
+    assert.equal(student.unlockedMedals?.some((m) => m.medalId === "beta_tester_ouro"), true);
+    assert.equal(student.unlockedMedals?.some((m) => m.medalId === "m_rpg_ametista"), true);
+    assert.equal(student.unlockedMedals?.some((m) => m.medalId === "streak_3_days"), true);
+  });
 });

@@ -36,6 +36,8 @@ import {
   type SizeIdx,
 } from "@/lib/shapes-content";
 import { playCorrect, playWrong } from "@/lib/sound";
+import { updateActiveGameLevel } from "@/lib/presence";
+import { useSafeTimeouts } from "@/lib/use-safe-timeouts";
 
 const DURATION = 120;
 const POINTS_CORRECT = 10;
@@ -77,6 +79,13 @@ export function ShapeColorGame({ onExit, onStatsChange, isRanked }: Props) {
   const prevModeRef = useRef<1 | 2 | 3 | 4 | undefined>(undefined);
   const prevMode4ColorsRef = useRef<readonly [ColorName, ColorName] | undefined>(undefined);
   const solveLockRef = useRef(false);
+  const { schedule: scheduleTimeout, clearAll: clearTimeouts } = useSafeTimeouts();
+
+  useEffect(() => {
+    if (running) {
+      updateActiveGameLevel(level);
+    }
+  }, [running, level]);
 
   // Per-question runtime state
   const [droppedIds, setDroppedIds] = useState<Set<string>>(new Set());              // mode 1
@@ -87,6 +96,7 @@ export function ShapeColorGame({ onExit, onStatsChange, isRanked }: Props) {
   const [timeAtEnd, setTimeAtEnd] = useState(0);
 
   const clock = useRoundClock(DURATION, running, () => {
+    clearTimeouts();
     setTimeAtEnd(0);
     endGame(0);
   });
@@ -131,12 +141,14 @@ export function ShapeColorGame({ onExit, onStatsChange, isRanked }: Props) {
   }
 
   function startGame() {
+    clearTimeouts();
     solveLockRef.current = false;
     setRunId((r) => r + 1);
     team.begin(teamConfig);
     setScore(0); setCorrect(0); setWrong(0);
     setLevel(startLevel); setQInLevel(0);
     setFinished(false);
+    setShowLevelUp(null);
     prevModeRef.current = undefined;
     prevMode4ColorsRef.current = undefined;
     loadNewQuestion(startLevel, 0);
@@ -151,13 +163,13 @@ export function ShapeColorGame({ onExit, onStatsChange, isRanked }: Props) {
       setLevel(newLevel);
       setQInLevel(0);
       setShowLevelUp(newLevel);
-      setTimeout(() => {
+      scheduleTimeout(() => {
         setShowLevelUp(null);
         loadNewQuestion(newLevel, 0);
       }, 1000);
     } else {
       setQInLevel(nextQ);
-      setTimeout(() => loadNewQuestion(level, nextQ), 500);
+      scheduleTimeout(() => loadNewQuestion(level, nextQ), 500);
     }
   }
 
@@ -183,7 +195,7 @@ export function ShapeColorGame({ onExit, onStatsChange, isRanked }: Props) {
     setWrong((w) => w + 1);
     if (slotId) {
       setFlashSlot(slotId);
-      setTimeout(() => setFlashSlot((cur) => (cur === slotId ? null : cur)), 500);
+      scheduleTimeout(() => setFlashSlot((cur) => (cur === slotId ? null : cur)), 500);
     }
   }
 
@@ -245,19 +257,23 @@ export function ShapeColorGame({ onExit, onStatsChange, isRanked }: Props) {
   }
 
   function handleMode3DropToSlot(slotId: string, pieceId: string) {
-    if (!question || question.mode !== 3) return;
+    if (solveLockRef.current || !question || question.mode !== 3) return;
     if (placed[slotId]) return;
+    if (Object.values(placed).includes(pieceId)) return;
     const slot = question.slots.find((s) => s.id === slotId);
-    // Only the adjusted piece can be placed
-    if (!adjustPiece || adjustPiece.id !== pieceId || !slot) {
+    const candidate =
+      adjustPiece?.id === pieceId
+        ? adjustPiece
+        : question.pieces.find((p) => p.id === pieceId);
+    if (!candidate || !slot) {
       registerWrong(slotId);
       return;
     }
-    if (adjustPiece.shape === slot.shape && adjustPiece.size === slot.size) {
+    if (candidate.shape === slot.shape && candidate.size === slot.size) {
       registerPlacement();
       const next = { ...placed, [slotId]: pieceId };
       setPlaced(next);
-      setAdjustPiece(null);
+      if (adjustPiece?.id === pieceId) setAdjustPiece(null);
       if (Object.keys(next).length >= question.slots.length) solveQuestion();
     } else {
       registerWrong(slotId);
@@ -279,12 +295,16 @@ export function ShapeColorGame({ onExit, onStatsChange, isRanked }: Props) {
   }
 
   function replayWithCountdown() {
+    clearTimeouts();
+    setShowLevelUp(null);
     team.advance();
     setFinished(false);
     setRunning(false);
     setPhase("countdown");
   }
   function backToSetup() {
+    clearTimeouts();
+    setShowLevelUp(null);
     setRunning(false);
     setFinished(false);
     setPhase("setup");
@@ -363,6 +383,7 @@ export function ShapeColorGame({ onExit, onStatsChange, isRanked }: Props) {
         <GameTopBar title="Formas e Cores" onExit={onExit} sessionActive={team.activeSession} onFinishSession={sessionEnd.request} />
         <ResultPanel
           gameId="formas"
+          mode={lastMatch?.mode ?? (isRanked ? "torneio_semanal" : undefined)}
           isTeam={team.activeSession}
           score={score} correct={correct} wrong={wrong} level={level}
           onReplay={replayWithCountdown} onMenu={onExit} onChangeSettings={backToSetup}

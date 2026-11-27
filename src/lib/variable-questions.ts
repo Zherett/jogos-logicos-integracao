@@ -60,22 +60,30 @@ function buildExpr(op: VarOp): RawExpr {
 }
 
 function makeOptions(answers: number[], count: number): number[] {
-  const set = new Set<number>(answers);
+  // Preserva multiplicidade das respostas (ex.: ? × ? = 49 precisa de duas bolinhas "7")
+  const arr: number[] = [...answers];
+  const seen = new Set<number>(answers);
+  const targetLen = Math.max(count, arr.length);
   let guard = 0;
   const anchor = answers[0] ?? 5;
-  while (set.size < count && guard++ < 200) {
+  while (arr.length < targetLen && guard++ < 200) {
     const base = pick(answers);
     const delta = pick([-6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6, 7, -7]);
     const cand = base + delta;
-    if (cand > 0 && cand <= 100) set.add(cand);
+    if (cand > 0 && cand <= 100 && !seen.has(cand)) {
+      seen.add(cand);
+      arr.push(cand);
+    }
   }
   let extra = 1;
-  while (set.size < count && guard++ < 400) {
+  while (arr.length < targetLen && guard++ < 400) {
     const cand = anchor + extra;
-    if (cand > 0 && cand <= 100) set.add(cand);
+    if (cand > 0 && cand <= 100 && !seen.has(cand)) {
+      seen.add(cand);
+      arr.push(cand);
+    }
     extra++;
   }
-  const arr = Array.from(set);
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
     [arr[i], arr[j]] = [arr[j], arr[i]];

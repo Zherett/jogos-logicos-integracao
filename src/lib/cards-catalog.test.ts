@@ -86,6 +86,14 @@ describe("Sistema de Cartas Colecionáveis e Pacotes", () => {
     });
     assert.equal(bad.card, null);
     assert.ok(bad.error);
+
+    const backslashRel = createCardDefinition({
+      name: "Carta Bypass",
+      description: "Teste",
+      rarity: "comum",
+      imageUrl: "/\\evil.com/x.png",
+    });
+    assert.equal(backslashRel.card, null);
   });
 
   it("abre pacote sorteando 5 cartas e acumulando quantidades repetidas", () => {
@@ -459,5 +467,85 @@ describe("Sistema de Cartas Colecionáveis e Pacotes", () => {
     assert.equal(summaryPartial.discoveredCount, 1);
     assert.equal(summaryPartial.missingFromCatalogUniqueCount, 1);
     assert.equal(summaryPartial.missingFromCatalogCopies, 2);
+  });
+
+  it("Bloco 1.3 (ECON-06/ECON-24): não sorteia Comum em pacote 0% comum, trata foil NaN, preserva defaults no merge e deduplica order", () => {
+    const rara = createCardDefinition({
+      name: "Rara Teste",
+      description: "Teste",
+      rarity: "rara",
+      imageUrl: "https://example.com/rara.png",
+      isFoil: false,
+    }).card!;
+    const raraFoil = createCardDefinition({
+      name: "Rara Teste",
+      description: "Teste",
+      rarity: "rara",
+      imageUrl: "https://example.com/rara.png",
+      isFoil: true,
+    }).card!;
+    const comum = createCardDefinition({
+      name: "Comum Teste",
+      description: "Comum",
+      rarity: "comum",
+      imageUrl: "https://example.com/comum.png",
+      isFoil: false,
+    }).card!;
+
+    // Soma 99.95% (incomum 50 + rara 49.95), comum = 0%; rng=0.9999 jamais pode cair para "comum"
+    const supremoLikePack = {
+      ...DEFAULT_CARD_PACKS[0],
+      id: "pack_supremo_test",
+      cardIds: undefined,
+      cardsPerPack: 1,
+      probabilities: { comum: 0, incomum: 50, rara: 49.95, epica: 0, lendaria: 0 },
+    };
+    const openEdge = openCardPack(supremoLikePack, [comum, rara], {}, () => 0.9999);
+    assert.equal(openEdge.drawnCards.length, 1);
+    assert.notEqual(openEdge.drawnCards[0].rarity, "comum");
+    assert.equal(openEdge.drawnCards[0].rarity, "rara");
+
+    // foilChancePercent inválido (NaN) deve usar fallback 30%: rng=0.1 -> Foil, rng=0.9 -> Normal
+    const onlyRaraPack = {
+      ...DEFAULT_CARD_PACKS[0],
+      id: "pack_foil_nan",
+      cardIds: undefined,
+      cardsPerPack: 1,
+      probabilities: { comum: 0, incomum: 0, rara: 100, epica: 0, lendaria: 0 },
+    };
+    const foilDraw = openCardPack(onlyRaraPack, [rara, raraFoil], {}, () => 0.1, Number.NaN);
+    assert.equal(foilDraw.drawnCards[0].isFoil, true);
+    const normalDraw = openCardPack(onlyRaraPack, [rara, raraFoil], {}, () => 0.9, Number.NaN);
+    assert.equal(normalDraw.drawnCards[0].isFoil, false);
+
+    // mergeWithDefaultCardPacks não deixa undefined apagar probabilidades padrão
+    const mergedPacks = mergeWithDefaultCardPacks([
+      {
+        ...DEFAULT_CARD_PACKS[0],
+        priceCoins: 99,
+        probabilities: undefined as any,
+      },
+    ]);
+    const p0 = mergedPacks.find((p) => p.id === DEFAULT_CARD_PACKS[0].id)!;
+    assert.equal(p0.priceCoins, 99);
+    assert.deepEqual(p0.probabilities, DEFAULT_CARD_PACKS[0].probabilities);
+
+    // mergeCardsCatalog deduplica order mesmo quando existente tem IDs repetidos
+    const dupRes = mergeCardsCatalog([rara, rara], [raraFoil], "merge");
+    assert.equal(dupRes.cards.filter((c) => c.id === rara.id).length, 1);
+    assert.equal(dupRes.cards.filter((c) => c.id === raraFoil.id).length, 1);
+
+    // QUOTA-07: carta individual maior que safeLimit lança erro e deserialize exige totalCardsExpected exato
+    const giantCard: CardDefinition = {
+      ...rara,
+      id: "card_giant",
+      description: "X".repeat(3000),
+    };
+    assert.throws(() => serializeCardsCatalogChunks([giantCard], 2000), /excede o limite/);
+    const badCount = deserializeCardsCatalogChunks(
+      JSON.stringify({ version: 1, chunkCount: 1, totalCards: 5, updatedAt: "2026-11-27T00:00:00.000Z" }),
+      [JSON.stringify([rara])],
+    );
+    assert.equal(badCount.ok, false);
   });
 });

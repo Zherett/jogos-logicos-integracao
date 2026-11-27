@@ -247,7 +247,8 @@ function generatePercentageQuestion(stage: number): ClashQuestion {
 
   if (Number.isInteger(exact) && Math.random() < 0.75) {
     const truth = Math.random() < 0.5;
-    const shown = truth ? exact : exact + pick([-10, -5, -4, 4, 5, 10]);
+    const deltas = [-10, -5, -4, 4, 5, 10].filter((d) => exact + d >= 0 && exact + d !== exact);
+    const shown = truth ? exact : exact + pick(deltas.length > 0 ? deltas : [4, 5, 10]);
     return {
       text: `${pct}% de ${base} é igual a ${shown}`,
       answer: shown === exact,

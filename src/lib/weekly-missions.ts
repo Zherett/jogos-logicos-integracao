@@ -23,6 +23,7 @@ export interface WeeklyMissionProgressState {
   rankedMatches: number;
   startRankIndex?: number;
   maxRankIndex?: number;
+  rankUpsEarned?: number;
   /** Faixa de nível travada na primeira atividade da semana para evitar mudança de missões no meio do ciclo */
   lockedLevel?: number;
   claimedIds: string[];
@@ -112,6 +113,7 @@ export function recordMatchIntoWeeklyMissions(
             typeof prev.startRankIndex === "number" ? prev.startRankIndex : rankBefore,
           maxRankIndex:
             typeof prev.maxRankIndex === "number" ? prev.maxRankIndex : rankBefore,
+          rankUpsEarned: Math.max(0, prev.rankUpsEarned ?? 0),
           ...(typeof prev.lockedLevel === "number"
             ? { lockedLevel: prev.lockedLevel }
             : typeof args.playerLevel === "number"
@@ -134,6 +136,8 @@ export function recordMatchIntoWeeklyMissions(
     base.rankedMatches += 1;
   }
   base.maxRankIndex = Math.max(base.maxRankIndex ?? rankBefore, rankAfter);
+  const stepRankUps = Math.max(0, rankAfter - rankBefore);
+  base.rankUpsEarned = Math.max(0, base.rankUpsEarned ?? 0) + stepRankUps;
 
   return base;
 }
@@ -210,6 +214,7 @@ export function mergeWeeklyMissionProgress(
     rankedMatches: Math.max(a.rankedMatches ?? 0, b.rankedMatches ?? 0),
     ...(startCandidates.length > 0 ? { startRankIndex: Math.min(...startCandidates) } : {}),
     ...(maxCandidates.length > 0 ? { maxRankIndex: Math.max(...maxCandidates) } : {}),
+    rankUpsEarned: Math.max(a.rankUpsEarned ?? 0, b.rankUpsEarned ?? 0),
     ...(levelCandidates.length > 0 ? { lockedLevel: Math.min(...levelCandidates) } : {}),
     claimedIds: Array.from(new Set([...(a.claimedIds ?? []), ...(b.claimedIds ?? [])])),
   };
@@ -388,7 +393,7 @@ export function generateWeeklyMissions(args: {
       else if (m.type === "weekly_ranked_ranks") {
         const startIdx = progress.startRankIndex ?? 0;
         const maxIdx = progress.maxRankIndex ?? startIdx;
-        current = Math.max(0, maxIdx - startIdx);
+        current = Math.max(Math.max(0, maxIdx - startIdx), progress.rankUpsEarned ?? 0);
       }
     }
 
@@ -472,7 +477,9 @@ export function claimWeeklyMissionForProfile(
   const coinsAwarded = Math.max(0, mission.rewardCoins ?? 0);
 
   if (pointsAwarded > 0) {
-    awardCareerPoints(profile, pointsAwarded, `Missão Semanal: ${mission.title}`);
+    awardCareerPoints(profile, pointsAwarded, `Missão Semanal: ${mission.title}`, 1, {
+      source: "missao_semanal",
+    });
   }
   if (xpAwarded > 0) {
     profile.xp = Math.max(0, (profile.xp ?? 0) + xpAwarded);
@@ -501,6 +508,7 @@ function buildWeeklyMissionsList(args: {
       : null;
   const level = Math.max(1, Math.floor(weekProgress?.lockedLevel ?? args.profile?.level ?? 1));
   const isAdmin = Boolean(args.profile?.isAdmin);
+  const tournamentEnabled = args.adminConfig?.tournamentEnabled !== false;
   const variant = Math.abs(weekIndex) % 2;
 
   const eligibleGames = getEligibleGamesForWeeklyMissions({
@@ -562,30 +570,40 @@ function buildWeeklyMissionsList(args: {
 
   if (level <= 6) {
     const distinctTarget = Math.min(5, maxEligibleGames);
-    const rotatingMission: WeeklyMission =
-      variant === 0
-        ? {
-            id: `wm_${weekKey}_xp`,
-            type: "weekly_xp",
-            title: "Força Semanal",
-            description: "Conquiste 1.000 XP ao longo desta semana.",
-            target: 1000,
-            current: 0,
-            rewardPoints: 120,
-            rewardXp: 120,
-            minLevelRequired: 4,
-          }
-        : {
-            id: `wm_${weekKey}_daily_missions`,
-            type: "weekly_daily_missions",
-            title: "Disciplina de Elite",
-            description: "Complete 10 missões diárias durante esta semana.",
-            target: 10,
-            current: 0,
-            rewardPoints: 130,
-            rewardXp: 130,
-            minLevelRequired: 4,
-          };
+    const xpMidMission: WeeklyMission = {
+      id: `wm_${weekKey}_xp`,
+      type: "weekly_xp",
+      title: "Força Semanal",
+      description: "Conquiste 1.000 XP ao longo desta semana.",
+      target: 1000,
+      current: 0,
+      rewardPoints: 120,
+      rewardXp: 120,
+      minLevelRequired: 4,
+    };
+    const dailyMidMission: WeeklyMission = {
+      id: `wm_${weekKey}_daily_missions`,
+      type: "weekly_daily_missions",
+      title: "Disciplina de Elite",
+      description: "Complete 10 missões diárias durante esta semana.",
+      target: 10,
+      current: 0,
+      rewardPoints: 130,
+      rewardXp: 130,
+      minLevelRequired: 4,
+    };
+    const rotatingMission = variant === 0 ? xpMidMission : dailyMidMission;
+    const fourthMidMission = tournamentEnabled
+      ? resolveRankedWeeklyMission({
+          level,
+          weekKey,
+          tournamentPoints: args.profile?.tournamentPoints,
+          tournamentRankId: args.profile?.tournamentRankId,
+          startRankIndex: weekProgress?.startRankIndex,
+        })
+      : variant === 0
+        ? dailyMidMission
+        : xpMidMission;
 
     return [
       {
@@ -611,41 +629,45 @@ function buildWeeklyMissionsList(args: {
         minLevelRequired: 4,
       },
       rotatingMission,
-      resolveRankedWeeklyMission({
+      fourthMidMission,
+    ];
+  }
+
+  const distinctTarget = Math.min(6, maxEligibleGames);
+  const xpHighMission: WeeklyMission = {
+    id: `wm_${weekKey}_xp`,
+    type: "weekly_xp",
+    title: "Potência Máxima",
+    description: "Conquiste 1.500 XP ao longo desta semana.",
+    target: 1500,
+    current: 0,
+    rewardPoints: 160,
+    rewardXp: 160,
+    minLevelRequired: 7,
+  };
+  const dailyHighMission: WeeklyMission = {
+    id: `wm_${weekKey}_daily_missions`,
+    type: "weekly_daily_missions",
+    title: "Imbatível na Rotina",
+    description: "Complete 12 missões diárias durante esta semana.",
+    target: 12,
+    current: 0,
+    rewardPoints: 170,
+    rewardXp: 170,
+    minLevelRequired: 7,
+  };
+  const rotatingHighMission = variant === 0 ? xpHighMission : dailyHighMission;
+  const fourthHighMission = tournamentEnabled
+    ? resolveRankedWeeklyMission({
         level,
         weekKey,
         tournamentPoints: args.profile?.tournamentPoints,
         tournamentRankId: args.profile?.tournamentRankId,
         startRankIndex: weekProgress?.startRankIndex,
-      }),
-    ];
-  }
-
-  const distinctTarget = Math.min(6, maxEligibleGames);
-  const rotatingHighMission: WeeklyMission =
-    variant === 0
-      ? {
-          id: `wm_${weekKey}_xp`,
-          type: "weekly_xp",
-          title: "Potência Máxima",
-          description: "Conquiste 1.500 XP ao longo desta semana.",
-          target: 1500,
-          current: 0,
-          rewardPoints: 160,
-          rewardXp: 160,
-          minLevelRequired: 7,
-        }
-      : {
-          id: `wm_${weekKey}_daily_missions`,
-          type: "weekly_daily_missions",
-          title: "Imbatível na Rotina",
-          description: "Complete 12 missões diárias durante esta semana.",
-          target: 12,
-          current: 0,
-          rewardPoints: 170,
-          rewardXp: 170,
-          minLevelRequired: 7,
-        };
+      })
+    : variant === 0
+      ? dailyHighMission
+      : xpHighMission;
 
   return [
     {
@@ -671,12 +693,6 @@ function buildWeeklyMissionsList(args: {
       minLevelRequired: 7,
     },
     rotatingHighMission,
-    resolveRankedWeeklyMission({
-      level,
-      weekKey,
-      tournamentPoints: args.profile?.tournamentPoints,
-      tournamentRankId: args.profile?.tournamentRankId,
-      startRankIndex: weekProgress?.startRankIndex,
-    }),
+    fourthHighMission,
   ];
 }

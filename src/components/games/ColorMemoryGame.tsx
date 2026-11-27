@@ -16,6 +16,7 @@ import { BonusTimeToggle } from "./BonusTimeToggle";
 import { useTeamSession } from "@/lib/use-team-session";
 import { updateBest, saveLastMatch, loadLastMatch, type LastMatch } from "@/lib/game-storage";
 import { playTone } from "@/lib/sound";
+import { useSafeTimeouts } from "@/lib/use-safe-timeouts";
 
 const DURATION = 120;
 const POINTS_CORRECT = 10;
@@ -87,7 +88,11 @@ export function ColorMemoryGame({ onExit, onStatsChange, isRanked }: Props) {
   const [sub, setSub] = useState<SubPhase>("showing");
   const [shake, setShake] = useState(false);
   const seqRef = useRef<Color[]>([]);
-  const timeoutsRef = useRef<number[]>([]);
+  const inputLockRef = useRef(false);
+  const userIdxRef = useRef(0);
+  const levelRef = useRef(1);
+  levelRef.current = level;
+  const { schedule: scheduleTimeout, clearAll: clearTimeouts } = useSafeTimeouts();
   /** How many rounds were already played with the current sequence length. */
   const roundAtLenRef = useRef(0);
 
@@ -98,11 +103,6 @@ export function ColorMemoryGame({ onExit, onStatsChange, isRanked }: Props) {
     setFinished(true);
     clearTimeouts();
   });
-
-  function clearTimeouts() {
-    timeoutsRef.current.forEach((t) => window.clearTimeout(t));
-    timeoutsRef.current = [];
-  }
 
   useEffect(() => {
     if (finished) {
@@ -123,10 +123,11 @@ export function ColorMemoryGame({ onExit, onStatsChange, isRanked }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [finished]);
 
-  useEffect(() => () => clearTimeouts(), []);
-
   function startGame() {
     clearTimeouts();
+    inputLockRef.current = true;
+    userIdxRef.current = 0;
+    levelRef.current = 1;
     team.begin(teamConfig);
     setCorrect(0); setWrong(0); setLevel(1); setBestStreak(0);
     roundAtLenRef.current = 0;
@@ -138,12 +139,13 @@ export function ColorMemoryGame({ onExit, onStatsChange, isRanked }: Props) {
     setUserIdx(0);
     setPhase("playing");
     setRunning(true);
-    playSequence(first);
+    playSequence(first, 1);
   }
 
   function replayWithCountdown() {
     team.advance();
     clearTimeouts();
+    inputLockRef.current = true;
     setFinished(false);
     setRunning(false);
     setPhase("countdown");
@@ -151,6 +153,7 @@ export function ColorMemoryGame({ onExit, onStatsChange, isRanked }: Props) {
 
   function backToSetup() {
     clearTimeouts();
+    inputLockRef.current = true;
     setRunning(false);
     setFinished(false);
     setPhase("setup");
@@ -158,58 +161,64 @@ export function ColorMemoryGame({ onExit, onStatsChange, isRanked }: Props) {
 
   const sessionEnd = useSessionEnd(team, backToSetup);
 
-  function playSequence(sequence: Color[], onDone?: () => void) {
+  function playSequence(sequence: Color[], targetLevel: number, onDone?: () => void) {
+    inputLockRef.current = true;
+    userIdxRef.current = 0;
     setSub("showing");
     setActive(null);
-    // Speed scales gently with level
+    // Speed scales gently with targetLevel explicit (sem closure obsoleta)
     const d = diffRef.current;
-    const flashDur = Math.max(300, d.flash - (level - 1) * 25);
-    const gap = Math.max(140, d.gap - (level - 1) * 12);
+    const flashDur = Math.max(300, d.flash - (targetLevel - 1) * 25);
+    const gap = Math.max(140, d.gap - (targetLevel - 1) * 12);
     let t = 400;
     sequence.forEach((c) => {
-      const onT = window.setTimeout(() => {
+      scheduleTimeout(() => {
         setActive(c);
         playTone(COLOR_STYLES[c].freq, flashDur / 1000);
       }, t);
-      const offT = window.setTimeout(() => setActive(null), t + flashDur);
-      timeoutsRef.current.push(onT, offT);
+      scheduleTimeout(() => setActive(null), t + flashDur);
       t += flashDur + gap;
     });
-    const doneT = window.setTimeout(() => {
+    scheduleTimeout(() => {
       setActive(null);
+      userIdxRef.current = 0;
+      inputLockRef.current = false;
       setSub("input");
       setUserIdx(0);
       onDone?.();
     }, t + 100);
-    timeoutsRef.current.push(doneT);
   }
 
   function handleClick(c: Color) {
-    if (!running || sub !== "input") return;
-    const target = seqRef.current[userIdx];
+    if (!running || sub !== "input" || inputLockRef.current) return;
+    const curIdx = userIdxRef.current;
+    const target = seqRef.current[curIdx];
     setActive(c);
     playTone(COLOR_STYLES[c].freq, 0.25);
-    window.setTimeout(() => setActive(null), 200);
+    scheduleTimeout(() => setActive(null), 200);
 
     if (c !== target) {
       // Wrong: repeat the SAME sequence and wait for the answer again
+      inputLockRef.current = true;
+      userIdxRef.current = 0;
       setSub("wrong");
       setUserIdx(0);
       setWrong((w) => w + 1);
       setShake(true);
       playTone(120, 0.5, "sawtooth");
-      window.setTimeout(() => setShake(false), 450);
-      const revealT = window.setTimeout(() => {
+      scheduleTimeout(() => setShake(false), 450);
+      scheduleTimeout(() => {
         setSub("reveal");
-        playSequence(seqRef.current);
+        playSequence(seqRef.current, levelRef.current);
       }, 800);
-      timeoutsRef.current.push(revealT);
       return;
     }
 
-    const nextIdx = userIdx + 1;
+    const nextIdx = curIdx + 1;
     if (nextIdx >= seqRef.current.length) {
       // Full sequence correct
+      inputLockRef.current = true;
+      userIdxRef.current = 0;
       setSub("correct");
       setCorrect((n) => n + 1);
       if (bonusOn) clock.addBonus();
@@ -218,20 +227,22 @@ export function ColorMemoryGame({ onExit, onStatsChange, isRanked }: Props) {
       const grow = roundAtLenRef.current >= 1;
       roundAtLenRef.current = grow ? 0 : roundAtLenRef.current + 1;
       const newLen = grow ? currentLen + 1 : currentLen;
+      const nextLevel = levelRef.current + 1;
+      levelRef.current = nextLevel;
       setBestStreak((b) => Math.max(b, currentLen));
-      setLevel((l) => l + 1);
+      setLevel(nextLevel);
       playTone(523.25, 0.15);
-      window.setTimeout(() => playTone(659.25, 0.15), 150);
-      window.setTimeout(() => playTone(783.99, 0.2), 300);
-      const nextT = window.setTimeout(() => {
+      scheduleTimeout(() => playTone(659.25, 0.15), 150);
+      scheduleTimeout(() => playTone(783.99, 0.2), 300);
+      scheduleTimeout(() => {
         const next = randomSeq(newLen, seqRef.current);
         seqRef.current = next;
         setSeq(next);
-        playSequence(next);
+        playSequence(next, nextLevel);
       }, 900);
-      timeoutsRef.current.push(nextT);
 
     } else {
+      userIdxRef.current = nextIdx;
       setUserIdx(nextIdx);
     }
   }
@@ -314,6 +325,7 @@ export function ColorMemoryGame({ onExit, onStatsChange, isRanked }: Props) {
         <GameTopBar title="Memória das Cores" onExit={onExit} sessionActive={team.activeSession} onFinishSession={sessionEnd.request} />
         <ResultPanel
           gameId="memoria"
+          mode={lastMatch?.mode ?? (isRanked ? "torneio_semanal" : undefined)}
           isTeam={team.activeSession}
           score={score} correct={correct} wrong={wrong} level={level}
           onReplay={replayWithCountdown} onMenu={onExit} onChangeSettings={backToSetup}

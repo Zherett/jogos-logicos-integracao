@@ -7,6 +7,7 @@ import type { PlatformAdminConfig } from "./game-codes.ts";
 export type AdminConfigWriteDomain =
   | "all"
   | "core"
+  | "x1"
   | "cards"
   | "packs"
   | "chests"
@@ -56,6 +57,8 @@ export interface MergeAdminConfigWriteOptions {
   allowEmptyCardsCatalog?: boolean;
   /** Lista explícita de coleções autorizadas a serem esvaziadas (ex.: exclusão em massa confirmada). */
   allowEmptyCollections?: readonly AdminConfigProtectedCollectionKey[];
+  /** Campos opcionais do domínio explicitamente limpos (ex.: ao cancelar agendamentos). */
+  clearFields?: readonly (keyof PlatformAdminConfig)[];
   /** Autoriza alteração de temporada (seasonId / activitySeasonId / rankedSeasonId). */
   allowSeasonChange?: boolean;
 }
@@ -110,6 +113,16 @@ const DOMAIN_FIELDS: Record<Exclude<AdminConfigWriteDomain, "all">, readonly (ke
     "rankedSeasonDurationDays",
     "rankedSeasonCycleMode",
     "rankedSeasonName",
+  ],
+  x1: [
+    "x1Enabled",
+    "x1ArenaClosed",
+    "x1OpenHour",
+    "x1CloseHour",
+    "x1ForceOpen",
+    "x1AvailableGames",
+    "x1RotationMinutes",
+    "x1MinadoGridSize",
   ],
   cards: [
     "cardsCatalog",
@@ -252,6 +265,13 @@ export function mergeAdminConfigForCloudWrite(
     for (const field of allowedFields) {
       if (incoming[field] !== undefined) {
         (merged as unknown as Record<string, unknown>)[field] = incoming[field];
+      }
+    }
+    if (options.clearFields && options.clearFields.length > 0) {
+      for (const field of options.clearFields) {
+        if (allowedFields.includes(field) && incoming[field] === undefined) {
+          delete (merged as unknown as Record<string, unknown>)[field];
+        }
       }
     }
   } else {

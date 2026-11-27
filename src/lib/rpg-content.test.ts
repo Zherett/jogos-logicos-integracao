@@ -157,4 +157,15 @@ describe("Batalha de Robôs Geométricos (RPG da Lógica)", () => {
     });
     assert.equal(carmesimWrong.scoreDelta, -15); // -5 * 3
   });
+
+  it("GAME-15: nunca gera valores negativos como distratores nas questões de porcentagem/matemática do RPG", () => {
+    for (let i = 0; i < 600; i++) {
+      const q = generateClashQuestion((i % 5) + 1);
+      assert.equal(
+        /(?:é igual a|=\s*)-\d+/.test(q.text),
+        false,
+        `Não deve gerar distrator negativo no RPG: ${q.text}`,
+      );
+    }
+  });
 });

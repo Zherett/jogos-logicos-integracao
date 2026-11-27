@@ -4,6 +4,10 @@ import {
   createInboxMessage,
   loadAllInboxMessages,
   getInboxMessagesForRecipient,
+  purgeExpiredInboxMessagesForPlayer,
+  commitInboxClaimLocally,
+  matchPlayerIdentifier,
+  INBOX_MESSAGE_AUTO_PURGE_MS,
   getInboxMessagesForPlayer,
   markInboxMessageAsRead,
   markAllInboxMessagesAsReadForRecipient,
@@ -29,11 +33,16 @@ import {
   getMessageRewards,
   getMediaRowSlotWidth,
   isSafeMediaUrl,
+  getCanonicalInboxStudentKey,
+  pruneExpiredLocalInboxReceipts,
   splitInboxBodySegments,
   parseInboxBoldSegments,
   stripInboxBoldMarkers,
 } from "./inbox-messages.ts";
 import type { PlayerProfile } from "./playfab.ts";
+import { getPlayerScoreLedger } from "./score-history-ledger.ts";
+import { DEFAULT_AVATARS } from "./cosmetics-catalog.ts";
+import { calculateDuplicateCosmeticCompensation } from "./chests-catalog.ts";
 
 function createTestStudent(overrides: Partial<PlayerProfile> = {}): PlayerProfile {
   return {
@@ -1105,5 +1114,139 @@ describe("Sistema Completo de Caixa de Entrada e Correio (inbox-messages)", () =
     assert.equal(isSafeMediaUrl("javascript:alert(1)"), false);
     assert.equal(isSafeMediaUrl("data:text/html,<script>alert(1)</script>"), false);
     assert.equal(isSafeMediaUrl("//evil.example.com/a.png"), false);
+    assert.equal(isSafeMediaUrl("/\\evil.example.com/a.png"), false);
+  });
+
+  it("Bloco 1.3 (SEC-07/ECON-08/ECON-12/ECON-13/ECON-21/ECON-25): valida elegibilidade, deferLocalCommit, tags, identificadores, purge puro e cosmético repetido", () => {
+    // 1. matchPlayerIdentifier rejeita vazios e casa acentos
+    assert.equal(matchPlayerIdentifier("   ", { id: "a", nick: "" }), false);
+    assert.equal(matchPlayerIdentifier("pf_local_", { id: "pf_local_", nick: "" }), false);
+    assert.equal(matchPlayerIdentifier("João", { id: "stu_j", nick: "joao" }), true);
+
+    // 2. extractInboxTags com escalas e formatInboxMessageText para [game2]/[event2] sem vínculo
+    const tags = extractInboxTags("Veja [img1:60%] e [gif2:50%]!");
+    assert.deepEqual(tags.imgs, ["img1"]);
+    assert.deepEqual(tags.gifs, ["gif2"]);
+
+    const formatted = formatInboxMessageText("Jogos: [game1] e [game2] | Eventos: [event1] e [event2]", {
+      mentionedGameId: "logica",
+      mentionedGames: { game1: "logica" },
+      mentionedEventTitle: "Olimpíada",
+      mentionedEvents: { event1: { eventTitle: "Olimpíada" } },
+    });
+    assert.equal(formatted, "Jogos: Lógica Matemática e [game2] | Eventos: Olimpíada e [event2]");
+
+    // 3. SEC-07: bloqueia mensagem cancelada e broadcast de outra escola
+    const canceledMsg = createInboxMessage({
+      recipientId: "ALL",
+      sender: "adm",
+      category: "recompensa_especial",
+      title: "Cancelada",
+      body: "Não deve resgatar",
+      includeNewPlayers: true,
+      reward: { id: "r_c", type: "points", pointsAmount: 50, isSecret: false, claimed: false },
+    });
+    cancelInboxMessage(canceledMsg.id);
+    const s1 = createTestStudent({ id: "stu_sec07_1", nick: "Sec07One", school: "Raimundo Bezerra" });
+    assert.equal(claimInboxReward(canceledMsg.id, s1).success, false);
+
+    const otherSchoolMsg = createInboxMessage({
+      recipientId: "ALL",
+      recipientFilter: { school: "Maria de Nazaré" },
+      sender: "adm",
+      category: "recompensa_especial",
+      title: "Restrita",
+      body: "Outra escola",
+      includeNewPlayers: true,
+      reward: { id: "r_s", type: "points", pointsAmount: 50, isSecret: false, claimed: false },
+    });
+    assert.equal(claimInboxReward(otherSchoolMsg.id, s1).success, false);
+
+    // 4. deferLocalCommit não escreve ledger antes de commitInboxClaimLocally + ledger único
+    const atomicId = `stu_atomic_${Date.now()}`;
+    const atomicStudent = createTestStudent({ id: atomicId, nick: "AtomicStu", careerPoints: 0, pointsBalance: 0 });
+    const ptsMsg = createInboxMessage({
+      recipientId: atomicStudent.id,
+      sender: "adm",
+      category: "recompensa_especial",
+      title: "Premio 80",
+      body: "80 pontos",
+      reward: { id: "r_pts", type: "points", pointsAmount: 80, isSecret: false, claimed: false },
+    });
+    const deferredRes = claimInboxReward(ptsMsg.id, atomicStudent, { deferLocalCommit: true });
+    assert.equal(deferredRes.success, true);
+    assert.equal(deferredRes.profile.careerPoints, 80);
+    assert.equal(getPlayerScoreLedger(atomicId).length, 0, "Ledger não pode gravar antes de commitInboxClaimLocally");
+
+    commitInboxClaimLocally(ptsMsg.id, deferredRes.profile, deferredRes.claimedAt, deferredRes.pendingLedgerEntries);
+    const ledgerAfterCommit = getPlayerScoreLedger(atomicId, { type: "career_points" });
+    assert.equal(ledgerAfterCommit.length, 1, "Deve gravar exatamente 1 lançamento de pontos após confirmação");
+    assert.equal(ledgerAfterCommit[0].source, "correio");
+    assert.equal(ledgerAfterCommit[0].amount, 80);
+
+    // 5. Medalha não-empilhável não incrementa count e cosmético repetido compensa em moedas
+    const paidAvatar = DEFAULT_AVATARS.find((a) => a.priceCoins > 0)!;
+    const rewardStudent = createTestStudent({
+      id: `stu_cosm_${Date.now()}`,
+      nick: "CosmStu",
+      coins: 0,
+      unlockedAvatars: [paidAvatar.id],
+      unlockedMedals: [{ medalId: "first_win", unlockedAt: "2026-11-01T12:00:00.000Z", count: 1 }],
+    });
+    const dupMsg = createInboxMessage({
+      recipientId: rewardStudent.id,
+      sender: "adm",
+      category: "recompensa_especial",
+      title: "Misto",
+      body: "Medalha e Cosmético",
+      rewards: [
+        { id: "rm1", type: "medal", medalId: "first_win", isSecret: false, claimed: false },
+        { id: "rm2", type: "cosmetic", cosmeticKind: "avatar", cosmeticId: paidAvatar.id, isSecret: false, claimed: false },
+      ],
+    });
+    const dupRes = claimInboxReward(dupMsg.id, rewardStudent);
+    assert.equal(dupRes.success, true);
+    assert.equal(dupRes.profile.unlockedMedals?.find((m) => m.medalId === "first_win")?.count, 1);
+    assert.equal(dupRes.profile.coins, calculateDuplicateCosmeticCompensation(paidAvatar.priceCoins));
+
+    // 6. getInboxMessagesForPlayer é puro e purgeExpiredInboxMessagesForPlayer remove após 24h
+    const pPurge = createTestStudent({ id: "stu_purge_24h", nick: "Purge24h" });
+    const oldMsg = createInboxMessage({
+      recipientId: pPurge.id,
+      sender: "adm",
+      category: "comunicado",
+      title: "Lida Antiga",
+      body: "Expira em 24h",
+      createdAt: "2026-11-20T12:00:00.000Z",
+    });
+    markInboxMessageAsRead(oldMsg.id, pPurge);
+    const futureNow = Date.now() + INBOX_MESSAGE_AUTO_PURGE_MS + 60_000;
+    // Leitura pura oculta expirada, mas permite que purge explícito ainda a contabilize e apague
+    const visibleAtFuture = getInboxMessagesForPlayer(pPurge, futureNow);
+    assert.equal(visibleAtFuture.some((m) => m.id === oldMsg.id), false);
+    const purgedCount = purgeExpiredInboxMessagesForPlayer(pPurge, futureNow);
+    assert.equal(purgedCount, 1);
+    // Ainda após purge no futuro, voltar no tempo antes de 24h confirma que foi persistida a exclusão
+    const visibleBeforeFuture = getInboxMessagesForPlayer(pPurge, Date.now());
+    assert.equal(visibleBeforeFuture.some((m) => m.id === oldMsg.id), false);
+
+    // QUOTA-06: chave canônica única + limpeza de recibos antigos > 90 dias
+    assert.equal(
+      getCanonicalInboxStudentKey({ id: "pf_local_maria", nick: "Maria", nickNormalized: "maria", playfabId: "PF_1" }),
+      "maria",
+    );
+    const nowMs = Date.UTC(2026, 10, 27, 12, 0, 0);
+    const receipts = {
+      maria: {
+        msg_active: new Date(nowMs - 100 * 86_400_000).toISOString(),
+        msg_stale: new Date(nowMs - 100 * 86_400_000).toISOString(),
+        msg_recent: new Date(nowMs - 10 * 86_400_000).toISOString(),
+      },
+    };
+    const pruned = pruneExpiredLocalInboxReceipts(receipts, new Set(["msg_active"]), nowMs, 90);
+    assert.equal(pruned, 1);
+    assert.ok(receipts.maria.msg_active);
+    assert.equal(receipts.maria.msg_stale, undefined);
+    assert.ok(receipts.maria.msg_recent);
   });
 });

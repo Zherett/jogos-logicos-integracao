@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Dialog,
   DialogContent,
@@ -19,12 +19,12 @@ import {
   Package,
   Camera,
   Loader2,
+  X,
 } from "lucide-react";
 import {
-  inspectPromoCode,
-  claimPromoCode,
+  inspectPromoCodeCloud,
+  claimPromoCodeCloud,
   normalizePromoCodeInput,
-  fetchPromoCodesFromPlayFab,
   getPromoCodesSnapshot,
   restorePromoCodesSnapshot,
   syncPromoCodesToPlayFab,
@@ -41,6 +41,12 @@ interface Props {
 
 type RedeemStep = "input" | "preview" | "success";
 
+function extractCodeFromQrText(raw: string): string {
+  const trimmed = raw.trim();
+  const match = trimmed.match(/[?&]c(ode)?=([A-Za-z0-9-]+)/i);
+  return (match ? match[2] : trimmed).toUpperCase();
+}
+
 export function PromoCodeRedeemDialog({ open, onOpenChange, onRewardClaimed }: Props) {
   const auth = usePlayerAuth();
   const profile = auth.profile;
@@ -52,15 +58,122 @@ export function PromoCodeRedeemDialog({ open, onOpenChange, onRewardClaimed }: P
   const [identifiedReward, setIdentifiedReward] = useState<PromoCodeRewardPayload | null>(null);
   const [confirmedCode, setConfirmedCode] = useState<string>("");
   const [scannerOpen, setScannerOpen] = useState(false);
+  const [scannerStatus, setScannerStatus] = useState<string | null>(null);
+  const [pasteInput, setPasteInput] = useState("");
 
-  // Sincroniza os códigos mais recentes da nuvem sempre que o modal abrir
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const actionLockRef = useRef(false);
+
+  function stopCamera() {
+    if (streamRef.current) {
+      for (const track of streamRef.current.getTracks()) {
+        track.stop();
+      }
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+  }
+
+  // Detecta ?code=... na URL caso o aluno tenha escaneado o QR Code pela câmera nativa do celular
   useEffect(() => {
-    if (open) {
-      void fetchPromoCodesFromPlayFab();
+    if (!open || typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const urlCode = params.get("code") || params.get("c");
+    if (urlCode && urlCode.trim()) {
+      setCodeInput(urlCode.trim().toUpperCase());
     }
   }, [open]);
 
+  // Para a câmera ao fechar o modal ou o scanner
+  useEffect(() => {
+    if (!open || !scannerOpen) {
+      stopCamera();
+    }
+    return () => {
+      stopCamera();
+    };
+  }, [open, scannerOpen]);
+
+  // Loop de leitura de QR Code via câmera + BarcodeDetector nativo
+  useEffect(() => {
+    if (!open || !scannerOpen) return;
+    let cancelled = false;
+    let rafId = 0;
+
+    async function startScanner() {
+      setScannerStatus("Iniciando câmera...");
+      const BarcodeDetectorCtor = (
+        window as unknown as {
+          BarcodeDetector?: new (opts: { formats: string[] }) => {
+            detect: (source: ImageBitmapSource) => Promise<Array<{ rawValue?: string }>>;
+          };
+        }
+      ).BarcodeDetector;
+
+      if (!navigator.mediaDevices?.getUserMedia || !BarcodeDetectorCtor) {
+        setScannerStatus("Leitura automática indisponível neste navegador. Cole o link ou código do QR abaixo:");
+        return;
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "environment" },
+          audio: false,
+        });
+        if (cancelled) {
+          for (const t of stream.getTracks()) t.stop();
+          return;
+        }
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play();
+        }
+        setScannerStatus("Aponte a câmera para o QR Code do cartão...");
+        const detector = new BarcodeDetectorCtor({ formats: ["qr_code"] });
+
+        const tick = async () => {
+          if (cancelled || !videoRef.current) return;
+          try {
+            if (videoRef.current.readyState >= 2) {
+              const results = await detector.detect(videoRef.current);
+              const hit = results.find((r) => r.rawValue && r.rawValue.trim().length > 0);
+              if (hit?.rawValue) {
+                setCodeInput(extractCodeFromQrText(hit.rawValue));
+                setScannerOpen(false);
+                stopCamera();
+                return;
+              }
+            }
+          } catch {
+            /* ignora erro pontual de frame */
+          }
+          rafId = window.requestAnimationFrame(() => {
+            void tick();
+          });
+        };
+        rafId = window.requestAnimationFrame(() => {
+          void tick();
+        });
+      } catch {
+        setScannerStatus("Não foi possível acessar a câmera. Cole o link ou código do QR abaixo:");
+      }
+    }
+
+    void startScanner();
+
+    return () => {
+      cancelled = true;
+      if (rafId) window.cancelAnimationFrame(rafId);
+      stopCamera();
+    };
+  }, [open, scannerOpen]);
+
   function resetForm() {
+    stopCamera();
     setStep("input");
     setCodeInput("");
     setErrorMsg(null);
@@ -68,6 +181,8 @@ export function PromoCodeRedeemDialog({ open, onOpenChange, onRewardClaimed }: P
     setConfirmedCode("");
     setLoading(false);
     setScannerOpen(false);
+    setScannerStatus(null);
+    setPasteInput("");
   }
 
   function handleClose(v: boolean) {
@@ -75,13 +190,14 @@ export function PromoCodeRedeemDialog({ open, onOpenChange, onRewardClaimed }: P
     onOpenChange(v);
   }
 
-  // Etapa 1: Inspeciona a prévia do código (sincronizando com a nuvem antes)
+  // Etapa 1: Inspeciona a prévia do código via servidor (CloudScript) sem baixar catálogo
   async function handleInspect(e?: React.FormEvent) {
     if (e) e.preventDefault();
+    if (actionLockRef.current || loading) return;
     setErrorMsg(null);
 
     if (!profile) {
-      setErrorMsg("Entre em uma conta de jogador (ex: Zheret ou Lord) para verificar e resgatar códigos.");
+      setErrorMsg("Entre na sua conta de jogador para verificar e resgatar códigos.");
       return;
     }
 
@@ -91,12 +207,10 @@ export function PromoCodeRedeemDialog({ open, onOpenChange, onRewardClaimed }: P
       return;
     }
 
+    actionLockRef.current = true;
     setLoading(true);
     try {
-      // Baixa códigos atualizados da nuvem PlayFab antes de validar
-      await fetchPromoCodesFromPlayFab();
-
-      const res = inspectPromoCode(codeInput, profile.id);
+      const res = await inspectPromoCodeCloud(codeInput, profile.id, profile);
       if (!res.valid) {
         setErrorMsg(res.errorMessage || "Código inválido ou expirado.");
         return;
@@ -105,40 +219,41 @@ export function PromoCodeRedeemDialog({ open, onOpenChange, onRewardClaimed }: P
       setIdentifiedReward(res.rewards || null);
       setStep("preview");
     } finally {
+      actionLockRef.current = false;
       setLoading(false);
     }
   }
 
   // Etapa 2: Confirmação e Resgate Atômico
   async function handleClaim() {
-    if (!profile || loading) {
+    if (!profile || loading || actionLockRef.current) {
       if (!profile) setErrorMsg("Sessão de jogador não encontrada.");
       return;
     }
+    actionLockRef.current = true;
     setLoading(true);
     setErrorMsg(null);
 
     const prevCodesRaw = getPromoCodesSnapshot();
 
     try {
-      // Re-sincroniza com a nuvem imediatamente antes de consumir (trava anti-duplicidade cross-browser)
-      await fetchPromoCodesFromPlayFab();
-
       // Usa o perfil ao vivo do localStorage (trava anti-duplicidade em múltiplas abas)
       const liveProfile = getActiveAccount()?.profile ?? profile;
       const profileSnapshot = JSON.parse(JSON.stringify(liveProfile)) as typeof liveProfile;
-      const res = claimPromoCode(confirmedCode || codeInput, profileSnapshot);
+      const res = await claimPromoCodeCloud(confirmedCode || codeInput, profileSnapshot);
       if (!res.success) {
         setErrorMsg(res.errorMessage || "Falha ao resgatar o código.");
         return;
       }
 
-      // Persiste XP, nível, moedas e itens no PlayFab com confirmação obrigatória do servidor ANTES de consumir o código na nuvem
+      // Persiste XP, nível, moedas e itens no PlayFab com confirmação obrigatória do servidor
       if (res.updatedProfile) {
         await savePlayerProfile(res.updatedProfile, { requireServerSync: true });
-        const syncedPromo = await syncPromoCodesToPlayFab();
-        if (!syncedPromo) {
-          console.warn("[PromoCode] Recompensa salva no perfil, mas falhou ao replicar status do código no PlayFab.");
+        if (!res.usedCloudScript) {
+          const syncedPromo = await syncPromoCodesToPlayFab();
+          if (!syncedPromo) {
+            console.warn("[PromoCode] Recompensa salva no perfil, mas falhou ao replicar status do código no SharedGroup.");
+          }
         }
         await auth.refresh();
       }
@@ -153,19 +268,16 @@ export function PromoCodeRedeemDialog({ open, onOpenChange, onRewardClaimed }: P
           : "Sua sessão expirou ou está sem conexão. Faça login novamente para resgatar este código.",
       );
     } finally {
+      actionLockRef.current = false;
       setLoading(false);
     }
   }
 
-  // Simulação amigável de scanner com prompt de colagem ou arquivo
-  function handleTriggerScanner() {
-    const pasted = window.prompt("Cole a URL ou código escaneado do QR Code:");
-    if (pasted) {
-      // Se for URL (ex: https://.../?code=A124C-D123A), extrai o código
-      const match = pasted.match(/[?&]c(ode)?=([A-Za-z0-9-]+)/i);
-      const codeExtracted = match ? match[2] : pasted;
-      setCodeInput(codeExtracted.toUpperCase());
-    }
+  function handleApplyPastedQr() {
+    if (!pasteInput.trim()) return;
+    setCodeInput(extractCodeFromQrText(pasteInput));
+    setPasteInput("");
+    setScannerOpen(false);
   }
 
   return (
@@ -175,9 +287,6 @@ export function PromoCodeRedeemDialog({ open, onOpenChange, onRewardClaimed }: P
           <DialogTitle className="flex items-center gap-2 font-display text-xl font-black text-foreground">
             <Ticket className="h-6 w-6 text-fuchsia-500" />
             Resgatar Código Promocional
-            <span className="rounded-full bg-fuchsia-500/20 text-fuchsia-600 dark:text-fuchsia-400 px-2 py-0.5 text-[10px] font-black uppercase">
-              Beta
-            </span>
           </DialogTitle>
         </DialogHeader>
 
@@ -225,13 +334,44 @@ export function PromoCodeRedeemDialog({ open, onOpenChange, onRewardClaimed }: P
                   <Button
                     type="button"
                     variant="outline"
-                    onClick={handleTriggerScanner}
+                    onClick={() => setScannerOpen((v) => !v)}
                     className="rounded-xl h-11 px-3 border-fuchsia-500/40 text-fuchsia-600 dark:text-fuchsia-400 hover:bg-fuchsia-500/10"
-                    title="Ler QR Code ou colar link do cartão"
+                    title="Ler QR Code com a câmera ou colar link do cartão"
                   >
-                    <Camera className="h-4 w-4" />
+                    {scannerOpen ? <X className="h-4 w-4" /> : <Camera className="h-4 w-4" />}
                   </Button>
                 </div>
+
+                {scannerOpen && (
+                  <div className="rounded-2xl border border-fuchsia-500/30 bg-muted/40 p-3 space-y-2.5">
+                    <div className="relative overflow-hidden rounded-xl bg-black/90 aspect-video flex items-center justify-center">
+                      <video ref={videoRef} className="h-full w-full object-cover" playsInline muted />
+                      {scannerStatus && (
+                        <div className="absolute inset-x-2 bottom-2 rounded-lg bg-black/75 px-2.5 py-1 text-center text-[11px] font-semibold text-white">
+                          {scannerStatus}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      <Input
+                        value={pasteInput}
+                        onChange={(e) => setPasteInput(e.target.value)}
+                        placeholder="Ou cole aqui o link / código do QR..."
+                        className="h-9 text-xs rounded-xl"
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        onClick={handleApplyPastedQr}
+                        disabled={!pasteInput.trim()}
+                        className="h-9 rounded-xl text-xs font-bold shrink-0"
+                      >
+                        Aplicar
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="flex gap-2 pt-1">

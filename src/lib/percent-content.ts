@@ -277,13 +277,19 @@ function makeMixedBuild(): MixedBuildQuestion {
   };
 }
 
+function pickExactTotalForPct(pct: number, candidates: readonly number[]): number {
+  const exact = candidates.filter((t) => (pct * t) % 100 === 0);
+  if (exact.length > 0) return pick(exact);
+  return 100;
+}
+
 function makeWord(avoid?: number): WordQuestion {
   const pct = pickAvoid([10, 25, 50, 75] as const, avoid);
   const type = Math.floor(Math.random() * 5);
 
   if (type === 0) {
-    const price = pick([40, 60, 80, 100, 200]);
-    const answer = Math.round((pct / 100) * price);
+    const price = pickExactTotalForPct(pct, [40, 60, 80, 100, 200]);
+    const answer = (pct * price) / 100;
     return {
       kind: "word", id: nextId(), emoji: "🎒",
       prompt: `Uma mochila custa R$ ${price} e está com ${pct}% de desconto. Qual é o valor do desconto?`,
@@ -308,8 +314,8 @@ function makeWord(avoid?: number): WordQuestion {
   }
 
   if (type === 2) {
-    const total = pick([20, 40, 60, 80]);
-    const answer = Math.round((pct / 100) * total);
+    const total = pickExactTotalForPct(pct, [20, 40, 60, 80]);
+    const answer = (pct * total) / 100;
     return {
       kind: "word", id: nextId(), emoji: "✏️",
       prompt: `Uma caixa possui ${total} lápis. ${pct}% são azuis. Quantos lápis azuis existem?`,
@@ -321,8 +327,8 @@ function makeWord(avoid?: number): WordQuestion {
   }
 
   if (type === 3) {
-    const total = pick([20, 24, 28, 32]);
-    const answer = Math.round((pct / 100) * total);
+    const total = pickExactTotalForPct(pct, [20, 24, 28, 32, 40]);
+    const answer = (pct * total) / 100;
     return {
       kind: "word", id: nextId(), emoji: "🧒",
       prompt: `Uma turma possui ${total} alunos e ${pct}% faltaram. Quantos alunos faltaram?`,
@@ -333,8 +339,8 @@ function makeWord(avoid?: number): WordQuestion {
     };
   }
 
-  const total = pick([20, 40, 50, 100]);
-  const answer = Math.round((pct / 100) * total);
+  const total = pickExactTotalForPct(pct, [20, 40, 50, 80, 100]);
+  const answer = (pct * total) / 100;
   return {
     kind: "word", id: nextId(), emoji: "🛒",
     prompt: `A loja tinha ${total} brinquedos e vendeu ${pct}%. Quantos brinquedos foram vendidos?`,

@@ -49,4 +49,28 @@ describe("Caça às Variáveis — múltiplos espaços e operadores", () => {
     }
     assert.equal(hasOpSlot, true);
   });
+
+  it("Onda 0 (GAME-02): preserva multiplicidade de bolinhas quando 2 slots exigem o mesmo número (ex: ? × ? = 49)", () => {
+    for (let i = 0; i < 300; i++) {
+      const q = generateVariableQuestion(3);
+      const requiredCounts = new Map<number, number>();
+      for (const role of q.slots) {
+        if (role === "op") continue;
+        const expected = q.expectedBySlot[role];
+        if (typeof expected === "number") {
+          requiredCounts.set(expected, (requiredCounts.get(expected) ?? 0) + 1);
+        }
+      }
+      const availableCounts = new Map<number, number>();
+      for (const opt of q.options) {
+        availableCounts.set(opt, (availableCounts.get(opt) ?? 0) + 1);
+      }
+      for (const [val, needed] of requiredCounts.entries()) {
+        assert.ok(
+          (availableCounts.get(val) ?? 0) >= needed,
+          `Esperava ao menos ${needed} bolinha(s) com valor ${val} em [${q.options.join(", ")}]`,
+        );
+      }
+    }
+  });
 });

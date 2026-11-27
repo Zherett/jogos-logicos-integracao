@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   Backpack,
@@ -19,8 +19,9 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { CARD_RARITY_META, mergeWithDefaultCardPacks, type CardDefinition } from "@/lib/cards-catalog";
-import { creditCoinMetrics } from "@/lib/career-points";
+import { awardCoins, checkLevelPromotionPoints } from "@/lib/career-points";
 import { mergeWithDefaultChests } from "@/lib/chests-catalog";
+import { ensureLevel5InitialLetterUnlock } from "@/lib/cosmetics-catalog";
 import {
   DUNGEON_BIOMES,
   DUNGEON_CRAFT_RECIPES,
@@ -46,6 +47,7 @@ import {
   getDungeonAccessForLevel,
   normalizeDungeonState,
   recordExternalMatchForDungeonStamina,
+  resolveActiveRunCards,
   resolveCardDungeonBonus,
   startDungeonRun,
   validateDungeonLoadout,
@@ -54,8 +56,19 @@ import {
 } from "@/lib/dungeon-engine";
 import { ALL_GAME_IDS, GAME_NAMES, type GameId } from "@/lib/game-storage";
 import { usePlayerAuth } from "@/lib/player-auth";
-import { getLocalDateKey, syncLevelStageProgress } from "@/lib/player-profile";
-import { getAllRegisteredPlayers } from "@/lib/playfab";
+import {
+  applyDailyXpCap,
+  DEFAULT_DAILY_XP_CAP,
+  getLocalDateKey,
+  isAdminOrTestAccount,
+  syncLevelStageProgress,
+} from "@/lib/player-profile";
+import {
+  getAllRegisteredPlayers,
+  getAuthoritativeNow,
+  syncStudentRosterFromPlayFab,
+} from "@/lib/playfab";
+import { recordScoreLedgerEntry } from "@/lib/score-history-ledger";
 import { CollectibleCardView } from "./CollectibleCardView";
 import { CardPagination, paginateItems } from "./CardPagination";
 import { DungeonEncounterStage } from "./DungeonEncounterStage";
@@ -80,6 +93,20 @@ export function DungeonGame({ onExit }: DungeonGameProps) {
     tone: "success" | "error" | "info";
     text: string;
   } | null>(null);
+  const mutatingRef = useRef(false);
+  const [isMutating, setIsMutating] = useState(false);
+  const [rankingSyncTick, setRankingSyncTick] = useState(0);
+
+  useEffect(() => {
+    if (activeTab !== "ranking") return;
+    let cancelled = false;
+    void syncStudentRosterFromPlayFab(undefined, false, { lightweight: true }).then(() => {
+      if (!cancelled) setRankingSyncTick((t) => t + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab]);
 
   // Fallback local para caso o ADM esteja testando com PIN sem conta de jogador logada
   const [guestDungeonState, setGuestDungeonState] = useState<PlayerDungeonState>(() =>
@@ -152,22 +179,24 @@ export function DungeonGame({ onExit }: DungeonGameProps) {
   );
 
   const allPlayersRankings = useMemo(() => {
-    const playersList = getAllRegisteredPlayers(false).map((p) => {
-      const ds =
-        profile && p.id === profile.id
-          ? dungeonState
-          : normalizeDungeonState(p.dungeonState);
-      return {
-        id: p.id,
-        nick: p.nick,
-        school: p.school,
-        level: p.level,
-        highestFloor: ds.progression.highestFloorReached,
-        bossesDefeated: ds.progression.bossesDefeated.length,
-        totalFloorsCleared: ds.progression.totalFloorsCleared,
-        flawlessFloorsCleared: ds.progression.flawlessFloorsCleared,
-      };
-    });
+    const playersList = getAllRegisteredPlayers(false)
+      .filter((p) => !isAdminOrTestAccount(p))
+      .map((p) => {
+        const ds =
+          profile && p.id === profile.id
+            ? dungeonState
+            : normalizeDungeonState(p.dungeonState);
+        return {
+          id: p.id,
+          nick: p.nick,
+          school: p.school,
+          level: p.level,
+          highestFloor: ds.progression.highestFloorReached,
+          bossesDefeated: ds.progression.bossesDefeated.length,
+          totalFloorsCleared: ds.progression.totalFloorsCleared,
+          flawlessFloorsCleared: ds.progression.flawlessFloorsCleared,
+        };
+      });
 
     const depthRanking = [...playersList]
       .filter((p) => p.highestFloor > 0)
@@ -190,7 +219,7 @@ export function DungeonGame({ onExit }: DungeonGameProps) {
       .slice(0, 20);
 
     return { depthRanking, explorerRanking };
-  }, [profile, dungeonState, activeTab]);
+  }, [profile, dungeonState, activeTab, rankingSyncTick]);
 
   async function persistDungeonState(
     nextState: PlayerDungeonState,
@@ -201,68 +230,139 @@ export function DungeonGame({ onExit }: DungeonGameProps) {
       packId?: string;
       packQty?: number;
       cardsAdd?: Record<string, number>;
+      onXpSettled?: (grantedXp: number, wasCapped: boolean) => void;
     },
-  ) {
-    if (!profile) {
-      setGuestDungeonState(nextState);
-      if (extraRewards?.cardsAdd) {
-        setGuestCardsMap((prev) => ({ ...prev, ...extraRewards.cardsAdd }));
-      }
-      return;
-    }
-
-    await auth.updateDungeonProfile((p) => {
-      const nextProfile = {
-        ...p,
-        dungeonState: nextState,
+  ): Promise<boolean> {
+    if (mutatingRef.current) return false;
+    mutatingRef.current = true;
+    setIsMutating(true);
+    try {
+      const serverNow = getAuthoritativeNow();
+      const stampedState: PlayerDungeonState = {
+        ...nextState,
+        updatedAtServerMs: serverNow.getTime(),
       };
-
-      if (extraRewards?.coins && extraRewards.coins > 0) {
-        creditCoinMetrics(nextProfile, extraRewards.coins);
-      }
-
-      if (extraRewards?.xp && extraRewards.xp > 0) {
-        const nextXp = (nextProfile.xp ?? 0) + extraRewards.xp;
-        nextProfile.xp = nextXp;
-        nextProfile.seasonXp = (nextProfile.seasonXp ?? 0) + extraRewards.xp;
-        const synced = syncLevelStageProgress({
-          xp: nextXp,
-          lifetimeMatches: nextProfile.matchesPlayed ?? 0,
-          lifetimeWins: nextProfile.wins ?? 0,
-          lifetimeDistinctGames: nextProfile.distinctGamesPlayed ?? 0,
-          currentLevel: nextProfile.level,
-          existingStage: nextProfile.levelStageProgress,
-        });
-        nextProfile.level = synced.level;
-        nextProfile.levelStageProgress = synced.stageProgress;
-      }
-
-      if (extraRewards?.chestId) {
-        const curChests = { ...(nextProfile.unopenedChests ?? {}) };
-        curChests[extraRewards.chestId] = (curChests[extraRewards.chestId] ?? 0) + 1;
-        nextProfile.unopenedChests = curChests;
-      }
-
-      if (extraRewards?.packId && extraRewards.packQty) {
-        const curPacks = { ...(nextProfile.unopenedPacks ?? {}) };
-        curPacks[extraRewards.packId] =
-          (curPacks[extraRewards.packId] ?? 0) + extraRewards.packQty;
-        nextProfile.unopenedPacks = curPacks;
-      }
-
-      if (extraRewards?.cardsAdd) {
-        const curCards = { ...(nextProfile.cards ?? {}) };
-        for (const [cId, qty] of Object.entries(extraRewards.cardsAdd)) {
-          curCards[cId] = Math.max(curCards[cId] ?? 0, qty);
+      if (!profile) {
+        setGuestDungeonState(stampedState);
+        if (extraRewards?.cardsAdd) {
+          setGuestCardsMap((prev) => ({ ...prev, ...extraRewards.cardsAdd }));
         }
-        nextProfile.cards = curCards;
+        extraRewards?.onXpSettled?.(extraRewards?.xp ?? 0, false);
+        return true;
       }
 
-      return nextProfile;
-    });
+      let grantedXpOut = 0;
+      let wasCappedOut = false;
+
+      await auth.updateDungeonProfile((p) => {
+        const nextProfile = {
+          ...p,
+          dungeonState: stampedState,
+        };
+
+        if (extraRewards?.coins && extraRewards.coins > 0) {
+          awardCoins(nextProfile, extraRewards.coins, "Recompensa da Masmorra", "partida");
+        }
+
+        if (extraRewards?.xp && extraRewards.xp > 0) {
+          const todayKey = getLocalDateKey(serverNow);
+          const capRes = applyDailyXpCap({
+            rawEarnedXp: extraRewards.xp,
+            currentDailyXp: nextProfile.dailyXp,
+            lastDateKey: nextProfile.dailyXpDate,
+            todayKey,
+            dailyCap: auth.adminConfig.dailyXpCap ?? DEFAULT_DAILY_XP_CAP,
+          });
+          grantedXpOut = capRes.grantedXp;
+          wasCappedOut = capRes.wasCapped;
+          nextProfile.dailyXp = capRes.newDailyXp;
+          nextProfile.dailyXpDate = capRes.dateKey;
+
+          if (capRes.grantedXp > 0) {
+            const prevLevel = nextProfile.level ?? 1;
+            const nextXp = (nextProfile.xp ?? 0) + capRes.grantedXp;
+            nextProfile.xp = nextXp;
+            nextProfile.seasonXp = (nextProfile.seasonXp ?? 0) + capRes.grantedXp;
+            try {
+              recordScoreLedgerEntry({
+                playerId: nextProfile.id || nextProfile.nick,
+                playerNick: nextProfile.nick || "Jogador",
+                type: "xp",
+                source: "partida",
+                amount: capRes.grantedXp,
+                balanceAfter: nextXp,
+                reason: "XP da Masmorra Lógica",
+                metadata: { gameId: "masmorra", mode: "dungeon" },
+              });
+            } catch {
+              /* ignore ledger error */
+            }
+            const synced = syncLevelStageProgress({
+              xp: nextXp,
+              lifetimeMatches: nextProfile.matchesPlayed ?? 0,
+              lifetimeWins: nextProfile.wins ?? 0,
+              lifetimeDistinctGames: nextProfile.distinctGamesPlayed ?? 0,
+              currentLevel: prevLevel,
+              existingStage: nextProfile.levelStageProgress,
+              maxAvailableGames: ALL_GAME_IDS.length,
+            });
+            nextProfile.level = synced.level;
+            nextProfile.levelStageProgress = synced.stageProgress;
+            if (synced.level > prevLevel) {
+              const seeded = new Set<number>(nextProfile.achievedLevelsPoints ?? []);
+              for (let lv = 2; lv <= prevLevel; lv++) seeded.add(lv);
+              nextProfile.achievedLevelsPoints = Array.from(seeded);
+              checkLevelPromotionPoints(
+                synced.level,
+                nextProfile,
+                1,
+                auth.adminConfig.coinRewardsConfig?.levelCoinStep ?? 10,
+              );
+              ensureLevel5InitialLetterUnlock(nextProfile);
+            }
+          }
+        }
+
+        if (extraRewards?.chestId) {
+          const curChests = { ...(nextProfile.unopenedChests ?? {}) };
+          curChests[extraRewards.chestId] = (curChests[extraRewards.chestId] ?? 0) + 1;
+          nextProfile.unopenedChests = curChests;
+        }
+
+        if (extraRewards?.packId && extraRewards.packQty) {
+          const curPacks = { ...(nextProfile.unopenedPacks ?? {}) };
+          curPacks[extraRewards.packId] =
+            (curPacks[extraRewards.packId] ?? 0) + extraRewards.packQty;
+          nextProfile.unopenedPacks = curPacks;
+        }
+
+        if (extraRewards?.cardsAdd) {
+          const curCards = { ...(nextProfile.cards ?? {}) };
+          for (const [cId, qty] of Object.entries(extraRewards.cardsAdd)) {
+            curCards[cId] = Math.max(curCards[cId] ?? 0, qty);
+          }
+          nextProfile.cards = curCards;
+        }
+
+        return nextProfile;
+      });
+      extraRewards?.onXpSettled?.(grantedXpOut, wasCappedOut);
+      return true;
+    } finally {
+      mutatingRef.current = false;
+      setIsMutating(false);
+    }
   }
 
   function handleToggleEquipCard(cardId: string) {
+    if (mutatingRef.current) return;
+    if (dungeonState.currentRun?.active) {
+      setStatusBanner({
+        tone: "info",
+        text: "🔒 Deck travado durante expedição ativa. Conclua ou extraia sua run antes de alterar as cartas.",
+      });
+      return;
+    }
     const current = [...activeEquippedIds];
     const existsIdx = current.indexOf(cardId);
     let nextIds: string[];
@@ -283,6 +383,7 @@ export function DungeonGame({ onExit }: DungeonGameProps) {
   }
 
   function handleStartPortal(startFloor: number) {
+    if (mutatingRef.current) return;
     if (!equippedValidation.valid) {
       setStatusBanner({
         tone: "error",
@@ -311,11 +412,18 @@ export function DungeonGame({ onExit }: DungeonGameProps) {
   }
 
   function handleResumeRun() {
-    if (!dungeonState.currentRun?.active) return;
-    if (!equippedValidation.valid) {
+    if (mutatingRef.current || !dungeonState.currentRun?.active) return;
+    const lockedCardsRes = resolveActiveRunCards(
+      dungeonState.currentRun,
+      ownedCardsMap,
+      cardCatalog,
+    );
+    if (!lockedCardsRes.valid) {
       setStatusBanner({
         tone: "error",
-        text: "Equipe 3 cartas válidas para retomar sua expedição.",
+        text:
+          lockedCardsRes.error ??
+          "As cartas travadas nesta expedição não estão disponíveis na sua coleção.",
       });
       return;
     }
@@ -323,7 +431,8 @@ export function DungeonGame({ onExit }: DungeonGameProps) {
     setInRunView(true);
   }
 
-  function handleCraft(recipeId: string) {
+  async function handleCraft(recipeId: string) {
+    if (mutatingRef.current) return;
     const res = craftDungeonRecipe(dungeonState, recipeId);
     if (!res.ok || !res.recipe) {
       setStatusBanner({
@@ -333,16 +442,16 @@ export function DungeonGame({ onExit }: DungeonGameProps) {
       return;
     }
     const recipe = res.recipe;
-    if (recipe.category === "pack") {
-      void persistDungeonState(res.state, {
-        packId: recipe.targetId,
-        packQty: recipe.quantity,
-      });
-    } else if (recipe.category === "chest") {
-      void persistDungeonState(res.state, { chestId: recipe.targetId });
-    } else {
-      void persistDungeonState(res.state, { coins: recipe.quantity });
-    }
+    const ok =
+      recipe.category === "pack"
+        ? await persistDungeonState(res.state, {
+            packId: recipe.targetId,
+            packQty: recipe.quantity,
+          })
+        : recipe.category === "chest"
+          ? await persistDungeonState(res.state, { chestId: recipe.targetId })
+          : await persistDungeonState(res.state, { coins: recipe.quantity });
+    if (!ok) return;
     setStatusBanner({
       tone: "success",
       text: `⚗️ Forja concluída! Você recebeu ${recipe.quantity}× ${recipe.name}.`,
@@ -351,23 +460,47 @@ export function DungeonGame({ onExit }: DungeonGameProps) {
 
   /* ------------------ Renderização da Run Ativa (Andar) ------------------ */
   if (inRunView) {
-    const runCards = equippedValidation.valid
-      ? equippedValidation.cards
-      : cardCatalog.slice(0, 3);
+    const activeRunCards = resolveActiveRunCards(
+      dungeonState.currentRun,
+      ownedCardsMap,
+      cardCatalog,
+    );
+    if (!activeRunCards.valid) {
+      return (
+        <div className="mx-auto max-w-xl rounded-3xl border-2 border-destructive/40 bg-card p-6 text-center space-y-4">
+          <h3 className="font-display text-lg font-black text-destructive">
+            Deck da Expedição Inválido
+          </h3>
+          <p className="text-sm text-muted-foreground">
+            {activeRunCards.error ??
+              "As cartas vinculadas a esta expedição não pertencem mais à sua coleção."}
+          </p>
+          <Button type="button" onClick={() => setInRunView(false)}>
+            Voltar ao Hub da Masmorra
+          </Button>
+        </div>
+      );
+    }
     return (
       <div className="space-y-4">
         <DungeonEncounterStage
           dungeonState={dungeonState}
-          equippedCards={runCards}
+          equippedCards={activeRunCards.cards}
           effectiveLevel={effectiveLevel}
+          isBusy={isMutating}
           onUpdateState={(nextState) => void persistDungeonState(nextState)}
           onFloorClearExtract={(nextState, coinsEarned, xpEarned, summaryTitle) => {
-            void persistDungeonState(nextState, { coins: coinsEarned, xp: xpEarned });
-            setInRunView(false);
-            setStatusBanner({
-              tone: "success",
-              text: `📜 ${summaryTitle}: +${coinsEarned} Moedas, +${xpEarned} XP e 100% dos itens salvos no inventário!`,
+            void persistDungeonState(nextState, {
+              coins: coinsEarned,
+              xp: xpEarned,
+              onXpSettled: (grantedXp, wasCapped) => {
+                setStatusBanner({
+                  tone: "success",
+                  text: `📜 ${summaryTitle}: +${coinsEarned} Moedas, +${grantedXp} XP${wasCapped ? " (teto diário atingido)" : ""} e 100% dos itens salvos no inventário!`,
+                });
+              },
             });
+            setInRunView(false);
           }}
           onGuardianClear={(
             nextState,
@@ -380,10 +513,12 @@ export function DungeonGame({ onExit }: DungeonGameProps) {
               chestId,
               coins: coinsEarned,
               xp: xpEarned,
-            });
-            setStatusBanner({
-              tone: "success",
-              text: `👑 Guardião do Andar ${unlockedCheckpoint} derrotado! Portal desbloqueado e Baú entregue na mochila.`,
+              onXpSettled: (grantedXp, wasCapped) => {
+                setStatusBanner({
+                  tone: "success",
+                  text: `👑 Guardião do Andar ${unlockedCheckpoint} derrotado! (+${grantedXp} XP${wasCapped ? " — teto diário" : ""}, +${coinsEarned} Moedas e Baú entregue na mochila)`,
+                });
+              },
             });
           }}
           onDefeatResolved={(nextState, keptCoins, summary) => {
@@ -434,20 +569,22 @@ export function DungeonGame({ onExit }: DungeonGameProps) {
             <Zap className="h-4 w-4 text-amber-300 fill-amber-300" />
             Estamina: {dungeonState.stamina.current} / {dungeonState.stamina.max}
           </div>
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            onClick={() => setAdmPanelOpen((v) => !v)}
-            className="rounded-xl bg-white/15 hover:bg-white/25 text-white border border-white/20 text-xs font-bold"
-          >
-            <Wrench className="h-3.5 w-3.5 mr-1" /> Ferramentas ADM
-          </Button>
+          {auth.isAdmin && (
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              onClick={() => setAdmPanelOpen((v) => !v)}
+              className="rounded-xl bg-white/15 hover:bg-white/25 text-white border border-white/20 text-xs font-bold"
+            >
+              <Wrench className="h-3.5 w-3.5 mr-1" /> Ferramentas ADM
+            </Button>
+          )}
         </div>
       </div>
 
-      {/* Painel Retrátil de Testes ADM */}
-      {admPanelOpen && (
+      {/* Painel Retrátil de Testes ADM (estritamente restrito a auth.isAdmin) */}
+      {auth.isAdmin && admPanelOpen && (
         <div className="rounded-3xl border-2 border-dashed border-purple-500/50 bg-purple-500/5 p-4 space-y-3 animate-in fade-in duration-200">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
@@ -488,6 +625,7 @@ export function DungeonGame({ onExit }: DungeonGameProps) {
               size="sm"
               variant="outline"
               onClick={() => {
+                if (!auth.isAdmin) return;
                 const next = {
                   ...dungeonState,
                   stamina: {
@@ -506,6 +644,7 @@ export function DungeonGame({ onExit }: DungeonGameProps) {
               size="sm"
               variant="outline"
               onClick={() => {
+                if (!auth.isAdmin) return;
                 const next = {
                   ...dungeonState,
                   stamina: {
@@ -525,6 +664,7 @@ export function DungeonGame({ onExit }: DungeonGameProps) {
               size="sm"
               variant="outline"
               onClick={() => {
+                if (!auth.isAdmin) return;
                 const grantCards: Record<string, number> = {};
                 for (const c of cardCatalog.slice(0, 5)) {
                   grantCards[c.id] = Math.max(ownedCardsMap[c.id] ?? 0, 1);
@@ -544,6 +684,7 @@ export function DungeonGame({ onExit }: DungeonGameProps) {
               size="sm"
               variant="outline"
               onClick={() => {
+                if (!auth.isAdmin) return;
                 const grantRes: DungeonResourceInventory = {};
                 for (const rId of DUNGEON_RESOURCE_IDS) grantRes[rId] = 5;
                 void persistDungeonState({
@@ -567,6 +708,7 @@ export function DungeonGame({ onExit }: DungeonGameProps) {
               size="sm"
               variant="outline"
               onClick={() => {
+                if (!auth.isAdmin) return;
                 void persistDungeonState({
                   ...dungeonState,
                   progression: {
@@ -600,6 +742,7 @@ export function DungeonGame({ onExit }: DungeonGameProps) {
                 type="button"
                 size="sm"
                 onClick={() => {
+                  if (!auth.isAdmin) return;
                   const res = recordExternalMatchForDungeonStamina(
                     dungeonState,
                     simGameId,
@@ -781,12 +924,15 @@ export function DungeonGame({ onExit }: DungeonGameProps) {
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={() => {
+                  disabled={isMutating}
+                  onClick={async () => {
+                    if (mutatingRef.current) return;
                     const ext = extractDungeonRun(dungeonState);
-                    void persistDungeonState(ext.state, {
+                    const ok = await persistDungeonState(ext.state, {
                       coins: ext.coinsEarned,
                       xp: ext.xpEarned,
                     });
+                    if (!ok) return;
                     setStatusBanner({
                       tone: "success",
                       text: `📜 Mochila extraída com 100% de segurança (+${ext.coinsEarned} Moedas, +${ext.xpEarned} XP).`,
@@ -798,6 +944,7 @@ export function DungeonGame({ onExit }: DungeonGameProps) {
                 </Button>
                 <Button
                   type="button"
+                  disabled={isMutating}
                   onClick={handleResumeRun}
                   className="rounded-xl font-display font-black"
                 >
@@ -1035,7 +1182,7 @@ export function DungeonGame({ onExit }: DungeonGameProps) {
                     <div className="space-y-1.5">
                       <Button
                         type="button"
-                        disabled={!canClick}
+                        disabled={!canClick || isMutating}
                         onClick={() => handleStartPortal(portal.startFloor)}
                         className="w-full h-11 rounded-2xl bg-white text-slate-950 hover:bg-white/90 font-display font-black text-xs disabled:opacity-50"
                       >
@@ -1151,8 +1298,8 @@ export function DungeonGame({ onExit }: DungeonGameProps) {
 
                   <Button
                     type="button"
-                    disabled={!canAfford}
-                    onClick={() => handleCraft(recipe.id)}
+                    disabled={!canAfford || isMutating}
+                    onClick={() => void handleCraft(recipe.id)}
                     className="w-full h-10 rounded-xl font-display font-black text-xs"
                   >
                     <Sparkles className="h-3.5 w-3.5 mr-1.5" /> Forjar Agora

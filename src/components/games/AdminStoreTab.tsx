@@ -34,6 +34,7 @@ import {
   extractCustomAvatarsForStorage,
   getAvatarCategory,
   isSafeCosmeticImageUrl,
+  measurePlatformCatalogsBytes,
   mergeWithDefaultAuras,
   mergeWithDefaultAvatars,
   type AuraDefinition,
@@ -41,6 +42,7 @@ import {
   type AvatarDefinition,
   type AvatarLetterVariant,
 } from "@/lib/cosmetics-catalog";
+import type { MergeAdminConfigWriteOptions } from "@/lib/admin-config-guard";
 import type { PlatformAdminConfig } from "@/lib/game-codes";
 import { usePlayerAuth } from "@/lib/player-auth";
 import { isAdminOrTestAccount } from "@/lib/player-profile";
@@ -64,7 +66,7 @@ import { getAuraPresentation, PlayerAvatarBadge } from "./PlayerAvatarBadge";
 interface AdminStoreTabProps {
   draft: PlatformAdminConfig;
   setDraft: (next: PlatformAdminConfig) => void;
-  onSaveConfig: (next: PlatformAdminConfig) => Promise<void> | void;
+  onSaveConfig: (next: PlatformAdminConfig, opts?: MergeAdminConfigWriteOptions) => Promise<void> | void;
   onShowFeedback?: (msg: string) => void;
   students?: PlayerProfile[];
   syncingStudents?: boolean;
@@ -203,16 +205,29 @@ export function AdminStoreTab({
     secreta: coinCfg.medalCoinsByRarity?.secreta ?? MEDAL_COINS_REWARDS.secreta,
   };
 
-  async function saveNext(next: PlatformAdminConfig, msg: string) {
+  async function saveNext(
+    next: PlatformAdminConfig,
+    msg: string,
+    opts?: MergeAdminConfigWriteOptions,
+  ) {
+    const payloadBytes = measurePlatformCatalogsBytes(next);
+    if (payloadBytes > 98_000) {
+      onShowFeedback?.(
+        `⚠️ Catálogo excedeu 98 KB (${Math.round(payloadBytes / 1024)} KB) — limite máximo do PlayFab é 100 KB. Remova imagens base64 grandes ou itens antigos antes de salvar.`,
+      );
+      return;
+    }
     setSaving(true);
     try {
       setDraft(next);
-      await onSaveConfig(next);
+      await onSaveConfig(next, opts);
       const cloudErr = getLastAdminCloudSyncError();
       onShowFeedback?.(
         cloudErr
           ? `⚠️ Salvo apenas localmente — erro ao publicar no PlayFab: ${cloudErr}`
-          : msg,
+          : payloadBytes >= 85_000
+            ? `${msg} (Aviso: catálogo em ${Math.round(payloadBytes / 1024)} KB de 100 KB.)`
+            : msg,
       );
     } finally {
       setSaving(false);
@@ -235,7 +250,7 @@ export function AdminStoreTab({
       name: cleanName,
       description: newAvatarDesc.trim() || "Avatar personalizado criado pelo ADM.",
       imageUrl: cleanUrl,
-      priceCoins: Math.max(0, Math.floor(newAvatarPrice || 0)),
+      priceCoins: Math.max(1, Math.floor(newAvatarPrice || 1)),
       featured: newAvatarFeatured,
       enabled: true,
       isDefault: false,
@@ -264,9 +279,11 @@ export function AdminStoreTab({
     const target = avatars.find((a) => a.id === id);
     if (!window.confirm(`Deseja excluir o avatar customizado "${target?.name ?? id}"?`)) return;
     const nextList = avatars.filter((a) => a.id !== id);
+    const extracted = extractCustomAvatarsForStorage(nextList);
     await saveNext(
-      { ...draft, avatarsCatalog: extractCustomAvatarsForStorage(nextList) },
+      { ...draft, avatarsCatalog: extracted },
       "🗑️ Avatar customizado removido.",
+      extracted.length === 0 ? { allowEmptyCollections: ["avatarsCatalog"] } : undefined,
     );
   }
 
@@ -638,9 +655,9 @@ export function AdminStoreTab({
                   <Label className="text-[11px] font-bold">Preço (Moedas)</Label>
                   <Input
                     type="number"
-                    min={0}
+                    min={1}
                     value={newAvatarPrice}
-                    onChange={(e) => setNewAvatarPrice(Math.max(0, Number(e.target.value) || 0))}
+                    onChange={(e) => setNewAvatarPrice(Math.max(1, Math.floor(Number(e.target.value) || 1)))}
                     className="h-9 rounded-xl text-xs"
                   />
                 </div>
@@ -758,10 +775,10 @@ export function AdminStoreTab({
                     <Input
                       key={`${av.id}_${av.priceCoins}`}
                       type="number"
-                      min={0}
+                      min={1}
                       defaultValue={av.priceCoins}
                       onBlur={(e) => {
-                        const v = Math.max(0, Math.floor(Number(e.target.value) || 0));
+                        const v = Math.max(1, Math.floor(Number(e.target.value) || 1));
                         if (v !== av.priceCoins) void handleUpdateAvatar(av.id, { priceCoins: v });
                       }}
                       className="h-7 w-16 rounded-lg text-[11px] text-center"
@@ -827,10 +844,10 @@ export function AdminStoreTab({
                   <Input
                     key={`${aura.id}_${aura.priceCoins}`}
                     type="number"
-                    min={0}
+                    min={1}
                     defaultValue={aura.priceCoins}
                     onBlur={(e) => {
-                      const v = Math.max(0, Math.floor(Number(e.target.value) || 0));
+                      const v = Math.max(1, Math.floor(Number(e.target.value) || 1));
                       if (v !== aura.priceCoins) void handleUpdateAura(aura.id, { priceCoins: v });
                     }}
                     className="h-7 w-16 rounded-lg text-[11px] text-center bg-background"

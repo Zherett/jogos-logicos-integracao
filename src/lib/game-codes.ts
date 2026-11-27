@@ -181,6 +181,8 @@ export interface PlatformAdminConfig {
   rankedSeasonStartAt?: string;
   rankedSeasonEndAt?: string | null;
   rankedSeasonDurationDays?: number; // Padrão: 14 dias (2 semanas)
+  /** Quando true, usa nomes fixos versionáveis (`XP_Season_Current`, `Best_<game>_Current`) em vez de `_S<N>` para não estourar limite de estatísticas do PlayFab (QUOTA-03) */
+  useVersionedSeasonStats?: boolean;
   rankedOpenHour?: number;
   rankedCloseHour?: number;
   rankedForceOpen?: boolean;
@@ -233,7 +235,7 @@ export interface PlatformAdminConfig {
   /** Pausar a rotação automática do slide do quadro de avisos */
   pauseNoticeBoard?: boolean;
   /** Mensagens transmitidas do Correio / Caixa de Entrada */
-  inboxMessages?: any[];
+  inboxMessages?: Array<Partial<import("./inbox-messages.ts").SystemInboxMessage> & { id?: string }>;
   /** IDs de mensagens com envio cancelado pelo Administrador */
   canceledInboxMessageIds?: string[];
   /** Regras de mensagens programadas e recorrentes */
@@ -438,6 +440,7 @@ export const DEFAULT_ADMIN_CONFIG: PlatformAdminConfig = {
   rankedSeasonEndAt: null,
   rankedSeasonDurationDays: 14,
   rankedSeasonCycleMode: "monthly",
+  useVersionedSeasonStats: false,
   tournamentPodiumRewards: {
     1: { ...DEFAULT_TOURNAMENT_PODIUM_REWARDS[1], items: [] },
     2: { ...DEFAULT_TOURNAMENT_PODIUM_REWARDS[2], items: [] },
@@ -484,32 +487,40 @@ export function normalizeCode(raw: string): string {
 let cachedAdminConfigRaw: string | null = null;
 let cachedAdminConfigObj: PlatformAdminConfig | null = null;
 
+function clonePlatformAdminConfig(cfg: PlatformAdminConfig): PlatformAdminConfig {
+  try {
+    if (typeof structuredClone === "function") {
+      return structuredClone(cfg);
+    }
+  } catch {
+    /* ignore */
+  }
+  return JSON.parse(JSON.stringify(cfg)) as PlatformAdminConfig;
+}
+
 export function loadAdminConfig(): PlatformAdminConfig {
-  if (typeof window === "undefined") return { ...DEFAULT_ADMIN_CONFIG };
+  if (typeof window === "undefined") return clonePlatformAdminConfig(DEFAULT_ADMIN_CONFIG);
   try {
     let raw = window.localStorage.getItem(ADMIN_CONFIG_KEY);
     // Migration: ensure default is unlocked initially for all devices
     const hasMigrated = window.localStorage.getItem(INITIAL_UNLOCKED_MIGRATION_KEY);
     if (!hasMigrated) {
-      window.localStorage.setItem(INITIAL_UNLOCKED_MIGRATION_KEY, "1");
+      safeLocalStorageSet(INITIAL_UNLOCKED_MIGRATION_KEY, "1");
       if (raw) {
         try {
           const p = JSON.parse(raw);
           p.requireCodeGate = false;
           raw = JSON.stringify(p);
-          window.localStorage.setItem(ADMIN_CONFIG_KEY, raw);
+          safeLocalStorageSet(ADMIN_CONFIG_KEY, raw);
         } catch {
           // ignore
         }
       }
     }
 
-    if (!raw) return { ...DEFAULT_ADMIN_CONFIG, enabledGames: { ...DEFAULT_ENABLED_GAMES } };
+    if (!raw) return clonePlatformAdminConfig(DEFAULT_ADMIN_CONFIG);
     if (raw === cachedAdminConfigRaw && cachedAdminConfigObj) {
-      return {
-        ...cachedAdminConfigObj,
-        enabledGames: { ...cachedAdminConfigObj.enabledGames },
-      };
+      return clonePlatformAdminConfig(cachedAdminConfigObj);
     }
     const parsed = JSON.parse(raw) as Partial<PlatformAdminConfig>;
     const built: PlatformAdminConfig = {
@@ -568,12 +579,9 @@ export function loadAdminConfig(): PlatformAdminConfig {
     };
     cachedAdminConfigRaw = raw;
     cachedAdminConfigObj = built;
-    return {
-      ...built,
-      enabledGames: { ...built.enabledGames },
-    };
+    return clonePlatformAdminConfig(built);
   } catch {
-    return { ...DEFAULT_ADMIN_CONFIG };
+    return clonePlatformAdminConfig(DEFAULT_ADMIN_CONFIG);
   }
 }
 
@@ -666,7 +674,7 @@ export function loadUnlocked(): GameId[] {
 
 export function saveUnlocked(list: GameId[]) {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(UNLOCK_KEY, JSON.stringify([...new Set(list)]));
+  safeLocalStorageSet(UNLOCK_KEY, JSON.stringify([...new Set(list)]));
 }
 
 export function clearUnlocked() {

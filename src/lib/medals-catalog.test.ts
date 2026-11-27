@@ -2553,4 +2553,112 @@ describe("Sistema Completo de Medalhas e Inventário", () => {
     assert.equal(agg.get("logica")?.plays, 2);
     assert.equal(agg.get("logica")?.wins, 0);
   });
+
+  it("Bloco 1.3 (ECON-20): tolera raridade desconhecida sem crash, exclui jogos ADM-only de all_game_medals e valida gameId/minScore em event_flawless", () => {
+    const customUnknown: MedalDefinition = {
+      id: "m_unknown_rar",
+      title: "Custom Rara",
+      description: "Teste",
+      category: "evento",
+      rarity: "mitica" as any,
+      iconName: "star",
+      condition: { type: "manual_event" },
+    };
+    const top = getTopShowcaseMedals(
+      [{ medalId: customUnknown.id, unlockedAt: "2026-11-26T12:00:00.000Z" }],
+      [customUnknown],
+      3,
+    );
+    assert.equal(top.length, 1);
+
+    // Aluno não precisa da medalha de mestre de jogo restrito a ADM (spacequest adminOnly)
+    const enabledExceptNone: Partial<Record<GameId, boolean>> = {};
+    const adminOnlySpace: Partial<Record<GameId, boolean>> = { spacequest: true };
+    const unlockedAllExceptSpace = ALL_GAME_IDS.filter((g) => g !== "spacequest").map((g) => ({
+      medalId: `game_${g}_lvl_master`,
+      unlockedAt: "2026-11-25T12:00:00.000Z",
+    }));
+    const studentMetaProfile: PlayerProfile = {
+      id: "st_meta",
+      nick: "MetaStu",
+      nickNormalized: "metastu",
+      full_name: "META STU",
+      school: "Escola Teste",
+      grade: "7º ano",
+      birthdate: "2013-01-01",
+      xp: 5000,
+      seasonXp: 5000,
+      level: 8,
+      wins: 100,
+      matchesPlayed: 100,
+      badges: [],
+      seasonId: 1,
+      unlockedMedals: unlockedAllExceptSpace,
+    };
+    const metaDef: MedalDefinition = {
+      id: "meta_all_games_test",
+      title: "Mestre Total",
+      description: "Todos os jogos ativos",
+      category: "meta",
+      rarity: "diamante",
+      iconName: "crown",
+      condition: { type: "all_game_medals" },
+    };
+    const awardedMeta = evaluatePlayerMedals(
+      {
+        profile: studentMetaProfile,
+        stats: [],
+        enabledGames: enabledExceptNone,
+        adminOnlyGames: adminOnlySpace,
+      },
+      [metaDef],
+    );
+    assert.equal(awardedMeta.some((m) => m.id === "meta_all_games_test"), true);
+
+    // event_flawless deve respeitar gameId e minScore
+    const evFlawlessMedal: MedalDefinition = {
+      id: "ev_flawless_logica",
+      title: "Perfeito Lógica",
+      description: "Sem erros em Lógica >= 200",
+      category: "evento",
+      rarity: "ouro",
+      iconName: "star",
+      eventId: "ev_fl",
+      eventRequirement: { type: "event_flawless", threshold: 1, gameId: "logica", minScore: 200 },
+      condition: { type: "manual_event" },
+    };
+    const profWrongGame: PlayerProfile = {
+      ...studentMetaProfile,
+      unlockedMedals: [],
+      eventProgress: {
+        ev_fl: {
+          cycleKey: "ev_fl_1",
+          flawlessCount: 2,
+          flawlessByGame: { rpg: 2, logica: 0 },
+          bestScoreByGame: { rpg: 500, logica: 150 },
+        },
+      },
+    };
+    assert.equal(
+      evaluatePlayerMedals({ profile: profWrongGame, stats: [] }, [evFlawlessMedal]).length,
+      0,
+      "Não pode desbloquear com flawless apenas de outro jogo/pontuação menor",
+    );
+    const profRightGame: PlayerProfile = {
+      ...studentMetaProfile,
+      unlockedMedals: [],
+      eventProgress: {
+        ev_fl: {
+          cycleKey: "ev_fl_1",
+          flawlessCount: 1,
+          flawlessByGame: { logica: 1 },
+          bestScoreByGame: { logica: 250 },
+        },
+      },
+    };
+    assert.equal(
+      evaluatePlayerMedals({ profile: profRightGame, stats: [] }, [evFlawlessMedal]).length,
+      1,
+    );
+  });
 });

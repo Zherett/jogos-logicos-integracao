@@ -1,4 +1,5 @@
 import { GAME_NAMES, type GameId } from "./game-storage.ts";
+import { safeLocalStorageSet } from "./storage-guard.ts";
 
 export type EventBonusType = "dobro_xp" | "xp_1_5x" | "aumentar_limite_diario" | "personalizado";
 
@@ -84,7 +85,7 @@ export function loadSpecialEvents(): SpecialEvent[] {
 export function saveSpecialEvents(events: SpecialEvent[]): void {
   if (typeof window === "undefined") return;
   try {
-    localStorage.setItem(SPECIAL_EVENTS_KEY, JSON.stringify(events));
+    safeLocalStorageSet(SPECIAL_EVENTS_KEY, JSON.stringify(events));
     // Trigger custom event so reactive UI (like menu and cards) can refresh immediately
     window.dispatchEvent(new CustomEvent("desafios:special-events-updated"));
   } catch {
@@ -126,9 +127,35 @@ export function getEventLinkedMedalIds(ev: {
   return ids;
 }
 
+const COARI_OFFSET_MS = -4 * 60 * 60 * 1000;
+
+function getCoariDateParts(date: Date): {
+  year: number;
+  month: number; // 0..11
+  day: number;
+  dayOfWeek: number;
+  hours: number;
+  minutes: number;
+} {
+  const shifted = new Date(date.getTime() + COARI_OFFSET_MS);
+  return {
+    year: shifted.getUTCFullYear(),
+    month: shifted.getUTCMonth(),
+    day: shifted.getUTCDate(),
+    dayOfWeek: shifted.getUTCDay(),
+    hours: shifted.getUTCHours(),
+    minutes: shifted.getUTCMinutes(),
+  };
+}
+
+function getCoariDateKey(date = new Date()): string {
+  const { year, month, day } = getCoariDateParts(date);
+  return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
 /**
  * Retorna a chave de ciclo do evento para controle de progresso estritamente durante aquela edição.
- * Se o evento for pontual, a chave é o startsAt. Se for recorrente, a chave é o dia YYYY-MM-DD.
+ * Se o evento for pontual, a chave é o startsAt. Se for recorrente, a chave é o dia YYYY-MM-DD em Coari (UTC-4).
  */
 export function getEventCycleKey(
   ev: { id: string; startsAt?: string },
@@ -137,10 +164,7 @@ export function getEventCycleKey(
   if (ev.startsAt) {
     return `${ev.id}_${ev.startsAt}`;
   }
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, "0");
-  const d = String(now.getDate()).padStart(2, "0");
-  return `${ev.id}_${y}-${m}-${d}`;
+  return `${ev.id}_${getCoariDateKey(now)}`;
 }
 
 export interface ActiveEventBonuses {
@@ -183,6 +207,7 @@ export function getActiveEventBonuses(
   now = new Date(),
   recurringEvents?: RecurringEvent[],
   isRankedMatch = false,
+  isX1Match = false,
 ): ActiveEventBonuses {
   const resolvedSpecial = activeEvents ?? getActiveSpecialEvents(undefined, now);
   const resolvedRecurring = recurringEvents ?? getActiveRecurringEvents(undefined, now);
@@ -198,11 +223,16 @@ export function getActiveEventBonuses(
     ...resolvedRecurring.filter((e) => isRecurringEventActive(e, now)),
   ];
 
+  const isX1Context = Boolean(isX1Match || (gameId as string) === "modo_x1");
+  const isRankedContext = Boolean(isRankedMatch || (gameId as string) === "modo_ranqueado");
+
   for (const ev of allActive) {
-    const isRankedScope = ev.scope === "modo_ranqueado";
-    const inScope = isRankedScope
-      ? Boolean(isRankedMatch || (gameId as any) === "modo_ranqueado")
-      : ev.scope === "todos" || ev.scope === gameId;
+    const inScope =
+      ev.scope === "modo_ranqueado"
+        ? isRankedContext
+        : ev.scope === "modo_x1"
+          ? isX1Context
+          : ev.scope === "todos" || ev.scope === gameId;
 
     if (inScope) {
       if (!activeEventNames.includes(ev.title)) {
@@ -211,8 +241,9 @@ export function getActiveEventBonuses(
 
       // Linha 1: Multiplicador de XP (+0.5x, +1.0x, etc.)
       let mult = ev.xpMultiplier;
-      const bType = "bonusType" in ev ? (ev as any).bonusType : undefined;
-      const bVal = "bonusValue" in ev ? (ev as any).bonusValue : undefined;
+      const legacyEv = ev as { bonusType?: EventBonusType; bonusValue?: number };
+      const bType = "bonusType" in ev ? legacyEv.bonusType : undefined;
+      const bVal = "bonusValue" in ev ? legacyEv.bonusValue : undefined;
       if (bType === "dobro_xp" && (!mult || mult < 2)) mult = 2;
       if (bType === "xp_1_5x" && (!mult || mult < 1.5)) mult = 1.5;
       if (mult && mult > 1) {
@@ -235,7 +266,7 @@ export function getActiveEventBonuses(
       if (
         ev.rankedMultiplier &&
         ev.rankedMultiplier > 1 &&
-        (isRankedMatch || (gameId as any) === "modo_ranqueado")
+        (isRankedMatch || (gameId as string) === "modo_ranqueado")
       ) {
         extraRankedMultiplier += (ev.rankedMultiplier - 1);
       }
@@ -555,7 +586,7 @@ export function loadRecurringEvents(): RecurringEvent[] {
   try {
     const raw = localStorage.getItem(RECURRING_EVENTS_KEY);
     if (raw === null) {
-      localStorage.setItem(RECURRING_EVENTS_KEY, JSON.stringify(DEFAULT_RECURRING_EVENTS));
+      safeLocalStorageSet(RECURRING_EVENTS_KEY, JSON.stringify(DEFAULT_RECURRING_EVENTS));
       return [...DEFAULT_RECURRING_EVENTS];
     }
     const list = JSON.parse(raw) as RecurringEvent[];
@@ -568,7 +599,7 @@ export function loadRecurringEvents(): RecurringEvent[] {
 export function saveRecurringEvents(events: RecurringEvent[]): void {
   if (typeof window === "undefined") return;
   try {
-    localStorage.setItem(RECURRING_EVENTS_KEY, JSON.stringify(events));
+    safeLocalStorageSet(RECURRING_EVENTS_KEY, JSON.stringify(events));
     window.dispatchEvent(new CustomEvent("desafios:special-events-updated"));
   } catch {
     // ignore
@@ -577,11 +608,9 @@ export function saveRecurringEvents(events: RecurringEvent[]): void {
 
 export function isRecurringEventActive(event: RecurringEvent, now = new Date()): boolean {
   if (!event.active) return false;
-  const currentDay = now.getDay();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  const todayDateStr = `${year}-${month}-${day}`;
+  const coari = getCoariDateParts(now);
+  const currentDay = coari.dayOfWeek;
+  const todayDateStr = getCoariDateKey(now);
 
   const matchesDayOfWeek = (event.daysOfWeek ?? []).includes(currentDay);
   const matchesDate = (event.specificDates ?? []).includes(todayDateStr);
@@ -778,8 +807,9 @@ export function getAllActiveEvents(
 ): ActiveEventDisplayItem[] {
   const items: ActiveEventDisplayItem[] = [];
 
-  // 1. Eventos Pontuais (SpecialEvent)
+  // 1. Eventos Pontuais (SpecialEvent) — filtra expirados/futuros mesmo quando lista bruta é informada
   for (const ev of specialEvents) {
+    if (!isEventActive(ev, now)) continue;
     const badges = buildEventBonusBadges(ev);
     const highlight = badges[0]?.label ?? "⚡ Bônus Especial";
 
@@ -802,15 +832,15 @@ export function getAllActiveEvents(
     });
   }
 
-  // 2. Eventos Recorrentes (RecurringEvent)
-  for (const ev of recurringEvents) {
-    const endOfDay = new Date(now);
-    endOfDay.setHours(23, 59, 59, 999);
+  // 2. Eventos Recorrentes (RecurringEvent) — filtra inativos fora do dia Coari UTC-4
+  const coari = getCoariDateParts(now);
+  const endOfDay = new Date(
+    Date.UTC(coari.year, coari.month, coari.day, 23, 59, 59, 999) - COARI_OFFSET_MS,
+  );
+  const todayDateStr = getCoariDateKey(now);
 
-    const year = now.getFullYear();
-    const month = String(now.getMonth() + 1).padStart(2, "0");
-    const day = String(now.getDate()).padStart(2, "0");
-    const todayDateStr = `${year}-${month}-${day}`;
+  for (const ev of recurringEvents) {
+    if (!isRecurringEventActive(ev, now)) continue;
 
     const badges = buildEventBonusBadges(ev);
     const highlight = badges[0]?.label ?? "⚡ Bônus Ativo";
@@ -868,10 +898,7 @@ export function getEventActivationKey(
   if (!isRecurring) {
     return `ev_${event.id}_${event.startsAt ?? "once"}`;
   }
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, "0");
-  const d = String(now.getDate()).padStart(2, "0");
-  return `rec_${event.id}_${y}-${m}-${d}`;
+  return `rec_${event.id}_${getCoariDateKey(now)}`;
 }
 
 export interface EventProgressSnapshot {

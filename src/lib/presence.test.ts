@@ -12,6 +12,8 @@ import {
   getPlayerCurrentActivity,
   getLatestProfileActivityMs,
   recordPlayerHeartbeat,
+  applyRemotePresenceHeartbeatsBatch,
+  getPlayerPresenceData,
   compareStudentsByPresenceAndLevel,
   sortStudentsByPresenceAndLevel,
   PRESENCE_SORT_PRIORITY,
@@ -116,6 +118,65 @@ describe("Player Presence System (computePresenceStatus)", () => {
 
     // Nunca conectou
     assert.equal(formatPresenceTimeAgo(null, BASE_NOW), "Nunca conectou");
+
+    // X1-13: anteontem no calendário Coari UTC-4 (< 48h corridas) NÃO deve aparecer como "Online ontem"
+    const coariNowMs = Date.UTC(2026, 9, 10, 14, 0, 0); // 10:00 UTC-4 (10/10)
+    const twoDaysCalendarLess48h = Date.UTC(2026, 9, 9, 3, 0, 0); // 23:00 UTC-4 (08/10) -> ~35h atrás, mas 2 dias de calendário
+    assert.equal(
+      formatPresenceTimeAgo(
+        { lastActiveAt: twoDaysCalendarLess48h, lastSeenAt: 0, disconnected: true },
+        coariNowMs,
+      ),
+      "Online há 2 dias",
+    );
+    const yesterdayCalendar = Date.UTC(2026, 9, 10, 2, 0, 0); // 22:00 UTC-4 (09/10) -> 12h/ontem? No, 12h < 24h; 09/10 10:00 vs 10/10 14:00:
+    const yesterdayOver24h = Date.UTC(2026, 9, 9, 13, 30, 0); // 09:30 UTC-4 (09/10) -> 24.5h atrás
+    assert.equal(
+      formatPresenceTimeAgo(
+        { lastActiveAt: yesterdayOver24h, lastSeenAt: 0, disconnected: true },
+        coariNowMs,
+      ),
+      "Online ontem às 09:30",
+    );
+    assert.ok(yesterdayCalendar > 0);
+  });
+
+  it("X1-10: applyRemotePresenceHeartbeatsBatch aplica múltiplos registros em lote único no storage", () => {
+    const store = new Map<string, string>();
+    const prevWindow = (globalThis as any).window;
+    (globalThis as any).window = {
+      localStorage: {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => void store.set(k, v),
+        removeItem: (k: string) => void store.delete(k),
+      },
+    };
+    try {
+      const now = Date.now();
+      const count = applyRemotePresenceHeartbeatsBatch([
+        {
+          rawJson: JSON.stringify({
+            playerId: "stu_b1",
+            nick: "BatchUm",
+            lastSeenAt: now - 5000,
+            lastActiveAt: now - 5000,
+          }),
+        },
+        {
+          rawJson: JSON.stringify({
+            playerId: "stu_b2",
+            nick: "BatchDois",
+            lastSeenAt: now - 8000,
+            lastActiveAt: now - 8000,
+          }),
+        },
+      ]);
+      assert.equal(count, 2);
+      assert.ok(getPlayerPresenceData("stu_b1"));
+      assert.ok(getPlayerPresenceData("stu_b2"));
+    } finally {
+      (globalThis as any).window = prevWindow;
+    }
   });
 
   it("handles clock-skew-proof idleMs and explicit disconnect flag accurately", () => {
@@ -315,6 +376,36 @@ describe("Player Presence System (computePresenceStatus)", () => {
           { presenceStatus: "offline", level: 10, xp: 9999, nick: "B" }
         ) < 0
       );
+    });
+
+    it("QUOTA-06: grava presença em chave canônica única sem amplificação 4x e preserva leitura por todos aliases", () => {
+      const store = new Map<string, string>();
+      const prevWindow = (globalThis as any).window;
+      (globalThis as any).window = {
+        localStorage: {
+          getItem: (k: string) => store.get(k) ?? null,
+          setItem: (k: string, v: string) => void store.set(k, v),
+          removeItem: (k: string) => void store.delete(k),
+        },
+        dispatchEvent: () => true,
+      };
+      try {
+        recordPlayerHeartbeat("pf_joao", {
+          playfabId: "PF_999",
+          nick: "João",
+          nickNormalized: "joao",
+          lastSeenAt: Date.now(),
+        });
+        const raw = store.get("desafios-presence-store-v1");
+        assert.ok(raw);
+        const parsed = JSON.parse(raw!);
+        assert.equal(Object.keys(parsed.players).length, 1);
+        assert.ok(getPlayerPresenceData("pf_joao", { playfabId: "PF_999", nick: "João", nickNormalized: "joao" }));
+        assert.ok(getPlayerPresenceData("PF_999"));
+        assert.ok(getPlayerPresenceData("joao"));
+      } finally {
+        (globalThis as any).window = prevWindow;
+      }
     });
   });
 });

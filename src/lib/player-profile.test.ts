@@ -26,6 +26,7 @@ import {
   normalizeBirthdatePasswordInput,
   passwordFromBirthdate,
   playfabUsernameFromNick,
+  prunePlayerProfileArrays,
   nickSlug,
   isPioneerExcludedAccount,
   splitStudentNameForPrivacy,
@@ -458,6 +459,10 @@ describe("Perfil do Jogador, Escolas, Trava de Níveis (1..10) e Limite Diário 
     assert.deepEqual(
       RANKING_SERIES_OPTIONS.map((o) => o.shortLabel),
       ["1ª Etapa (5º ano)", "2ª Etapa (6º - 9º ano)", "3ª Etapa (15+)"],
+    );
+    assert.equal(
+      RANKING_SERIES_OPTIONS.find((o) => o.id === "etapa_2")?.description.includes("Agenor Smith"),
+      true,
     );
 
     const aluno5Ano = {
@@ -1169,5 +1174,105 @@ describe("Perfil do Jogador, Escolas, Trava de Níveis (1..10) e Limite Diário 
     assert.equal(stageForPlayer("Raimundo Bezerra", "", new Date()).id, "etapa_2");
     assert.equal(stageForPlayer("Raimunda Cruz", "", new Date()).id, "etapa_1");
     assert.equal(stageForPlayer("Nenhuma", "", new Date()).id, "etapa_3");
+  });
+
+  it("Bloco 1.3 (ECON-16/ECON-20): alinha level/checklist na Opção B, zera cap em dia anterior no computeMatchDisplayXp e preserva Pedro_Lord", () => {
+    // 1. Opção B: calculatePlayerLevel e levelProgress concordam quando há stageProgress no nível 4 (ambos permanecem Nível 4 em 0/12)
+    const stage4Reset = { forLevel: 4, matches: 0, wins: 0, distinctGames: [] as string[] };
+    const lvl = calculatePlayerLevel({
+      xp: 2000,
+      matchesPlayed: 50,
+      wins: 30,
+      distinctGames: 9,
+      currentLevel: 4,
+      stageProgress: stage4Reset,
+    });
+    const lp = levelProgress({
+      xp: 2000,
+      matchesPlayed: 50,
+      wins: 30,
+      distinctGames: 9,
+      currentLevel: 4,
+      stageProgress: stage4Reset,
+    });
+    assert.equal(lvl, 4);
+    assert.equal(lp.level, 4);
+    assert.equal(lp.checklist.find((c) => c.key === "matches")?.current, 0);
+
+    // 2. computeMatchDisplayXp ignora currentDailyXp se dailyXpDate for de ontem (X1 e Ranqueado)
+    const now = new Date("2026-11-26T18:00:00.000Z"); // 2026-11-26 Coari
+    const x1NewDay = computeMatchDisplayXp({
+      score: 100,
+      correct: 5,
+      won: true,
+      mode: "x1_online",
+      currentDailyXp: 100,
+      dailyXpCap: 100,
+      dailyXpDate: "2026-11-25",
+      now,
+    });
+    assert.equal(x1NewDay.atDailyCap, false);
+    assert.equal(x1NewDay.finalXp, 25);
+
+    const tourNewDay = computeMatchDisplayXp({
+      score: 100,
+      correct: 5,
+      won: true,
+      mode: "torneio_semanal",
+      currentDailyXp: 100,
+      dailyXpCap: 100,
+      dailyXpDate: "2026-11-25",
+      now,
+    });
+    assert.equal(tourNewDay.atDailyCap, false);
+    assert.equal(tourNewDay.finalXp, 10);
+
+    // 3. isPioneerExcludedAccount não exclui alunos legítimos como Pedro_Lord ou badminton
+    assert.equal(isPioneerExcludedAccount({ nick: "Pedro_Lord", nickNormalized: "pedro_lord", full_name: "PEDRO LORD SILVA" }), false);
+    assert.equal(isPioneerExcludedAccount({ nick: "badminton", nickNormalized: "badminton", full_name: "CARLOS ADMINISTRO" }), false);
+
+    // 4. QUOTA-04: prunePlayerProfileArrays poda activeDates antigos preservando totalActiveDaysCount e deduplica claims
+    const oldDates = Array.from({ length: 120 }, (_, i) => {
+      const dt = new Date(Date.UTC(2026, 7, 1 + i));
+      return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
+    });
+    const profToPrune: {
+      activeDates: string[];
+      totalActiveDaysCount?: number;
+      claimedInboxRewardIds: string[];
+      claimedPromoCodeIds: string[];
+    } = {
+      activeDates: oldDates,
+      claimedInboxRewardIds: ["m1", "m1", "m2"],
+      claimedPromoCodeIds: ["c1", "c1"],
+    };
+    prunePlayerProfileArrays(profToPrune, { todayKey: "2026-11-28", maxActiveDatesDays: 90 });
+    assert.equal(profToPrune.totalActiveDaysCount, 120);
+    assert.ok(profToPrune.activeDates.length <= 91);
+    assert.deepEqual(profToPrune.claimedInboxRewardIds, ["m1", "m2"]);
+    assert.deepEqual(profToPrune.claimedPromoCodeIds, ["c1"]);
+  });
+
+  it("ECON-15: atualiza cortes etários dinamicamente na virada dos anos letivos (2026, 2027, 2028)", () => {
+    const ref2026 = new Date("2026-06-15T12:00:00");
+    const ref2027 = new Date("2027-06-15T12:00:00");
+    const ref2028 = new Date("2028-06-15T12:00:00");
+
+    // Em 2026: Etapa 1 >= 2014, Etapa 3 < 2010
+    assert.equal(isOlderThanEtapa1("2014-05-10", ref2026), false);
+    assert.equal(isEtapa3OrOlder("2010-05-10", ref2026), false);
+    assert.equal(isEtapa3OrOlder("2009-05-10", ref2026), true);
+
+    // Em 2027: nascidos em 2014 avançam para Etapa 2 (6º ano), e 2010 avança para Etapa 3
+    assert.equal(isOlderThanEtapa1("2014-05-10", ref2027), true);
+    assert.equal(isOlderThanEtapa1("2015-05-10", ref2027), false);
+    assert.equal(isEtapa3OrOlder("2010-05-10", ref2027), true);
+    assert.equal(isEtapa3OrOlder("2011-05-10", ref2027), false);
+
+    // Em 2028: Etapa 1 >= 2016, Etapa 3 < 2012
+    assert.equal(isOlderThanEtapa1("2015-05-10", ref2028), true);
+    assert.equal(isOlderThanEtapa1("2016-05-10", ref2028), false);
+    assert.equal(isEtapa3OrOlder("2011-05-10", ref2028), true);
+    assert.equal(isEtapa3OrOlder("2012-05-10", ref2028), false);
   });
 });

@@ -16,7 +16,7 @@ import { GAME_REGISTRY } from "@/lib/game-registry";
 import type { PlatformNoticeSlide } from "@/lib/game-codes";
 import { MedalIcon } from "./MedalIcon";
 import { MedalDetailModal } from "./MedalDetailModal";
-import { buildBaseMedalsCatalog, type MedalDefinition } from "@/lib/medals-catalog";
+import { getAllAvailableMedals, type MedalDefinition } from "@/lib/medals-catalog";
 
 export interface NoticeBoardProps {
   slides?: PlatformNoticeSlide[];
@@ -25,6 +25,12 @@ export interface NoticeBoardProps {
   pauseNoticeBoard?: boolean;
   compact?: boolean;
   weeklyGameName?: string;
+  enabledGames?: Record<string, boolean>;
+  adminOnlyGames?: Partial<Record<string, boolean>>;
+  isAdmin?: boolean;
+  x1HoursLabel?: string;
+  x1Enabled?: boolean;
+  tournamentEnabled?: boolean;
   onSelectGame?: (gameId: GameId) => void;
   onOpenWeeklyTournament?: () => void;
   onOpenX1Arena?: () => void;
@@ -38,6 +44,12 @@ export const NoticeBoard: React.FC<NoticeBoardProps> = ({
   pauseNoticeBoard = false,
   compact = false,
   weeklyGameName = "Batalha de Robôs",
+  enabledGames,
+  adminOnlyGames,
+  isAdmin = false,
+  x1HoursLabel = "07:00 às 19:00",
+  x1Enabled = true,
+  tournamentEnabled = true,
   onSelectGame,
   onOpenWeeklyTournament,
   onOpenX1Arena,
@@ -47,17 +59,33 @@ export const NoticeBoard: React.FC<NoticeBoardProps> = ({
   const [isPaused, setIsPaused] = useState(false);
   const [inspectMedal, setInspectMedal] = useState<MedalDefinition | null>(null);
 
-  const medalsCatalog = useMemo<MedalDefinition[]>(() => buildBaseMedalsCatalog(), []);
+  const medalsCatalog = useMemo<MedalDefinition[]>(() => getAllAvailableMedals(), [slides]);
+
+  const isGameAccessible = useMemo(
+    () => (gameId?: GameId | null) => {
+      if (!gameId) return false;
+      if (enabledGames && enabledGames[gameId] === false) return false;
+      if (adminOnlyGames?.[gameId] && !isAdmin) return false;
+      return true;
+    },
+    [enabledGames, adminOnlyGames, isAdmin],
+  );
 
   // Slides efetivos: customizados ativos pelo ADM e slides informativos padrão selecionados
   const effectiveSlides = useMemo<PlatformNoticeSlide[]>(() => {
-    // 1. Slides customizados ativos criados pelo ADM
-    const activeCustom = (slides || []).filter((s) => s.active !== false);
+    // 1. Slides customizados ativos criados pelo ADM (filtrando destaques de jogos bloqueados/ADM-only)
+    const activeCustom = (slides || []).filter((s) => {
+      if (s.active === false) return false;
+      if (s.type === "game_highlight" && s.featuredGameId && !isGameAccessible(s.featuredGameId)) {
+        return false;
+      }
+      return true;
+    });
 
     // 2. Slides padrão do sistema (caso não estejam ocultados globalmente)
     const defaults: PlatformNoticeSlide[] = [];
     if (!hideAllDefaultNotices) {
-      if (enabledDefaultNotices?.default_weekly_tournament !== false) {
+      if (tournamentEnabled && enabledDefaultNotices?.default_weekly_tournament !== false) {
         defaults.push({
           id: "default_weekly_tournament",
           title: `Desafio da Semana: ${weeklyGameName}`,
@@ -70,12 +98,11 @@ export const NoticeBoard: React.FC<NoticeBoardProps> = ({
           createdAt: "2026-01-01T00:00:00.000Z",
         });
       }
-      if (enabledDefaultNotices?.default_x1_arena !== false) {
+      if (x1Enabled && enabledDefaultNotices?.default_x1_arena !== false) {
         defaults.push({
           id: "default_x1_arena",
           title: "Arena X1 Online: Desafie seus colegas!",
-          message:
-            "Duelos 1 vs 1 ao vivo das 07:00 às 19:00 com rotação de jogos e barra de vantagem dinâmica. Conquiste até +100 XP extras por dia!",
+          message: `Duelos 1 vs 1 ao vivo das ${x1HoursLabel || "07:00 às 19:00"} com rotação de jogos e barra de vantagem dinâmica. Conquiste até +100 XP extras por dia!`,
           badgeLabel: "BATALHA AO VIVO",
           type: "announcement",
           featuredGameId: null,
@@ -84,6 +111,9 @@ export const NoticeBoard: React.FC<NoticeBoardProps> = ({
         });
       }
       if (enabledDefaultNotices?.default_new_games !== false) {
+        const highlightId: GameId | null = isGameAccessible("rpg")
+          ? "rpg"
+          : (GAME_REGISTRY.find((g) => isGameAccessible(g.id))?.id ?? null);
         defaults.push({
           id: "default_new_games",
           title: "Explore Todos os Desafios de Lógica",
@@ -91,7 +121,7 @@ export const NoticeBoard: React.FC<NoticeBoardProps> = ({
             "Pratique raciocínio lógico, geometria no plano cartesiano, porcentagens e labirintos matemáticos para subir do Nível 1 ao Nível Máximo 10!",
           badgeLabel: "NOVIDADE & DESTAQUE",
           type: "game_highlight",
-          featuredGameId: "rpg",
+          featuredGameId: highlightId,
           active: true,
           createdAt: "2026-01-01T00:00:00.000Z",
         });
@@ -99,7 +129,16 @@ export const NoticeBoard: React.FC<NoticeBoardProps> = ({
     }
 
     return [...activeCustom, ...defaults];
-  }, [slides, hideAllDefaultNotices, enabledDefaultNotices, weeklyGameName]);
+  }, [
+    slides,
+    hideAllDefaultNotices,
+    enabledDefaultNotices,
+    weeklyGameName,
+    x1HoursLabel,
+    x1Enabled,
+    tournamentEnabled,
+    isGameAccessible,
+  ]);
 
   const count = effectiveSlides.length;
 
@@ -271,7 +310,9 @@ export const NoticeBoard: React.FC<NoticeBoardProps> = ({
             )}
 
             {/* Botão de Ação do Jogo em Destaque */}
-            {currentSlide.featuredGameId && onSelectGame && (
+            {currentSlide.featuredGameId &&
+              isGameAccessible(currentSlide.featuredGameId) &&
+              onSelectGame && (
               <button
                 type="button"
                 onClick={() => onSelectGame(currentSlide.featuredGameId!)}

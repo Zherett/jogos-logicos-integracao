@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -74,6 +74,7 @@ export function DailyRewardsModal({
   const [activeTab, setActiveTab] = useState<"recompensas" | "missoes" | "semanais">("recompensas");
   const [claimingDaily, setClaimingDaily] = useState(false);
   const [claimingMissionId, setClaimingMissionId] = useState<string | null>(null);
+  const claimLockRef = useRef(false);
   const [feedbackMsg, setFeedbackMsg] = useState<{ text: string; tone: "success" | "error" } | null>(null);
   const [openedChest, setOpenedChest] = useState<{
     chest: ChestDefinition;
@@ -221,7 +222,8 @@ export function DailyRewardsModal({
   const isStudentsRolloutActive = Boolean(adminConfig?.rolloutFlags?.enableDailyRoutineForStudents);
 
   async function handleClaimDaily() {
-    if (claimingDaily || isTodayClaimed) return;
+    if (claimingDaily || isTodayClaimed || claimLockRef.current) return;
+    claimLockRef.current = true;
     setClaimingDaily(true);
     setFeedbackMsg(null);
     try {
@@ -241,12 +243,14 @@ export function DailyRewardsModal({
         setOpenedChest({ chest: res.chestDefinition, outcome: res.chestOutcome });
       }
     } finally {
+      claimLockRef.current = false;
       setClaimingDaily(false);
     }
   }
 
   async function handleClaimDailyMission(missionId: string) {
-    if (claimingMissionId) return;
+    if (claimingMissionId || claimLockRef.current) return;
+    claimLockRef.current = true;
     setClaimingMissionId(missionId);
     setFeedbackMsg(null);
     try {
@@ -262,12 +266,14 @@ export function DailyRewardsModal({
       setFeedbackMsg({ text: `✅ Missão diária resgatada! ${parts.join(" • ")}`, tone: "success" });
       onProfileUpdated?.();
     } finally {
+      claimLockRef.current = false;
       setClaimingMissionId(null);
     }
   }
 
   async function handleClaimWeeklyMission(missionId: string) {
-    if (claimingMissionId) return;
+    if (claimingMissionId || claimLockRef.current) return;
+    claimLockRef.current = true;
     setClaimingMissionId(missionId);
     setFeedbackMsg(null);
     try {
@@ -283,6 +289,7 @@ export function DailyRewardsModal({
       setFeedbackMsg({ text: `🏆 Missão semanal resgatada! ${parts.join(" • ")}`, tone: "success" });
       onProfileUpdated?.();
     } finally {
+      claimLockRef.current = false;
       setClaimingMissionId(null);
     }
   }

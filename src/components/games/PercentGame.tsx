@@ -85,8 +85,9 @@ export function PercentGame({ onExit, onStatsChange, isRanked }: Props) {
 
   const timersRef = useRef<number[]>([]);
   const lockRef = useRef(false);
+  const streakRef = useRef(0);
   const modeRef = useRef<Mode>("porcentagem");
-  modeRef.current = mode;
+  modeRef.current = isRanked ? "porcentagem" : mode;
 
   const maxLevel = mode === "fracoes" ? 6 : 5;
   const perLevel = mode === "fracoes" ? FRACTION_QUESTIONS_PER_LEVEL : QUESTIONS_PER_LEVEL;
@@ -111,6 +112,10 @@ export function PercentGame({ onExit, onStatsChange, isRanked }: Props) {
 
   useEffect(() => {
     setLastMatch(loadLastMatch("porcentagem"));
+    if (isRanked) {
+      setMode("porcentagem");
+      return;
+    }
     try {
       const saved = window.localStorage.getItem(MODE_KEY) as Mode | null;
       if (saved === "porcentagem" || saved === "fracoes") {
@@ -118,11 +123,12 @@ export function PercentGame({ onExit, onStatsChange, isRanked }: Props) {
         setLastMode(saved);
       }
     } catch { /* ignore */ }
-  }, []);
+  }, [isRanked]);
   useEffect(() => () => clearTimers(), []);
 
   useEffect(() => {
     if (!finished) return;
+    const effectiveMode: Mode = isRanked ? "porcentagem" : mode;
     updateBest("porcentagem", score, level);
     const m: LastMatch = {
       score,
@@ -130,13 +136,15 @@ export function PercentGame({ onExit, onStatsChange, isRanked }: Props) {
       wrong,
       level,
       at: Date.now(),
-      mode: isRanked ? "torneio_semanal" : team.activeSession ? "equipes" : mode,
+      mode: isRanked ? "torneio_semanal" : team.activeSession ? "equipes" : effectiveMode,
       isTeam: team.activeSession,
     };
     saveLastMatch("porcentagem", m);
     setLastMatch(m);
-    setLastMode(mode);
-    try { window.localStorage.setItem(MODE_KEY, mode); } catch { /* ignore */ }
+    setLastMode(effectiveMode);
+    if (!isRanked) {
+      try { window.localStorage.setItem(MODE_KEY, effectiveMode); } catch { /* ignore */ }
+    }
     onStatsChange();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [finished]);
@@ -175,8 +183,14 @@ export function PercentGame({ onExit, onStatsChange, isRanked }: Props) {
   function startGame() {
     clearTimers();
     lockRef.current = false;
+    streakRef.current = 0;
+    if (isRanked) {
+      setMode("porcentagem");
+    }
     team.begin(teamConfig);
-    try { window.localStorage.setItem(MODE_KEY, mode); } catch { /* ignore */ }
+    if (!isRanked) {
+      try { window.localStorage.setItem(MODE_KEY, mode); } catch { /* ignore */ }
+    }
     setCorrect(0); setWrong(0); setStreak(0); setBestStreak(0);
     setLevel(1); setDone(0);
     setFinished(false);
@@ -207,17 +221,17 @@ export function PercentGame({ onExit, onStatsChange, isRanked }: Props) {
     if (isRight) {
       setCorrect((c) => c + 1);
       soundCorrect();
-      setStreak((s) => {
-        const n = s + 1;
-        setBestStreak((b) => Math.max(b, n));
-        if (bonusOn && STREAK_MARKS.includes(n) && clock.bonus < BONUS_MAX) {
-          clock.addBonus(BONUS_STEP);
-          setBonusFlash(Date.now());
-        }
-        return n;
-      });
+      const nextStreak = streakRef.current + 1;
+      streakRef.current = nextStreak;
+      setStreak(nextStreak);
+      setBestStreak((b) => Math.max(b, nextStreak));
+      if (bonusOn && STREAK_MARKS.includes(nextStreak) && clock.bonus < BONUS_MAX) {
+        clock.addBonus(BONUS_STEP);
+        setBonusFlash(Date.now());
+      }
     } else {
       setWrong((w) => w + 1);
+      streakRef.current = 0;
       setStreak(0);
       soundWrong();
     }
@@ -339,10 +353,13 @@ export function PercentGame({ onExit, onStatsChange, isRanked }: Props) {
         onFinishSession={sessionEnd.request}
         bonusTime={bonusOn}
         onBonusTimeChange={setBonusOn}
+        bonusTimeLabel={`Tempo extra +${BONUS_STEP}s a cada 5 acertos seguidos`}
       >
         <div className="space-y-4">
           <div>
-            <p className="mb-2 text-sm font-bold uppercase tracking-wider text-muted-foreground">Escolha o modo</p>
+            <p className="mb-2 text-sm font-bold uppercase tracking-wider text-muted-foreground">
+              Escolha o modo {isRanked && "• 🔒 Modo oficial da Ranqueada: Porcentagem"}
+            </p>
             <div className="grid gap-3 sm:grid-cols-2">
               <ModeCard
                 active={mode === "porcentagem"}
@@ -352,11 +369,14 @@ export function PercentGame({ onExit, onStatsChange, isRanked }: Props) {
                 text="Barras, diagramas, réguas e situações do dia a dia."
               />
               <ModeCard
-                active={mode === "fracoes"}
-                onClick={() => setMode("fracoes")}
+                active={!isRanked && mode === "fracoes"}
+                disabled={Boolean(isRanked)}
+                onClick={() => {
+                  if (!isRanked) setMode("fracoes");
+                }}
                 icon={<PieChart className="h-6 w-6" />}
                 title="Desafio das Frações"
-                text="Pizzas de 3, 4, 5, 8 e 10 partes para montar frações."
+                text={isRanked ? "Indisponível durante o Torneio Ranqueado." : "Pizzas de 3, 4, 5, 8 e 10 partes para montar frações."}
               />
             </div>
             {lastMode && (
@@ -398,7 +418,7 @@ export function PercentGame({ onExit, onStatsChange, isRanked }: Props) {
         <GameTopBar title={TITLE} onExit={onExit} sessionActive={team.activeSession} onFinishSession={sessionEnd.request} />
         <ResultPanel
           gameId="porcentagem"
-          mode={mode}
+          mode={lastMatch?.mode === "torneio_semanal" || isRanked ? "torneio_semanal" : mode}
           isTeam={team.activeSession}
           score={score} correct={correct} wrong={wrong} level={level}
           onReplay={replayWithCountdown} onMenu={onExit} onChangeSettings={backToSetup}
@@ -624,14 +644,19 @@ export function PercentGame({ onExit, onStatsChange, isRanked }: Props) {
 }
 
 function ModeCard({
-  active, onClick, icon, title, text,
-}: { active: boolean; onClick: () => void; icon: React.ReactNode; title: string; text: string }) {
+  active, onClick, icon, title, text, disabled,
+}: { active: boolean; onClick: () => void; icon: React.ReactNode; title: string; text: string; disabled?: boolean }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`flex items-start gap-3 rounded-2xl border-2 p-4 text-left transition-all hover:scale-[1.01] active:scale-95 ${
-        active ? "border-primary bg-primary/10 shadow-md" : "border-border bg-card hover:bg-secondary"
+      disabled={disabled}
+      className={`flex items-start gap-3 rounded-2xl border-2 p-4 text-left transition-all ${
+        disabled
+          ? "opacity-50 cursor-not-allowed border-border bg-card"
+          : "hover:scale-[1.01] active:scale-95"
+      } ${
+        !disabled && active ? "border-primary bg-primary/10 shadow-md" : !disabled ? "border-border bg-card hover:bg-secondary" : ""
       }`}
     >
       <div className={`grid h-11 w-11 shrink-0 place-items-center rounded-xl ${active ? "bg-primary text-primary-foreground" : "bg-secondary text-foreground"}`}>

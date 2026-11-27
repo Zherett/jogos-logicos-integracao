@@ -1,4 +1,4 @@
-import { Fragment, useState, useMemo, useEffect } from "react";
+import { Fragment, useState, useMemo, useEffect, useRef } from "react";
 import {
   Mail,
   Gift,
@@ -19,6 +19,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button";
 import {
   getInboxMessagesForPlayer,
+  purgeExpiredInboxMessagesForPlayer,
   markInboxMessageAsRead,
   markAllInboxMessagesAsReadForRecipient,
   claimInboxReward,
@@ -39,6 +40,7 @@ import { canAccessShopAndCustomization } from "@/lib/daily-rewards";
 import { usePlayerAuth } from "@/lib/player-auth";
 import {
   getActiveAccount,
+  getAuthoritativeNow,
   hasValidCloudSessionTicket,
   isAdminUnlockedSession,
   pushInboxReadToPlayFab,
@@ -74,6 +76,26 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
     event: (SpecialEvent | RecurringEvent) | null;
     fallbackTitle?: string;
   } | null>(null);
+  const revealIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const revealTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const claimLockRef = useRef(false);
+
+  const clearRevealTimers = () => {
+    if (revealIntervalRef.current !== null) {
+      clearInterval(revealIntervalRef.current);
+      revealIntervalRef.current = null;
+    }
+    if (revealTimeoutRef.current !== null) {
+      clearTimeout(revealTimeoutRef.current);
+      revealTimeoutRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      clearRevealTimers();
+    };
+  }, []);
 
   // Mensagem selecionada ativa
   const activeMessage = useMemo(() => {
@@ -83,7 +105,8 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
 
   const refreshMessages = () => {
     if (profile) {
-      const list = getInboxMessagesForPlayer(profile);
+      const nowTime = getAuthoritativeNow().getTime();
+      const list = getInboxMessagesForPlayer(profile, nowTime);
       setMessages(list);
     } else {
       setMessages([]);
@@ -93,13 +116,21 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
   useEffect(() => {
     if (open) {
       setSelectedMessageId(null);
+    } else {
+      clearRevealTimers();
+      setIsRevealing(false);
+      setRevealProgress(0);
     }
   }, [open]);
 
   useEffect(() => {
     if (open && profile) {
+      purgeExpiredInboxMessagesForPlayer(profile, getAuthoritativeNow().getTime());
       refreshMessages();
-      void syncInboxReadsFromPlayFab().then(() => refreshMessages());
+      void syncInboxReadsFromPlayFab().then(() => {
+        purgeExpiredInboxMessagesForPlayer(profile, getAuthoritativeNow().getTime());
+        refreshMessages();
+      });
       // Escuta novos eventos de correio em tempo real
       const handleNew = () => refreshMessages();
       window.addEventListener("desafios:inbox-message-received", handleNew);
@@ -133,13 +164,22 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
   };
 
   const handleMarkAllRead = () => {
-    if (profile) {
-      markAllInboxMessagesAsReadForRecipient(profile.id, profile);
-      for (const m of messages) {
-        pushInboxReadToPlayFab(m.id, profile).catch(console.warn);
+    if (!profile) return;
+    const unreadIds = messages.filter((m) => !m.read).map((m) => m.id);
+    markAllInboxMessagesAsReadForRecipient(profile.id, profile);
+    refreshMessages();
+    if (unreadIds.length === 0) return;
+
+    const currentProfile = profile;
+    void (async () => {
+      const BATCH_SIZE = 3;
+      for (let i = 0; i < unreadIds.length; i += BATCH_SIZE) {
+        const batch = unreadIds.slice(i, i + BATCH_SIZE);
+        await Promise.all(
+          batch.map((msgId) => pushInboxReadToPlayFab(msgId, currentProfile).catch(console.warn)),
+        );
       }
-      refreshMessages();
-    }
+    })();
   };
 
   const handleDeleteMessage = (msgId: string) => {
@@ -158,14 +198,20 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
 
   // Fluxo de Recompensa Secreta (exibe todas as recompensas da mensagem ao revelar)
   const handleStartSecretReveal = (rewardsList: InboxReward[]) => {
+    if (isRevealing) return;
+    clearRevealTimers();
     setIsRevealing(true);
     setRevealProgress(0);
 
-    const interval = setInterval(() => {
+    revealIntervalRef.current = setInterval(() => {
       setRevealProgress((prev) => {
         if (prev >= 100) {
-          clearInterval(interval);
-          setTimeout(() => {
+          if (revealIntervalRef.current !== null) {
+            clearInterval(revealIntervalRef.current);
+            revealIntervalRef.current = null;
+          }
+          revealTimeoutRef.current = setTimeout(() => {
+            revealTimeoutRef.current = null;
             setIsRevealing(false);
             setRevealedRewardsModal(rewardsList);
           }, 300);
@@ -178,24 +224,26 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
 
   // Confirmar Resgate (Atômico: só grava estado local e nuvem após confirmar UserData no PlayFab)
   const handleClaimReward = async (msgId: string) => {
-    if (!profile || claimingMsgId) return;
+    if (!profile || claimingMsgId || claimLockRef.current) return;
     if (!hasValidCloudSessionTicket()) {
       alert("Sua sessão expirou. Faça login novamente para resgatar esta recompensa com segurança.");
       return;
     }
+    claimLockRef.current = true;
     setClaimingMsgId(msgId);
     try {
       await syncSinglePlayerFromPlayFab(profile.nickNormalized || profile.id).catch(() => null);
       const liveProfile = getActiveAccount()?.profile ?? profile;
       const profileSnapshot = JSON.parse(JSON.stringify(liveProfile)) as typeof liveProfile;
 
-      const res = claimInboxReward(msgId, profileSnapshot, { deferLocalCommit: true });
+      const nowIso = getAuthoritativeNow().toISOString();
+      const res = claimInboxReward(msgId, profileSnapshot, { deferLocalCommit: true, nowIso });
       if (!res.success) {
         alert(res.error || "Erro ao resgatar recompensa.");
         return;
       }
       await savePlayerProfile(res.profile, { requireServerSync: true });
-      commitInboxClaimLocally(msgId, res.profile, res.claimedAt);
+      commitInboxClaimLocally(msgId, res.profile, res.claimedAt, res.pendingLedgerEntries);
       setRevealedRewardsModal(null);
       markInboxMessageAsRead(msgId, res.profile);
       pushInboxReadToPlayFab(msgId, res.profile).catch(console.warn);
@@ -209,6 +257,7 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
           : "Sua sessão expirou ou está sem conexão. Faça login novamente para resgatar esta recompensa.",
       );
     } finally {
+      claimLockRef.current = false;
       setClaimingMsgId(null);
     }
   };
@@ -774,7 +823,7 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                                     <span>+{rew.pointsAmount} Moedas da Loja</span>
                                   )}
                                   {rew.type === "medal" && (() => {
-                                    const itemData = rew.itemData as any;
+                                    const itemData = rew.itemData as { tournamentMedal?: { label?: string; bonusXpAwarded?: number } } | undefined;
                                     const tourMedal = itemData?.tournamentMedal;
                                     if (tourMedal?.label) {
                                       return <span>{tourMedal.label}</span>;
@@ -789,7 +838,7 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                                     );
                                   })()}
                                   {rew.type === "future_item" && (() => {
-                                    const idata = rew.itemData as any;
+                                    const idata = rew.itemData as { itemName?: string; itemCategory?: string; quantity?: number } | undefined;
                                     if (idata?.itemName) {
                                       return (
                                         <span>
@@ -813,8 +862,8 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                                         ? inventoryOpen
                                           ? "Será adicionado diretamente ao seu inventário/visual"
                                           : "Guardado com segurança no seu Inventário — ficará disponível assim que a Loja for liberada!"
-                                        : (rew.itemData as any)?.tournamentMedal
-                                          ? `+${(rew.itemData as any).tournamentMedal.bonusXpAwarded ?? 0} XP Extra e Medalha de Pódio Oficial`
+                                        : (rew.itemData as { tournamentMedal?: { bonusXpAwarded?: number } } | undefined)?.tournamentMedal
+                                          ? `+${(rew.itemData as { tournamentMedal?: { bonusXpAwarded?: number } }).tournamentMedal?.bonusXpAwarded ?? 0} XP Extra e Medalha de Pódio Oficial`
                                           : "Adicionada à sua galeria de troféus e medalhas"}
                                 </div>
                               </div>
@@ -937,7 +986,7 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                     </>
                   )}
                   {rew.type === "future_item" && (() => {
-                    const idata = rew.itemData as any;
+                    const idata = rew.itemData as { itemName?: string; itemCategory?: string; quantity?: number } | undefined;
                     const label = idata?.itemName
                       ? idata.itemCategory === "cosmetic"
                         ? idata.itemName
@@ -955,7 +1004,7 @@ export function PlayerInboxModal({ open, onOpenChange }: Props) {
                     );
                   })()}
                   {rew.type === "medal" && (() => {
-                    const itemData = rew.itemData as any;
+                    const itemData = rew.itemData as { tournamentMedal?: { label?: string; bonusXpAwarded?: number } } | undefined;
                     const tourMedal = itemData?.tournamentMedal;
                     if (tourMedal?.label) {
                       return (

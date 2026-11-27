@@ -131,15 +131,15 @@ export function PlayerMedalsInventory({
   }, [needsFullCatalogProgress, allMedals, unlockedMap, profile, stats]);
 
   const filtered = sortedMedals.filter(({ medal: m }) => {
+    const isSecLocked = Boolean(m.isSecret && !unlockedMap.has(m.id));
     if (activeTab === "eventos" && m.category !== "evento" && !m.eventId) return false;
-    if (selectedCategory !== "ALL" && m.category !== selectedCategory) return false;
-    if (selectedRarity !== "ALL" && m.rarity !== selectedRarity) return false;
+    if (selectedCategory !== "ALL" && (isSecLocked || m.category !== selectedCategory)) return false;
+    if (selectedRarity !== "ALL" && (isSecLocked || m.rarity !== selectedRarity)) return false;
     if (search.trim()) {
       const q = search.toLowerCase();
-      const isSecLocked = Boolean(m.isSecret && !unlockedMap.has(m.id));
       const effectiveTitle = isSecLocked ? "medalha secreta" : m.title.toLowerCase();
       const effectiveDesc = isSecLocked ? "medalha secreta jogue e descubra" : m.description.toLowerCase();
-      const rLabel = RARITY_INFO[m.rarity]?.label.toLowerCase() ?? "";
+      const rLabel = isSecLocked ? "secreta" : (RARITY_INFO[m.rarity]?.label.toLowerCase() ?? "");
       return (
         effectiveTitle.includes(q) ||
         effectiveDesc.includes(q) ||
@@ -231,6 +231,12 @@ export function PlayerMedalsInventory({
                     <div
                       key={m.id}
                       onClick={() => setSelectedMedal(m)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setSelectedMedal(m);
+                        }
+                      }}
                       className={`relative flex flex-col items-center justify-center rounded-2xl border-2 px-2.5 pt-4 pb-2.5 text-center bg-card/90 cursor-pointer transition-all hover:scale-[1.03] active:scale-95 ${
                         isSecretRevealed
                           ? "border-emerald-400 ring-2 ring-emerald-400/80 shadow-[0_0_24px_rgba(34,197,94,0.85)] animate-pulse"
@@ -550,6 +556,12 @@ export function PlayerMedalsInventory({
                 <div
                   key={m.id}
                   onClick={() => setSelectedMedal(m)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setSelectedMedal(m);
+                    }
+                  }}
                   className={`group relative flex flex-col justify-between rounded-2xl border-2 p-3 transition-all cursor-pointer hover:scale-[1.01] active:scale-95 ${
                     isSecretRevealed
                       ? "bg-card border-emerald-400 ring-2 ring-emerald-400/80 shadow-[0_0_20px_rgba(34,197,94,0.8)] animate-pulse"
@@ -605,13 +617,17 @@ export function PlayerMedalsInventory({
                         <div className="flex items-center gap-1.5">
                           <span
                             className={`text-[9px] font-black uppercase tracking-wider ${
-                              isUnlocked ? rarity.textColor : "text-muted-foreground"
+                              isUnlocked
+                                ? rarity.textColor
+                                : isSecretLocked
+                                  ? "text-amber-500"
+                                  : "text-muted-foreground"
                             }`}
                           >
-                            {rarity.label}
+                            {isSecretLocked ? "Secreta" : rarity.label}
                           </span>
                           <span className="text-[9px] font-extrabold text-amber-500">
-                            +{MEDAL_POINTS_REWARDS[m.rarity] ?? 20} pts
+                            {isSecretLocked ? "+?? pts" : `+${MEDAL_POINTS_REWARDS[m.rarity] ?? 20} pts`}
                           </span>
                         </div>
                         {isUnlocked ? (
