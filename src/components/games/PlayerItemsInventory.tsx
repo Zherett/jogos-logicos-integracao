@@ -1177,34 +1177,34 @@ export function PlayerItemsInventory() {
                     const current = batchPrompt;
                     setBatchPrompt(null);
                     if (current.kind === "chest") {
-                      void handleOpenChest(current.item, current.quantity);
-                    } else {
-                      handleOpenPack(current.item, current.quantity);
-                    }
-                  }}
-                  className="w-full rounded-2xl font-display font-extrabold shadow-sm"
-                >
-                  <Sparkles className="h-4 w-4 mr-1.5" />
-                  Abrir todos ({batchPrompt.quantity}x)
-                </Button>
-
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="lg"
-                  disabled={isOpeningChest}
-                  onClick={() => {
-                    const current = batchPrompt;
-                    setBatchPrompt(null);
-                    if (current.kind === "chest") {
                       void handleOpenChest(current.item, 1);
                     } else {
                       handleOpenPack(current.item, 1);
                     }
                   }}
-                  className="w-full rounded-2xl font-display font-bold"
+                  className="w-full rounded-2xl font-display font-extrabold shadow-sm"
                 >
+                  <Sparkles className="h-4 w-4 mr-1.5" />
                   Abrir 1 unidade por vez
+                </Button>
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={isOpeningChest}
+                  onClick={() => {
+                    const current = batchPrompt;
+                    setBatchPrompt(null);
+                    if (current.kind === "chest") {
+                      void handleOpenChest(current.item, current.quantity);
+                    } else {
+                      handleOpenPack(current.item, current.quantity);
+                    }
+                  }}
+                  className="w-full h-9 rounded-2xl font-display text-xs font-bold"
+                >
+                  Abrir todos ({batchPrompt.quantity}x)
                 </Button>
               </div>
             </div>
