@@ -33,6 +33,7 @@ import {
 } from "@/lib/playfab.ts";
 import type { AdminConfig } from "@/lib/game-codes.ts";
 import { mergeWithDefaultCardPacks } from "@/lib/cards-catalog.ts";
+import { playRewardClaimSound } from "@/lib/sound";
 import type { ChestDefinition, ChestOpenOutcome } from "@/lib/chests-catalog.ts";
 import {
   canAccessShopAndCustomization,
@@ -232,6 +233,7 @@ export function DailyRewardsModal({
         setFeedbackMsg({ text: res.error ?? "Não foi possível resgatar hoje.", tone: "error" });
         return;
       }
+      playRewardClaimSound();
       const parts: string[] = [];
       if (res.pointsAwarded > 0) parts.push(`+${res.pointsAwarded} pts`);
       if (res.xpAwarded > 0) parts.push(`+${res.xpAwarded} XP`);
@@ -259,6 +261,7 @@ export function DailyRewardsModal({
         setFeedbackMsg({ text: res.error ?? "Não foi possível resgatar esta missão.", tone: "error" });
         return;
       }
+      playRewardClaimSound();
       const parts: string[] = [];
       if (res.pointsAwarded > 0) parts.push(`+${res.pointsAwarded} pts`);
       if (res.xpAwarded > 0) parts.push(`+${res.xpAwarded} XP`);
@@ -282,6 +285,7 @@ export function DailyRewardsModal({
         setFeedbackMsg({ text: res.error ?? "Não foi possível resgatar esta missão semanal.", tone: "error" });
         return;
       }
+      playRewardClaimSound();
       const parts: string[] = [];
       if (res.pointsAwarded > 0) parts.push(`+${res.pointsAwarded} pts`);
       if (res.xpAwarded > 0) parts.push(`+${res.xpAwarded} XP`);

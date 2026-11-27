@@ -912,3 +912,61 @@ export function playChestRewardPack() {
     /* ignore */
   }
 }
+
+/** Som de moedas caindo/sendo gastas ao concluir uma compra na Loja. */
+export function playShopCoinsSpent() {
+  if (isSoundMuted()) return;
+  const ctx = getAudioContext();
+  if (!ctx) return;
+  try {
+    const now = ctx.currentTime;
+    const notes = [
+      { freq: 1975.53, delay: 0, dur: 0.14, gain: 0.08 },
+      { freq: 1567.98, delay: 0.055, dur: 0.15, gain: 0.075 },
+      { freq: 1318.51, delay: 0.11, dur: 0.16, gain: 0.07 },
+      { freq: 2093.0, delay: 0.17, dur: 0.22, gain: 0.085 },
+    ];
+    notes.forEach(({ freq, delay, dur, gain: peak }) => {
+      const t = now + delay;
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, t);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.linearRampToValueAtTime(peak, t + 0.006);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      osc.connect(g);
+      g.connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + dur + 0.02);
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Som de coleta/resgate para recompensa diária e missões diárias/semanais. */
+export function playRewardClaimSound() {
+  if (isSoundMuted()) return;
+  const ctx = getAudioContext();
+  if (!ctx) return;
+  try {
+    const now = ctx.currentTime;
+    [659.25, 880, 1174.66, 1567.98].forEach((freq, idx) => {
+      const t = now + idx * 0.055;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = idx === 3 ? "sine" : "triangle";
+      osc.frequency.setValueAtTime(freq, t);
+      gain.gain.setValueAtTime(0.0001, t);
+      gain.gain.linearRampToValueAtTime(0.09, t + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.26);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t);
+      osc.stop(t + 0.28);
+    });
+  } catch {
+    /* ignore */
+  }
+}

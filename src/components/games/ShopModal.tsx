@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { BadgeDollarSign, Check, Coins, Package, Palette, Search, Sparkles, Star, X } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { BadgeDollarSign, Check, Coins, Package, Palette, Receipt, Search, Sparkles, Star, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -25,6 +25,8 @@ import {
 import { usePlayerAuth } from "@/lib/player-auth";
 import { getActiveAccount, syncActiveProfileChangeToPlayFab } from "@/lib/playfab";
 import { recordScoreLedgerEntry } from "@/lib/score-history-ledger";
+import { playShopCoinsSpent } from "@/lib/sound";
+import { PackArtwork } from "./PackOpeningModal";
 import { getAuraPresentation, PlayerAvatarBadge } from "./PlayerAvatarBadge";
 
 interface ShopModalProps {
@@ -33,6 +35,31 @@ interface ShopModalProps {
 }
 
 type ShopPill = "destaques" | "pacotes" | "cosmeticos";
+
+type PurchasedReceiptState =
+  | {
+      kind: "avatar";
+      item: AvatarDefinition;
+      pricePaid: number;
+      phase: "open" | "flying";
+    }
+  | {
+      kind: "aura";
+      item: AuraDefinition;
+      pricePaid: number;
+      phase: "open" | "flying";
+    };
+
+type PackRevealState = {
+  pack: CardPackDefinition;
+  phase: "mystery" | "spin" | "flying";
+};
+
+type InventoryToastState = {
+  id: number;
+  itemName: string;
+  equipped?: boolean;
+};
 
 export function ShopModal({ open, onOpenChange }: ShopModalProps) {
   const auth = usePlayerAuth();
@@ -47,9 +74,101 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
   const [busyId, setBusyId] = useState<string | null>(null);
   const actionLockRef = useRef(false);
 
+  const [purchasedReceipt, setPurchasedReceipt] = useState<PurchasedReceiptState | null>(null);
+  const [packReveal, setPackReveal] = useState<PackRevealState | null>(null);
+  const [inventoryToast, setInventoryToast] = useState<InventoryToastState | null>(null);
+  const [flyTransform, setFlyTransform] = useState({ dx: 0, dy: 0, scale: 0.22 });
+  const toastTargetRef = useRef<HTMLDivElement | null>(null);
+  const flyCardRef = useRef<HTMLDivElement | null>(null);
+  const timersRef = useRef<number[]>([]);
+  const toastTimerRef = useRef<number | null>(null);
+
+  function scheduleShopTimer(fn: () => void, ms: number) {
+    const id = window.setTimeout(fn, ms);
+    timersRef.current.push(id);
+    return id;
+  }
+
+  function clearShopTimers() {
+    for (const id of timersRef.current) {
+      window.clearTimeout(id);
+    }
+    timersRef.current = [];
+  }
+
+  function showInventoryToast(itemName: string, equipped = false) {
+    if (toastTimerRef.current !== null) {
+      window.clearTimeout(toastTimerRef.current);
+      toastTimerRef.current = null;
+    }
+    setInventoryToast({ id: Date.now(), itemName, equipped });
+    toastTimerRef.current = window.setTimeout(() => {
+      setInventoryToast(null);
+      toastTimerRef.current = null;
+    }, 3200);
+  }
+
+  function startPackReveal(pack: CardPackDefinition) {
+    clearShopTimers();
+    setFlyTransform({ dx: 0, dy: 0, scale: 0.22 });
+    setPackReveal({ pack, phase: "mystery" });
+    scheduleShopTimer(() => {
+      setPackReveal((prev) => (prev ? { ...prev, phase: "spin" } : null));
+    }, 140);
+    scheduleShopTimer(() => {
+      setPackReveal((prev) => (prev ? { ...prev, phase: "flying" } : null));
+    }, 1020);
+    scheduleShopTimer(() => {
+      setPackReveal(null);
+      showInventoryToast(`1x ${pack.name}`);
+    }, 1500);
+  }
+
+  function closeReceiptWithFly(equipped = false) {
+    if (!purchasedReceipt || purchasedReceipt.phase === "flying") return;
+    const itemName = purchasedReceipt.item.name;
+    setFlyTransform({ dx: 0, dy: 0, scale: 0.22 });
+    setPurchasedReceipt((prev) => (prev ? { ...prev, phase: "flying" } : null));
+    scheduleShopTimer(() => {
+      setPurchasedReceipt(null);
+      showInventoryToast(itemName, equipped);
+    }, 450);
+  }
+
+  useLayoutEffect(() => {
+    const isFlying = packReveal?.phase === "flying" || purchasedReceipt?.phase === "flying";
+    if (!isFlying) return;
+    const cardEl = flyCardRef.current;
+    if (!cardEl) return;
+    const cardRect = cardEl.getBoundingClientRect();
+    const targetRect = toastTargetRef.current?.getBoundingClientRect();
+    const cardCx = cardRect.left + cardRect.width / 2;
+    const cardCy = cardRect.top + cardRect.height / 2;
+    const targetCx = targetRect ? targetRect.left + targetRect.width / 2 : window.innerWidth / 2;
+    const targetCy = targetRect ? targetRect.top + targetRect.height / 2 : window.innerHeight - 44;
+    setFlyTransform({
+      dx: targetCx - cardCx,
+      dy: targetCy - cardCy,
+      scale: 0.2,
+    });
+  }, [packReveal?.phase, purchasedReceipt?.phase]);
+
+  useEffect(() => {
+    return () => {
+      clearShopTimers();
+      if (toastTimerRef.current !== null) {
+        window.clearTimeout(toastTimerRef.current);
+      }
+    };
+  }, []);
+
   useEffect(() => {
     if (open) {
       setFeedback(null);
+    } else {
+      clearShopTimers();
+      setPackReveal(null);
+      setPurchasedReceipt(null);
     }
   }, [open]);
 
@@ -158,7 +277,8 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
         /* ignore */
       }
       await auth.refresh();
-      setFeedback(`✅ Você comprou 1x ${pack.name}! Confira na sua Mochila.`);
+      playShopCoinsSpent();
+      startPackReveal(pack);
     } catch (err) {
       setFeedback(
         err instanceof Error && err.message
@@ -198,7 +318,13 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
         /* ignore */
       }
       await auth.refresh();
-      setFeedback(`✅ Avatar "${avatar.name}" desbloqueado! Já disponível em Personalizar Perfil.`);
+      playShopCoinsSpent();
+      setPurchasedReceipt({
+        kind: "avatar",
+        item: avatar,
+        pricePaid: res.pricePaid,
+        phase: "open",
+      });
     } catch (err) {
       setFeedback(
         err instanceof Error && err.message
@@ -238,7 +364,13 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
         /* ignore */
       }
       await auth.refresh();
-      setFeedback(`✅ ${aura.name} desbloqueada! Já disponível em Personalizar Perfil.`);
+      playShopCoinsSpent();
+      setPurchasedReceipt({
+        kind: "aura",
+        item: aura,
+        pricePaid: res.pricePaid,
+        phase: "open",
+      });
     } catch (err) {
       setFeedback(
         err instanceof Error && err.message
@@ -251,8 +383,8 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
     }
   }
 
-  async function handleEquipAvatar(avatarId: string) {
-    if (!profile || busyId || actionLockRef.current) return;
+  async function handleEquipAvatar(avatarId: string): Promise<boolean> {
+    if (!profile || busyId || actionLockRef.current) return false;
     actionLockRef.current = true;
     setBusyId(`equip:${avatarId}`);
     setFeedback(null);
@@ -261,7 +393,7 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
       const liveOwned = new Set(getUnlockedAvatarIds(liveProfile));
       if (!liveOwned.has(avatarId)) {
         setFeedback("⚠️ Este avatar ainda não está desbloqueado na sua conta.");
-        return;
+        return false;
       }
       const prevSecondary = liveProfile.equippedAvatar?.secondaryId;
       await syncActiveProfileChangeToPlayFab(
@@ -277,20 +409,22 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
       );
       await auth.refresh();
       setFeedback("✨ Avatar equipado no seu perfil!");
+      return true;
     } catch (err) {
       setFeedback(
         err instanceof Error && err.message
           ? `⚠️ ${err.message}`
           : "⚠️ Não foi possível salvar o avatar no servidor. Tente novamente.",
       );
+      return false;
     } finally {
       actionLockRef.current = false;
       setBusyId(null);
     }
   }
 
-  async function handleEquipAura(auraId: string) {
-    if (!profile || busyId || actionLockRef.current) return;
+  async function handleEquipAura(auraId: string): Promise<boolean> {
+    if (!profile || busyId || actionLockRef.current) return false;
     actionLockRef.current = true;
     setBusyId(`equip:${auraId}`);
     setFeedback(null);
@@ -299,7 +433,7 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
       const liveOwned = new Set(getUnlockedAuraIds(liveProfile));
       if (!liveOwned.has(auraId)) {
         setFeedback("⚠️ Esta aura ainda não está desbloqueada na sua conta.");
-        return;
+        return false;
       }
       await syncActiveProfileChangeToPlayFab(
         {
@@ -310,12 +444,14 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
       );
       await auth.refresh();
       setFeedback("✨ Aura equipada no seu perfil!");
+      return true;
     } catch (err) {
       setFeedback(
         err instanceof Error && err.message
           ? `⚠️ ${err.message}`
           : "⚠️ Não foi possível salvar a aura no servidor. Tente novamente.",
       );
+      return false;
     } finally {
       actionLockRef.current = false;
       setBusyId(null);
@@ -327,6 +463,7 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
   const featuredAuras = auras.filter((a) => a.featured);
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="h-[min(86vh,46rem)] max-h-[90vh] flex flex-col overflow-hidden rounded-3xl sm:max-w-3xl">
         <DialogHeader className="shrink-0 space-y-3 border-b border-border/60 pb-3">
@@ -842,5 +979,178 @@ export function ShopModal({ open, onOpenChange }: ShopModalProps) {
         </div>
       </DialogContent>
     </Dialog>
+
+    {/* Animação de Pacote de Cartas girando e voando para o Toast */}
+    <Dialog open={Boolean(packReveal)} onOpenChange={() => {}}>
+      <DialogContent className="pointer-events-none max-w-xs border-0 bg-transparent p-0 shadow-none overflow-visible [&>button:last-child]:hidden">
+        {packReveal && (
+          <div className="flex flex-col items-center justify-center">
+            <div
+              ref={flyCardRef}
+              className="perspective-1000 flex flex-col items-center justify-center"
+              style={{
+                transform:
+                  packReveal.phase === "flying"
+                    ? `translate(${flyTransform.dx}px, ${flyTransform.dy}px) scale(${flyTransform.scale})`
+                    : packReveal.phase === "mystery"
+                      ? "translate(0px, 0px) scale(0.85)"
+                      : "translate(0px, 0px) scale(1.06)",
+                transition:
+                  packReveal.phase === "flying"
+                    ? "transform 480ms cubic-bezier(0.22, 1, 0.36, 1), opacity 460ms ease"
+                    : "transform 280ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease",
+                opacity: packReveal.phase === "flying" ? 0 : packReveal.phase === "mystery" ? 0.75 : 1,
+              }}
+            >
+              <div
+                className="preserve-3d transition-transform duration-700 ease-[cubic-bezier(0.22,1,0.36,1)]"
+                style={{
+                  transform: packReveal.phase === "mystery" ? "rotateY(0deg)" : "rotateY(360deg)",
+                }}
+              >
+                <PackArtwork
+                  pack={{
+                    name: packReveal.pack.name,
+                    colorTheme: packReveal.pack.colorTheme,
+                    icon: packReveal.pack.icon,
+                    isFoil: packReveal.pack.isFoil,
+                  }}
+                  quantity={1}
+                  className="w-44 sm:w-48"
+                  bodyHeightClass="h-56 sm:h-60"
+                  iconSizeClass="h-10 w-10"
+                  iconBoxSizeClass="h-20 w-20"
+                />
+              </div>
+            </div>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+
+    {/* Nota de Compra / Item Adquirido (Cosméticos) */}
+    <Dialog
+      open={Boolean(purchasedReceipt)}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) closeReceiptWithFly(false);
+      }}
+    >
+      <DialogContent className="max-w-sm border-0 bg-transparent p-0 shadow-none overflow-visible [&>button:last-child]:hidden">
+        {purchasedReceipt && (
+          <div
+            ref={flyCardRef}
+            className="relative rounded-3xl border-2 border-amber-500/40 bg-card p-5 text-card-foreground shadow-2xl"
+            style={{
+              transform:
+                purchasedReceipt.phase === "flying"
+                  ? `translate(${flyTransform.dx}px, ${flyTransform.dy}px) scale(${flyTransform.scale})`
+                  : "translate(0px, 0px) scale(1)",
+              transition: "transform 440ms cubic-bezier(0.22, 1, 0.36, 1), opacity 420ms ease",
+              opacity: purchasedReceipt.phase === "flying" ? 0 : 1,
+            }}
+          >
+            <button
+              type="button"
+              aria-label="Fechar nota de compra"
+              disabled={purchasedReceipt.phase === "flying" || busyId !== null}
+              onClick={() => closeReceiptWithFly(false)}
+              className="absolute right-3.5 top-3.5 flex h-8 w-8 items-center justify-center rounded-full border border-border/70 bg-secondary/60 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground cursor-pointer"
+            >
+              <X className="h-4 w-4" />
+            </button>
+
+            <div className="flex items-center gap-2 text-xs font-black uppercase tracking-wider text-amber-600 dark:text-amber-400">
+              <Receipt className="h-4 w-4" />
+              <span>Nota de Compra • Item Adquirido</span>
+            </div>
+
+            <div className="mt-4 flex flex-col items-center rounded-2xl border border-dashed border-border/80 bg-secondary/30 p-4 text-center">
+              {purchasedReceipt.kind === "avatar" ? (
+                <PlayerAvatarBadge avatar={purchasedReceipt.item} size="lg" />
+              ) : (
+                (() => {
+                  const pres = getAuraPresentation(purchasedReceipt.item);
+                  return (
+                    <div
+                      className={`flex h-16 w-16 items-center justify-center rounded-2xl border-2 bg-card ${pres.className}`}
+                      style={pres.style}
+                    >
+                      <Sparkles className="h-7 w-7 text-amber-500" />
+                    </div>
+                  );
+                })()
+              )}
+
+              <div className="mt-3 font-display text-lg font-black text-foreground">
+                {purchasedReceipt.item.name}
+              </div>
+              <div className="text-xs font-semibold text-muted-foreground">
+                {purchasedReceipt.kind === "avatar" ? "Avatar de Perfil" : "Aura de Perfil"}
+              </div>
+
+              <div className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-amber-500/35 bg-amber-500/10 px-3 py-1 font-mono text-xs font-extrabold text-amber-600 dark:text-amber-400">
+                <Coins className="h-3.5 w-3.5" />
+                <span>-{purchasedReceipt.pricePaid} moedas</span>
+              </div>
+            </div>
+
+            <div className="mt-4 flex items-center gap-2">
+              <Button
+                type="button"
+                disabled={purchasedReceipt.phase === "flying" || busyId !== null}
+                onClick={async () => {
+                  const ok =
+                    purchasedReceipt.kind === "avatar"
+                      ? await handleEquipAvatar(purchasedReceipt.item.id)
+                      : await handleEquipAura(purchasedReceipt.item.id);
+                  if (ok) {
+                    closeReceiptWithFly(true);
+                  }
+                }}
+                className="flex-1 rounded-2xl font-display font-extrabold"
+              >
+                <Sparkles className="h-4 w-4 mr-1.5" />
+                Equipar
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={purchasedReceipt.phase === "flying" || busyId !== null}
+                onClick={() => closeReceiptWithFly(false)}
+                className="rounded-2xl px-5 font-display font-bold"
+              >
+                OK
+              </Button>
+            </div>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+
+    {/* Toast inferior de destino ("Adicionado ao inventário") */}
+    <div
+      ref={toastTargetRef}
+      className="pointer-events-none fixed bottom-5 left-1/2 z-[120] flex min-h-[44px] min-w-[230px] -translate-x-1/2 items-center justify-center"
+    >
+      {inventoryToast && (
+        <div
+          key={inventoryToast.id}
+          className="flex items-center gap-2.5 rounded-full border border-emerald-500/40 bg-zinc-950/95 px-4 py-2.5 text-white shadow-xl backdrop-blur animate-in fade-in slide-in-from-bottom-3 zoom-in-95 duration-200"
+        >
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-400">
+            <Check className="h-3.5 w-3.5" />
+          </span>
+          <div className="text-left leading-tight">
+            <div className="text-xs font-extrabold tracking-wide">
+              {inventoryToast.equipped
+                ? "Equipado e adicionado ao inventário"
+                : "Adicionado ao inventário"}
+            </div>
+            <div className="text-[11px] font-medium text-zinc-300">{inventoryToast.itemName}</div>
+          </div>
+        </div>
+      )}
+    </div>
+    </>
   );
 }
