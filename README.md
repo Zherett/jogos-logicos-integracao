@@ -35,7 +35,7 @@ Construída como uma **SPA estática** (**Vite + React 19 + TypeScript + Tailwin
 | **Batalha de Robôs** | `rpg` | Duelo tático em turnos: derrote oponentes resolvendo desafios de lógica |
 | **Space Quest** | `spacequest` | Aventura espacial em 5 fases de exploração e resolução de enigmas lógicos |
 
-> **Códigos e Acesso Administrativo:** os códigos de liberação das atividades e o acesso ao **Painel ADM** (`#/admin` ou botão **ADM**) são configurados e gerenciados exclusivamente via variáveis de ambiente (`VITE_ADMIN_PIN`, `VITE_PLAYFAB_TITLE_ID`) e sincronização no PlayFab/Painel ADM.
+
 
 ---
 
